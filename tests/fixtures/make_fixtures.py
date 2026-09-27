@@ -91,6 +91,28 @@ fixture('ps1-as-iso', {
 }, add=['tnd.iso'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-00975',
    ident='serial', name='007 - Tomorrow Never Dies (USA)')
 
+# a CD game dumped as raw 2,352-byte sectors but named .iso. Given the .iso, chdman types the track by
+# file size alone: 640 raw sectors are also a whole number of 2,048-byte ones, so it would store the
+# image as 2,048-byte sectors. The app writes a cue with the sectors' own mode instead; `ref` is the
+# equivalent cue that native chdman gets for the byte-for-byte comparison.
+def raw_iso():
+    iso = ps1_iso('SLUS_009.75', 'TND', 1, 16)
+    return g.raw_sectors(iso.ljust(-(-len(iso) // (128 * 2048)) * 128 * 2048, b'\0'), 2)
+
+
+fixture('ps1-raw-iso', {
+    'rawtnd.iso': raw_iso,
+    'rawtnd-ref.cue': lambda: b'FILE "rawtnd.iso" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n',
+}, add=['rawtnd.iso'], ref='rawtnd-ref.cue', job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-00975',
+   ident='serial', name='007 - Tomorrow Never Dies (USA)', warning='raw 2,352-byte CD sectors')
+
+# the same disc as ps1-single through a cue with a byte order mark and lower-case keywords, which
+# chdman alone reads as no tracks at all (it then never finishes)
+fixture('ps1-cue-lowercase', {
+    'twine lower.cue': lambda: b'\xef\xbb\xbf' + b'file "twine.bin" binary\r\n  track 01 mode2/2352\r\n    index 01 00:00:00\r\n',
+}, add=['twine lower.cue', 'twine.bin'], ref='twine.cue', job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-01272',
+   ident='serial', name='007 - The World Is Not Enough (USA)')
+
 # serial SLUS-01272 (TWINE), but tests/support/server.js can add a test database row matching this
 # bin's size and CRC-32 under another name, to exercise the checksum-verified path
 fixture('ps1-verified', {

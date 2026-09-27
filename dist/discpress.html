@@ -700,7 +700,7 @@ body { overflow-x: clip; }
   <p>The layout adapts to your screen, text size, notch, rotation and keyboard. In a normal browser the whole page scrolls; inside apps that preview files (and when installed on the home screen) the header stays fixed and only the content scrolls. If scrolling ever feels wrong, change it in Settings → Scrolling; Settings → Screen info shows what your device reports. </p>
   <p>Keep this page open and in the foreground while it works; the screen is kept awake automatically. If the browser suspends the tab, the job may stop and need to be restarted.</p>
   <h3>Compatibility of the results</h3>
-  <p>The CHDs are standard CHD v5 files made by the same chdman code as desktop chdman 0.289, with identical data checksums, so they work in MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast and other emulators. The <i>Zstandard</i> option needs a recent emulator build.</p>
+  <p>The CHDs are standard CHD v5 files made by chdman from the official MAME 0.289 release, with the same checksums as desktop chdman 0.289 (for data, the very same bytes as the official build), so they work in MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast and other emulators. The <i>Zstandard</i> option needs a recent emulator build.</p>
   <h3>Everything else</h3>
   <p>The <b>Advanced</b> tab exposes every chdman command and option: <code>copy</code>, <code>createraw</code>, parent CHDs, hard disk templates, <code>addmeta</code>, <code>delmeta</code>, <code>dumpmeta</code>, <code>listtemplates</code> and more.</p>
 </div>
@@ -1671,7 +1671,7 @@ async function stageInput(msg, index, stages) {
   postMessage({ type: 'notice', level: 'info', message: 'This browser cannot read "' + inp.name + '" directly in the background, so it is copied to private storage first.' });
   function prog() {
     var now = Date.now();
-    if (now - last > 300) { last = now; postMessage({ type: 'progress', text: 'Copying input, ' + (100 * pos / size).toFixed(1) + '% complete' }); }
+    if (now - last > 300) { last = now; postMessage({ type: 'progress', text: 'Copying input, ' + (size ? 100 * pos / size : 100).toFixed(1) + '% complete' }); }
   }
   try {
     if (msg.debugStage === 2) throw new Error('debug');
@@ -2641,6 +2641,82 @@ function rewriteRefs(kind, text, map) {
     return ln;
   }).join('\n');
 }
+// chdman reads a descriptor's bytes as they are and matches keywords case-sensitively: a byte order
+// mark, UTF-16 or lower-case keywords leave it with no tracks, and with no tracks (or a track number
+// outside 1-99) it never finishes. So the page decodes the text itself, gives chdman a corrected
+// copy when needed (fixDescriptor), and refuses what chdman would not convert.
+function decodeText(b) {
+  if (b[0] === 0xEF && b[1] === 0xBB && b[2] === 0xBF) return { text: new TextDecoder().decode(b.subarray(3)), recoded: true };
+  if (b[0] === 0xFF && b[1] === 0xFE) return { text: new TextDecoder('utf-16le').decode(b.subarray(2)), recoded: true };
+  if (b[0] === 0xFE && b[1] === 0xFF) return { text: new TextDecoder('utf-16be').decode(b.subarray(2)), recoded: true };
+  try { return { text: new TextDecoder('utf-8', { fatal: true }).decode(b), recoded: false }; }
+  catch (e) { return { text: new TextDecoder('windows-1252').decode(b), recoded: true }; }
+}
+// chdman's msf_to_frames: "mm:ss:ff", or a plain number of frames
+function tocMsf(s) {
+  var m = /^(\d+):(\d+):(\d+)/.exec(s);
+  return m ? (+m[1] * 60 + +m[2]) * 75 + +m[3] : parseInt(s, 10) || 0;
+}
+// the length chdman 0.289 reads from the words after a TOC file name: `#offset length`, `start length`
+// or `#offset start length`; a single value is the length only on track 1, elsewhere an offset
+function tocFrames(a, first) {
+  var i = 0, w = a[i++] || '', num = function (s) { return /^\d/.test(s || ''); };
+  if (w === 'SWAP') w = a[i++] || '';
+  var offset = w.charAt(0) === '#' ? parseInt(w.slice(1), 10) || 0 : num(w) ? tocMsf(w) : 0;
+  var len = a[i++] || '';
+  if (num(len)) { var after = a[i++] || ''; return tocMsf(num(after) ? after : len); }
+  return first ? offset : 0;
+}
+// returns {text, changed, problem}: the text chdman should read, and why it can't be converted.
+// Lines may end in CR alone (classic Mac OS), which chdman reads as a single line.
+function fixDescriptor(kind, text) {
+  var lines = text.split(/\r\n|\r|\n/), tracks = 0, problem = '';
+  if (kind === 'cue') {
+    lines = lines.map(function (ln) {
+      var m = /^(\s*)(\S+)(.*)$/.exec(ln);
+      if (!m) return ln;
+      var k = m[2].toUpperCase(), rest = m[3];
+      if (k === 'FILE') rest = rest.replace(/^(\s+(?:"[^"]*"|\S+)\s+)(\S+)/, function (a, pre, type) { return pre + type.toUpperCase(); });
+      else if (k === 'TRACK') {
+        rest = rest.toUpperCase();
+        tracks++;
+        var n = parseInt(rest, 10);
+        if (!(n >= 1 && n <= 99) && !problem) problem = 'Track numbers go from 01 to 99, but this CUE file has \u201c' + ln.trim() + '\u201d.';
+      } else if (k === 'FLAGS') rest = rest.toUpperCase();
+      else if (k === 'REM') rest = rest.replace(/^(\s+)(SESSION|PREGAP|LEAD-OUT|LEAD-IN|SINGLE-DENSITY AREA|HIGH-DENSITY AREA)\b/i, function (a, sp, w) { return sp + w.toUpperCase(); });
+      else if (!/^(INDEX|PREGAP|POSTGAP)$/.test(k)) return ln;
+      return m[1] + k + rest;
+    });
+    if (!tracks) problem = 'This CUE file lists no tracks.';
+  } else if (kind === 'toc') {
+    var frames = 0, file = null, prevFile = null;
+    var endTrack = function () {
+      if (tracks && !frames && !problem) problem = 'chdman can\u2019t tell the length of track ' + tracks + ' from this TOC file.';
+    };
+    lines = lines.map(function (ln) {
+      var t = tokenize(ln);
+      if (t[0] === 'TRACK') { endTrack(); tracks++; prevFile = file; file = null; frames = 0; }
+      else if (/^(FILE|DATAFILE|AUDIOFILE)$/.test(t[0]) && tracks && t.length > 1) {
+        var a = t.slice(2);
+        frames = tocFrames(a, tracks === 1);
+        // `DATAFILE "file" length`, as chdman itself writes for one file per track, starts at the
+        // beginning of its file; chdman reads the length as an offset past track 1 and drops the track
+        if (!frames && t[0] === 'DATAFILE' && tracks > 1 && /^\d/.test(a[0] || '') && !/^\d/.test(a[1] || '') && t[1] !== prevFile) {
+          ln = ln.replace(/^(\s*DATAFILE\s+(?:"[^"]*"|\S+)\s+)/, '$1#0 ');
+          frames = tocMsf(a[0]);
+        }
+        file = t[1];
+      }
+      return ln;
+    });
+    endTrack();
+    if (!tracks) problem = 'This TOC file lists no tracks.';
+  } else {
+    return { text: text, changed: false, problem: '' };
+  }
+  var out = lines.join('\n');
+  return { text: out, changed: out !== text.split(/\r?\n/).join('\n'), problem: problem };
+}
 async function sniffSync(file) {
   try {
     var b = new Uint8Array(await file.slice(0, 16).arrayBuffer());
@@ -3074,7 +3150,7 @@ async function identifyJob(job, onStatus, onProvisional) {
 /* ---------- identification scheduling ---------- */
 var identQueue = [], identBusy = false;
 function scheduleIdentify(job) {
-  if (job.identPromise || (job.kind === 'create' && (job.missing.length || job.needCue))) return;
+  if (job.identPromise || (job.kind === 'create' && (job.missing.length || job.needCue || job.invalid))) return;
   job.identState = 'pending';
   job.identPromise = new Promise(function (resolve) { identQueue.push({ job: job, resolve: resolve }); });
   // settles once the game is known, possibly before the checksum that confirms it (identState 'checking')
@@ -3269,7 +3345,8 @@ async function addEntries(entries) {
     var d = descs[i];
     claimed.add(d);
     var job = await descriptorJob(d, pool, claimed);
-    created.push(job);
+    if (job) created.push(job);
+    else ignored.push(base(d.path));
   }
 
   // 3) everything else
@@ -3282,8 +3359,10 @@ async function addEntries(entries) {
       job2 = newJob({ kind: 'chd', title: t, files: [{ file: file, name: name }], state: 'probing', action: 'extract' });
     } else if (x === 'iso' || x === 'cdr' || x === 'toast') {
       var sync = await sniffSync(file);
-      job2 = newJob({ kind: 'create', src: 'iso', title: t, files: [{ file: file, name: name }], disc: sync ? 'cd' : (x === 'iso' ? 'dvd' : 'cd'), choices: ['dvd', 'cd'], syncMode: sync });
-      if (sync) job2.warnings.push('This .iso contains raw 2352-byte CD sectors, so it will be converted as a CD.');
+      // raw sectors get a generated cue with their own mode: given the .iso itself, chdman types the
+      // track by file size alone (Mode 2 for any raw image, 2,048-byte sectors when the size allows)
+      job2 = newJob({ kind: 'create', src: 'iso', title: t, files: [{ file: file, name: name }], disc: sync ? 'cd' : (x === 'iso' ? 'dvd' : 'cd'), choices: ['dvd', 'cd'], syncMode: sync, autoCue: sync ? (sync === 2 ? 'MODE2/2352' : 'MODE1/2352') : '' });
+      if (sync) job2.warnings.push('This .' + x + ' file contains raw 2,352-byte CD sectors, so it will be converted as a CD.');
     } else if (x === 'nrg') {
       job2 = newJob({ kind: 'create', src: 'nrg', title: t, files: [{ file: file, name: name }], disc: 'cd' });
     } else if (x === 'avi') {
@@ -3339,10 +3418,18 @@ async function addEntries(entries) {
 }
 
 async function descriptorJob(d, pool, claimed) {
-  var kind = ext(d.path), text = '';
-  try { text = await d.file.text(); } catch (e) { text = ''; }
-  var refs = parseRefs(kind, text);
-  var job = newJob({ kind: 'create', src: kind, title: stem(d.path), disc: kind === 'gdi' ? 'gdrom' : 'cd', descFile: d.file, descName: base(d.path), descText: text, files: [] });
+  var kind = ext(d.path), dec = null;
+  try { dec = decodeText(new Uint8Array(await d.file.slice(0, 1 << 20).arrayBuffer())); } catch (e) { /* unreadable */ }
+  // not a text file, e.g. a drive's raw table of contents that some dumping tools save as .toc: not a job
+  if (dec && (d.file.size > 1 << 20 || dec.text.indexOf('\0') >= 0)) return null;
+  var fix = dec ? fixDescriptor(kind, dec.text) : { text: '', changed: false, problem: 'This file could not be read.' };
+  var text = fix.text, refs = parseRefs(kind, text);
+  var job = newJob({ kind: 'create', src: kind, title: stem(d.path), disc: kind === 'gdi' ? 'gdrom' : 'cd', descFile: d.file, descName: base(d.path), descText: text, descDirty: !!dec && (dec.recoded || fix.changed), files: [] });
+  if (fix.problem) {
+    job.invalid = true;
+    job.state = 'error';
+    job.errorText = dec ? fix.problem + ' chdman can\u2019t convert it as it is.' : fix.problem;
+  }
   var dir = dirOf(d.path);
   refs.forEach(function (ref) {
     var want = base(ref).toLowerCase();
@@ -3363,8 +3450,8 @@ async function descriptorJob(d, pool, claimed) {
     if (li >= 0) looseFiles.splice(li, 1);
     job.files.push({ file: hit.file, name: base(hit.path), ref: ref });
   });
-  if (!refs.length) job.warnings.push('No track files are listed in this ' + kind.toUpperCase() + ' file.');
-  if (job.missing.length) job.state = 'blocked';
+  if (!refs.length && !job.invalid) job.warnings.push('No track files are listed in this ' + kind.toUpperCase() + ' file.');
+  if (job.missing.length && !job.invalid) job.state = 'blocked';
   return job;
 }
 
@@ -3382,7 +3469,7 @@ function finalizeCreateJob(job) {
     job.files.forEach(function (f) {
       if (f.ref && f.ref !== f.name) { map[f.ref] = f.name; changed = true; }
     });
-    job.descBlob = changed ? new Blob([rewriteRefs(job.src, job.descText, map)], { type: 'text/plain' }) : job.descFile;
+    job.descBlob = changed || job.descDirty ? new Blob([rewriteRefs(job.src, job.descText, map)], { type: 'text/plain' }) : job.descFile;
   }
   if (!job.action) job.action = KIND[job.disc].cmd;
 }
@@ -3614,7 +3701,7 @@ function refreshJob(job, full) {
   if (full) renderControls(job);
   else $$('input,select,button', ui.controls).forEach(function (x) { x.disabled = busy; });
   renderNotes(job);
-  ui.cmd.textContent = job.state === 'probing' || job.state === 'blocked' ? '' : safeCmd(job);
+  ui.cmd.textContent = job.state === 'probing' || job.state === 'blocked' || job.invalid ? '' : safeCmd(job);
   ui.prog.hidden = !(job.state === 'running' || job.state === 'queued');
   if (job.state === 'queued') setProgress(job, null, 'Waiting in queue…');
   renderResult(job);
@@ -3638,7 +3725,7 @@ function subtitle(job) {
   }
   var what;
   if (job.descFile) what = job.src.toUpperCase() + ' + ' + plural(job.files.length, 'track file');
-  else if (job.autoCue) what = '.' + ext(job.files[0].name) + ' image (no cue)';
+  else if (job.autoCue && job.src !== 'iso') what = '.' + ext(job.files[0].name) + ' image (no cue)';
   else what = '.' + ext(job.files[0].name) + ' image';
   var total = n + (job.descFile ? job.descFile.size : 0);
   return what + ' · ' + fmtBytes(total);
@@ -3668,7 +3755,7 @@ function renderControls(job) {
   var ui = job.ui, box = ui.controls, o = job.opts;
   var busy = job.state === 'running' || job.state === 'queued';
   box.replaceChildren();
-  if (job.state === 'probing' || (job.kind === 'chd' && !job.info)) return;
+  if (job.state === 'probing' || job.invalid || (job.kind === 'chd' && !job.info)) return;
   var refresh = function () { refreshJob(job, true); };
   var soft = function () { ui.cmd.textContent = safeCmd(job); };
 
@@ -3803,6 +3890,7 @@ function renderFoot(job) {
   var f = job.ui.foot;
   f.replaceChildren();
   var st = { ready: ['', 'Ready'], blocked: ['warn', 'Waiting for files'], probing: ['run', 'Reading…'], queued: ['run', 'Queued'], running: ['run', 'Working…'], done: ['ok', 'Finished'], error: ['err', 'Failed'], canceled: ['warn', 'Canceled'] }[job.state];
+  if (job.invalid) st = ['err', 'Can\u2019t convert'];
   f.append(el('span', { class: 'state' }, el('span', { class: 'dot ' + st[0] }), st[1]));
   if (job.state === 'ready') {
     var label = job.kind === 'create' ? 'Create CHD' : job.action === 'extract' ? 'Extract' : job.action === 'verify' ? 'Verify' : job.action === 'rename' ? 'Save renamed copy' : 'Show info';
@@ -3810,7 +3898,7 @@ function renderFoot(job) {
   } else if (job.state === 'queued' || job.state === 'running') {
     f.append(el('button', { class: 'btn danger', onclick: function () { cancelJob(job); } }, 'Cancel'));
   } else if (job.state === 'done' || job.state === 'error' || job.state === 'canceled') {
-    if (job.kind === 'chd' && job.info || job.kind === 'create') {
+    if (job.kind === 'chd' && job.info || job.kind === 'create' && !job.invalid) {
       f.append(el('button', { class: 'btn', onclick: function () { resetJob(job); } }, job.state === 'done' ? 'Run again' : 'Try again'));
     }
   }
@@ -3941,8 +4029,13 @@ async function pump() {
   }
 }
 
+// chdman never finishes when it finds no data: its progress then reads "nan% complete" (0 of 0)
+var STALLED = 'chdman found no data to convert in these files and would never have finished, so it was stopped. Check that the .cue, .gdi or .toc file lists the disc\u2019s tracks.';
+function stalledProgress(t) { return /\bnan% complete/i.test(t); }
+
 async function runJobNow(job) {
   job.state = 'running';
+  job.stalled = false;
   job.log = [];
   job.outputs = [];
   refreshJob(job, false);
@@ -4003,6 +4096,7 @@ async function runJobNow(job) {
       if (fm) setProgress(job, 100, 'Finishing…', ['ratio ' + fm[1] + '%']);
     },
     onProgress: function (t) {
+      if (stalledProgress(t)) { if (!job.stalled) { job.stalled = true; job.run.cancel(); } return; }
       var m = /^\s*([A-Za-z][A-Za-z ]*?),\s*([\d.]+)% complete(?:.*ratio=([\d.]+)%)?/.exec(t);
       if (!m) return;
       var phase = m[1], pct = parseFloat(m[2]);
@@ -4048,7 +4142,8 @@ async function runJobNow(job) {
       Store.removeJob(job.id);
     }
   } catch (e) {
-    if (e.canceled) { job.state = 'canceled'; }
+    if (e.canceled && job.stalled) { job.state = 'error'; job.errorText = STALLED; }
+    else if (e.canceled) { job.state = 'canceled'; }
     else { job.state = 'error'; job.errorText = readFailHint(e.message); appendLog(job, e.message); }
     Store.removeJob(job.id);
   }
@@ -4408,7 +4503,7 @@ async function cliRun() {
   ptext.textContent = 'Running…';
   $('#cliRun').disabled = true;
   $('#cliCancel').hidden = false;
-  var cjob = { id: 'cli' + uid(), outputs: [], el: null };
+  var cjob = { id: 'cli' + uid(), outputs: [], el: null }, stalled = false;
   try {
     await Engine.ready();
     var isCreate = /^(create|copy)/.test(args[0]);
@@ -4426,6 +4521,7 @@ async function cliRun() {
       helpers: isCreate && comp !== 'none' && nt > 1 ? nt : 0,
       onLine: function (s, t) { con.textContent += t + '\n'; con.scrollTop = con.scrollHeight; },
       onProgress: function (t) {
+        if (stalledProgress(t)) { if (!stalled) { stalled = true; cli.run.cancel(); } return; }
         var m = /([\d.]+)% complete/.exec(t);
         if (m) { prog.querySelector('.bar').classList.remove('indet'); barI.style.width = m[1] + '%'; ptext.textContent = t.trim(); }
       },
@@ -4443,7 +4539,7 @@ async function cliRun() {
         el('div', { class: 'row' }, el('button', { class: 'btn sm primary', onclick: function () { saveOutput({ id: cjob.id, outputs: cjob.outputs }, o); } }, icon(useShareSheet ? 'i-share' : 'i-download'), saveLabel))));
     });
   } catch (e) {
-    con.textContent += '\n' + (e.canceled ? '[canceled]' : 'Error: ' + e.message) + '\n';
+    con.textContent += '\n' + (e.canceled ? (stalled ? '[stopped] ' + STALLED : '[canceled]') : 'Error: ' + e.message) + '\n';
     prog.hidden = true;
   } finally {
     cli.run = null;

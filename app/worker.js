@@ -544,7 +544,7 @@ async function stageInput(msg, index, stages) {
   postMessage({ type: 'notice', level: 'info', message: 'This browser cannot read "' + inp.name + '" directly in the background, so it is copied to private storage first.' });
   function prog() {
     var now = Date.now();
-    if (now - last > 300) { last = now; postMessage({ type: 'progress', text: 'Copying input, ' + (100 * pos / size).toFixed(1) + '% complete' }); }
+    if (now - last > 300) { last = now; postMessage({ type: 'progress', text: 'Copying input, ' + (size ? 100 * pos / size : 100).toFixed(1) + '% complete' }); }
   }
   try {
     if (msg.debugStage === 2) throw new Error('debug');
