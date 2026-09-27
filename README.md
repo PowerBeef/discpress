@@ -189,7 +189,7 @@ source ~/emsdk/emsdk_env.sh
 - If you only change files in `app/`, run `python3 scripts/assemble.py` instead of the full build.
 - To refresh the game database with the latest Redump data, run `./scripts/update-db.sh`, then `python3 scripts/assemble.py`.
 - The README graphics are rendered from `scripts/brand/brand.html` with `python3 scripts/brand/render.py` (needs Playwright).
-- Pushing a tag like `v1.0.0` publishes a GitHub release with `discpress.html` attached (see `.github/workflows/release.yml`).
+- Pushing a tag like `v1.0.0`, or running **Actions → Release → Run workflow**, publishes a GitHub release with `discpress.html` attached (see `.github/workflows/release.yml`). Release notes come from `.github/release-notes/<tag>.md` when that file exists.
 
 </details>
 

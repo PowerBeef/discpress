@@ -5,6 +5,8 @@ name: Release
 #   - Actions > Release > Run workflow, enter a tag such as v1.0.0
 #   - push a tag (git tag v1.0.0 && git push origin v1.0.0)
 #   - publish a release on GitHub
+# If .github/release-notes/<tag>.md exists, it becomes the release notes
+# (replacing what's there on every run); otherwise GitHub generates them.
 on:
   push:
     tags: ['v*']
@@ -35,6 +37,12 @@ jobs:
         run: |
           case "$TAG" in v[0-9]*) ;; *) echo "::error::Tag must look like v1.0.0, got '$TAG'"; exit 1 ;; esac
           test -f dist/discpress.html || { echo "::error::dist/discpress.html is missing"; exit 1; }
-          gh release view "$TAG" >/dev/null 2>&1 ||
+          NOTES=".github/release-notes/$TAG.md"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            if [ -f "$NOTES" ]; then gh release edit "$TAG" --notes-file "$NOTES"; fi
+          elif [ -f "$NOTES" ]; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "Discpress $TAG" --notes-file "$NOTES"
+          else
             gh release create "$TAG" --target "$GITHUB_SHA" --title "Discpress $TAG" --generate-notes
+          fi
           gh release upload "$TAG" dist/discpress.html --clobber
