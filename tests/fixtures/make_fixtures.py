@@ -163,6 +163,23 @@ fixture('dreamcast-gdi', {
 }, add=['aerowings.gdi', 'track01.bin', 'track02.raw', 'track03.bin'], job='create', disc='gdrom', command='createcd', sys='dc',
    serial='T-40201N', ident='serial', name='AeroWings (USA)')
 
+# The Redump layout of a GD-ROM: one .bin per track, track 2's 2-second pregap stored at the start of
+# its file (INDEX 00), and REM lines marking the high-density area, which chdman places at LBA 45000.
+GD_CUE = ('REM SINGLE-DENSITY AREA\r\n'
+          'FILE "aerowings (Track 1).bin" BINARY\r\n  TRACK 01 MODE1/2352\r\n    INDEX 01 00:00:00\r\n'
+          'FILE "aerowings (Track 2).bin" BINARY\r\n  TRACK 02 AUDIO\r\n    INDEX 00 00:00:00\r\n    INDEX 01 00:02:00\r\n'
+          'REM HIGH-DENSITY AREA\r\n'
+          'FILE "aerowings (Track 3).bin" BINARY\r\n  TRACK 03 MODE1/2352\r\n    INDEX 01 00:00:00\r\n').encode()
+fixture('dreamcast-cue', {
+    'aerowings.cue': lambda: GD_CUE,
+    'aerowings (Track 1).bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660({'README.TXT': b'fixture'}, 'AEROWINGS')).ljust(300 * 2048, b'\0'), 1, 0),
+    'aerowings (Track 2).bin': lambda: g.audio(302, 63, silence=150),
+    'aerowings (Track 3).bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(
+        {'1ST_READ.BIN': g.filler(2 << 20, 64)}, 'AEROWINGS', '',
+        ipbin(b'SEGA SEGAKATANA ', 0x40, b'T-40201N  ', 0x80, b'AEROWINGS', {0x10: b'SEGA ENTERPRISES', 0x30: b'GD-ROM1/1       '}))), 1, 45000),
+}, add=['aerowings.cue', 'aerowings (Track 1).bin', 'aerowings (Track 2).bin', 'aerowings (Track 3).bin'], job='create', disc='gdrom',
+   command='createcd', sys='dc', serial='T-40201N', ident='serial', name='AeroWings (USA)')
+
 # ---------------------------------------------------------------- unrecognized / other types
 fixture('homebrew-iso', {
     'homebrew.iso': lambda: g.pad_sectors(g.iso9660({'README.TXT': b'hello', 'GAME.DAT': g.filler(3 << 20, 71)}, 'HOMEBREW')),

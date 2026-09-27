@@ -339,9 +339,15 @@ async function identifyJob(job, onStatus, onProvisional) {
     if (job.kind === 'chd') {
       chd = await chdReader(job.files[0].file);
       if (chd.kind === 1) {
-        for (var t = 0; t < chd.tracks.length && !det; t++) {
+        // as for .gdi files, a GD-ROM's IP.BIN header is on the high-density data track, the last one;
+        // the low-density track 1 holds a plain ISO 9660 volume that alone would pass for a PC disc
+        var order = chd.tracks.map(function (tr, i) { return i; });
+        if (chd.tracks.length && chd.tracks[0].gdrom) order.reverse();
+        for (var j = 0; j < order.length && (!det || det.weak); j++) {
+          var t = order[j];
           if (chd.tracks[t].type === 7) continue;
-          det = await detectTrack({ read: (function (tt) { return function (lba) { return chd.read(tt, lba); }; })(t) });
+          var dt = await detectTrack({ read: (function (tt) { return function (lba) { return chd.read(tt, lba); }; })(t) });
+          if (dt && (!det || !dt.weak)) det = dt;
         }
         chd.tracks.forEach(function (tr) { sizes.push(tr.frames * 2352); });
       } else if (chd.kind === 2) {

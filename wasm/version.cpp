@@ -1,5 +1,5 @@
 #define BARE_BUILD_VERSION "0.289"
-#define BARE_VCS_REVISION "mame0289-76c7d19 wasm"
+#define BARE_VCS_REVISION "mame0289 discpress"
 extern const char bare_build_version[];
 extern const char bare_vcs_revision[];
 extern const char build_version[];

@@ -17,6 +17,20 @@ function probe(bin) {
   }
 }
 
+const binaryHashes = new Map();
+function binaryHash(bin) {
+  if (!binaryHashes.has(bin)) {
+    let resolved = bin;
+    if (!bin.includes('/')) {
+      try { resolved = execFileSync('sh', ['-c', 'command -v "$0"', bin], { encoding: 'utf8' }).trim(); } catch { /* keep the name */ }
+    }
+    let h = bin;
+    try { h = crypto.createHash('sha1').update(fs.readFileSync(resolved)).digest('hex'); } catch { /* unreadable: fall back to the name */ }
+    binaryHashes.set(bin, h);
+  }
+  return binaryHashes.get(bin);
+}
+
 let cached;
 export function nativeChdman() {
   if (cached !== undefined) return cached;
@@ -59,7 +73,8 @@ export function info(chd) {
  */
 export function reference(command, input, extra = []) {
   const n = nativeChdman();
-  const key = crypto.createHash('sha1').update([n.bin, n.version, command, input, ...extra].join('\0')).digest('hex').slice(0, 16);
+  // keyed by the binary's content too: a rebuild from another MAME revision keeps the same path and version
+  const key = crypto.createHash('sha1').update([binaryHash(n.bin), n.version, command, input, ...extra].join('\0')).digest('hex').slice(0, 16);
   const dir = path.join(CACHE, 'native');
   fs.mkdirSync(dir, { recursive: true });
   const out = path.join(dir, `${key}.chd`);

@@ -12,7 +12,7 @@ Research for the planned chdman fork (CHD format, chdman internals, disc layouts
 
 ```sh
 # one-time: Emscripten 6.0.10 (emsdk), then the pinned MAME source + browser patch
-./scripts/fetch-mame.sh            # -> third_party/mame (sparse checkout of MAME 76c7d19 = post-0.289 master, applies wasm/mame.patch)
+./scripts/fetch-mame.sh            # -> third_party/mame (sparse checkout of the MAME 0.289 release, tag mame0289; applies wasm/mame.patch)
 
 # full build: compiles SIMD and non-SIMD wasm, links, then assembles
 source ~/emsdk/emsdk_env.sh
@@ -39,7 +39,7 @@ python3 scripts/brand/render.py
 
 Compiler experiments: `make -C wasm ... EXTRA="<flags>"` adds flags to every compile (empty by default). Measured with Emscripten 6.0.10: single-threaded conversion is within about 10–12% of native chdman; `-flto` gave no measurable speedup and breaks C++ exceptions under `-fwasm-exceptions` (DVD creation dies with an uncaught `WebAssembly.Exception`), so don't use it. Never use flags that change results (e.g. `-ffast-math` alters FLAC output).
 
-`wasm/Makefile`'s `native` target (`T=native`, used by `build-native.sh`) builds the same sources without `wasm_helper.cpp`. For default settings the app's CHDs are byte-identical to this native chdman's, whatever the thread count or SIMD choice; the tests rely on that. Two known exceptions (see `docs/chd/`): CD-audio (FLAC) hunks can differ by a few bytes between the wasm and native builds, because libFLAC's window functions depend on libm (same CHD SHA-1; the synthetic test audio doesn't trigger it); and 76c7d19 is not the 0.289 release. Its LZMA level (6 vs 8) and GD-ROM layout differ from official 0.289, so files differ from official 0.289 even though the CHD SHA-1 matches, except for GD-ROM.
+`wasm/Makefile`'s `native` target (`T=native`, used by `build-native.sh`) builds the same sources without `wasm_helper.cpp`. For default settings the app's CHDs are byte-identical to this native chdman's, whatever the thread count or SIMD choice; the tests rely on that. The pin is the official 0.289 release, so they also match other 0.289 builds that use MAME's bundled codec libraries (distro builds with system FLAC or zlib-ng can differ). One known exception (see `docs/chd/`): CD-audio (FLAC) hunks can differ by a few bytes between the wasm and native builds, because libFLAC's window functions depend on libm (same CHD SHA-1; the synthetic test audio doesn't trigger it). Don't pin a MAME master commit: post-0.289 master lowered the LZMA level (8 → 6, different bytes) and broke the GD-ROM layout that Dreamcast emulators read (`tests/ui/gdrom.spec.js`).
 
 ## Testing workflow
 
