@@ -11,6 +11,7 @@
 //     --presets default,fast          compression presets: default, fast, zstd, none
 //     --repeat 1                      runs per configuration; the median is reported
 //     --no-native                     skip the native chdman baseline
+//     --no-native-timing              still verify against native chdman, but don't time it
 //     --no-verify                     skip checking outputs against native chdman
 //     --html PATH                     page to test (default dist/discpress.html)
 //     --label NAME                    name for this run (saved as .cache/bench/<time>-<label>.json)
@@ -41,6 +42,7 @@ const cfg = {
   presets: list('presets', 'default'),
   repeat: +opt('repeat', 1),
   native: !flag('no-native') && !!nativeChdman(),
+  nativeTiming: !flag('no-native-timing'),
   verify: !flag('no-verify'),
   html: path.resolve(ROOT, opt('html', process.env.DISCPRESS_HTML || 'dist/discpress.html')),
   label: opt('label', 'run'),
@@ -211,7 +213,7 @@ for (const fx of fixtures) {
         }
       }
       // native baseline for the same work
-      if (cfg.native) {
+      if (cfg.native && cfg.nativeTiming) {
         const threadsList = op === 'extract' ? [1] : cfg.threads;
         for (const threads of threadsList) {
           const times = [];
