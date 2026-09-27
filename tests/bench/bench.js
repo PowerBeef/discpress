@@ -243,7 +243,7 @@ const meta = { label: cfg.label, date: new Date().toISOString(), cpus: cores, cp
 let previous = null;
 if (cfg.compare) {
   const f = cfg.compare === 'latest' ? fs.readdirSync(outDir).filter(n => n.endsWith('.json')).sort().pop() : cfg.compare;
-  if (f) previous = JSON.parse(fs.readFileSync(path.isAbsolute(f) ? f : path.join(outDir, f), 'utf8'));
+  if (f) previous = JSON.parse(fs.readFileSync([path.resolve(f), path.join(outDir, f)].find(p => fs.existsSync(p)) || f, 'utf8'));
 }
 const keyOf = r => [r.fixture, r.op, r.preset, r.simd, r.threads].join('|');
 const prev = new Map((previous?.results || []).map(r => [keyOf(r), r]));

@@ -1,6 +1,9 @@
 // The Advanced tab: every chdman command through a form or as text.
+import fs from 'node:fs';
+import path from 'node:path';
 import { test, expect } from '../support/app.js';
-import { nativeChdman, reference, sameVersion, sha1File, info } from '../support/native.js';
+import { FIXTURES } from '../support/paths.js';
+import { chdman, nativeChdman, reference, sameVersion, sha1File, info } from '../support/native.js';
 
 async function openCli(app, page) {
   await app.open();
@@ -72,4 +75,28 @@ test('listtemplates prints the hard disk templates', async ({ app, page }) => {
   const out = await runCli(page);
   expect(out).toContain('[exit code 0]');
   expect(out).toMatch(/Conner|Seagate|Quantum/);
+});
+
+test('addmeta edits a copy of the CHD in place, exactly like desktop chdman', async ({ app, page }) => {
+  test.skip(!nativeChdman(), 'needs native chdman');
+  // metadata can only be added to uncompressed CHDs; chdman rewrites parts of the file in place
+  const src = reference('createdvd', 'homebrew.iso', ['-c', 'none']);
+  const dir = path.join(FIXTURES, 'chd');
+  fs.mkdirSync(dir, { recursive: true });
+  const input = path.join(dir, 'meta.chd');
+  fs.copyFileSync(src, input);
+  const expected = test.info().outputPath('expected.chd');
+  fs.copyFileSync(src, expected);
+  chdman(['addmeta', '-i', expected, '-t', 'TEST', '-vt', 'hello from the tests']);
+
+  await openCli(app, page);
+  await addCliFiles(app, ['chd/meta.chd']);
+  await page.locator('#cliCmd').selectOption('addmeta');
+  await page.locator('#cliOpts label.field', { hasText: 'Metadata tag' }).locator('input').fill('TEST');
+  await page.locator('#cliOpts label.field', { hasText: 'Text value' }).locator('input').fill('hello from the tests');
+  expect(await runCli(page)).toContain('[exit code 0]');
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('#cliOuts button').first().click()]);
+  const got = test.info().outputPath('meta.chd');
+  await dl.saveAs(got);
+  expect(sha1File(got)).toBe(sha1File(expected));
 });
