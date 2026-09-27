@@ -2,7 +2,7 @@
 
 Measured on 2026-09-27 for the chdman fork dossier. Everything here can be reproduced with [`lab/lab.sh`](lab/lab.sh); see [lab/README.md](lab/README.md).
 
-**What was measured.** The subject is chdman built from the source Discpress ships: MAME `76c7d19`, i.e. 0.289 plus 1,167 commits. Codecs were driven through MAME's own classes (`chdcodec.cpp`), linked from `build/obj-native`.
+**What was measured.** The subject is chdman built from the source Discpress shipped at the time: MAME `76c7d19`, i.e. 0.289 plus 1,167 commits. Codecs were driven through MAME's own classes (`chdcodec.cpp`), linked from `build/obj-native`. Discpress 1.2.1 moved to the 0.289 release, whose only codec difference is LZMA level 8 instead of 6 (§5): LZMA figures shift by about 0.1% in size and LZMA is about 1.35× slower there; everything else is unchanged. The lab scripts now build against the 0.289 pin.
 
 **Build and host.** The native build uses `-O2`, `FLAC__NO_ASM` and `Z7_ST`, as `scripts/build-native.sh` builds it. The host is a 4 vCPU Intel Xeon at 2.1 GHz shared with other jobs. **Timings are per-thread CPU time** (`CLOCK_THREAD_CPUTIME_ID`, or `rusage` for whole processes), so contention mostly cancels out. Wall-clock comparisons are marked as such.
 
@@ -133,6 +133,16 @@ What each variant changes:
 - **The 0.289 → HEAD LZMA level change (8 → 6)** cost about 0.1% in size and made LZMA about 1.35× faster (lane B). Level 9 recovers the size.
 - None of these changes is worth breaking byte identity by default. They fit an explicit "smallest" preset.
 
+**Deflate at its limit.** zopfli (15 iterations) is too slow for the full corpus, so it ran on smaller discs built from the same material (`small.cue`: the first 6,000 data frames plus the Chopin *Albumleaf* and NIN *999,999* tracks, 46.6 MB; `small.iso`: the first 12,000 sectors of `payload.iso`, 24.6 MB). Four threads; CPU is the process total. MAME and libchdr decoded every output to the same data SHA-1.
+
+| Deflate encoder | CD (`small.cue`) | Δ size | CPU | DVD (`small.iso`) | Δ size | CPU |
+|---|---|---|---|---|---|---|
+| zlib level 9 (stock) | 13,482,845 | — | 13.0 s | 8,899,830 | — | 11.1 s |
+| libdeflate level 12 | 13,479,960 | −0.02% | 15.3 s | 8,816,313 | −0.94% | 14.7 s |
+| zopfli, 15 iterations | 13,479,348 | −0.03% | 455 s | 8,773,999 | −1.41% | 867 s |
+
+zopfli buys another 0.5% on DVD data over libdeflate for 30–60 times libdeflate's CPU time: at most an offline "archive" setting, never a default. On CD it gains almost nothing: LZMA wins about 90% of the data hunks, and deflate wins the rest by only a few bytes (§1).
+
 ## 4. Hunk size
 
 Stock chdman with `-hs`; libchdr decoding. "Decode per hunk" is the libchdr CPU time to decode one hunk, i.e. the cost of a random read that misses the hunk cache.
@@ -177,6 +187,8 @@ MAME was built at tag `mame0289` with the same Makefile, and both builds were ru
 - Here, 0.289's code rebuilt with only the new LZMA SDK 26.02 gives files **identical** to official 0.289 on the PS1, Saturn and PS2 fixtures. Lanes A and G also found SDKs 22.01, 23.01 and 26.02 byte-identical at chdman's settings.
 
 The SDK update changes nothing. So the shipped claim of "byte for byte the same as chdman 0.289" is inaccurate. The CHD identity (SHA-1) matches, except for GD-ROM.
+
+**Resolved in Discpress 1.2.1.** The pin is now the `mame0289` tag. Its native build gives files byte-identical to the independent 0.289 build on every fixture above, GD-ROM included, and `tests/ui/gdrom.spec.js` guards the GD-ROM layout.
 
 ## 6. Mode 1 vs Mode 2: ECC stripping check
 

@@ -29,9 +29,9 @@ This is research done on 2026-09-27 to prepare a hard fork of MAME's `chdman` fo
 
 ---
 
-## Problems in the shipped app
+## Problems in the shipped app (1.0–1.2.0)
 
-Found during this research and verified independently of the lane that found them.
+Found during this research and verified independently of the lane that found them. Discpress 1.2.1 fixes 1–3 and guards against 4 (see [fork-plan.md](fork-plan.md), milestone 0).
 
 ### 1. Dreamcast CHDs made by Discpress 1.0–1.2 don't load in any released Flycast, and GDI-sourced ones are mis-mastered
 
@@ -48,6 +48,8 @@ Found during this research and verified independently of the lane that found the
 
 **Fix.** Lane C validated a fix: restore 0.289's GD handling. The output then matches official 0.289 byte for byte (optical-media.md §5, §13; ecosystem-sony-dreamcast.md §1.5).
 
+**Status: fixed in 1.2.1** by building the `mame0289` tag; `tests/ui/gdrom.spec.js` checks the layout. Dreamcast CHDs made with 1.0–1.2.0 should be converted again from the original files.
+
 ### 2. "Byte for byte the same as chdman 0.289" is not true
 
 Three separate causes:
@@ -58,10 +60,14 @@ Three separate causes:
 
 The claim in the README, the help page, CLAUDE.md and the release notes should be reworded until the fork restores identity (fork-plan.md, milestones 0 and 2.3).
 
+**Status in 1.2.1:** the 0.289 tag restores byte identity for data (verified on every fixture against an independent 0.289 build). The FLAC caveat remains, and the wording now says so.
+
 ### 3. Other unreleased upstream changes shipped with the pin
 
 - **The `CHSE` session tag.** It is written for multi-session sources, and changes the SHA-1 compared with 0.289. Virtual Jaguar requires it for Jaguar CD. Kronos, Yabause and jgenesis refuse any disc that has it.
 - **CD+G cue input.** Every Beetle core and Flycast ≤ 2.7 refuse discs with subcode.
+
+**Status:** gone in 1.2.1; 0.289 has neither.
 
 ### 4. Inputs that hang or crash chdman
 
@@ -75,6 +81,12 @@ Any input that yields 0 tracks makes chdman loop forever; this is also in 0.289.
 A 100-track cue crashes it.
 
 Hostile CHDs are a risk too: a malformed FLAC hunk hangs MAME's decoder, and a self-referencing hunk overflows the stack. Discpress reads user-supplied CHDs for identification, so these apply to the app. See optical-media.md §12 and format.md §11.
+
+**Status in 1.2.1:**
+- The Convert tab refuses descriptors with no tracks or out-of-range track numbers, and repairs BOM, encoding, line endings and keyword case.
+- It skips binary `.toc` files, and lone `.bin`/raw `.iso` images get a generated cue.
+- A watchdog stops any run whose progress reads `nan%`, in the Advanced tab too.
+- Hardening against hostile CHDs is left to the fork (milestone 1).
 
 ---
 

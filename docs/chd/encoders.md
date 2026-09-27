@@ -11,7 +11,7 @@ Lane G of the fork dossier. Written 2026-09-27.
 **Subject.** Discpress's pinned MAME source, commit `76c7d197ed`. That is a post-0.289 master snapshot from 2026-09-27, not the `mame0289` tag; see §1.3. Nothing under `/home/user/discpress` was modified.
 
 **Evidence labels.** Every claim carries one of these tags:
-- **[exp]**: my own measurement. The harnesses and raw logs are under `$SP/exp/`, where `$SP` = `$SP`.
+- **[exp]**: my own measurement. The harnesses and raw logs are under `$SP/exp/`, in the research workspace.
 - **[code]**: read in the source, with the location given.
 - **[doc]**: taken from the cited documentation.
 - **[unverified]**: plausible but not checked.

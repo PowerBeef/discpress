@@ -1005,7 +1005,7 @@ Ranked by value divided by risk. **[BI]** means byte-identical-preserving: outpu
 - `THIRD_PARTY_NOTICES.md`
 - `.github/release-notes/v1.1.0.md`–`v1.2.0.md`
 
-**My artefacts** (`$SP` = `$SP`):
+**My artefacts** (in the research workspace `$SP`):
 
 | Path | Contents |
 |---|---|

@@ -12,7 +12,7 @@ Outputs (in the directory given as argument, where lab.sh fetch put the sources)
   audio.bin      CD-DA, 16-bit little endian stereo, each track padded to 2352
   mixed.cue/.bin a mixed-mode disc: data_m2 track + the audio tracks
 """
-import glob, os, sys, zipfile
+import glob, os, shutil, sys, zipfile
 import numpy as np
 import soundfile as sf
 from scipy.signal import resample_poly
@@ -92,5 +92,15 @@ if __name__ == '__main__':
         open(name, 'wb').write(bytes(150 * 2352) + pcm)
         cue += [f'FILE "{name}" BINARY', f'  TRACK {i:02d} AUDIO', '    INDEX 00 00:00:00', '    INDEX 01 00:02:00']
     open('mixed.cue', 'w').write('\n'.join(cue) + '\n')
+    # a smaller pair for the slowest variants (SLOW in run_variants.py): the first 12,000 sectors of
+    # payload.iso, and a disc with the first 6,000 data frames plus the first and third audio tracks
+    open('small.iso', 'wb').write(p[:12000 * S])
+    open('small (Track 1).bin', 'wb').write(m2[:6000 * 2352])
+    cue = ['FILE "small (Track 1).bin" BINARY', '  TRACK 01 MODE2/2352', '    INDEX 01 00:00:00']
+    for i, src in ((2, 2), (3, 4)):
+        name = f'small (Track {i}).bin'
+        shutil.copyfile(f'mixed (Track {src}).bin', name)
+        cue += [f'FILE "{name}" BINARY', f'  TRACK {i:02d} AUDIO', '    INDEX 00 00:00:00', '    INDEX 01 00:02:00']
+    open('small.cue', 'w').write('\n'.join(cue) + '\n')
     print('payload', len(p) // S, 'sectors;', 'audio', sum(len(t[1]) for t in tr) // 2352, 'frames;',
           [(t[0], len(t[1]) // 2352) for t in tr])

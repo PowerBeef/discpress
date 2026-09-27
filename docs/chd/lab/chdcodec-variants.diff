@@ -37,10 +37,10 @@
 +}
 +}
 +
- #include <bit>
  #include <cstring>
  #include <new>
-@@ -935,6 +968,15 @@
+ 
+@@ -934,6 +967,15 @@
  
  uint32_t chd_zlib_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
@@ -56,7 +56,7 @@
  	// reset the compressor
  	m_deflater.next_in = const_cast<Bytef *>(src);
  	m_deflater.avail_in = srclen;
-@@ -1061,7 +1103,8 @@
+@@ -1060,7 +1102,8 @@
  uint32_t chd_zstd_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
  	// reset the compressor
@@ -66,7 +66,7 @@
  	if (ZSTD_isError(result))
  		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  
-@@ -1255,6 +1298,30 @@
+@@ -1254,6 +1297,30 @@
  {
  	// initialize the properties
  	configure_properties(m_props, hunkbytes);
@@ -97,7 +97,7 @@
  }
  
  
-@@ -1646,6 +1713,16 @@
+@@ -1651,6 +1718,16 @@
  	// finish up
  	uint32_t complen = m_encoder.finish();
  

@@ -14,7 +14,7 @@ This is the synthesis of the research dossier in this folder (see [README.md](RE
 
 ## 1. Where Discpress stands today
 
-**Engine.** Discpress compiles MAME's chdman from a pinned MAME **master** commit, `76c7d19` (0.289 plus 1,167 commits, including output-changing ones). On top sits a 130-line patch that farms hunk compression out to helper Web Workers, with Asyncify yielding to JavaScript. The engine is driven through `callMain`, and progress is scraped from text (B §6).
+**Engine.** Up to 1.2.0, Discpress compiled MAME's chdman from a pinned MAME **master** commit, `76c7d19` (0.289 plus 1,167 commits, including output-changing ones); 1.2.1 pins the `mame0289` release tag instead (milestone 0). On top sits a 130-line patch that farms hunk compression out to helper Web Workers, with Asyncify yielding to JavaScript. The engine is driven through `callMain`, and progress is scraped from text (B §6).
 
 **Promise.** The app, CLAUDE.md and every release note say the CHDs are "byte for byte" what desktop chdman 0.289 makes. The research shows that promise is false in three ways:
 
@@ -116,6 +116,19 @@ Effort estimates assume one developer working with the existing test harness.
 ### Milestone 0: correctness hotfix (days)
 
 This affects users today, so it ships as its own small release before any fork work.
+
+**Status: shipped in Discpress 1.2.1.**
+- Re-pinned to the `mame0289` tag: GD-ROM layout and LZMA level are 0.289's, and the native build is byte-identical to an independent 0.289 build on every fixture.
+- `tests/ui/gdrom.spec.js` checks the layout for a `.gdi` and a Redump cue.
+- The claims now say "same checksums as chdman 0.289, the same bytes for data".
+- Guard rails in the app:
+  - descriptors are decoded (BOM, UTF-16, Windows-1252, CR-only line ends) and cue keywords upper-cased;
+  - cues without tracks or with track numbers outside 1–99 are refused, and so are TOCs with a track length chdman can't read;
+  - chdman's own one-file-per-track TOC is repaired (`DATAFILE "f" #0 length`; chdman drops those tracks otherwise);
+  - binary `.toc` files are skipped;
+  - raw `.iso` images get a cue with their sector mode;
+  - a `nan%` progress watchdog stops any remaining endless run.
+- Still open: more GD types (1, 2 and 3-split) and the CC0 music fixture for the FLAC divergence.
 
 1. **GD-ROM.**
    - **Minimal fix:** revert #15870's `.gdi` virtual-pregap branch to 0.289's "gap becomes `PAD` of the previous track".

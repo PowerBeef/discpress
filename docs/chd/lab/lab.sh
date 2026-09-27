@@ -19,7 +19,7 @@ M="${MAME_DIR:-$ROOT/third_party/mame}"
 export LAB
 mkdir -p "$LAB"/{corpus,src,out,bin}
 
-CXXFLAGS="-O2 -std=c++20 -DNDEBUG -DLSB_FIRST -DCRLF=2 -DSDLMAME_UNIX -DOSD_SDL -DSDLMAME_LINUX -DZLIB_CONST -DUTF8PROC_STATIC -D_FILE_OFFSET_BITS=64 \
+CXXFLAGS="-O2 -std=c++20 -DNDEBUG -DLSB_FIRST -DCRLF=2 -DSDLMAME_UNIX -DOSD_SDL -DSDLMAME_LINUX -DUTF8PROC_STATIC -D_FILE_OFFSET_BITS=64 \
  -I$M/src/osd -I$M/src/lib/util -I$M/3rdparty -I$M/3rdparty/zlib -I$M/3rdparty/zstd/lib -I$M/3rdparty/flac/include -I$M/src/lib -I$ROOT/wasm/shim -Wno-deprecated-declarations"
 
 clone() { [ -d "$LAB/src/$2" ] || git clone -q --depth 1 "https://github.com/$1" "$LAB/src/$2"; }
