@@ -1,6 +1,7 @@
-// Native chdman as a reference ("oracle") for the browser build.
-// Prefers the same version the app ships (build/chdman-native, see scripts/build-native.sh);
-// falls back to CHDMAN=... or a chdman on PATH (e.g. the mame-tools package).
+// Native chdman as a reference ("oracle") for the browser build. Unless CHDMAN=... names one,
+// prefers unmodified chdman 0.289 built from the MAME release (build/chdman-0.289, see
+// scripts/build-upstream.sh), then the engine's own native build (build/chdman-native, see
+// scripts/build-native.sh), then a chdman on PATH (e.g. the mame-tools package).
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -34,7 +35,7 @@ function binaryHash(bin) {
 let cached;
 export function nativeChdman() {
   if (cached !== undefined) return cached;
-  for (const bin of [process.env.CHDMAN, path.join(ROOT, 'build', 'chdman-native'), 'chdman'].filter(Boolean)) {
+  for (const bin of [process.env.CHDMAN, path.join(ROOT, 'build', 'chdman-0.289'), path.join(ROOT, 'build', 'chdman-native'), 'chdman'].filter(Boolean)) {
     const out = probe(bin);
     const m = out && /manager ([\d.]+)/.exec(out);
     if (m) return (cached = { bin, version: m[1] });
@@ -53,7 +54,7 @@ export function sameVersion() {
 
 export function chdman(args, opts = {}) {
   const n = nativeChdman();
-  if (!n) throw new Error('native chdman not found (run scripts/build-native.sh or install mame-tools)');
+  if (!n) throw new Error('native chdman not found (run scripts/build-upstream.sh or scripts/build-native.sh, or install mame-tools)');
   return execFileSync(n.bin, args, { encoding: 'utf8', maxBuffer: 64 << 20, cwd: opts.cwd || FIXTURES, stdio: ['ignore', 'pipe', 'pipe'] });
 }
 

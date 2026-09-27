@@ -125,7 +125,7 @@ No. Discpress is a single file that runs entirely on your device. It makes no ne
 <details>
 <summary><b>Are the CHDs as good as the ones from desktop chdman?</b></summary>
 <br>
-Yes. Discpress runs chdman from the official MAME 0.289 release, so the files are standard CHD v5 with the same checksums as desktop chdman 0.289's. For data they are the same byte for byte as an official chdman 0.289 build's. With CD audio a few compressed bytes can differ, because the FLAC encoder's floating-point math isn't identical in every build; the audio itself is the same. The only changes are two small additions so it can run in a browser: a bridge for reading and writing files, and multi-core compression. You can read every change in <a href="wasm/mame.patch"><code>wasm/mame.patch</code></a>.
+Yes. Discpress runs chdman from the official MAME 0.289 release, so the files are standard CHD v5 with the same checksums as desktop chdman 0.289's. For data they are the same byte for byte as an official chdman 0.289 build's. With CD audio a few compressed bytes can differ, because the FLAC encoder's floating-point math isn't identical in every build; the audio itself is the same. Its source is in <a href="engine/README.md"><code>engine/</code></a>, and the only changes are small additions so it can run in a browser: a bridge for reading and writing files, and multi-core compression. You can read every change in <a href="engine/mame-0.289.diff"><code>engine/mame-0.289.diff</code></a>.
 </details>
 
 <details>
@@ -173,13 +173,12 @@ The build is fully reproducible: building from a clean checkout gives a byte-ide
 <summary><b>Build instructions</b></summary>
 <br>
 
-Requirements: [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) 6.0.10, Python 3, make and git.
+Requirements: [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) 6.0.10, Python 3 and make. The chdman source is in `engine/` (see [`engine/README.md`](engine/README.md)).
 
 ```sh
 # one-time setup
 git clone https://github.com/emscripten-core/emsdk.git ~/emsdk
 ~/emsdk/emsdk install 6.0.10 && ~/emsdk/emsdk activate 6.0.10
-./scripts/fetch-mame.sh         # MAME 0.289 source (only what chdman needs) + the browser patch
 
 # build
 source ~/emsdk/emsdk_env.sh

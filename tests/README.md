@@ -10,7 +10,7 @@ with [Playwright](https://playwright.dev). Nothing here is part of the app.
 cd tests
 npm install                      # Playwright Test + axe-core
 pip install numpy                # for the synthetic disc generator
-../scripts/build-native.sh       # optional but recommended: native chdman 0.289 (the reference)
+../scripts/build-upstream.sh     # optional but recommended: unmodified chdman 0.289, the reference
 ```
 
 Chromium must be available to Playwright (`npx playwright install chromium` on a new machine;
@@ -36,8 +36,9 @@ parallel test workers (default 2), `CHDMAN` a native chdman binary, `REGEN_FIXTU
 ## How correctness is checked
 
 - **Native chdman is the oracle.** Every CHD the app creates is compared with what native chdman
-  makes from the same files. With `build/chdman-native` (same MAME revision and patch as the app)
-  the outputs must be **byte-identical**, for every compression preset, thread count, SIMD and
+  makes from the same files: preferably `build/chdman-0.289`, unmodified chdman from the MAME 0.289
+  release (`scripts/build-upstream.sh`), otherwise the engine's own `build/chdman-native`. With
+  either, the outputs must be **byte-identical**, for every compression preset, thread count, SIMD and
   non-SIMD build, and storage mode. With another chdman version only the data checksums are compared.
 - **Extraction** is compared file by file with native `extractcd`/`extractdvd`/`extracthd`, and DVD
   and hard disk images must come back identical to the original input.

@@ -15,7 +15,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
 LAB="${LAB:-$ROOT/tests/.cache/chd-lab}"
-M="${MAME_DIR:-$ROOT/third_party/mame}"
+M="${MAME_DIR:-$ROOT/engine/mame}"
 export LAB
 mkdir -p "$LAB"/{corpus,src,out,bin}
 

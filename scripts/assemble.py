@@ -29,8 +29,9 @@ assert '</script' not in wsrc.lower(), 'script end tag in worker source'
 simd_b64, simd_size = pack(os.path.join(B, 'chdman.wasm'))
 base_b64, base_size = pack(os.path.join(B, 'chdman-nosimd.wasm'))
 
-# Shown in Help > About: every change made to MAME, plus the two new files.
-patch = rd(os.path.join(W, 'mame.patch'))
+# Shown in Help > About: every change the engine makes to MAME 0.289 (scripts/engine-diff.sh),
+# plus the two new files.
+patch = rd(os.path.join(ROOT, 'engine', 'mame-0.289.diff'))
 for name, label in [('wasm_helper.cpp', 'new file'), ('par_lib.js', 'new file, Emscripten JS library')]:
     patch += '\n--- /dev/null\n+++ %s (%s)\n' % (name, label)
     patch += ''.join('+' + l + '\n' for l in rd(os.path.join(W, name)).splitlines())

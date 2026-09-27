@@ -149,6 +149,12 @@ This affects users today, so it ships as its own small release before any fork w
 
 ### Milestone 1: the engine fork (1–2 weeks)
 
+**Status: step 1 done.**
+- The engine is in `engine/` (see `engine/README.md`): 75 MAME 0.289 source files and their headers, with the browser patch applied as ordinary code.
+- The unused utf8proc-backed functions are gone, and so are disasmintf, nanosvg, expat and the unused LZMA/7z files.
+- It builds without a MAME checkout. The objects are byte-identical to the old build's (except `unicode.o`), and the build stays reproducible.
+- The tests now compare with unmodified chdman 0.289 (`scripts/build-upstream.sh`).
+
 1. **Extract `engine/`.** Take the 78-object closure (B §7.1) at the reference tag, re-apply `mame.patch` as ordinary code, and drop `disasmintf`, `nanosvg`, expat and the unused LZMA/7z files. Fix `THIRD_PARTY_NOTICES.md`.
 2. **Library API instead of `callMain`.** `chd_file_compressor` is already a resumable state machine (`compress_begin`/`compress_continue`). Expose:
    - `create_open` → `step` → `finish`;

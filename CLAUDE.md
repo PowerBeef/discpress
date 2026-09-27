@@ -11,19 +11,19 @@ Research for the planned chdman fork (CHD format, chdman internals, disc layouts
 ## Commands
 
 ```sh
-# one-time: Emscripten 6.0.10 (emsdk), then the pinned MAME source + browser patch
-./scripts/fetch-mame.sh            # -> third_party/mame (sparse checkout of the MAME 0.289 release, tag mame0289; applies wasm/mame.patch)
-
-# full build: compiles SIMD and non-SIMD wasm, links, then assembles
+# one-time: Emscripten 6.0.10 (emsdk); the engine source is in engine/ (no MAME checkout needed)
+# full build: compiles SIMD and non-SIMD wasm from engine/, links, then assembles
 source ~/emsdk/emsdk_env.sh
-./build.sh                         # -> build/ (gitignored) and dist/discpress.html; JOBS=, MAME_DIR= optional
+./build.sh                         # -> build/ (gitignored) and dist/discpress.html; JOBS= optional
 
 # after changing only app/ or db/: no Emscripten needed
 python3 scripts/extract-build.py   # once: recovers build/chdman.js + both .wasm from dist/discpress.html
 python3 scripts/assemble.py        # [output.html], default dist/discpress.html
 
-# native chdman 0.289 from the same source + patch (reference for tests/benchmarks)
-./scripts/build-native.sh          # -> build/chdman-native (fetches MAME if needed; ~3 min first time)
+# native chdman: the tests' reference, and the engine itself
+./scripts/build-upstream.sh        # -> build/chdman-0.289: unmodified MAME 0.289 (fetches it into third_party/mame)
+./scripts/build-native.sh          # -> build/chdman-native: engine/ built natively
+./scripts/engine-diff.sh           # after changing engine/mame: refresh engine/mame-0.289.diff (--check to verify)
 
 # tests and benchmarks (run from tests/; see tests/README.md)
 npm test                           # UI tests on dist/discpress.html; `npm run test:dev` tests app/ as assembled now
@@ -39,7 +39,7 @@ python3 scripts/brand/render.py
 
 Compiler experiments: `make -C wasm ... EXTRA="<flags>"` adds flags to every compile (empty by default). Measured with Emscripten 6.0.10: single-threaded conversion is within about 10–12% of native chdman; `-flto` gave no measurable speedup and breaks C++ exceptions under `-fwasm-exceptions` (DVD creation dies with an uncaught `WebAssembly.Exception`), so don't use it. Never use flags that change results (e.g. `-ffast-math` alters FLAC output).
 
-`wasm/Makefile`'s `native` target (`T=native`, used by `build-native.sh`) builds the same sources without `wasm_helper.cpp`. For default settings the app's CHDs are byte-identical to this native chdman's, whatever the thread count or SIMD choice; the tests rely on that. The pin is the official 0.289 release, so they also match other 0.289 builds that use MAME's bundled codec libraries (distro builds with system FLAC or zlib-ng can differ). One known exception (see `docs/chd/`): CD-audio (FLAC) hunks can differ by a few bytes between the wasm and native builds, because libFLAC's window functions depend on libm (same CHD SHA-1; the synthetic test audio doesn't trigger it). Don't pin a MAME master commit: post-0.289 master lowered the LZMA level (8 → 6, different bytes) and broke the GD-ROM layout that Dreamcast emulators read (`tests/ui/gdrom.spec.js`).
+`wasm/Makefile`'s `native` target builds the same sources without `wasm_helper.cpp`: from `engine/` for `build-native.sh`, from unmodified MAME 0.289 (`UPSTREAM=1`) for `build-upstream.sh`. For default settings the app's CHDs must be byte-identical to upstream chdman 0.289's, whatever the thread count or SIMD choice; the tests compare with `build/chdman-0.289` (else `build/chdman-native`). They also match other 0.289 builds that use MAME's bundled codec libraries (distro builds with system FLAC or zlib-ng can differ). One known exception (see `docs/chd/`): CD-audio (FLAC) hunks can differ by a few bytes between the wasm and native builds, because libFLAC's window functions depend on libm (same CHD SHA-1; the synthetic test audio doesn't trigger it). Don't take engine code from MAME master: post-0.289 master lowered the LZMA level (8 → 6, different bytes) and broke the GD-ROM layout that Dreamcast emulators read (`tests/ui/gdrom.spec.js`).
 
 ## Testing workflow
 
@@ -65,9 +65,10 @@ Consequences: app JS is plain browser script (no modules/imports, ES5-style `var
 - **`app/ui.js`** (main thread, one IIFE): job model (files grouped into jobs by descriptor `.cue`/`.gdi`/etc.), building chdman argument lists per job (`buildJob`), the Advanced tab CLI builder (`CMDS`/`OPT`), OPFS bookkeeping (`Store`), settings, and the `Engine` that runs commands. `Engine.run` starts one **job worker** per chdman command plus N **helper workers** connected to it by `MessageChannel`s. N comes from the thread setting: `'auto'` (default) uses `Tuning`, a one-off per-device speed test (helpers compress synthetic DVD hunks at 1, 2, 3… threads until an extra one adds under 8%; cached in `localStorage['chdman-web-tuning']` keyed by core count + user agent; up to 8 threads on touch devices, 16 elsewhere, regardless of the reported core count), run before the first compressing job; `threadCount()` resolves the setting.
 - **Input guard rails** (`app/ui.js`): chdman 0.289 reads descriptors byte for byte with case-sensitive keywords, and loops forever when it finds no tracks. So `descriptorJob` decodes a descriptor itself (`decodeText`: BOM, UTF-16, Windows-1252), and `fixDescriptor` either gives chdman a corrected copy (LF line ends, cue keywords upper-cased; chdman's own one-file-per-track TOC gets `#0` offsets) or refuses the job (`job.invalid`: no tracks, track numbers outside 1–99, TOC lengths chdman can't read). Binary `.toc` files are skipped, raw-sector `.iso` files get an `autoCue`, and a `nan% complete` progress line stops the run (`STALLED`), in the Advanced tab too.
 - **`app/worker.js`** (Web Worker, appended to the Emscripten glue): message roles `run` (execute `callMain` with args), `helper` (compress hunks for the job worker), `reader` (open a CHD and serve sectors for identification) and `crc`. It mounts a custom Emscripten filesystem (`makeFS`) over storage backends: `BlobStore` (read inputs in place via `FileReaderSync`), `OpfsStore` (outputs to Origin Private File System), `MemStore` (fallback), and `StreamStore` (outputs streamed to a user-chosen folder: `s-*` messages handled by `makeSink` in `ui.js` via the File System Access API). When a worker can't read picked files (some iOS file-viewer web views), it sends `stage-request` and the page streams chunks (`stage-chunk`/`stage-ack`/`stage-end`).
-- **Multi-core compression** doesn't use pthreads/SharedArrayBuffer (so no COOP/COEP headers are needed). `wasm/mame.patch` adds hooks in `chd_file_compressor` and chdman's `compress_common`; `wasm/par_lib.js` (Emscripten JS library) hands hunks to `Module.parSubmit` and suspends chdman with **Asyncify** in `wasm_par_yield`; helper workers run a second wasm instance whose `wasm_helper_*` exports (`wasm/wasm_helper.cpp`) compress hunks exactly as `chd_file_compressor` would. Asyncify-instrumented functions are listed in `wasm/link.sh` (`ASYNCIFY_ADD`); new exported C functions must be added to `EXPORTED_FUNCTIONS` there.
+- **Multi-core compression** doesn't use pthreads/SharedArrayBuffer (so no COOP/COEP headers are needed). The engine has hooks in `chd_file_compressor` (`engine/mame/src/lib/util/chd.cpp`) and chdman's `compress_common`; `wasm/par_lib.js` (Emscripten JS library) hands hunks to `Module.parSubmit` and suspends chdman with **Asyncify** in `wasm_par_yield`; helper workers run a second wasm instance whose `wasm_helper_*` exports (`wasm/wasm_helper.cpp`) compress hunks exactly as `chd_file_compressor` would. Asyncify-instrumented functions are listed in `wasm/link.sh` (`ASYNCIFY_ADD`); new exported C functions must be added to `EXPORTED_FUNCTIONS` there.
 - **Game identification** (`app/ident.js`, runs on the main thread): reads boot data (IP.BIN, SYSTEM.CNF, PARAM.SFO, …) via ISO 9660 from raw images, or from inside CHDs via the worker `reader` role backed by `wasm_probe_*` in `wasm_helper.cpp`; matches serial, or size + CRC-32 (computed in a worker with zlib's `crc32` exported from the wasm, JS fallbacks in the worker and on the page), against the database. Identification is two-phase: once console/serial/sizes are known, `onProvisional` lets a conversion start (`job.identKnown`); the checksum then confirms the exact release and `renameOutputs` renames finished results if it differs (not when results were already saved, named by the user, or written straight into a folder, which waits for the checksum). `db/db.json.gz` is `{version, systems: {key: "name\tserial\tsize\tcrc\ttrack\text" rows}}`; system keys in `db/mkdb.py` must match `SYSTEMS` in `ident.js`.
-- **`wasm/`**: `sources.mk` lists exactly which MAME `lib/util`, OSD and 3rdparty sources are compiled; `shim/SDL2/SDL.h` stubs the only SDL calls chdman needs; `version.cpp` supplies the version strings. Keep every MAME change inside `wasm/mame.patch` (it is also displayed in Help → About); `scripts/fetch-mame.sh` pins the MAME commit.
+- **`engine/`** (see `engine/README.md`): the chdman fork. `engine/mame` holds MAME 0.289's chdman and exactly the MAME sources it links (`engine/FILES`), at MAME's paths. Change them in place, then run `scripts/engine-diff.sh`: `engine/mame-0.289.diff` lists every change and is shown in Help → About. New code goes outside `engine/mame`. `scripts/fetch-mame.sh` fetches the unmodified release for the diff and for `build-upstream.sh`.
+- **`wasm/`**: `sources.mk` lists the engine sources that are compiled; `shim/SDL2/SDL.h` stubs the only SDL calls chdman needs; `version.cpp` supplies the version strings.
 
 ## Releases
 

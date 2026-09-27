@@ -15,11 +15,10 @@ OPT := -O2 -g0
 PLAT := -DSDLMAME_LINUX
 endif
 O ?= obj-$(T)
-COMMON := $(OPT) -DNDEBUG -DLSB_FIRST -DCRLF=2 -DSDLMAME_UNIX -DOSD_SDL -DUTF8PROC_STATIC -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE
-INC := -I$(M)/src/osd -I$(M)/src/lib/util -I$(M)/3rdparty -I$(M)/3rdparty/zlib -I$(M)/3rdparty/zstd/lib -I$(M)/3rdparty/flac/include -I$(M)/3rdparty/utf8proc -I$(M)/3rdparty/expat/lib -I$(M)/src/lib -Ishim
+COMMON := $(OPT) -DNDEBUG -DLSB_FIRST -DCRLF=2 -DSDLMAME_UNIX -DOSD_SDL -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE $(if $(UPSTREAM),-DUTF8PROC_STATIC '-DBARE_VCS_REVISION="mame0289"')
+INC := -I$(M)/src/osd -I$(M)/src/lib/util -I$(M)/3rdparty -I$(M)/3rdparty/zlib -I$(M)/3rdparty/zstd/lib -I$(M)/3rdparty/flac/include $(if $(UPSTREAM),-I$(M)/3rdparty/utf8proc) -I$(M)/src/lib -Ishim
 CXXFLAGS := $(COMMON) $(PLAT) -std=c++20 $(INC) -Wno-deprecated-declarations
 FLACDEF := -DHAVE_CONFIG_H -DENABLE_64_BIT_WORDS=1 -DOGG_FOUND=0 -DFLAC__HAS_OGG=0 -DHAVE_LROUND=1 -DHAVE_INTTYPES_H -DHAVE_STDBOOL_H -DHAVE_STDINT_H -DHAVE_STDIO_H -DHAVE_STDLIB_H -DHAVE_STRING_H -DCPU_IS_BIG_ENDIAN=0 -DCPU_IS_LITTLE_ENDIAN=1 -DWORDS_BIGENDIAN=0 -DHAVE_BSWAP16 -DHAVE_BSWAP32 -DFLAC__NO_ASM -I$(M)/3rdparty/flac/src/libFLAC/include -I$(M)/3rdparty/flac/include
-EXPATDEF := -DHAVE_CXX11 -DHAVE_MEMMOVE -DHAVE_STDINT_H -DHAVE_STDIO_H -DHAVE_STDLIB_H -DHAVE_STRING_H '-DPACKAGE="expat"' -DSTDC_HEADERS -DXML_CONTEXT_BYTES=1024 -DXML_DTD -DXML_GE=1 -DXML_NS -DBYTEORDER=1234 -DXML_POOR_ENTROPY
 ZSTDDEF := -DXXH_NAMESPACE=ZSTD_ -DDEBUGLEVEL=0 -DZSTD_DISABLE_ASM -DZSTD_MULTITHREAD=0
 LZMADEF := -DZ7_PPMD_SUPPORT -DZ7_ST
 
@@ -45,17 +44,21 @@ $(foreach s,$(ZSTD_SRC),$(eval $(call crule,$(s),$(ZSTDDEF))))
 $(foreach s,$(FLAC_SRC),$(eval $(call crule,$(s),$(FLACDEF))))
 $(foreach s,$(LZMA_SRC),$(eval $(call crule,$(s),$(LZMADEF))))
 $(foreach s,$(UTF8_SRC),$(eval $(call crule,$(s),)))
-$(foreach s,$(EXPAT_SRC),$(eval $(call crule,$(s),$(EXPATDEF))))
 
-ALL_SRC := $(CPP_SRC) $(ZLIB_SRC) $(ZSTD_SRC) $(FLAC_SRC) $(LZMA_SRC) $(UTF8_SRC) $(EXPAT_SRC)
+ALL_SRC := $(CPP_SRC) $(ZLIB_SRC) $(ZSTD_SRC) $(FLAC_SRC) $(LZMA_SRC) $(UTF8_SRC)
 OBJS := $(foreach s,$(ALL_SRC),$(call obj,$(s)))
 
 $(O):
 	mkdir -p $(O)
 
-objs: $(OBJS)
+# the link list: only these objects (stale ones in $(O) are ignored), sorted so the order doesn't depend on the locale
+$(O)/objs.rsp: $(OBJS) | $(O)
+	printf '%s\n' $(sort $(OBJS)) > $@
 
+objs: $(OBJS) $(O)/objs.rsp
+
+NATIVE ?= $(O)/../chdman-native
 native: $(OBJS)
-	$(CXX) -O2 $(OBJS) -o $(O)/../chdman-native -lpthread
+	$(CXX) -O2 $(OBJS) -o $(NATIVE) -lpthread
 
 .PHONY: objs native

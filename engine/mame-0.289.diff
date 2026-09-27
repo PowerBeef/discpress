@@ -1,0 +1,277 @@
+--- a/src/lib/util/chd.cpp
++++ b/src/lib/util/chd.cpp
+@@ -28,6 +28,16 @@
+ #include <new>
+ #include <tuple>
+ 
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++extern "C" {
++	// provided by the JavaScript host (browser build): offload hunk compression to helper workers
++	int wasm_par_enabled(uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression);
++	void wasm_par_submit(void *item, const uint8_t *data, uint32_t length);
++}
++static int s_wasm_par = 0;
++#endif
++
+ 
+ //**************************************************************************
+ //  CONSTANTS
+@@ -3022,6 +3032,10 @@
+ 
+ 	// reset write state
+ 	m_write_hunk = 0;
++
++#ifdef __EMSCRIPTEN__
++	s_wasm_par = compressed() ? wasm_par_enabled(hunk_bytes(), unit_bytes(), m_compression) : 0;
++#endif
+ }
+ 
+ /**
+@@ -3123,6 +3137,11 @@
+ 			}
+ 			else
+ 			{
++#ifdef __EMSCRIPTEN__
++				// a helper worker skipped this hunk as a probable duplicate, but it is not in the map: compress it here
++				if (item.m_compression == -2)
++					item.m_compression = item.m_codecs->find_best_compressor(item.m_data, item.m_compressed, item.m_complen);
++#endif
+ 				// otherwise, append it compressed and add to the self map
+ 				hunk_write_compressed(item.m_hunknum, item.m_compression, item.m_compressed, item.m_complen, item.m_hash[0].m_crc16);
+ 				m_total_out += item.m_complen;
+@@ -3345,6 +3364,15 @@
+ 			assert(item.m_status == WS_READING);
+ 			item.m_status = WS_QUEUED;
+ 			item.m_hunknum = hunknum;
++#ifdef __EMSCRIPTEN__
++			if (s_wasm_par && !m_walking_parent && compressed())
++			{
++				item.m_osd = nullptr;
++				item.m_codecs = m_codecs[0];
++				wasm_par_submit(&item, item.m_data, hunk_bytes());
++				continue;
++			}
++#endif
+ 			item.m_osd = osd_work_item_queue(m_work_queue, m_walking_parent ? async_walk_parent_static : async_compress_hunk_static, &item, 0);
+ 		}
+ 
+@@ -3512,3 +3540,22 @@
+ 	metadata_entry metaentry;
+ 	return metadata_find(AV_METADATA_TAG, 0, metaentry);
+ }
++
++
++#ifdef __EMSCRIPTEN__
++void chd_file_compressor::wasm_par_complete_item(void *itemp, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen, const uint8_t *data)
++{
++	work_item &item = *reinterpret_cast<work_item *>(itemp);
++	item.m_hash[0].m_crc16 = util::crc16_t(uint16_t(crc16));
++	memcpy(item.m_hash[0].m_sha1.m_raw, sha1, sizeof(item.m_hash[0].m_sha1.m_raw));
++	item.m_compression = int8_t(compression);
++	item.m_complen = complen;
++	memcpy(item.m_compressed, data, complen);
++	item.m_status = WS_COMPLETE;
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE void wasm_par_complete(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen, const uint8_t *data)
++{
++	chd_file_compressor::wasm_par_complete_item(item, crc16, sha1, compression, complen, data);
++}
++#endif
+--- a/src/lib/util/chd.h
++++ b/src/lib/util/chd.h
+@@ -450,6 +450,11 @@
+ 	void compress_begin();
+ 	std::error_condition compress_continue(double &progress, double &ratio);
+ 
++#ifdef __EMSCRIPTEN__
++	// browser build: completion callback for hunks compressed by helper workers
++	static void wasm_par_complete_item(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen, const uint8_t *data);
++#endif
++
+ protected:
+ 	// required override: read more data
+ 	virtual uint32_t read_data(void *dest, uint64_t offset, uint32_t length) = 0;
+--- a/src/lib/util/unicode.cpp
++++ b/src/lib/util/unicode.cpp
+@@ -16,71 +16,12 @@
+ #include "strconv.h"
+ #endif
+ 
+-#include <utf8proc.h>
+-
+ #include <codecvt>
+ #include <locale>
+ 
+ 
+-namespace {
+-
+-//-------------------------------------------------
+-//  internal_normalize_unicode - uses utf8proc to
+-//  normalize unicode
+-//-------------------------------------------------
+-
+-std::string internal_normalize_unicode(
+-		char const *s,
+-		size_t length,
+-		unicode_normalization_form normalization_form,
+-		bool fold_case,
+-		bool null_terminated)
+-{
+-	// convert the normalization form
+-	int options;
+-	switch (normalization_form)
+-	{
+-	case unicode_normalization_form::C:
+-		options = UTF8PROC_STABLE | UTF8PROC_COMPOSE;
+-		break;
+-	case unicode_normalization_form::D:
+-		options = UTF8PROC_STABLE | UTF8PROC_DECOMPOSE;
+-		break;
+-	case unicode_normalization_form::KC:
+-		options = UTF8PROC_STABLE | UTF8PROC_COMPOSE | UTF8PROC_COMPAT;
+-		break;
+-	case unicode_normalization_form::KD:
+-		options = UTF8PROC_STABLE | UTF8PROC_DECOMPOSE | UTF8PROC_COMPAT;
+-		break;
+-	default:
+-		throw false;
+-	}
+-
+-	// perform case folding?
+-	if (fold_case)
+-		options |= UTF8PROC_CASEFOLD;
+-
+-	// use NUL terminator to determine length?
+-	if (null_terminated)
+-		options |= UTF8PROC_NULLTERM;
+-
+-	// invoke utf8proc
+-	utf8proc_uint8_t *utf8proc_result(nullptr);
+-	utf8proc_ssize_t const utf8proc_result_length(utf8proc_map(reinterpret_cast<utf8proc_uint8_t const *>(s), length, &utf8proc_result, utf8proc_option_t(options)));
+-
+-	// conver the result
+-	std::string result;
+-	if (utf8proc_result)
+-	{
+-		if (utf8proc_result_length > 0)
+-			result.assign(reinterpret_cast<char const *>(utf8proc_result), utf8proc_result_length);
+-		free(utf8proc_result);
+-	}
+-
+-	return result;
+-}
+-
+-} // anonymous namespace
++// Discpress: normalize_unicode, uchar_toupper and uchar_tolower (the only users of
++// utf8proc) are removed; nothing in the chdman engine calls them.
+ 
+ 
+ //-------------------------------------------------
+@@ -482,50 +423,6 @@
+ }
+ 
+ 
+-//-------------------------------------------------
+-//  normalize_unicode - uses utf8proc to normalize
+-//  unicode
+-//-------------------------------------------------
+-
+-std::string normalize_unicode(const char *s, unicode_normalization_form normalization_form, bool fold_case)
+-{
+-	return internal_normalize_unicode(s, 0, normalization_form, fold_case, true);
+-}
+-
+-
+-//-------------------------------------------------
+-//  normalize_unicode - uses utf8proc to normalize
+-//  unicode
+-//-------------------------------------------------
+-
+-std::string normalize_unicode(std::string_view s, unicode_normalization_form normalization_form, bool fold_case)
+-{
+-	return internal_normalize_unicode(s.data(), s.length(), normalization_form, fold_case, false);
+-}
+-
+-
+-//-------------------------------------------------
+-//  uchar_toupper - uses utf8proc to convert to
+-//  upper case
+-//-------------------------------------------------
+-
+-char32_t uchar_toupper(char32_t ch)
+-{
+-	return utf8proc_toupper(ch);
+-}
+-
+-
+-//-------------------------------------------------
+-//  uchar_tolower - uses utf8proc to convert to
+-//  lower case
+-//-------------------------------------------------
+-
+-char32_t uchar_tolower(char32_t ch)
+-{
+-	return utf8proc_tolower(ch);
+-}
+-
+-
+ //-------------------------------------------------
+ //  utf8_previous_char - return a pointer to the
+ //  previous character in a string
+--- a/src/lib/util/unicode.h
++++ b/src/lib/util/unicode.h
+@@ -37,8 +37,6 @@
+ #define UTF8_CHAR_MAX   6
+ #define UTF16_CHAR_MAX  2
+ 
+-enum class unicode_normalization_form { C, D, KC, KD };
+-
+ 
+ 
+ /***************************************************************************
+@@ -71,14 +69,6 @@
+ std::wstring wstring_from_utf8(std::string_view utf8string);
+ std::string utf8_from_wstring(std::wstring_view string);
+ 
+-// unicode normalization
+-std::string normalize_unicode(const char *s, unicode_normalization_form normalization_form, bool fold_case = false);
+-std::string normalize_unicode(std::string_view s, unicode_normalization_form normalization_form, bool fold_case = false);
+-
+-// upper and lower case
+-char32_t uchar_toupper(char32_t ch);
+-char32_t uchar_tolower(char32_t ch);
+-
+ // misc UTF-8 helpers
+ const char *utf8_previous_char(const char *utf8string);
+ bool utf8_is_valid_string(const char *utf8string);
+--- a/src/tools/chdman.cpp
++++ b/src/tools/chdman.cpp
+@@ -41,6 +41,10 @@
+ #include <utility>
+ #include <vector>
+ 
++#ifdef __EMSCRIPTEN__
++extern "C" void wasm_par_yield(void); // browser build: lets helper-worker results arrive
++#endif
++
+ using util::string_format;
+ 
+ 
+@@ -1507,10 +1511,15 @@
+ 	double complete, ratio;
+ 	std::error_condition err;
+ 	while ((err = chd.compress_continue(complete, ratio)) == chd_file::error::WALKING_PARENT || err == chd_file::error::COMPRESSING)
++	{
+ 		if (err == chd_file::error::WALKING_PARENT)
+ 			progress(false, "Examining parent, %.1f%% complete...  \r", 100.0 * complete);
+ 		else
+ 			progress(false, "Compressing, %.1f%% complete... (ratio=%.1f%%)  \r", 100.0 * complete, 100.0 * ratio);
++#ifdef __EMSCRIPTEN__
++		wasm_par_yield();
++#endif
++	}
+ 
+ 	// handle errors
+ 	if (err)
