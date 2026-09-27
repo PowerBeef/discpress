@@ -21,7 +21,12 @@ EXPATDEF := -DHAVE_CXX11 -DHAVE_MEMMOVE -DHAVE_STDINT_H -DHAVE_STDIO_H -DHAVE_ST
 ZSTDDEF := -DXXH_NAMESPACE=ZSTD_ -DDEBUGLEVEL=0 -DZSTD_DISABLE_ASM -DZSTD_MULTITHREAD=0
 LZMADEF := -DZ7_PPMD_SUPPORT -DZ7_ST
 
+# wasm_helper.cpp is browser-only (helper workers and identification probes)
+ifeq ($(T),wasm)
 CPP_SRC := $(UTIL_SRC) $(OSD_SRC) $(TOOL_SRC)
+else
+CPP_SRC := $(UTIL_SRC) $(OSD_SRC) $(filter-out wasm_helper.cpp,$(TOOL_SRC))
+endif
 obj = $(O)/$(subst /,_,$(subst $(M)/,,$(basename $(1)))).o
 
 define cxxrule
