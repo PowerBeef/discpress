@@ -56,12 +56,12 @@ export class App {
     page.on('dialog', d => d.accept());
   }
 
-  /** Open the page. Options: settings, debug, noSimd, noOpfs, cores, theme. */
+  /** Open the page. Options: settings, debug, noSimd, noOpfs, cores, theme, testdb (extra database rows). */
   async open(opts = {}) {
     const o = { ...opts };
     if (o.theme) o.settings = { ...(o.settings || {}), theme: o.theme };
     await this.page.addInitScript(initScript, o);
-    this.url = this.fileUrl ? pathToFileURL(pageUnderTest()).href : '/discpress.html';
+    this.url = this.fileUrl ? pathToFileURL(pageUnderTest()).href : '/discpress.html' + (o.testdb ? '?testdb=1' : '');
     await this.page.goto(this.url);
     await expect(this.page.locator('#chipEngine')).toContainText(/ready/i, { timeout: 60_000 });
     return this;

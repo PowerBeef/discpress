@@ -486,6 +486,8 @@ function scheduleIdentify(job) {
   if (job.identPromise || (job.kind === 'create' && (job.missing.length || job.needCue))) return;
   job.identState = 'pending';
   job.identPromise = new Promise(function (resolve) { identQueue.push({ job: job, resolve: resolve }); });
+  // settles once the game is known, possibly before the checksum that confirms it (identState 'checking')
+  job.identKnown = new Promise(function (resolve) { job.identKnownResolve = resolve; });
   pumpIdentify();
 }
 async function pumpIdentify() {
@@ -498,28 +500,40 @@ async function pumpIdentify() {
     job.identState = 'running';
     job.identStatus = 'Identifying game…';
     if (job.ui && job.state !== 'running') renderNotes(job);
+    if (DEBUG.identDelay) await sleep(DEBUG.identDelay); // testing: a slow identification
     try {
       job.ident = await identifyJob(job, function (msg, p) {
         job.identStatus = msg + (p ? ' ' + Math.round(p * 100) + '%' : '');
         var n = job.ui && job.ui.identLine;
         if (n) n.textContent = job.identStatus;
+      }, function (provisional) {
+        job.ident = provisional;
+        job.identState = 'checking';
+        applyIdent(job);
+        job.identKnownResolve();
+        if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
       });
     } catch (e) {
       job.ident = { error: e.message, readFail: /I\/O read|NotReadable/i.test(e.message || '') };
     }
     job.identState = 'done';
     applyIdent(job);
+    // the checksum finished after the conversion started: name the results after the confirmed release
+    if (job.state === 'done') renameOutputs(job);
+    job.identKnownResolve();
     if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
   }
   it.resolve();
   identBusy = false;
   pumpIdentify();
 }
-function applyIdent(job) {
+// starting: the job is about to run (state is already 'running') and may still take the name and type
+function applyIdent(job, starting) {
   var id = job.ident;
   if (!id || !id.sys) return;
-  if (settings.rename && id.name && !job.outEdited && job.state !== 'running' && job.state !== 'done') job.opts.out = id.name;
-  if (job.kind !== 'create' || job.state === 'running' || job.state === 'done') return;
+  var locked = !starting && (job.state === 'running' || job.state === 'done');
+  if (settings.rename && id.name && !job.outEdited && !locked) job.opts.out = id.name;
+  if (job.kind !== 'create' || locked) return;
   // pick the right CHD flavour for the system
   if (job.src === 'iso' || (job.src === 'bin' && job.choices)) {
     if (id.sys === 'psp') { job.disc = 'dvd'; if (!job.hunkEdited) job.opts.hunk = '2048'; }
@@ -531,6 +545,18 @@ function applyIdent(job) {
     if (job.choices && job.choices.indexOf(job.disc) < 0) job.disc = job.choices[0];
     job.action = KIND[job.disc].cmd;
   }
+}
+// after a conversion that started before the checksum finished, rename its results
+// if the confirmed release has a different name (unless the user named them or already saved one)
+function renameOutputs(job) {
+  var id = job.ident;
+  if (job.kind !== 'create' || !id || !id.name || !settings.rename || job.outEdited) return;
+  if (job.outputs.some(function (o) { return o.downloaded || o.kind === 'disk'; })) return;
+  var from = outBase(job);
+  job.opts.out = id.name;
+  var to = outBase(job);
+  if (from === to) return;
+  job.outputs.forEach(function (o) { if (o.name.indexOf(from + '.') === 0) o.name = to + o.name.slice(from.length); });
 }
 function identNote(job) {
   if (job.identState === 'pending' || job.identState === 'running') {
@@ -564,6 +590,11 @@ function identNote(job) {
     }
   } else {
     box.append(el('div', { class: 'small' }, (id.headerTitle ? 'Disc title: ' + id.headerTitle + '. ' : '') + 'Not found in the Redump database, so the original name is kept.'));
+  }
+  if (job.identState === 'checking') {
+    var chk = el('div', { class: 'small ident-check' }, job.identStatus || 'Checking against the game database…');
+    job.ui.identLine = chk;
+    box.append(chk);
   }
   if (id.sys === 'gc' || id.sys === 'wii') box.append(el('div', { class: 'small', style: 'margin-top:4px' }, 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.'));
   return box;
@@ -1328,9 +1359,12 @@ async function runJobNow(job) {
   catch (e) { job.state = 'error'; job.errorText = e.message; refreshJob(job, true); return; }
   if (job.identPromise && job.identState !== 'done') {
     setProgress(job, null, 'Identifying game…');
-    await job.identPromise;
+    // start as soon as the game is known; the checksum confirming the exact release can finish
+    // meanwhile (results are renamed if needed). Files written straight into a folder are named
+    // when created, so that mode waits for the checksum.
+    await (settings.storage === 'folder' && outDir ? job.identPromise : job.identKnown);
     if (job.state !== 'running') return;
-    applyIdent(job);
+    applyIdent(job, true);
   }
   var spec = buildJob(job);
   if (spec.rename) {
@@ -1404,6 +1438,7 @@ async function runJobNow(job) {
         return ea - eb || a.name.localeCompare(b.name, undefined, { numeric: true });
       });
       if (job.kind === 'chd' && job.action === 'info') job.lastInfo = parseInfo(job.log);
+      if (job.identState === 'done') renameOutputs(job); // the checksum finished while converting
     } else {
       job.state = 'error';
       if (res.readFail) { job.errorText = readFailHint(res.error); Store.removeJob(job.id); refreshJob(job, true); return; }
