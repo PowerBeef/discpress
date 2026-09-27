@@ -560,7 +560,10 @@ function setupParallel(M, ports) {
     // the LaserDisc codec (avhu) reads settings from the CHD's own metadata: keep it single-threaded
     if (comps.indexOf(0x61766875) >= 0) return false;
     hunkbytes = hb;
-    batchSize = Math.max(1, Math.min(64, Math.floor((512 * 1024) / hb)));
+    // chdman keeps at most 256 hunks in flight and reads them 128 at a time, so a batch must be
+    // small enough for those 128 to give every helper two batches; otherwise helpers sit idle
+    // (with 4 KiB DVD hunks, 512 KiB batches meant only two helpers ever had work)
+    batchSize = Math.max(1, Math.min(64, Math.floor((512 * 1024) / hb), Math.floor(128 / (2 * helpers.length))));
     scratch = M._malloc(hb + 64);
     helpers.forEach(function (h) { h.port.postMessage({ type: 'init', hunkbytes: hb, unitbytes: ub, comps: comps }); });
     M.parActive = true;

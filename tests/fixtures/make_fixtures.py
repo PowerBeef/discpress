@@ -120,6 +120,16 @@ fixture('saturn', {
 }, add=['albert odyssey.cue', 'albert odyssey.bin'], job='create', disc='cd', command='createcd', sys='saturn', serial='T-12705H',
    ident='serial', name='Albert Odyssey - Legend of Eldean (USA)')
 
+# a USA disc whose serial (T-8113H) also prefixes European/German releases (T-8113H-50, T-8113H-18):
+# the exact match must win
+fixture('saturn-region', {
+    'alien trilogy.cue': lambda: cue([('alien trilogy.bin', 'MODE1/2352', 0)]),
+    'alien trilogy.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(
+        {'0.BIN': g.filler(256 << 10, 42)}, 'ALIEN', 'SEGA SEGASATURN',
+        ipbin(b'SEGA SEGASATURN ', 0x20, b'T-8113H   ', 0x60, b'ALIEN TRILOGY', {0x10: b'SEGA TP T-81    '}))), 1),
+}, add=['alien trilogy.cue', 'alien trilogy.bin'], job='create', disc='cd', command='createcd', sys='saturn', serial='T-8113H',
+   ident='serial', name='Alien Trilogy (USA)')
+
 fixture('segacd', {
     'ax101.cue': lambda: cue([('ax101.bin', 'MODE1/2352', 0), ('ax101 audio.bin', 'AUDIO', 150)]),
     'ax101.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(

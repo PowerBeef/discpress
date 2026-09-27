@@ -14,9 +14,10 @@
   --accent-hi: #ff79a8;
   --accent-2: #ffb23f;
   --accent-3: #ffe14d;
+  --link: #c2185b; /* the accent pink is too light for body text on the cream surfaces */
   --cyan: #13a9ba;
   --on-accent: #1c1733;
-  --ok: #17864a;
+  --ok: #11703d;
   --ok-soft: #ddf2e3;
   --warn: #935700;
   --warn-soft: #fff0cc;
@@ -36,14 +37,14 @@
   :root:not([data-theme="light"]) {
     --bg: #15122b; --dots: rgba(255, 255, 255, .055); --surface: #1f1a3c; --surface-2: #29234d; --ink: #07060f;
     --text: #f5f2ff; --muted: #aaa3d2; --line: #3b346a; --accent: #ff6fa3; --accent-hi: #ff8db6; --accent-2: #ffc24f;
-    --accent-3: #ffe266; --cyan: #3fe0d0; --on-accent: #1a1030; --ok: #5fe39c; --ok-soft: #173a2b; --warn: #ffcf5c;
+    --accent-3: #ffe266; --cyan: #3fe0d0; --on-accent: #1a1030; --ok: #5fe39c; --ok-soft: #173a2b; --link: #ff6fa3; --warn: #ffcf5c;
     --warn-soft: #3a2e12; --err: #ff7d95; --err-soft: #3e1626; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #15122b; --dots: rgba(255, 255, 255, .055); --surface: #1f1a3c; --surface-2: #29234d; --ink: #07060f;
   --text: #f5f2ff; --muted: #aaa3d2; --line: #3b346a; --accent: #ff6fa3; --accent-hi: #ff8db6; --accent-2: #ffc24f;
-  --accent-3: #ffe266; --cyan: #3fe0d0; --on-accent: #1a1030; --ok: #5fe39c; --ok-soft: #173a2b; --warn: #ffcf5c;
+  --accent-3: #ffe266; --cyan: #3fe0d0; --on-accent: #1a1030; --ok: #5fe39c; --ok-soft: #173a2b; --link: #ff6fa3; --warn: #ffcf5c;
   --warn-soft: #3a2e12; --err: #ff7d95; --err-soft: #3e1626; color-scheme: dark;
 }
 
@@ -95,7 +96,7 @@ html.mode-shell body.has-dock .scroller { padding-bottom: calc(120px + var(--sa-
 /* retro-tinted scrollbars where supported */
 html, .scroller { scrollbar-color: var(--line) transparent; }
 button, input, select, textarea { font: inherit; color: inherit; }
-a { color: var(--accent); text-underline-offset: 2px; }
+a { color: var(--link); text-underline-offset: 2px; }
 [hidden] { display: none !important; }
 .wrap { width: 100%; max-width: 1180px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
 .muted { color: var(--muted); }

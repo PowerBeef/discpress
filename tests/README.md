@@ -66,7 +66,9 @@ identification the app should produce. `--bench` adds large, realistic images fo
 | `mobile` | phone layout, thread defaults, the fixed-header scrolling used inside iOS app web views |
 | `layout` | 7 screen sizes × light/dark × 5 screens: no horizontal overflow; screenshots in `.cache/screens/` |
 | `a11y` | axe-core audit of every screen in both themes; serious problems fail |
-| `known-issues` | app bugs found by this suite, pinned with `test.fail()` until fixed |
+
+A bug found but not fixed yet can be pinned in the relevant spec with `test.fail(true, 'why')`: the
+test passes while the bug exists and Playwright reports it when a fix lands, so the marker can be removed.
 
 Emulated phones use Chromium with phone viewports, touch and user agents; they catch layout and
 logic problems but not WebKit-specific rendering.

@@ -146,3 +146,22 @@ test('a child CHD finds its parent and extracts', async ({ app }) => {
   const [out] = await app.downloads(card);
   expect(sha1File(out.path)).toBe(sha1File(patched));
 });
+
+test('a CHD is never used as its own parent', async ({ app }) => {
+  // a child made against a parent with identical data carries its own SHA-1 as the parent's
+  const dir = path.join(FIXTURES, 'chd');
+  const parent = path.join(dir, 'same-parent.chd'), child = path.join(dir, 'same-child.chd');
+  if (!fs.existsSync(child)) {
+    fs.copyFileSync(reference('createdvd', 'homebrew.iso'), parent);
+    chdman(['createdvd', '-i', 'homebrew.iso', '-o', child, '-op', parent, '-f']);
+  }
+  await app.open();
+  await app.add(['chd/same-child.chd']);
+  const card = app.job('same-child');
+  await app.settled(card);
+  await expect(card).toContainText('This CHD depends on a parent CHD');
+  await expect(card.locator('code.cmd')).not.toContainText('-ip');
+  await app.add(['chd/same-parent.chd']);
+  await expect(card).toContainText('Uses parent CHD same-parent.chd');
+  await expect(card.locator('code.cmd')).toContainText('-ip same-parent.chd');
+});

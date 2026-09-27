@@ -9,11 +9,7 @@ import { CACHE } from '../support/paths.js';
 
 // Known issues still to fix in the app: [rule id, CSS selector substring, why].
 // Anything else that is serious or critical fails. Remove entries as they are fixed.
-const ACCEPTED = [
-  ['color-contrast', '.ident-how', 'light theme: green "Matched by…" text #17864a on #f2ead7 is 3.85:1 (needs 4.5:1)'],
-  ['color-contrast', '.note.ok', 'light theme: green "Done." note #17864a on #ddf2e3 is 3.93:1'],
-  ['color-contrast', 'a[', 'light theme: pink links in Help #ff5c93 on #fffdf6 are 2.86:1'],
-];
+const ACCEPTED = [];
 
 async function audit(page, name) {
   const r = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'best-practice']).analyze();
