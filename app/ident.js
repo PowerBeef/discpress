@@ -146,7 +146,9 @@ async function crcHere(blob, start, end, onProgress) {
 }
 function crcOf(blob, start, end, onProgress) {
   var w = DEBUG.stage ? Promise.reject(new Error('debug')) : crcWorker(blob, start, end, onProgress);
-  return w.catch(function () { return crcHere(blob, start, end, onProgress); });
+  var p = w.catch(function () { return crcHere(blob, start, end, onProgress); });
+  // DEBUG.crcDelay (ms): a slow checksum, for testing that conversions don't wait for it
+  return DEBUG.crcDelay ? p.then(function (c) { return sleep(DEBUG.crcDelay).then(function () { return c; }); }) : p;
 }
 function crcWorker(blob, start, end, onProgress) {
   return Engine.ready().then(function () {
@@ -159,7 +161,7 @@ function crcWorker(blob, start, end, onProgress) {
         else if (m.type === 'fatal') { w.terminate(); reject(new Error(m.message)); }
       };
       w.onerror = function (e) { w.terminate(); reject(new Error(e.message || 'worker error')); };
-      w.postMessage({ type: 'crc', blob: blob, start: start || 0, end: end });
+      Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end }); // with the compiled module, for zlib's crc32
     });
   });
 }
@@ -327,7 +329,9 @@ function probePlan(job) {
 }
 
 /* ---------- the identification itself ---------- */
-async function identifyJob(job, onStatus) {
+// onProvisional(result), if given, receives what is known before the slow checksum step
+// (console, serial, sizes), so a conversion can start while the checksum confirms the release
+async function identifyJob(job, onStatus, onProvisional) {
   await GameDB.ready();
   var det = null, sizes = [], exact = null, cands = [];
   var chd = null;
@@ -351,51 +355,59 @@ async function identifyJob(job, onStatus) {
         if (d && (!det || !d.weak)) det = d;
       }
       // exact match: size + CRC-32 of a data file against the Redump database
-      for (var k = 0; k < plan.hashes.length && !exact; k++) {
-        var hsh = plan.hashes[k];
+      var toHash = [];
+      plan.hashes.forEach(function (hsh) {
         sizes.push(hsh.file.size);
         var bySize = GameDB.size(hsh.file.size);
         if (det && !det.weak) {
           var same = bySize.filter(function (e) { return e.sys === det.sys; });
           if (same.length) bySize = same;
         }
-        if (!bySize.length) continue;
+        if (bySize.length) toHash.push({ file: hsh.file, bySize: bySize });
+      });
+      if (toHash.length && onProvisional) onProvisional(result(null, true));
+      for (var k = 0; k < toHash.length && !exact; k++) {
+        var th = toHash[k];
         onStatus && onStatus('Checking against the game database…', 0);
-        var crc = await crcOf(hsh.file, 0, hsh.file.size, function (p) { onStatus && onStatus('Checking against the game database…', p); });
-        var hits = bySize.filter(function (e) { return e.crc === crc; });
+        var crc = await crcOf(th.file, 0, th.file.size, function (p) { onStatus && onStatus('Checking against the game database…', p); });
+        var hits = th.bySize.filter(function (e) { return e.crc === crc; });
         if (hits.length) exact = hits;
       }
     }
   } finally {
     if (chd) chd.close();
   }
-  var entry = null, method = '';
-  if (exact) {
-    entry = exact[0];
-    if (det && det.serial && exact.length > 1) entry = exact.find(function (e) { return normSerial(e.serial) === normSerial(det.serial); }) || entry;
-    method = 'hash';
-  } else if (det && det.serial) {
-    cands = GameDB.serial(det.serial, det.sys);
-    if (!cands.length) cands = GameDB.serial(det.serial);
-    var bySz = cands.filter(function (e) { return sizes.indexOf(e.size) >= 0; });
-    var pick = bySz.length ? bySz : cands;
-    if (pick.length) {
-      var names = pick.map(function (e) { return e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
-      entry = pick[0];
-      method = names.length > 1 ? 'serial-ambiguous' : bySz.length ? 'serial+size' : 'serial';
-      if (names.length > 1) entry = Object.assign({}, pick[0], { alternatives: names });
+  return result(exact, false);
+
+  function result(exact, checking) {
+    var entry = null, method = '';
+    if (exact) {
+      entry = exact[0];
+      if (det && det.serial && exact.length > 1) entry = exact.find(function (e) { return normSerial(e.serial) === normSerial(det.serial); }) || entry;
+      method = 'hash';
+    } else if (det && det.serial) {
+      cands = GameDB.serial(det.serial, det.sys);
+      if (!cands.length) cands = GameDB.serial(det.serial);
+      var bySz = cands.filter(function (e) { return sizes.indexOf(e.size) >= 0; });
+      var pick = bySz.length ? bySz : cands;
+      if (pick.length) {
+        var names = pick.map(function (e) { return e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
+        entry = pick[0];
+        method = names.length > 1 ? 'serial-ambiguous' : bySz.length ? 'serial+size' : 'serial';
+        if (names.length > 1) entry = Object.assign({}, pick[0], { alternatives: names });
+      }
+    } else if (job.kind === 'chd' && sizes.length) {
+      // CHD without a readable serial: a unique size match is still a strong hint
+      var pool = [];
+      sizes.forEach(function (s) { GameDB.size(s).forEach(function (e) { if (!det || det.weak || e.sys === det.sys) pool.push(e); }); });
+      var uniq = pool.map(function (e) { return e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
+      if (uniq.length === 1) { entry = pool[0]; method = 'size'; }
     }
-  } else if (job.kind === 'chd' && sizes.length) {
-    // CHD without a readable serial: a unique size match is still a strong hint
-    var pool = [];
-    sizes.forEach(function (s) { GameDB.size(s).forEach(function (e) { if (!det || det.weak || e.sys === det.sys) pool.push(e); }); });
-    var uniq = pool.map(function (e) { return e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
-    if (uniq.length === 1) { entry = pool[0]; method = 'size'; }
+    var sys = entry ? entry.sys : det ? det.sys : null;
+    return {
+      sys: sys, detected: det, entry: entry, method: method,
+      name: entry ? entry.name : '', serial: (det && det.serial) || (entry && entry.serial) || '',
+      headerTitle: det && det.title || '', checking: checking
+    };
   }
-  var sys = entry ? entry.sys : det ? det.sys : null;
-  return {
-    sys: sys, detected: det, entry: entry, method: method,
-    name: entry ? entry.name : '', serial: (det && det.serial) || (entry && entry.serial) || '',
-    headerTitle: det && det.title || ''
-  };
 }

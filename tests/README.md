@@ -53,6 +53,10 @@ They carry serial numbers of real games, so identification can be tested against
 Redump database, but contain no game data. `manifest.json` lists each fixture with the job and
 identification the app should produce. `--bench` adds large, realistic images for benchmarks.
 
+Synthetic discs can't match real Redump checksums, so `make_fixtures.py` also writes `testdb.json`:
+database rows matching some fixtures' size and CRC-32. The test server merges them into the page's
+game database when it is requested as `/discpress.html?testdb=1` (`app.open({ testdb: true })`).
+
 ## What the tests cover (`ui/`)
 
 | Spec | Covers |
@@ -60,6 +64,7 @@ identification the app should produce. `--bench` adds large, realistic images fo
 | `smoke` | loading, tabs, help, settings persistence, one conversion (also from `file://` and on phones) |
 | `convert` | every input type and console, identification, output naming, version choice, presets, thread counts, Start all / Download all |
 | `chd` | CHD inputs: identification from inside the CHD, extract (cue, split bins, toc, gdi, iso, img), verify (good and damaged), info, rename, parent CHDs |
+| `identify` | checksum-verified identification (via extra database rows, below), conversions that start before the checksum finishes and are renamed after it, starting while identification is still running |
 | `advanced` | the Advanced tab: form, text commands, validation, listtemplates |
 | `edge-cases` | missing tracks, lone tracks, duplicates, unsupported files, truncated images, DVD/CD switch, cancel, remove |
 | `fallbacks` | no SIMD, no OPFS, memory-only, input staging and page streaming (iOS web views), single core |

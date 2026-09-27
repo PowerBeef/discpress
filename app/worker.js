@@ -884,16 +884,27 @@ function crcUpdate(crc, b) {
   for (; i < n; i++) crc = T[(crc ^ b[i]) & 255] ^ (crc >>> 8);
   return crc;
 }
-function runCrc(msg) {
+async function runCrc(msg) {
   var blob = msg.blob, start = msg.start || 0, end = msg.end != null ? msg.end : blob.size;
-  var crc = -1, step = 8 << 20, r = getReader(), last = 0;
+  var step = 8 << 20, r = getReader(), last = 0;
+  // zlib's crc32 in WebAssembly is several times faster than the JavaScript loop below it
+  var M = null, buf = 0;
+  if (msg.wasmModule || msg.wasmBytes) {
+    try {
+      await loadModule(msg);
+      M = await instantiate({});
+      if (typeof M._crc32 === 'function') buf = M._malloc(step); else M = null;
+    } catch (e) { M = null; }
+  }
+  var crc = M ? 0 : -1;
   for (var pos = start; pos < end; pos += step) {
     var chunk = new Uint8Array(r.readAsArrayBuffer(blob.slice(pos, Math.min(end, pos + step))));
-    crc = crcUpdate(crc, chunk);
+    if (M) { M.HEAPU8.set(chunk, buf); crc = M._crc32(crc, buf, chunk.length) >>> 0; }
+    else crc = crcUpdate(crc, chunk);
     var now = Date.now();
     if (now - last > 250) { last = now; postMessage({ type: 'crc-progress', done: pos - start, total: end - start }); }
   }
-  crc = (crc ^ -1) >>> 0;
+  crc = M ? crc >>> 0 : (crc ^ -1) >>> 0;
   postMessage({ type: 'crc', crc: ('00000000' + crc.toString(16).toUpperCase()).slice(-8) });
 }
 
@@ -916,7 +927,7 @@ self.onmessage = function (e) {
   }
   if (msg.type === 'stage-end' && stageWaiter) { stageWaiter.resolve(); return; }
   if (msg.type === 'stage-fail' && stageWaiter) { stageWaiter.reject(new Error(msg.message)); return; }
-  if (msg.type === 'crc') { try { runCrc(msg); } catch (err) { postMessage({ type: 'fatal', message: String(err && err.message || err) }); } return; }
+  if (msg.type === 'crc') { runCrc(msg).catch(function (err) { postMessage({ type: 'fatal', message: String(err && err.message || err) }); }); return; }
   var p = msg.type === 'helper' ? runHelper(msg) : msg.type === 'run' ? runJob(msg) : msg.type === 'reader' ? runReader(msg) : null;
   if (p) p.catch(function (err) { postMessage({ type: 'fatal', message: String(err && err.stack || err && err.message || err) }); });
 };

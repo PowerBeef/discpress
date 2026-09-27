@@ -297,6 +297,7 @@ details.opts[open] > .fields { margin-top: 10px; }
 .ident-name { font: 900 1.0625rem/1.3 var(--display); overflow-wrap: anywhere; margin-top: 3px; }
 .ident-how { color: var(--ok); font-weight: 600; }
 .note.ident:not(.ok) .ident-how { color: var(--muted); }
+.ident-check { color: var(--muted); margin-top: 4px; }
 .note.ident select { background-color: var(--surface); }
 
 /* progress: arcade block meter */

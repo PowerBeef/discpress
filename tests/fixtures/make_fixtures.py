@@ -85,6 +85,20 @@ fixture('ps1-lone-bin', {
 }, add=['lone.bin'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-00975',
    ident='serial', name='007 - Tomorrow Never Dies (USA)', warning='No .cue file was added')
 
+# a PlayStation CD game stored as a plain 2048-byte .iso: must become a CD CHD, not a DVD one
+fixture('ps1-as-iso', {
+    'tnd.iso': lambda: ps1_iso('SLUS_009.75', 'TND', 1, 14),
+}, add=['tnd.iso'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-00975',
+   ident='serial', name='007 - Tomorrow Never Dies (USA)')
+
+# serial SLUS-01272 (TWINE), but tests/support/server.js can add a test database row matching this
+# bin's size and CRC-32 under another name, to exercise the checksum-verified path
+fixture('ps1-verified', {
+    'verified.cue': lambda: cue([('verified.bin', 'MODE2/2352', 0)]),
+    'verified.bin': lambda: g.raw_sectors(ps1_iso('SLUS_012.72', 'VERIFIED', 1, 15), 2),
+}, add=['verified.cue', 'verified.bin'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-01272',
+   testdb=True, ident='hash', name='Checksum Verified Game (USA)', provisional='007 - The World Is Not Enough (USA)')
+
 # ---------------------------------------------------------------- PlayStation 2 / PSP (DVD)
 fixture('ps2-dvd', {
     'agent.iso': lambda: g.pad_sectors(g.iso9660({
@@ -173,6 +187,11 @@ if args.bench:
             'SYSTEM.CNF': b'BOOT2 = cdrom0:\\SLUS_202.65;1\r\nVER = 1.00\r\n', 'SLUS_202.65': exe('SLUS_202.65'),
             'DATA.BIN': g.filler((args.dvd_mb << 20) - (1 << 20), 95)}, 'BENCH', 'PLAYSTATION')),
     }, add=['bench-dvd.iso'], job='create', disc='dvd', command='createdvd', sys='ps2', bench=True)
+
+# extra database rows for the page served with ?testdb=1 (see tests/support/server.js)
+vb = open(os.path.join(OUT, 'verified.bin'), 'rb').read()
+with open(os.path.join(OUT, 'testdb.json'), 'w') as f:
+    json.dump({'ps1': ['\t'.join(['Checksum Verified Game (USA)', 'SLUS-99999', str(len(vb)), '%08X' % zlib.crc32(vb), '', 'bin'])]}, f)
 
 with open(os.path.join(OUT, 'manifest.json'), 'w') as f:
     json.dump(manifest, f, indent=1)
