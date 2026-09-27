@@ -109,11 +109,13 @@ const server = http.createServer((q, r) => {
 }).listen(0, '127.0.0.1');
 await new Promise(r => server.once('listening', r));
 const url = `http://127.0.0.1:${server.address().port}/discpress.html`;
-const browser = await chromium.launch();
+// Each run gets a fresh persistent profile: like a normal browser window, and unlike an
+// incognito-style context, whose storage quota (tied to free disk space) can be below 1 GB.
 const browserPid = process.pid; // Chromium runs as a child of this process
 
 async function appRun({ fx, op, threads, simd, preset, chdInput }) {
-  const ctx = await browser.newContext({ acceptDownloads: true, viewport: { width: 1280, height: 900 } });
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'discpress-bench-'));
+  const ctx = await chromium.launchPersistentContext(profile, { acceptDownloads: true, viewport: { width: 1280, height: 900 } });
   await ctx.addInitScript(o => {
     localStorage.setItem('chdman-web-settings', JSON.stringify({ threads: o.threads }));
     if (!o.simd) {
@@ -121,7 +123,7 @@ async function appRun({ fx, op, threads, simd, preset, chdInput }) {
       WebAssembly.validate = function (b) { const u = b instanceof Uint8Array ? b : new Uint8Array(b.buffer || b); return u.length < 64 && u.includes(0xfd) ? false : v.apply(this, arguments); };
     }
   }, { threads, simd });
-  const page = await ctx.newPage();
+  const page = ctx.pages()[0] || await ctx.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.goto(url);
@@ -164,6 +166,7 @@ async function appRun({ fx, op, threads, simd, preset, chdInput }) {
     outs.push({ name: dl.suggestedFilename(), path: p, size: fs.statSync(p).size });
   }
   await ctx.close();
+  fs.rmSync(profile, { recursive: true, force: true });
   if (errors.length) die(`page errors: ${errors.join('; ')}`);
   return { seconds, peakRss: peak, outs };
 }
@@ -230,7 +233,6 @@ for (const fx of fixtures) {
     }
   }
 }
-await browser.close();
 server.close();
 fs.rmSync(work, { recursive: true, force: true });
 
