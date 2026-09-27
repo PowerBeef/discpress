@@ -1,10 +1,12 @@
 include sources.mk
 T ?= wasm
 SIMD ?= -msimd128
+# EXTRA: additional compiler flags for experiments (e.g. EXTRA=-flto)
+EXTRA ?=
 ifeq ($(T),wasm)
 CC := emcc
 CXX := em++
-OPT := -O3 -fwasm-exceptions $(SIMD)
+OPT := -O3 -fwasm-exceptions $(SIMD) $(EXTRA)
 PLAT := -DSDLMAME_EMSCRIPTEN
 else
 CC := gcc
