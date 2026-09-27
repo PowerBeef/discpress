@@ -73,13 +73,14 @@ var isMobile = (window.matchMedia && matchMedia('(pointer: coarse)').matches) ||
 var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 var cores = Math.max(1, navigator.hardwareConcurrency || 4);
 var maxThreads = Math.min(cores, 16);
-var settings = { threads: Math.min(maxThreads, isMobile ? 4 : 8), storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto' };
+// threads: 'auto' (measured per device, see Tuning) or a fixed number of compression threads
+var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto' };
 var outDir = null; // folder picked for direct writing (not persisted)
 try {
   var saved = JSON.parse(localStorage.getItem('chdman-web-settings') || '{}');
   for (var sk in saved) if (sk in settings) settings[sk] = saved[sk];
 } catch (e) { /* storage may be unavailable */ }
-settings.threads = Math.max(1, Math.min(maxThreads, settings.threads | 0 || 1));
+if (settings.threads !== 'auto') settings.threads = Math.max(1, Math.min(maxThreads, settings.threads | 0 || 1));
 function saveSettings() {
   try { localStorage.setItem('chdman-web-settings', JSON.stringify(settings)); } catch (e) { /* ignore */ }
 }
@@ -351,6 +352,112 @@ var Engine = {
     };
   }
 };
+
+/* ============================================================
+   automatic thread count
+   Once per device and browser, helper workers compress the same synthetic data at
+   1, 2, 3… threads until an extra thread stops adding speed. Measuring beats guessing
+   from the device: browsers may under-report cores, fast and efficient cores differ,
+   and nothing depends on recognizing the device, so old devices simply settle low.
+   ============================================================ */
+var Tuning = {
+  result: null, running: null,
+  // up to 8 on phones and tablets, 16 elsewhere, whatever the browser reports
+  cap: isMobile ? 8 : 16,
+  key: function () { return cores + '|' + navigator.userAgent; },
+  load: function () {
+    try {
+      var t = JSON.parse(localStorage.getItem('chdman-web-tuning') || 'null');
+      this.result = t && t.key === this.key() && t.threads >= 1 ? t : null;
+    } catch (e) { this.result = null; }
+  },
+  measure: function (onStep) {
+    var self = this;
+    if (!this.running) {
+      this.running = this._measure(onStep).then(function (t) {
+        self.result = t;
+        try { localStorage.setItem('chdman-web-tuning', JSON.stringify(t)); } catch (e) { /* ignore */ }
+        self.running = null;
+        updateChips();
+        return t;
+      }, function (e) { self.running = null; throw e; });
+    }
+    return this.running;
+  },
+  _measure: async function (onStep) {
+    await Engine.ready();
+    var HB = 4096, BATCH = 16, WARM = 250, WINDOW = 500, seq = 0;
+    // the default DVD codecs (lzma, zlib, huff, flac): the same work as a real conversion
+    var comps = [0x6c7a6d61, 0x7a6c6962, 0x68756666, 0x666c6163];
+    var rnd = 0x9e3779b9;
+    function batch() {
+      var d = new Uint8Array(HB * BATCH), dv = new DataView(d.buffer);
+      for (var h = 0; h < BATCH; h++) {
+        var o = h * HB;
+        dv.setUint32(o, ++seq); // every hunk unique, so none is skipped as a duplicate
+        for (var i = 8; i < HB; i++) {
+          rnd ^= rnd << 13; rnd ^= rnd >>> 17; rnd ^= rnd << 5;
+          // half text-like (compressible), half noise, like a typical disc
+          d[o + i] = i < HB / 2 ? 97 + ((rnd >>> 0) % 12) : rnd & 255;
+        }
+      }
+      return d;
+    }
+    var pool = [], steps = [], best = 0, bestN = 1, misses = 0;
+    function spawn() {
+      var w = new Worker(Engine.url), ch = new MessageChannel();
+      Engine.post(w, { type: 'helper', port: ch.port2 }, [ch.port2]);
+      ch.port1.postMessage({ type: 'init', hunkbytes: HB, unitbytes: 2048, comps: comps });
+      var h = { w: w, port: ch.port1, done: 0, counting: false, live: false };
+      ch.port1.onmessage = function (e) {
+        if (e.data.type !== 'result') return;
+        if (h.counting) h.done += BATCH;
+        send(h);
+      };
+      return h;
+    }
+    function send(h) {
+      var d = batch();
+      h.port.postMessage({ type: 'batch', id: 0, items: new Uint32Array(BATCH), data: d.buffer }, [d.buffer]);
+    }
+    try {
+      var counts = [1, 2, 3, 4, 6, 8, 10, 12, 14, 16].filter(function (n) { return n <= Tuning.cap; });
+      for (var ci = 0; ci < counts.length; ci++) {
+        var n = counts[ci];
+        while (pool.length < n) pool.push(spawn());
+        pool.forEach(function (h) { if (!h.live) { h.live = true; send(h); send(h); } });
+        await sleep(WARM);
+        pool.forEach(function (h) { h.done = 0; h.counting = true; });
+        var t0 = performance.now();
+        await sleep(WINDOW);
+        var dt = (performance.now() - t0) / 1000;
+        pool.forEach(function (h) { h.counting = false; });
+        var rate = pool.reduce(function (a, h) { return a + h.done; }, 0) * HB / 1048576 / dt;
+        steps.push([n, +rate.toFixed(2)]);
+        if (onStep) onStep(n, rate);
+        if (rate > best * 1.08) { best = rate; bestN = n; misses = 0; }
+        // past the reported core count one miss ends it; below it, allow one noisy step
+        else if (++misses >= (n > cores ? 1 : 2)) break;
+      }
+    } finally {
+      pool.forEach(function (h) { h.w.terminate(); });
+    }
+    return { key: this.key(), threads: bestN, rate: +best.toFixed(2), steps: steps, cores: cores, date: Date.now() };
+  }
+};
+Tuning.load();
+// compression threads to use now
+function threadCount() {
+  if (settings.threads !== 'auto') return settings.threads;
+  return Tuning.result ? Tuning.result.threads : Math.min(maxThreads, isMobile ? 4 : 8);
+}
+// before a compressing job in automatic mode: measure the device once
+async function ensureTuned(report) {
+  if (settings.threads !== 'auto' || Tuning.result) return;
+  try {
+    await Tuning.measure(report);
+  } catch (e) { /* fall back to the default guess */ }
+}
 
 /* ============================================================
    private browser storage (OPFS) bookkeeping
@@ -915,7 +1022,8 @@ function buildJob(job) {
     if (hs) { args.push('-hs', hs); display.push('-hs', hs); }
     if (disc === 'raw') { args.push('-us', o.unit || '512'); display.push('-us', o.unit || '512'); }
     slots = 2;
-    helpers = settings.threads > 1 && c !== 'none' ? settings.threads : 0;
+    var nt = threadCount();
+    helpers = nt > 1 && c !== 'none' ? nt : 0;
     expected = jobInputBytes(job);
   } else {
     var info = job.info || {}, name = job.files[0].name;
@@ -1366,6 +1474,14 @@ async function runJobNow(job) {
     if (job.state !== 'running') return;
     applyIdent(job, true);
   }
+  // automatic thread count: measure this device once, before its first compression
+  if (job.kind === 'create' && job.opts.preset !== 'none' && job.disc !== 'ld' && settings.threads === 'auto' && !Tuning.result) {
+    setProgress(job, null, 'Measuring this device\u2019s speed (only once)\u2026');
+    await ensureTuned(function (n, rate) {
+      setProgress(job, null, 'Measuring this device\u2019s speed (only once)\u2026', [plural(n, 'thread') + ': ' + rate.toFixed(1) + ' MB/s']);
+    });
+    if (job.state !== 'running') return;
+  }
   var spec = buildJob(job);
   if (spec.rename) {
     var nm = outBase(job) + '.chd', src = job.files[0].file;
@@ -1813,11 +1929,17 @@ async function cliRun() {
     await Engine.ready();
     var isCreate = /^(create|copy)/.test(args[0]);
     var comp = args.indexOf('-c') >= 0 ? args[args.indexOf('-c') + 1] : '';
+    if (isCreate && comp !== 'none') {
+      ptext.textContent = 'Measuring this device\u2019s speed (only once)\u2026';
+      await ensureTuned();
+      ptext.textContent = 'Running\u2026';
+    }
+    var nt = threadCount();
     cli.run = Engine.run({
       jobId: cjob.id, dirPath: Store.dirPath(cjob.id), args: args, inputs: inputs, writable: writable,
       slots: /^(info|listtemplates)$/.test(args[0]) || (args[0] === 'verify' && !writable.length) ? 0 : args[0] === 'extractcd' ? 101 : 3,
       outMode: settings.storage === 'folder' && outDir ? 'stream' : settings.storage === 'memory' || !Store.available ? 'mem' : 'opfs', outDir: outDir,
-      helpers: isCreate && comp !== 'none' && settings.threads > 1 ? settings.threads : 0,
+      helpers: isCreate && comp !== 'none' && nt > 1 ? nt : 0,
       onLine: function (s, t) { con.textContent += t + '\n'; con.scrollTop = con.scrollHeight; },
       onProgress: function (t) {
         var m = /([\d.]+)% complete/.exec(t);
@@ -2086,6 +2208,8 @@ function fillDiag() {
       '   pointer: ' + (mm('(pointer: coarse)') ? 'coarse' : 'fine') + '   hover: ' + (mm('(hover: hover)') ? 'yes' : 'no') +
       '   orientation: ' + (mm('(orientation: portrait)') ? 'portrait' : 'landscape'),
     'text scale: ' + getComputedStyle(rootEl).fontSize + '   theme: ' + (mm('(prefers-color-scheme: dark)') ? 'dark' : 'light'),
+    'cores reported: ' + (navigator.hardwareConcurrency || '?') + '   threads: ' + (settings.threads === 'auto' ? 'auto, using ' : '') + threadCount() + '   SIMD: ' + (Engine.module ? (Engine.simd ? 'yes' : 'no') : '?'),
+    'speed test: ' + (Tuning.result ? Tuning.result.steps.map(function (x) { return x[0] + ' → ' + x[1] + ' MB/s'; }).join(', ') + ' (' + new Date(Tuning.result.date).toISOString().slice(0, 10) + ')' : 'not run yet'),
     'agent: ' + navigator.userAgent
   ];
   out.textContent = lines.join('\n');
@@ -2149,9 +2273,20 @@ function init() {
 
   // settings
   var dlg = $('#settings'), thr = $('#setThreads');
+  thr.append(el('option', { value: 'auto' }, 'Automatic (recommended)'));
   for (var t = 1; t <= maxThreads; t++) thr.append(el('option', { value: t }, t === 1 ? '1 (single thread)' : t + ' threads' + (t === cores ? ' (all cores)' : '')));
   thr.value = settings.threads;
-  thr.addEventListener('change', function () { settings.threads = +thr.value; saveSettings(); updateChips(); });
+  thr.addEventListener('change', function () { settings.threads = thr.value === 'auto' ? 'auto' : +thr.value; saveSettings(); updateChips(); });
+  $('#retune').addEventListener('click', async function () {
+    var b = $('#retune'), info = $('#retuneInfo');
+    b.disabled = true;
+    try {
+      await Tuning.measure(function (n, rate) { info.textContent = plural(n, 'thread') + ': ' + rate.toFixed(1) + ' MB/s'; });
+      info.textContent = '';
+    } catch (e) { info.textContent = 'Measuring failed: ' + e.message; }
+    b.disabled = false;
+    fillDiag();
+  });
   if (!window.showDirectoryPicker) {
     var fo = $('#setStorage option[value="folder"]');
     if (fo) fo.remove();
@@ -2234,7 +2369,15 @@ function init() {
 }
 
 function updateChips() {
-  setChip('chipThreads', settings.threads > 1 ? settings.threads + ' threads' : '1 thread', '');
+  var nt = threadCount(), auto = settings.threads === 'auto';
+  setChip('chipThreads', (auto ? 'Auto \u00b7 ' : '') + plural(nt, 'thread'), '');
+  var ti = $('#threadsInfo'), rr = $('#retuneRow');
+  if (ti) {
+    ti.textContent = !auto ? '' : Tuning.result
+      ? 'Measured on this device: ' + plural(Tuning.result.threads, 'thread') + ' (about ' + Tuning.result.rate.toFixed(1) + ' MB/s of test data).'
+      : 'Discpress measures this device the first time it creates a CHD (a few seconds, once).';
+    rr.hidden = !auto;
+  }
   if (settings.storage === 'folder') setChip('chipStore', outDir ? 'Saving to “' + outDir.name + '”' : 'Output folder not chosen', outDir ? 'ok' : 'warn');
   else {
     var mem = settings.storage === 'memory' || !Store.available;

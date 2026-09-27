@@ -17,9 +17,9 @@ test('the phone layout fits the screen before and after converting', async ({ ap
   expect(['Download', 'Save to Files']).toContain(label.trim());
 });
 
-test('phones default to fewer threads', async ({ app, page }) => {
-  await app.open({ cores: 8 });
-  await expect(page.locator('#chipThreads')).toHaveText('4 threads');
+test('before measuring, phones start from fewer threads', async ({ app, page }) => {
+  await app.open({ cores: 8, tuned: false });
+  await expect(page.locator('#chipThreads')).toHaveText(/Auto · 4 threads/i);
 });
 
 test('inside an iOS app web view the header stays fixed and the content scrolls', async ({ browser, browserName }, testInfo) => {

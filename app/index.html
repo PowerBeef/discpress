@@ -149,7 +149,9 @@
     <label class="field"><span>CPU threads for compression</span>
       <select id="setThreads"></select>
       <span class="hint">More threads create CHDs faster. Extracting and verifying always use one thread.</span>
+      <span class="hint" id="threadsInfo"></span>
     </label>
+    <div class="row" id="retuneRow" hidden><button class="btn sm" id="retune">Measure again</button><span class="small muted" id="retuneInfo"></span></div>
     <label class="field"><span>Where to keep results</span>
       <select id="setStorage">
         <option value="auto">Browser storage, then save (recommended)</option>

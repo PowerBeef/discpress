@@ -61,6 +61,6 @@ test('if the worker cannot read them at all, the page streams inputs to it (iOS 
 
 test('a single CPU core still converts (no helper workers)', async ({ app, page }) => {
   await app.open({ cores: 1 });
-  await expect(page.locator('#chipThreads')).toHaveText('1 thread');
+  await expect(page.locator('#chipThreads')).toContainText('1 thread');
   await convertAgent(app);
 });

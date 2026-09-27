@@ -40,6 +40,14 @@ function initScript(o) {
     Object.defineProperty(navigator.storage, 'getDirectory', { value: undefined });
   }
   if (o.cores) Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => o.cores });
+  // a stored per-device speed test, so tests don't each spend seconds measuring (tuned: false opts out)
+  if (o.tuned !== false) {
+    try {
+      const cores = Math.max(1, navigator.hardwareConcurrency || 4);
+      localStorage.setItem('chdman-web-tuning', JSON.stringify({ key: cores + '|' + navigator.userAgent,
+        threads: Math.min(4, cores), rate: 1, steps: [[1, 1]], cores, date: Date.now() }));
+    } catch (e) { /* file:// may block storage */ }
+  }
 }
 
 export class App {
@@ -56,7 +64,8 @@ export class App {
     page.on('dialog', d => d.accept());
   }
 
-  /** Open the page. Options: settings, debug, noSimd, noOpfs, cores, theme, testdb (extra database rows). */
+  /** Open the page. Options: settings, debug, noSimd, noOpfs, cores, theme, testdb (extra database rows),
+   *  tuned (false: no stored per-device speed test, so automatic threads measure the device). */
   async open(opts = {}) {
     const o = { ...opts };
     if (o.theme) o.settings = { ...(o.settings || {}), theme: o.theme };
