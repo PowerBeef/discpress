@@ -35,6 +35,8 @@ npm run bench -- --quick           # conversion benchmark; `npm run bench:dev --
 python3 scripts/brand/render.py
 ```
 
+Compiler experiments: `make -C wasm ... EXTRA="<flags>"` adds flags to every compile (empty by default). Measured with Emscripten 6.0.10: single-threaded conversion is within about 10–12% of native chdman; `-flto` gave no measurable speedup and breaks C++ exceptions under `-fwasm-exceptions` (DVD creation dies with an uncaught `WebAssembly.Exception`), so don't use it. Never use flags that change results (e.g. `-ffast-math` alters FLAC output).
+
 `wasm/Makefile`'s `native` target (`T=native`, used by `build-native.sh`) builds the same sources without `wasm_helper.cpp`. For default settings the app's CHDs are byte-identical to this native chdman's, whatever the thread count or SIMD choice; the tests rely on that.
 
 ## Testing workflow
