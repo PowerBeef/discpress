@@ -8,4 +8,5 @@ MAME="${MAME_DIR:-$ROOT/third_party/mame}"
 [ -f "$MAME/src/tools/chdman.cpp" ] || "$ROOT/scripts/fetch-mame.sh" "$MAME"
 JOBS="${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)}"
 make -s -C "$ROOT/wasm" -j"$JOBS" T=native M="$(cd "$MAME" && pwd)" O="$ROOT/build/obj-native" native
-"$ROOT/build/chdman-native" 2>&1 | head -1
+# chdman without arguments prints its version and usage, and exits non-zero
+{ "$ROOT/build/chdman-native" || true; } 2>&1 | head -1
