@@ -41,7 +41,8 @@ for (const fx of manifest().filter(f => f.job === 'create' && !f.bench && !f.tes
 
     const extra = fx.sys === 'psp' ? ['-hs', '2048'] : [];
     if (fx.key === 'ps1-lone-bin') return; // the app generates its own .cue for a lone .bin
-    expectSameAsNative(outs[0].path, fx.command, inputOf(fx), extra);
+    // `ref`: the input native chdman gets instead, when the app gives chdman a corrected or generated descriptor
+    expectSameAsNative(outs[0].path, fx.command, fx.ref || inputOf(fx), extra);
   });
 }
 

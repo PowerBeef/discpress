@@ -1,0 +1,39 @@
+--- src/lib/util/flac.cpp
++++ src/lib/util/flac.cpp
+@@ -9,6 +9,9 @@
+ ***************************************************************************/
+ 
+ #include "flac.h"
++#include <cstdlib>
++#include <string>
++#include <vector>
+ 
+ #include "ioprocs.h"
+ #include "multibyte.h"
+@@ -83,6 +86,26 @@
+ 	FLAC__stream_encoder_set_total_samples_estimate(m_encoder, 0);
+ 	FLAC__stream_encoder_set_streamable_subset(m_encoder, false);
+ 	FLAC__stream_encoder_set_blocksize(m_encoder, m_block_size);
++	// CHDV_FLAC = lvl=N,e,p,l=N,r=N,a=<apodization>  (block size, channels and depth stay fixed)
++	if (const char *env = getenv("CHDV_FLAC"))
++	{
++		std::string spec(env);
++		std::vector<std::string> toks;
++		for (size_t pos = 0; pos <= spec.size(); )
++		{
++			size_t c = spec.find(',', pos); if (c == std::string::npos) c = spec.size();
++			toks.push_back(spec.substr(pos, c - pos)); pos = c + 1;
++		}
++		for (auto &t : toks) if (t.rfind("lvl=", 0) == 0) { FLAC__stream_encoder_set_compression_level(m_encoder, atoi(t.c_str() + 4)); FLAC__stream_encoder_set_blocksize(m_encoder, m_block_size); }
++		for (auto &t : toks)
++		{
++			if (t == "e") FLAC__stream_encoder_set_do_exhaustive_model_search(m_encoder, true);
++			else if (t == "p") FLAC__stream_encoder_set_do_qlp_coeff_prec_search(m_encoder, true);
++			else if (t.rfind("l=", 0) == 0) FLAC__stream_encoder_set_max_lpc_order(m_encoder, atoi(t.c_str() + 2));
++			else if (t.rfind("r=", 0) == 0) FLAC__stream_encoder_set_max_residual_partition_order(m_encoder, atoi(t.c_str() + 2));
++			else if (t.rfind("a=", 0) == 0) FLAC__stream_encoder_set_apodization(m_encoder, t.c_str() + 2);
++		}
++	}
+ 
+ 	// re-start processing
+ 	if (m_file)

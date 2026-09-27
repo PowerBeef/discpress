@@ -51,6 +51,20 @@ test('missing required options are reported instead of run', async ({ app, page 
   await expect(page.locator('#toasts')).toContainText('Please fill in: Input file');
 });
 
+for (const threads of [1, 4]) {
+  test(`a command chdman would never finish is stopped (${threads} thread${threads > 1 ? 's' : ''})`, async ({ app, page }) => {
+    // given a .bin, createcd parses it as a cdrdao TOC, finds no tracks and never finishes
+    await app.open({ settings: { threads } });
+    await page.click('.tab[data-tab="cli"]');
+    await addCliFiles(app, ['lone.bin']);
+    await page.click('#cliEditToggle');
+    await page.locator('#cliText').fill('chdman createcd -i lone.bin -o stuck.chd');
+    await page.click('#cliRun');
+    await expect(page.locator('#cliConsole')).toContainText('[stopped] chdman found no data to convert', { timeout: 60_000 });
+    await expect(page.locator('#cliRun')).toBeEnabled();
+  });
+}
+
 test('commands can be typed as text', async ({ app, page }) => {
   await openCli(app, page);
   await addCliFiles(app, ['agent.iso']);

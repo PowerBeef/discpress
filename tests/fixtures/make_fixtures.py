@@ -91,6 +91,28 @@ fixture('ps1-as-iso', {
 }, add=['tnd.iso'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-00975',
    ident='serial', name='007 - Tomorrow Never Dies (USA)')
 
+# a CD game dumped as raw 2,352-byte sectors but named .iso. Given the .iso, chdman types the track by
+# file size alone: 640 raw sectors are also a whole number of 2,048-byte ones, so it would store the
+# image as 2,048-byte sectors. The app writes a cue with the sectors' own mode instead; `ref` is the
+# equivalent cue that native chdman gets for the byte-for-byte comparison.
+def raw_iso():
+    iso = ps1_iso('SLUS_009.75', 'TND', 1, 16)
+    return g.raw_sectors(iso.ljust(-(-len(iso) // (128 * 2048)) * 128 * 2048, b'\0'), 2)
+
+
+fixture('ps1-raw-iso', {
+    'rawtnd.iso': raw_iso,
+    'rawtnd-ref.cue': lambda: b'FILE "rawtnd.iso" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n',
+}, add=['rawtnd.iso'], ref='rawtnd-ref.cue', job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-00975',
+   ident='serial', name='007 - Tomorrow Never Dies (USA)', warning='raw 2,352-byte CD sectors')
+
+# the same disc as ps1-single through a cue with a byte order mark and lower-case keywords, which
+# chdman alone reads as no tracks at all (it then never finishes)
+fixture('ps1-cue-lowercase', {
+    'twine lower.cue': lambda: b'\xef\xbb\xbf' + b'file "twine.bin" binary\r\n  track 01 mode2/2352\r\n    index 01 00:00:00\r\n',
+}, add=['twine lower.cue', 'twine.bin'], ref='twine.cue', job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-01272',
+   ident='serial', name='007 - The World Is Not Enough (USA)')
+
 # serial SLUS-01272 (TWINE), but tests/support/server.js can add a test database row matching this
 # bin's size and CRC-32 under another name, to exercise the checksum-verified path
 fixture('ps1-verified', {
@@ -162,6 +184,23 @@ fixture('dreamcast-gdi', {
         ipbin(b'SEGA SEGAKATANA ', 0x40, b'T-40201N  ', 0x80, b'AEROWINGS', {0x10: b'SEGA ENTERPRISES', 0x30: b'GD-ROM1/1       '}))), 1, 45000),
 }, add=['aerowings.gdi', 'track01.bin', 'track02.raw', 'track03.bin'], job='create', disc='gdrom', command='createcd', sys='dc',
    serial='T-40201N', ident='serial', name='AeroWings (USA)')
+
+# The Redump layout of a GD-ROM: one .bin per track, track 2's 2-second pregap stored at the start of
+# its file (INDEX 00), and REM lines marking the high-density area, which chdman places at LBA 45000.
+GD_CUE = ('REM SINGLE-DENSITY AREA\r\n'
+          'FILE "aerowings (Track 1).bin" BINARY\r\n  TRACK 01 MODE1/2352\r\n    INDEX 01 00:00:00\r\n'
+          'FILE "aerowings (Track 2).bin" BINARY\r\n  TRACK 02 AUDIO\r\n    INDEX 00 00:00:00\r\n    INDEX 01 00:02:00\r\n'
+          'REM HIGH-DENSITY AREA\r\n'
+          'FILE "aerowings (Track 3).bin" BINARY\r\n  TRACK 03 MODE1/2352\r\n    INDEX 01 00:00:00\r\n').encode()
+fixture('dreamcast-cue', {
+    'aerowings.cue': lambda: GD_CUE,
+    'aerowings (Track 1).bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660({'README.TXT': b'fixture'}, 'AEROWINGS')).ljust(300 * 2048, b'\0'), 1, 0),
+    'aerowings (Track 2).bin': lambda: g.audio(302, 63, silence=150),
+    'aerowings (Track 3).bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(
+        {'1ST_READ.BIN': g.filler(2 << 20, 64)}, 'AEROWINGS', '',
+        ipbin(b'SEGA SEGAKATANA ', 0x40, b'T-40201N  ', 0x80, b'AEROWINGS', {0x10: b'SEGA ENTERPRISES', 0x30: b'GD-ROM1/1       '}))), 1, 45000),
+}, add=['aerowings.cue', 'aerowings (Track 1).bin', 'aerowings (Track 2).bin', 'aerowings (Track 3).bin'], job='create', disc='gdrom',
+   command='createcd', sys='dc', serial='T-40201N', ident='serial', name='AeroWings (USA)')
 
 # ---------------------------------------------------------------- unrecognized / other types
 fixture('homebrew-iso', {

@@ -5,7 +5,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="${1:-$ROOT/third_party/mame}"
-COMMIT=76c7d197ed46e844ffb1fbad5cc21c9ab3cdc9c0   # MAME 0.289
+COMMIT=f34f02505e32c1993c6a782b6814232cbfc74e36   # MAME 0.289 (release tag mame0289)
 PATCH="$ROOT/wasm/mame.patch"
 
 if [ ! -d "$DEST/.git" ]; then

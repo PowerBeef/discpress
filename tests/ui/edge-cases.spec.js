@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect, fixture } from '../support/app.js';
 import { FIXTURES } from '../support/paths.js';
+import { extract, info, nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
 
 test('a cue with a missing track waits for it, then continues', async ({ app }) => {
   await app.open();
@@ -55,6 +56,83 @@ test('a truncated image gets a warning', async ({ app }) => {
   const card = app.jobs().first();
   await app.settled(card);
   await expect(card).toContainText('The file size is not a multiple of 2,352 bytes');
+});
+
+// chdman 0.289 never finishes on a descriptor it reads as having no tracks (and writes outside its
+// track table for a track number outside 1-99); the app refuses those and says why instead
+for (const [name, text, why] of [
+  ['no tracks', 'FILE "lone.bin" BINARY\r\n', 'This CUE file lists no tracks.'],
+  ['track zero', 'FILE "lone.bin" BINARY\r\n  TRACK 00 MODE2/2352\r\n    INDEX 01 00:00:00\r\n', 'Track numbers go from 01 to 99'],
+  ['no length', 'CD_ROM_XA\n\nTRACK MODE2_RAW\nDATAFILE "lone.bin"\n', 'chdman can\u2019t tell the length of track 1'],
+]) {
+  test(`a descriptor chdman can't convert is refused: ${name}`, async ({ app }) => {
+    const file = name + (text.startsWith('CD_ROM') ? '.toc' : '.cue');
+    fs.writeFileSync(path.join(FIXTURES, file), text);
+    await app.open();
+    await app.add([file, 'lone.bin']);
+    await expect(app.jobs()).toHaveCount(1);
+    const card = app.job(name);
+    await app.waitState(card, 'error');
+    await expect(card.locator('.note.err')).toContainText(why);
+    await expect(card.locator('.job-foot')).toContainText('Can\u2019t convert');
+    await expect(card.locator('.job-foot button')).toHaveCount(0);
+    await expect(card.locator('code.cmd')).toBeEmpty();
+  });
+}
+
+// chdman reads a cue's bytes as they are; the app hands it a UTF-8 copy with LF line ends when needed
+for (const [how, key, bin, bytes] of [
+  ['in UTF-16', 'utf16', 'twine.bin', s => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(s, 'utf16le')])],
+  ['in Windows-1252', 'cp1252', 'twin\u00e9.bin', s => Buffer.from(s, 'latin1')],
+  ['with classic Mac OS line ends (CR)', 'cr', 'twine.bin', s => Buffer.from(s.replace(/\r\n/g, '\r'))],
+]) {
+  test(`a cue sheet ${how} converts like a plain one`, async ({ app, page }) => {
+    const cue = `twine ${key}.cue`;
+    fs.writeFileSync(path.join(FIXTURES, cue), bytes(`FILE "${bin}" BINARY\r\n  TRACK 01 MODE2/2352\r\n    INDEX 01 00:00:00\r\n`));
+    await app.open();
+    // files go in as buffers: a file chooser may drop paths with non-ASCII names when the locale isn't UTF-8
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#addFiles')]);
+    await chooser.setFiles([[cue, cue], [bin, 'twine.bin']].map(([name, src]) =>
+      ({ name, mimeType: 'application/octet-stream', buffer: fs.readFileSync(path.join(FIXTURES, src)) })));
+    const card = app.job(`twine ${key}`);
+    await app.settled(card);
+    await expect(card.locator('.sub')).toContainText('CUE + 1 track file');
+    await app.run(card);
+    const [out] = await app.downloads(card);
+    if (!nativeChdman()) return;
+    const ref = reference('createcd', 'twine.cue');
+    if (sameVersion()) expect(sha1File(out.path)).toBe(sha1File(ref));
+    else expect(info(out.path).dataSha1).toBe(info(ref).dataSha1);
+  });
+}
+
+test('a binary .toc beside a cue sheet is skipped', async ({ app, page }) => {
+  // some disc dumping tools save the drive's raw table of contents as a binary <name>.toc beside the .cue
+  fs.writeFileSync(path.join(FIXTURES, 'twine.toc'), Buffer.from('0012010100140100000000000014aa0000002e10', 'hex'));
+  await app.open();
+  await app.add(['twine.cue', 'twine.toc', 'twine.bin']);
+  await expect(page.locator('#toasts')).toContainText('ignored 1 file (twine.toc)');
+  await expect(app.jobs()).toHaveCount(1);
+  await app.settled(app.job('twine'));
+});
+
+test('a TOC with one file per track, as chdman writes it, keeps every track', async ({ app }) => {
+  test.skip(!nativeChdman(), 'needs native chdman to write the TOC');
+  // chdman extractcd -sb writes `DATAFILE "file" length` for each track, and chdman createcd reads a
+  // lone length after track 1 as an offset: the later tracks came out empty
+  const original = reference('createcd', 'mgs disc1.cue');
+  const x = extract('extractcd', original, 'mgs split.toc', ['-sb']);
+  for (const f of x.files) fs.copyFileSync(path.join(x.dir, f), path.join(FIXTURES, f));
+  const toc = fs.readFileSync(path.join(FIXTURES, 'mgs split.toc'), 'utf8');
+  fs.writeFileSync(path.join(FIXTURES, 'mgs split-ref.toc'), toc.replace(/^(DATAFILE "[^"]*" )(\d)/gm, '$1#0 $2'));
+  await app.open();
+  await app.add(x.files);
+  const card = app.job('mgs split');
+  await app.settled(card);
+  await app.run(card);
+  const [out] = await app.downloads(card);
+  expect(info(out.path).dataSha1).toBe(info(original).dataSha1);
+  if (sameVersion()) expect(sha1File(out.path)).toBe(sha1File(reference('createcd', 'mgs split-ref.toc')));
 });
 
 test('an ISO can be switched between DVD and CD', async ({ app }) => {
