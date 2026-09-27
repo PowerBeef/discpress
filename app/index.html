@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="text-scale" content="scale">
+<script>
+/* Pick the scrolling model before anything paints.
+   doc   = the page scrolls (real browsers: toolbar collapse, tap-to-top, pull-to-refresh work natively)
+   shell = fixed header + inner scroll area sized to the measured visible height
+           (in-app web views and installed web apps, where the host insets the page unpredictably) */
+(function () {
+  var d = document.documentElement, ua = navigator.userAgent, pref = 'auto';
+  try { pref = (JSON.parse(localStorage.getItem('chdman-web-settings') || '{}').scroll) || 'auto'; } catch (e) {}
+  var iOS = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  var standalone = (window.matchMedia && matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches) || navigator.standalone === true;
+  var iosWebView = iOS && !/Safari\//.test(ua);
+  var androidWebView = /Android/.test(ua) && /; wv\)/.test(ua);
+  var auto = standalone || iosWebView || androidWebView ? 'shell' : 'doc';
+  var mode = pref === 'page' ? 'doc' : pref === 'app' ? 'shell' : auto;
+  d.className += ' mode-' + mode + (iOS ? ' ios' : '');
+  d.setAttribute('data-auto-mode', auto);
+  if (mode === 'shell') d.style.setProperty('--app-h', window.innerHeight + 'px');
+})();
+</script>
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f7f1e3" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#15122b" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Discpress">
+<meta name="description" content="Discpress turns your game disc images into compact CHD files and back, entirely on your device.">
+<title>Discpress</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect x='2' y='2' width='44' height='44' rx='12' fill='%231c1733'/%3E%3CclipPath id='c'%3E%3Ccircle cx='24' cy='24' r='15'/%3E%3C/clipPath%3E%3Ccircle cx='24' cy='24' r='15' fill='%23fff7e6'/%3E%3Cg clip-path='url%28%23c%29'%3E%3Crect x='6' y='26' width='36' height='3.3' fill='%23ff5c93'/%3E%3Crect x='6' y='29.3' width='36' height='3.3' fill='%23ffb23f'/%3E%3Crect x='6' y='32.6' width='36' height='3.3' fill='%23ffe14d'/%3E%3Crect x='6' y='35.9' width='36' height='4' fill='%2313a9ba'/%3E%3C/g%3E%3Ccircle cx='24' cy='24' r='4.6' fill='%231c1733'/%3E%3Ccircle cx='24' cy='24' r='1.8' fill='%23fff7e6'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect x='2' y='2' width='44' height='44' rx='12' fill='%231c1733'/%3E%3CclipPath id='c'%3E%3Ccircle cx='24' cy='24' r='15'/%3E%3C/clipPath%3E%3Ccircle cx='24' cy='24' r='15' fill='%23fff7e6'/%3E%3Cg clip-path='url%28%23c%29'%3E%3Crect x='6' y='26' width='36' height='3.3' fill='%23ff5c93'/%3E%3Crect x='6' y='29.3' width='36' height='3.3' fill='%23ffb23f'/%3E%3Crect x='6' y='32.6' width='36' height='3.3' fill='%23ffe14d'/%3E%3Crect x='6' y='35.9' width='36' height='4' fill='%2313a9ba'/%3E%3C/g%3E%3Ccircle cx='24' cy='24' r='4.6' fill='%231c1733'/%3E%3Ccircle cx='24' cy='24' r='1.8' fill='%23fff7e6'/%3E%3C/svg%3E">
+<style>
+/*STYLE*/
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-disc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 5.5a6.5 6.5 0 0 1 6.5 6.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" opacity=".55"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M4 17v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 3.5v11M12 3.5 8 7.5M12 3.5l4 4M6 11H5a1.5 1.5 0 0 0-1.5 1.5v6A1.5 1.5 0 0 0 5 20h14a1.5 1.5 0 0 0 1.5-1.5v-6A1.5 1.5 0 0 0 19 11h-1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.5-2-3.4-2.4.9a7.5 7.5 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.5 7.5 0 0 0 7 6.5l-2.4-.9-2 3.4 2 1.5a7.6 7.6 0 0 0 0 3l-2 1.5 2 3.4 2.4-.9a7.5 7.5 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.5 7.5 0 0 0 2.6-1.5l2.4.9 2-3.4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<header class="top">
+  <div class="wrap top-row">
+    <a class="brand" href="#" id="brandLink" aria-label="Discpress home"><svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><rect x="2" y="2" width="44" height="44" rx="12" fill="#1c1733"/><clipPath id="lgc"><circle cx="24" cy="24" r="15"/></clipPath><circle cx="24" cy="24" r="15" fill="#fff7e6"/><g clip-path="url(#lgc)"><rect x="6" y="26" width="36" height="3.3" fill="#ff5c93"/><rect x="6" y="29.3" width="36" height="3.3" fill="#ffb23f"/><rect x="6" y="32.6" width="36" height="3.3" fill="#ffe14d"/><rect x="6" y="35.9" width="36" height="4" fill="#13a9ba"/></g><circle cx="24" cy="24" r="4.6" fill="#1c1733"/><circle cx="24" cy="24" r="1.8" fill="#fff7e6"/></svg><span class="wordmark">Disc<b>press</b></span><span class="ver">chdman 0.289</span></a>
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab" role="tab" aria-selected="true" data-tab="convert">Convert<span class="count" id="jobCount" hidden>0</span></button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="cli">Advanced</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="help">Help</button>
+    </nav>
+    <div class="top-actions"><button class="icon-btn" id="settingsBtn" aria-label="Settings" title="Settings"><svg><use href="#i-gear"/></svg></button></div>
+  </div>
+  <div class="stripes" aria-hidden="true"></div>
+</header>
+
+<div class="scroller" id="scroller">
+<main class="wrap">
+  <div class="chips" id="chips" aria-live="polite"><span class="chip" id="chipEngine"><i></i>Loading engine…</span></div>
+  <div id="fatal"></div>
+
+  <section class="panel" id="tab-convert" role="tabpanel">
+    <div class="drop" id="drop">
+      <svg class="drop-art" viewBox="0 0 132 132" aria-hidden="true">
+        <rect x="14" y="10" width="8" height="8" style="fill:var(--accent-3)"/><rect x="108" y="30" width="7" height="7" style="fill:var(--cyan)"/><rect x="104" y="112" width="6" height="6" style="fill:var(--accent)"/><rect x="18" y="104" width="5" height="5" style="fill:var(--accent-2)"/>
+        <clipPath id="dac"><circle cx="66" cy="78" r="42"/></clipPath>
+        <circle cx="70" cy="82" r="44" style="fill:var(--ink)"/>
+        <circle cx="66" cy="78" r="42" style="fill:#fff7e6;stroke:var(--ink);stroke-width:3.5"/>
+        <g clip-path="url(#dac)"><rect x="20" y="84" width="92" height="8" fill="#ff5c93"/><rect x="20" y="92" width="92" height="8" fill="#ffb23f"/><rect x="20" y="100" width="92" height="8" fill="#ffe14d"/><rect x="20" y="108" width="92" height="14" fill="#13a9ba"/></g>
+        <circle cx="66" cy="78" r="42" style="fill:none;stroke:var(--ink);stroke-width:3.5"/>
+        <circle cx="66" cy="78" r="12" style="fill:var(--ink)"/><circle cx="66" cy="78" r="4.5" fill="#fff7e6"/>
+        <path d="M54 6h24v18h12L66 48 42 24h12z" style="fill:var(--accent);stroke:var(--ink);stroke-width:3.5;stroke-linejoin:round"/>
+      </svg>
+      <h2>Drop your games here</h2>
+      <p class="lead">Turn <code>.cue</code>/<code>.bin</code>, <code>.gdi</code>, <code>.iso</code> and more into compact CHD files named after the real game, or unpack a <code>.chd</code> again. Pick every file of a game together.</p>
+      <div class="row">
+        <button class="btn primary" id="addFiles"><svg><use href="#i-upload"/></svg>Choose files</button>
+        <button class="btn" id="addFolder" hidden><svg><use href="#i-folder"/></svg>Choose folder</button>
+      </div>
+      <p class="drop-hint">Drop more files anywhere on this page.</p>
+      <ul class="systems" aria-label="Supported systems"><li style="--sys:#c8c8d4;--sys-fg:#1c1733">PS1</li><li style="--sys:#2f5bd3;--sys-fg:#fff">PS2</li><li style="--sys:#26262e;--sys-fg:#fff">PSP</li><li style="--sys:#4a4f63;--sys-fg:#fff">Saturn</li><li style="--sys:#ff7a1a;--sys-fg:#1c1733">Dreamcast</li><li style="--sys:#1f4ea8;--sys-fg:#fff">Sega CD</li><li style="--sys:#f1ead6;--sys-fg:#1c1733">PC Engine CD</li><li style="--sys:#d9b23a;--sys-fg:#1c1733">Neo Geo CD</li><li style="--sys:#b01e2f;--sys-fg:#fff">3DO</li><li style="--sys:#1c6fb8;--sys-fg:#fff">CD-i</li><li style="--sys:#e11d48;--sys-fg:#fff">Amiga CD32</li><li style="--sys:#6a4fb8;--sys-fg:#fff">Arcade</li></ul>
+      <p class="drop-foot"><svg><use href="#i-lock"/></svg>Runs entirely on your device. Nothing is uploaded.</p>
+    </div>
+    <div class="note warn" id="memTip" hidden>This page cannot use the browser's private storage here (for example when it is opened as a local file), so results are kept in memory. That is fine for CDs; for large DVD images <button class="btn sm" id="memTipBtn" style="margin-left:4px">write results directly into a folder</button></div>
+    <div class="jobs" id="jobs"></div>
+  </section>
+
+  <section class="panel" id="tab-cli" role="tabpanel" hidden>
+    <div class="card">
+      <h2>Advanced: any chdman command</h2>
+      <p class="muted small" style="margin:0 0 12px">Every chdman command and option is available here. Add the files the command needs, fill in the options, then run.</p>
+      <label class="field"><span>Command</span><select id="cliCmd"></select></label>
+      <p class="small muted" id="cliDesc" style="margin:6px 0 0"></p>
+    </div>
+    <div class="card">
+      <div class="row"><h2 style="margin:0">Files</h2><span class="spacer"></span><button class="btn sm" id="cliAdd"><svg><use href="#i-upload"/></svg>Add files</button></div>
+      <ul class="files-list" id="cliFiles"></ul>
+      <p class="small muted" id="cliFilesEmpty" style="margin:8px 0 0">No files yet. For a .cue or .gdi, add its track files too.</p>
+    </div>
+    <div class="card">
+      <h2 id="cliOptsTitle">Options</h2>
+      <div class="fields" id="cliOpts"></div>
+      <div style="margin-top:14px">
+        <div class="row"><span class="small muted" style="font-weight:600">Command</span><span class="spacer"></span><button class="btn sm ghost" id="cliEditToggle">Edit as text</button></div>
+        <code class="cmd" id="cliPreview" style="margin-top:6px"></code>
+        <textarea id="cliText" hidden spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+        <p class="small muted" id="cliTextHint" hidden style="margin:6px 0 0">Refer to added files by name. Output files are offered for download when the command finishes.</p>
+      </div>
+      <div class="row end" style="margin-top:14px">
+        <button class="btn danger" id="cliCancel" hidden>Cancel</button>
+        <button class="btn primary" id="cliRun"><svg><use href="#i-play"/></svg>Run</button>
+      </div>
+    </div>
+    <div class="card" id="cliResult" hidden>
+      <div class="prog" id="cliProg" hidden><div class="bar"><i></i></div><div class="ptext"></div></div>
+      <pre class="console" id="cliConsole"></pre>
+      <div class="outs" id="cliOuts" style="margin-top:10px"></div>
+    </div>
+  </section>
+
+  <section class="panel help" id="tab-help" role="tabpanel" hidden>
+    <!--HELP-->
+  </section>
+</main>
+</div>
+
+<div class="dock" id="dock" hidden>
+  <div class="wrap">
+    <div class="summary"><div id="dockText"></div><div class="bar" id="dockBar" hidden><i></i></div></div>
+    <button class="btn sm" id="clearDone" hidden>Clear finished</button>
+    <button class="btn sm" id="saveAll" hidden><svg><use href="#i-folder"/></svg>Save all to folder</button>
+    <button class="btn sm" id="dlAll" hidden><svg><use href="#i-download"/></svg>Download all</button>
+    <button class="btn primary" id="startAll"><svg><use href="#i-play"/></svg>Start all</button>
+  </div>
+</div>
+
+<dialog id="settings">
+  <div class="dhead"><h2>Settings</h2><button class="icon-btn" id="settingsClose" aria-label="Close"><svg><use href="#i-x"/></svg></button></div>
+  <div class="dbody">
+    <label class="field"><span>CPU threads for compression</span>
+      <select id="setThreads"></select>
+      <span class="hint">More threads create CHDs faster. Extracting and verifying always use one thread.</span>
+    </label>
+    <label class="field"><span>Where to keep results</span>
+      <select id="setStorage">
+        <option value="auto">Browser storage, then save (recommended)</option>
+        <option value="folder">Straight into a folder</option>
+        <option value="memory">Memory only (small files)</option>
+      </select>
+      <span class="hint" id="storageInfo"></span>
+    </label>
+    <div class="row" id="folderRow" hidden><button class="btn sm" id="pickFolder"><svg><use href="#i-folder"/></svg>Choose folder</button><span class="small muted">Current: <b id="folderName">none</b>. Files with the same name are replaced.</span></div>
+    <label class="check"><input type="checkbox" id="setRename"> Name results after the official (Redump) game title</label>
+    <label class="check"><input type="checkbox" id="setWake"> Keep the screen awake while working</label>
+    <label class="field"><span>Appearance</span>
+      <select id="setTheme"><option value="">Match system</option><option value="light">Light</option><option value="dark">Dark</option></select>
+    </label>
+    <label class="field"><span>Scrolling</span>
+      <select id="setScroll">
+        <option value="auto">Automatic (recommended)</option>
+        <option value="page">Page scrolls (browser style)</option>
+        <option value="app">Fixed header (app style)</option>
+      </select>
+      <span class="hint" id="scrollHint"></span>
+    </label>
+    <div class="row"><button class="btn sm" id="clearStorage">Free temporary storage</button><span class="small muted" id="clearInfo"></span></div>
+    <details class="log" id="diagBox"><summary>Screen info</summary>
+      <p class="small muted" style="margin:8px 0 0">If the layout looks wrong on your device, a screenshot of this helps pin it down.</p>
+      <pre class="logtext" id="diagText"></pre>
+      <div class="row" style="margin-top:8px"><button class="btn sm" id="diagCopy">Copy</button></div>
+    </details>
+  </div>
+</dialog>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<div id="probes" aria-hidden="true" style="position:fixed;left:0;top:0;width:0;visibility:hidden;pointer-events:none">
+  <div data-p="vh" style="position:absolute;height:100vh"></div><div data-p="dvh" style="position:absolute;height:100dvh"></div>
+  <div data-p="svh" style="position:absolute;height:100svh"></div><div data-p="lvh" style="position:absolute;height:100lvh"></div>
+  <div data-p="safe" style="position:absolute;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)"></div>
+</div>
+<input type="file" id="fileInput" multiple hidden>
+<input type="file" id="dirInput" multiple webkitdirectory hidden>
+<input type="file" id="cliFileInput" multiple hidden>
+
+<script type="text/plain" id="worker-src">/*WORKER*/</script>
+<script type="application/octet-stream" id="wasm-simd" data-size="/*SIMD_SIZE*/">/*WASM_SIMD*/</script>
+<script type="application/octet-stream" id="wasm-base" data-size="/*BASE_SIZE*/">/*WASM_BASE*/</script>
+<script type="application/octet-stream" id="gamedb" data-size="/*DB_SIZE*/">/*GAMEDB*/</script>
+<script>
+/*UI*/
+</script>
+</body>
+</html>
