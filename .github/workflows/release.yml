@@ -1,0 +1,25 @@
+name: Release
+
+# Publishes dist/discpress.html as a release download.
+# Push a tag (git tag v1.0.0 && git push origin v1.0.0) or publish a release on GitHub.
+on:
+  push:
+    tags: ['v*']
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Attach discpress.html to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Discpress $TAG" --generate-notes
+          gh release upload "$TAG" dist/discpress.html --clobber

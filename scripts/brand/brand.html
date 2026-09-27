@@ -1,0 +1,237 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@600;700;800;900&family=JetBrains+Mono:wght@700;800&display=block">
+<style>
+/* Discpress brand graphics for the README. Rendered to PNG by render.py. */
+:root {
+  --bg: #f7f1e3; --dots: rgba(28,23,51,.08); --surface: #fffdf6; --surface-2: #f2ead7; --ink: #1c1733; --text: #1c1733;
+  --muted: #676180; --line: #ddd2ba; --accent: #ff5c93; --accent-2: #ffb23f; --accent-3: #ffe14d; --cyan: #13a9ba;
+  --on-accent: #1c1733; --ok: #17864a; --shadow-c: #1c1733;
+  --display: "Nunito", ui-rounded, sans-serif; --mono: "JetBrains Mono", ui-monospace, monospace;
+}
+.dark {
+  --bg: #15122b; --dots: rgba(255,255,255,.06); --surface: #1f1a3c; --surface-2: #29234d; --ink: #07060f; --text: #f5f2ff;
+  --muted: #aaa3d2; --line: #3b346a; --accent: #ff6fa3; --accent-2: #ffc24f; --accent-3: #ffe266; --cyan: #3fe0d0;
+  --on-accent: #1a1030; --ok: #5fe39c; --shadow-c: #000;
+}
+* { box-sizing: border-box; margin: 0; }
+html, body { background: transparent; }
+body { font-family: var(--display); color: var(--text); -webkit-font-smoothing: antialiased; }
+.scene { display: none; padding: 4px 14px 14px 4px; width: max-content; }
+.scene.on { display: block; }
+.card {
+  position: relative; overflow: hidden; background-color: var(--bg);
+  background-image: radial-gradient(var(--dots) 1.6px, transparent 1.7px); background-size: 22px 22px;
+  border: 4px solid var(--ink); border-radius: 30px; box-shadow: 10px 10px 0 var(--shadow-c);
+}
+.flat .card { border: 0; border-radius: 0; box-shadow: none; }
+.flat.scene { padding: 0; }
+.stripes { position: absolute; left: 0; right: 0; bottom: 0; height: 14px; display: flex; }
+.stripes i { flex: 1; } .stripes i:nth-child(1) { background: var(--accent); } .stripes i:nth-child(2) { background: var(--accent-2); }
+.stripes i:nth-child(3) { background: var(--accent-3); } .stripes i:nth-child(4) { background: var(--cyan); }
+.logo { flex: none; filter: drop-shadow(4px 4px 0 var(--shadow-c)); }
+.dark .logo rect.tile { stroke: #3b346a; stroke-width: 1.5; }
+.wordmark { font-weight: 900; letter-spacing: -.035em; line-height: 1; }
+.wordmark b { color: var(--accent); font-weight: 900; }
+.mono { font-family: var(--mono); font-weight: 800; text-transform: uppercase; letter-spacing: .08em; }
+.pill { display: inline-flex; align-items: center; gap: 10px; border: 2.5px solid var(--line); border-radius: 999px; padding: 8px 16px; font-size: 15px; color: var(--muted); background: var(--surface); }
+.pill i { width: 10px; height: 10px; border-radius: 3px; background: var(--ok); }
+.chip { display: inline-flex; align-items: center; justify-content: center; font-family: var(--mono); font-weight: 800; border: 3px solid var(--ink); border-radius: 12px; box-shadow: 0 4px 0 var(--ink); white-space: nowrap; }
+.sticker { position: absolute; display: inline-flex; align-items: center; gap: 10px; font-weight: 900; font-size: 22px; padding: 12px 20px; border: 3.5px solid var(--ink); border-radius: 16px; box-shadow: 5px 5px 0 var(--shadow-c); color: #1c1733; white-space: nowrap; }
+.sticker svg { width: 24px; height: 24px; }
+.phone { position: absolute; width: 336px; border: 11px solid #0c0a18; border-radius: 54px; overflow: hidden; background: #0c0a18; box-shadow: 12px 12px 0 var(--shadow-c); }
+.phone img { display: block; width: 100%; }
+.phone .scr { border-radius: 43px; overflow: hidden; background: var(--bg); }
+.phone .sb { height: 46px; display: flex; align-items: center; justify-content: space-between; padding: 6px 30px 0 34px; font: 800 17px/1 var(--display); color: var(--text); background: var(--bg); }
+.phone .sb span:last-child { display: inline-flex; gap: 6px; align-items: center; }
+.phone .sb .bat { width: 25px; height: 12px; border: 2px solid currentColor; border-radius: 4px; padding: 1.5px; }
+.phone .sb .bat i { display: block; height: 100%; width: 75%; background: currentColor; border-radius: 1.5px; }
+.phone .sb .sig { display: inline-flex; gap: 2px; align-items: flex-end; height: 12px; }
+.phone .sb .sig i { width: 3.5px; background: currentColor; border-radius: 1px; }
+.phone::after { content: ""; position: absolute; top: 9px; left: 50%; width: 92px; height: 27px; margin-left: -46px; border-radius: 20px; background: #0c0a18; }
+
+/* hero */
+#hero .card { width: 1280px; height: 640px; }
+#hero .left { position: absolute; left: 72px; top: 76px; width: 640px; }
+#hero .brandrow { display: flex; align-items: center; gap: 26px; margin: 30px 0 26px; }
+#hero .wordmark { font-size: 108px; }
+#hero h2 { font-size: 40px; line-height: 1.18; font-weight: 900; letter-spacing: -.015em; }
+#hero h2 em { font-style: normal; color: var(--accent); }
+#hero p { font: 600 22px/1.45 var(--display); color: var(--muted); margin-top: 18px; max-width: 580px; }
+#hero .chips { display: flex; gap: 10px; margin-top: 34px; flex-wrap: wrap; }
+#hero .chips .chip { font-size: 15px; padding: 8px 12px; }
+#hero .phone { left: 842px; top: 58px; transform: rotate(4deg); }
+
+/* download button */
+#download .btn { display: inline-flex; align-items: center; gap: 22px; padding: 22px 36px 22px 24px; background: var(--accent); border: 4px solid var(--ink); border-radius: 24px; box-shadow: 8px 8px 0 var(--shadow-c); color: #1c1733; }
+#download .ico { width: 68px; height: 68px; border-radius: 18px; background: #1c1733; color: #fff7e6; display: grid; place-items: center; }
+#download .ico svg { width: 40px; height: 40px; }
+#download .t1 { font-size: 40px; font-weight: 900; letter-spacing: -.02em; line-height: 1.05; }
+#download .t2 { font-size: 15px; margin-top: 6px; opacity: .8; }
+
+/* steps */
+#steps .row { display: flex; align-items: stretch; gap: 0; }
+#steps .step { width: 384px; background: var(--surface); border: 4px solid var(--ink); border-radius: 26px; box-shadow: 8px 8px 0 var(--shadow-c); padding: 30px 30px 34px; position: relative; }
+#steps .num { position: absolute; top: -4px; right: 26px; font: 900 20px/1 var(--display); background: var(--ink); color: var(--surface); padding: 10px 14px 12px; border-radius: 0 0 14px 14px; }
+.dark #steps .num { background: var(--accent-3); color: #1c1733; }
+#steps .icon { width: 76px; height: 76px; border-radius: 20px; border: 4px solid var(--ink); display: grid; place-items: center; color: #1c1733; box-shadow: 0 5px 0 var(--ink); }
+#steps .icon svg { width: 40px; height: 40px; }
+#steps h3 { font-size: 34px; font-weight: 900; letter-spacing: -.02em; margin-top: 24px; }
+#steps p { font: 600 20px/1.45 var(--display); color: var(--muted); margin-top: 10px; }
+#steps .arrow { width: 64px; display: grid; place-items: center; color: var(--muted); }
+#steps .arrow svg { width: 44px; height: 44px; }
+
+/* feature cards */
+#features .grid { display: grid; grid-template-columns: repeat(3, 400px); gap: 28px 26px; }
+#features .f { background: var(--surface); border: 4px solid var(--ink); border-radius: 24px; box-shadow: 7px 7px 0 var(--shadow-c); padding: 26px 26px 28px; }
+#features .top { display: flex; align-items: center; gap: 16px; }
+#features .icon { width: 58px; height: 58px; flex: none; border-radius: 16px; border: 3.5px solid var(--ink); display: grid; place-items: center; color: #1c1733; box-shadow: 0 4px 0 var(--ink); }
+#features .icon svg { width: 30px; height: 30px; }
+#features h3 { font-size: 26px; font-weight: 900; letter-spacing: -.015em; line-height: 1.1; }
+#features p { font: 600 18.5px/1.45 var(--display); color: var(--muted); margin-top: 14px; }
+
+/* systems */
+#systems .wrap { width: 1250px; display: flex; flex-wrap: wrap; gap: 18px 16px; justify-content: center; }
+#systems .chip { font-size: 21px; padding: 12px 20px; }
+
+/* showcase */
+#showcase .stage { position: relative; width: 1280px; height: 880px; }
+#showcase .win { position: absolute; left: 0; top: 0; width: 1160px; border: 4px solid var(--ink); border-radius: 22px; overflow: hidden; background: var(--surface); box-shadow: 10px 10px 0 var(--shadow-c); }
+#showcase .bar { height: 50px; display: flex; align-items: center; gap: 10px; padding: 0 20px; background: var(--surface-2); border-bottom: 4px solid var(--ink); }
+#showcase .bar i { width: 16px; height: 16px; border-radius: 50%; border: 2.5px solid var(--ink); }
+#showcase .bar i:nth-child(1) { background: var(--accent); } #showcase .bar i:nth-child(2) { background: var(--accent-2); } #showcase .bar i:nth-child(3) { background: var(--accent-3); }
+#showcase .url { margin-left: 18px; flex: 1; max-width: 520px; height: 30px; border-radius: 10px; background: var(--surface); border: 2.5px solid var(--line); font: 700 14px/25px var(--mono); color: var(--muted); padding: 0 12px; }
+#showcase .win img { display: block; width: 100%; }
+#showcase .phone { left: 944px; top: 150px; width: 316px; transform: rotate(3deg); }
+
+/* divider */
+#divider .d { width: 1280px; height: 14px; display: flex; border-radius: 7px; overflow: hidden; }
+#divider .d i { flex: 1; } #divider .d i:nth-child(1) { background: #ff5c93; } #divider .d i:nth-child(2) { background: #ffb23f; }
+#divider .d i:nth-child(3) { background: #ffe14d; } #divider .d i:nth-child(4) { background: #13a9ba; }
+#divider.scene { padding: 0; }
+
+/* ---- phone-width variants (m=1): same scenes, laid out for ~390px screens ---- */
+.m #hero .card { width: 720px; height: 1120px; }
+.m #hero .left { left: 48px; top: 56px; width: 624px; }
+.m #hero .brandrow { margin: 34px 0 30px; gap: 22px; }
+.m #hero .wordmark { font-size: 104px; }
+.m #hero h2 { font-size: 50px; }
+.m #hero p { font-size: 28px; }
+.m #hero .chips .chip { font-size: 21px; padding: 10px 14px; }
+.m #hero .phone { left: 330px; top: 700px; }
+.m #hero .st1 { left: 36px !important; top: 770px !important; font-size: 30px; }
+.m #hero .st2 { left: 60px !important; top: 900px !important; font-size: 30px; }
+.m #steps .row { flex-direction: column; width: 720px; }
+.m #steps .step { width: 720px; padding: 34px 40px 38px; display: grid; grid-template-columns: 76px 1fr; column-gap: 26px; align-items: center; }
+.m #steps .step h3 { margin-top: 0; }
+.m #steps .step p { grid-column: 1 / -1; margin-top: 20px; }
+.m #steps .arrow { width: 720px; height: 64px; }
+.m #steps .arrow svg { transform: rotate(90deg); }
+.m #steps h3 { font-size: 46px; }
+.m #steps p { font-size: 28px; }
+.m #steps .num { font-size: 26px; }
+.m #features .grid { grid-template-columns: 720px; gap: 26px; }
+.m #features .f { padding: 30px 34px 34px; }
+.m #features .icon { width: 76px; height: 76px; border-radius: 20px; }
+.m #features .icon svg { width: 40px; height: 40px; }
+.m #features h3 { font-size: 38px; }
+.m #features p { font-size: 27px; }
+.m #systems .wrap { width: 720px; gap: 16px 14px; }
+.m #systems .chip { font-size: 25px; padding: 12px 18px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="logo" viewBox="0 0 48 48"><rect class="tile" x="2" y="2" width="44" height="44" rx="12" fill="#1c1733"/><clipPath id="lgc"><circle cx="24" cy="24" r="15"/></clipPath><circle cx="24" cy="24" r="15" fill="#fff7e6"/><g clip-path="url(#lgc)"><rect x="6" y="26" width="36" height="3.3" fill="#ff5c93"/><rect x="6" y="29.3" width="36" height="3.3" fill="#ffb23f"/><rect x="6" y="32.6" width="36" height="3.3" fill="#ffe14d"/><rect x="6" y="35.9" width="36" height="4" fill="#13a9ba"/></g><circle cx="24" cy="24" r="4.6" fill="#1c1733"/><circle cx="24" cy="24" r="1.8" fill="#fff7e6"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M4 17v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" fill="none" stroke="currentColor" stroke-width="2.2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h15m0 0-5-5m5 5-5 5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2.2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1" fill="currentColor"/><path d="M9 2.5V6m6-3.5V6M9 18v3.5m6-3.5v3.5M2.5 9H6m-3.5 6H6M18 9h3.5M18 15h3.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3a1.5 1.5 0 0 1 0 2.1l-6.6 6.6a1.5 1.5 0 0 1-2.1 0z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><circle cx="8.3" cy="8.3" r="1.8" fill="currentColor"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13.5 2.5 5 13.5h6l-1 8 8.5-11h-6z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6.5" y="2.5" width="11" height="19" rx="2.8" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M10.5 18.2h3" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-stack" viewBox="0 0 24 24"><ellipse cx="12" cy="6.5" rx="8" ry="3" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M4 6.5v5c0 1.7 3.6 3 8 3s8-1.3 8-3v-5M4 11.5v5c0 1.7 3.6 3 8 3s8-1.3 8-3v-5" fill="none" stroke="currentColor" stroke-width="2.2"/></symbol>
+</svg>
+
+<!-- HERO -->
+<div class="scene" id="hero"><div class="card">
+  <div class="left">
+    <span class="pill mono"><i></i>MAME chdman 0.289 · in your browser</span>
+    <div class="brandrow"><svg class="logo" width="104" height="104"><use href="#logo"/></svg><span class="wordmark">Disc<b>press</b></span></div>
+    <h2>Pack your game discs into <em>CHD files</em>, right in your browser.</h2>
+    <p>No install, nothing uploaded. Works on iPhone, iPad, Android, Mac, Windows and Linux.</p>
+    <div class="chips" id="heroChips"></div>
+  </div>
+  <div class="phone"><div class="scr"><div class="sb"><span>9:41</span><span><span class="sig"><i style="height:5px"></i><i style="height:7px"></i><i style="height:9.5px"></i><i style="height:12px"></i></span><span class="bat"><i></i></span></span></div><img id="heroPhone"></div></div>
+  <div class="sticker st1" style="left:692px;top:214px;background:var(--accent-3);transform:rotate(-6deg)"><svg><use href="#i-tag"/></svg>Names your games</div>
+  <div class="sticker st2" style="left:712px;top:584px;background:var(--cyan);transform:rotate(3deg)"><svg><use href="#i-lock"/></svg>100% on-device</div>
+  <div class="stripes"><i></i><i></i><i></i><i></i></div>
+</div></div>
+
+<!-- DOWNLOAD BUTTON -->
+<div class="scene" id="download"><div class="btn">
+  <div class="ico"><svg><use href="#i-download"/></svg></div>
+  <div><div class="t1">Download Discpress</div><div class="t2 mono">One HTML file · Works offline</div></div>
+</div></div>
+
+<!-- STEPS -->
+<div class="scene" id="steps"><div class="row">
+  <div class="step"><span class="num">1</span><div class="icon" style="background:var(--accent-3)"><svg><use href="#i-upload"/></svg></div><h3>Add your games</h3><p>Pick the .cue and .bin files, a .gdi set or an .iso. Discpress spots the console and the exact game.</p></div>
+  <div class="arrow"><svg><use href="#i-arrow"/></svg></div>
+  <div class="step"><span class="num">2</span><div class="icon" style="background:var(--accent)"><svg><use href="#i-play"/></svg></div><h3>Press Start</h3><p>The real chdman compresses every disc using all your CPU cores. Queue as many as you like.</p></div>
+  <div class="arrow"><svg><use href="#i-arrow"/></svg></div>
+  <div class="step"><span class="num">3</span><div class="icon" style="background:var(--cyan)"><svg><use href="#i-download"/></svg></div><h3>Save the CHDs</h3><p>Named after the official title and ready for MAME, RetroArch, DuckStation, PCSX2 and more.</p></div>
+</div></div>
+
+<!-- FEATURES -->
+<div class="scene" id="features"><div class="grid">
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent)"><svg><use href="#i-chip"/></svg></div><h3>The real chdman</h3></div><p>MAME 0.289 compiled to WebAssembly. Same CHD files and checksums as the desktop tool.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-3)"><svg><use href="#i-tag"/></svg></div><h3>Knows your games</h3></div><p>Reads the disc, finds the console and serial, and names it from 42,000 Redump entries.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-2)"><svg><use href="#i-bolt"/></svg></div><h3>Multi-core fast</h3></div><p>Compression runs on every CPU core, with SIMD when your browser supports it.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--cyan)"><svg><use href="#i-phone"/></svg></div><h3>Made for phones</h3></div><p>Fits any screen, notch and text size. Save to Files on iPhone, dark mode included.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:#b69cff"><svg><use href="#i-stack"/></svg></div><h3>Big discs welcome</h3></div><p>Results stream to disk, not memory, so multi-gigabyte DVD images work too.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:#7be3a3"><svg><use href="#i-lock"/></svg></div><h3>Totally private</h3></div><p>Nothing leaves your device. It even works offline, straight from your Files app.</p></div>
+</div></div>
+
+<!-- SYSTEMS -->
+<div class="scene" id="systems"><div class="wrap" id="sysWrap"></div></div>
+
+<!-- SHOWCASE -->
+<div class="scene" id="showcase"><div class="stage">
+  <div class="win"><div class="bar"><i></i><i></i><i></i><div class="url">discpress.html</div></div><img id="showDesk"></div>
+  <div class="phone"><div class="scr"><div class="sb"><span>9:41</span><span><span class="sig"><i style="height:5px"></i><i style="height:7px"></i><i style="height:9.5px"></i><i style="height:12px"></i></span><span class="bat"><i></i></span></span></div><img id="showPhone"></div></div>
+</div></div>
+
+<!-- LOGO MARK -->
+<div class="scene" id="mark" style="padding:0"><svg width="256" height="256" style="display:block"><use href="#logo"/></svg></div>
+
+<!-- DIVIDER -->
+<div class="scene" id="divider"><div class="d"><i></i><i></i><i></i><i></i></div></div>
+
+<script>
+var q = new URLSearchParams(location.search), theme = q.get('theme') || 'light', scene = q.get('scene') || 'hero';
+if (theme === 'dark') document.documentElement.className = 'dark';
+if (q.get('m')) document.body.classList.add('m');
+var el = document.getElementById(scene); el.classList.add('on'); if (q.get('flat')) el.classList.add('flat');
+var shots = q.get('shots') || '../../docs/screenshots/';
+document.getElementById('heroPhone').src = shots + 'phone-ident-' + theme + '.png';
+document.getElementById('showDesk').src = shots + 'desktop-' + theme + '.png';
+document.getElementById('showPhone').src = shots + 'phone-start-' + theme + '.png';
+var C = { ps1: ['#c8c8d4', '#1c1733'], ps2: ['#2f5bd3', '#fff'], psp: ['#26262e', '#fff'], saturn: ['#4a4f63', '#fff'], segacd: ['#1f4ea8', '#fff'],
+  dc: ['#ff7a1a', '#1c1733'], naomi: ['#6a4fb8', '#fff'], pcecd: ['#f1ead6', '#1c1733'], pcfx: ['#3a3a44', '#fff'], ngcd: ['#d9b23a', '#1c1733'],
+  '3do': ['#b01e2f', '#fff'], cdi: ['#1c6fb8', '#fff'], cd32: ['#e11d48', '#fff'], cdtv: ['#33333d', '#fff'], hd: ['#13a9ba', '#1c1733'], ld: ['#ffe14d', '#1c1733'] };
+function chip(k, label) { var s = document.createElement('span'); s.className = 'chip'; s.textContent = label; s.style.background = C[k][0]; s.style.color = C[k][1]; return s; }
+[['ps1', 'PS1'], ['ps2', 'PS2'], ['psp', 'PSP'], ['saturn', 'Saturn'], ['dc', 'Dreamcast'], ['segacd', 'Sega CD']].forEach(function (c) { document.getElementById('heroChips').appendChild(chip(c[0], c[1])); });
+var more = document.createElement('span'); more.className = 'chip'; more.textContent = '+ 10 more'; more.style.background = 'var(--surface)'; more.style.color = 'var(--text)';
+document.getElementById('heroChips').appendChild(more);
+[['ps1', 'PlayStation'], ['ps2', 'PlayStation 2'], ['psp', 'PSP'], ['saturn', 'Saturn'], ['segacd', 'Sega CD · Mega CD'], ['dc', 'Dreamcast'], ['naomi', 'NAOMI'],
+ ['pcecd', 'PC Engine CD · TurboGrafx-CD'], ['pcfx', 'PC-FX'], ['ngcd', 'Neo Geo CD'], ['3do', '3DO'], ['cdi', 'CD-i'], ['cd32', 'Amiga CD32'], ['cdtv', 'CDTV'],
+ ['hd', 'Arcade hard disks'], ['ld', 'LaserDisc']].forEach(function (c) { document.getElementById('sysWrap').appendChild(chip(c[0], c[1])); });
+</script>
+</body>
+</html>

@@ -1,46 +1,177 @@
-# Discpress
-
-**MAME's chdman in a single HTML file.** Convert disc images to CHD (and back) right in your browser, on iPhone, iPad, Android, Mac, Windows or Linux. Nothing to install and nothing uploaded.
-
 <p align="center">
-  <img src="docs/mobile-start.png" width="260" alt="Discpress on a phone, start screen">
-  &nbsp;
-  <img src="docs/mobile.png" width="260" alt="Discpress on a phone in dark mode, a PlayStation disc identified as Metal Gear Solid">
-</p>
-<p align="center">
-  <img src="docs/desktop.png" width="820" alt="Discpress on desktop with several games ready to convert">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/hero-mobile-dark.png">
+    <source media="(max-width: 600px)" srcset="docs/brand/hero-mobile-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/hero-dark.png">
+    <img src="docs/brand/hero-light.png" width="100%" alt="Discpress: pack your game discs into CHD files, right in your browser. No install, nothing uploaded. Works on iPhone, iPad, Android, Mac, Windows and Linux.">
+  </picture>
 </p>
 
-## Use it
+<p align="center">
+  <a href="https://github.com/PowerBeef/discpress/releases/latest/download/discpress.html">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/download-dark.png">
+      <img src="docs/brand/download-light.png" width="380" alt="Download Discpress: one HTML file, works offline">
+    </picture>
+  </a>
+</p>
 
-1. Download [`dist/discpress.html`](dist/discpress.html) (on GitHub: open it, then use the download button).
-2. Open it in any modern browser. It works offline, straight from your Files app, Downloads folder or desktop.
-3. Add your game files (`.cue` + `.bin`, `.gdi` + tracks, `.iso`, `.chd`…), then press **Start all**.
+<p align="center">
+  <b>Free and open source</b> &nbsp;·&nbsp; <b>No install</b> &nbsp;·&nbsp; <b>Nothing uploaded</b> &nbsp;·&nbsp; <b>Phone and desktop</b>
+  <br><br>
+  <a href="#how-it-works">How it works</a> &nbsp;·&nbsp;
+  <a href="#features">Features</a> &nbsp;·&nbsp;
+  <a href="#supported-systems">Systems</a> &nbsp;·&nbsp;
+  <a href="#get-started">Get started</a> &nbsp;·&nbsp;
+  <a href="#faq">FAQ</a> &nbsp;·&nbsp;
+  <a href="#build-it-yourself">Build it yourself</a>
+</p>
+
+<img src="docs/brand/divider.png" width="100%" alt="">
+
+## What is Discpress?
+
+A single PlayStation or Saturn game can be a dozen `.bin` files plus a `.cue`. **CHD** packs the whole disc into one compressed file that takes much less space, loses nothing, and loads directly in MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast and more.
+
+The standard tool for making CHDs is **chdman**, a command-line program from the MAME project. **Discpress** puts the real chdman inside a friendly app that runs in your web browser, on your phone or your computer. There's no terminal and nothing to install, and your files never leave your device. It also recognizes your games and names each file after its official title.
+
+## How it works
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/steps-mobile-dark.png">
+    <source media="(max-width: 600px)" srcset="docs/brand/steps-mobile-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/steps-dark.png">
+    <img src="docs/brand/steps-light.png" width="100%" alt="1. Add your games: pick the cue and bin files, a gdi set or an iso; Discpress spots the console and the exact game. 2. Press Start: the real chdman compresses every disc using all your CPU cores. 3. Save the CHDs, named after the official title and ready for your emulator.">
+  </picture>
+</p>
 
 ## Features
 
-- **The real chdman.** MAME 0.289's chdman compiled to WebAssembly, so the output is identical to desktop chdman (same CHD v5 files, same checksums). Works with MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast and other emulators.
-- **Picks the right command for you**: `createcd`, `createdvd`, `createhd`, `createld`, `extractcd`/`extractdvd`/`extracthd`, `verify`, `info`. The **Advanced** tab exposes every chdman command and option.
-- **Identifies your games.** It detects the console and serial number from the disc itself and looks the game up in a built-in copy of the [Redump](http://redump.org) database (about 42,000 discs). Output files get the official name, for example `Metal Gear Solid (USA) (Disc 1).chd`. When the size and CRC-32 match, the dump is marked as verified.
-- **Supported systems:** PlayStation 1/2, PSP, Saturn, Sega CD / Mega CD, Dreamcast (GD-ROM), NAOMI, PC Engine CD, PC-FX, Neo Geo CD, 3DO, CD-i, Amiga CD32/CDTV, arcade hard disks and LaserDiscs.
-- **Fast.** Compression is spread over several CPU cores, using WebAssembly SIMD when available.
-- **Handles big files.** Results are written to the browser's private disk storage (OPFS), so multi-gigabyte DVD images work. On desktop Chrome and Edge, results can go straight into a folder you choose.
-- **Made for phones too.** It adapts to any screen, notch, rotation, text size and dark mode. On iPhone and iPad, **Save to Files** uses the share sheet, which also works inside file-viewer apps.
-- **Private.** Everything runs on your device.
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/features-mobile-dark.png">
+    <source media="(max-width: 600px)" srcset="docs/brand/features-mobile-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/features-dark.png">
+    <img src="docs/brand/features-light.png" width="100%" alt="The real chdman. Knows your games. Multi-core fast. Made for phones. Big discs welcome. Totally private.">
+  </picture>
+</p>
 
-## Browser support
+<details>
+<summary><b>Everything it can do</b></summary>
+<br>
 
-| Browser | Notes |
+- **Real chdman output.** MAME 0.289's chdman compiled to WebAssembly makes standard CHD v5 files with the same data checksums as desktop chdman.
+- **The right command, picked for you:** `createcd`, `createdvd`, `createhd`, `createld`, `extractcd`, `extractdvd`, `extracthd`, `verify` and `info`. The **Advanced** tab gives you every chdman command and option, including `copy`, parent CHDs, `addmeta` and hard disk templates.
+- **Game recognition.** Discpress reads the disc's own boot files to find the console and serial number, then looks the game up in a built-in copy of the [Redump](http://redump.org) database (about 42,000 discs). When the size and CRC-32 match, the dump is marked as verified. When several releases share a serial number, you choose which one.
+- **Official names.** For example `Metal Gear Solid (USA) (Disc 1).chd`. You can also type your own name, turn renaming off, or use **Rename** to fix the name of a CHD you already have.
+- **Fast.** Compression is spread over all your CPU cores, with WebAssembly SIMD when your browser supports it.
+- **Big files.** Results are written to the browser's private disk storage, so multi-gigabyte DVD images work. On desktop Chrome and Edge, results can go straight into a folder you choose.
+- **Made for phones.** It adapts to any screen, notch, rotation and text size, in light or dark mode. On iPhone and iPad, **Save to Files** uses the share sheet.
+- **Private and offline.** It's one self-contained HTML file with nothing to load from the internet.
+
+</details>
+
+## Supported systems
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/systems-mobile-dark.png">
+    <source media="(max-width: 600px)" srcset="docs/brand/systems-mobile-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/systems-dark.png">
+    <img src="docs/brand/systems-light.png" width="100%" alt="PlayStation, PlayStation 2, PSP, Saturn, Sega CD / Mega CD, Dreamcast, NAOMI, PC Engine CD / TurboGrafx-CD, PC-FX, Neo Geo CD, 3DO, CD-i, Amiga CD32, CDTV, arcade hard disks and LaserDisc.">
+  </picture>
+</p>
+
+| System | Add these files | Becomes |
+|---|---|---|
+| PlayStation, Saturn, Sega CD, PC Engine CD, Neo Geo CD, 3DO, CD-i, Amiga CD32, PC-FX | `.cue` + `.bin` | CD CHD |
+| Dreamcast | `.gdi` + tracks, or Redump `.cue` + `.bin` | CD CHD (GD-ROM detected) |
+| PlayStation 2 | DVD games: `.iso` · CD games: `.cue` + `.bin` | DVD or CD CHD |
+| PSP | `.iso` | DVD CHD |
+| Arcade and computer hard disks | `.img`, `.hdd` | Hard disk CHD |
+| LaserDisc arcade games | `.avi` | LaserDisc CHD |
+| Any of the above | `.chd` | Back to `.cue`/`.bin`, `.gdi` or `.iso` |
+
+## See it in action
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/showcase-dark.png">
+    <img src="docs/brand/showcase-light.png" width="100%" alt="Discpress on a desktop browser with a PlayStation disc identified as Metal Gear Solid (USA) (Disc 1), next to the phone version.">
+  </picture>
+</p>
+
+## Get started
+
+1. **[Download `discpress.html`](https://github.com/PowerBeef/discpress/releases/latest/download/discpress.html).** It's the whole app in one file.
+2. **Open it.**
+   - **Computer:** double-click it, and it opens in your browser.
+   - **Android:** open it with Chrome or another browser.
+   - **iPhone and iPad:** save it to the Files app, then open it with an app that can run web pages, such as Sitecase.
+3. **Add your games.** Pick every file of a game together (the `.cue` *and* its `.bin` files), or drag them onto the page.
+4. **Press Start all**, then **Save** or **Download** each CHD when it's ready. Keep the page open while it works.
+
+<img src="docs/brand/divider.png" width="100%" alt="">
+
+## FAQ
+
+<details>
+<summary><b>Are my games uploaded anywhere?</b></summary>
+<br>
+No. Discpress is a single file that runs entirely on your device. It makes no network requests and works in airplane mode.
+</details>
+
+<details>
+<summary><b>Are the CHDs as good as the ones from desktop chdman?</b></summary>
+<br>
+Yes. Discpress uses the same chdman source code (MAME 0.289), so the files are standard CHD v5 with identical data checksums. The only changes are two small additions so it can run in a browser: a bridge for reading and writing files, and multi-core compression. You can read every change in <a href="wasm/mame.patch"><code>wasm/mame.patch</code></a>.
+</details>
+
+<details>
+<summary><b>Which browsers work?</b></summary>
+<br>
+
+| Browser | Support |
 |---|---|
-| Safari 16.4+ (iOS, iPadOS, macOS) | Full support |
-| Chrome / Edge 102+ (desktop, Android) | Full support, plus saving straight into a folder |
-| Firefox 111+ | Full support |
+| Safari 16.4+ (iPhone, iPad, Mac) | Full |
+| Chrome and Edge 102+ (desktop, Android) | Full, plus saving straight into a folder |
+| Firefox 111+ | Full |
 
-Older browsers fall back to keeping results in memory, which limits the size of the files you can convert.
+Older browsers keep results in memory instead of on disk, which limits how big a disc can be.
+</details>
 
-## Build from source
+<details>
+<summary><b>How big can a disc be?</b></summary>
+<br>
+Multi-gigabyte DVD images work as long as your device has the free space, because results are written to disk rather than memory. Creating a CHD is CPU-heavy, so expect a few minutes per CD on a computer and longer on a phone. <i>Faster to create</i> in Options trades a little size for a lot of speed.
+</details>
 
-The HTML file is fully reproducible: building from a clean checkout gives a byte-identical `dist/discpress.html`.
+<details>
+<summary><b>My game says "not recognized". Is something wrong?</b></summary>
+<br>
+No. Hacks, translations, homebrew and modified dumps aren't in the Redump database, so they keep their original file name. The conversion works exactly the same. You can also type any name you like in Options.
+</details>
+
+<details>
+<summary><b>Can I turn a CHD back into a .cue/.bin or .iso?</b></summary>
+<br>
+Yes. Add the <code>.chd</code> and choose Extract. You can also verify a CHD's checksums or view its details.
+</details>
+
+<details>
+<summary><b>Does Discpress come with any games?</b></summary>
+<br>
+No. It only converts files you already have. Please convert only discs you own.
+</details>
+
+## Build it yourself
+
+The build is fully reproducible: building from a clean checkout gives a byte-identical `dist/discpress.html`.
+
+<details>
+<summary><b>Build instructions</b></summary>
+<br>
 
 Requirements: [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) 6.0.10, Python 3, make and git.
 
@@ -55,29 +186,50 @@ source ~/emsdk/emsdk_env.sh
 ./build.sh                      # -> dist/discpress.html
 ```
 
-If you only change files in `app/`, rerun `python3 scripts/assemble.py` instead of the full build.
+- If you only change files in `app/`, run `python3 scripts/assemble.py` instead of the full build.
+- To refresh the game database with the latest Redump data, run `./scripts/update-db.sh`, then `python3 scripts/assemble.py`.
+- The README graphics are rendered from `scripts/brand/brand.html` with `python3 scripts/brand/render.py` (needs Playwright).
+- Pushing a tag like `v1.0.0` publishes a GitHub release with `discpress.html` attached (see `.github/workflows/release.yml`).
 
-To refresh the game database with the latest Redump data, run `./scripts/update-db.sh`, then `python3 scripts/assemble.py`.
+</details>
 
-### Repository layout
+<details>
+<summary><b>Repository layout</b></summary>
+<br>
 
 | Path | What it is |
 |---|---|
 | `app/` | The web app: page, styles, UI, game identification, and the Web Worker that runs chdman |
 | `wasm/` | WebAssembly build: Makefile, link flags, the MAME patch, the parallel-compression helper, and a small SDL stub |
 | `db/` | Game database (`db.json.gz`) and the script that builds it from libretro-database |
-| `scripts/` | Fetch MAME, update the database, and assemble the single HTML file |
+| `scripts/` | Fetch MAME, update the database, assemble the single HTML file, and render the brand graphics |
 | `dist/` | The ready-to-use `discpress.html` |
+| `docs/` | README graphics and screenshots |
 
-### How it works
+</details>
 
-- **File access.** A custom Emscripten file system reads your files directly (no copy into memory) and writes results to OPFS, to a folder, or to memory.
-- **Multi-core compression.** Helper workers compress hunks in parallel. chdman's main loop gets a small hook ([`wasm/mame.patch`](wasm/mame.patch)) and yields with Asyncify while the helpers work.
-- **iOS web views.** When a worker can't read the picked files (some file-viewer apps), the page streams them to the worker in chunks instead.
-- **Game identification.** It reads boot headers (IP.BIN, SYSTEM.CNF, PARAM.SFO, IPL.TXT…) through ISO 9660, including inside existing CHDs, then matches the serial number or the size and CRC-32 against the database.
+<details>
+<summary><b>How it works inside</b></summary>
+<br>
 
-## License
+- **File access.** A custom Emscripten file system reads your files directly (no copy into memory) and writes results to the browser's private storage (OPFS), to a folder, or to memory.
+- **Multi-core compression.** Helper workers compress hunks in parallel. chdman's main loop gets a small hook and yields with Asyncify while the helpers work.
+- **iOS web views.** When a worker can't read the picked files (inside some file-viewer apps), the page streams them to the worker in chunks instead.
+- **Game identification.** It reads boot headers (IP.BIN, SYSTEM.CNF, PARAM.SFO, IPL.TXT and others) through ISO 9660, including inside existing CHDs, then matches the serial number, or the size and CRC-32, against the database.
 
-Discpress is released under the [BSD 3-Clause license](LICENSE). It includes chdman and MAME's `lib/util` (BSD 3-Clause, © Aaron Giles, R. Belmont and the MAMEdev team), plus zlib, LZMA SDK, FLAC, Zstandard, utf8proc and Expat. The game database comes from [libretro-database](https://github.com/libretro/libretro-database) (Redump data). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+</details>
 
-Discpress is not affiliated with the MAME team, Redump or libretro. It does not include any games. Only convert discs you own.
+## Credits and license
+
+Discpress is released under the [BSD 3-Clause license](LICENSE). It is built on **chdman** and MAME's `lib/util` (BSD 3-Clause, © Aaron Giles, R. Belmont and the MAMEdev team), with zlib, LZMA SDK, FLAC, Zstandard, utf8proc, Expat and a few smaller libraries. Game data comes from [Redump](http://redump.org) via [libretro-database](https://github.com/libretro/libretro-database). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full list.
+
+Discpress is not affiliated with the MAME team, Redump or libretro.
+
+<br>
+<p align="center">
+  <img src="docs/brand/divider.png" width="100%" alt="">
+  <br><br>
+  <img src="docs/brand/logo.png" width="56" alt="Discpress logo">
+  <br>
+  <sub><b>Discpress</b> · made for everyone with a shelf full of old discs</sub>
+</p>
