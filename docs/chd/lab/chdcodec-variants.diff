@@ -1,0 +1,116 @@
+--- src/lib/util/chdcodec.cpp
++++ src/lib/util/chdcodec.cpp
+@@ -21,6 +21,39 @@
+ #include <zlib.h>
+ #include <zstd.h>
+ 
++#include <cstdio>
++#include <cstdlib>
++#include <string>
++#include "libdeflate.h"
++#include "zopfli/zopfli.h"
++
++// ---- Discpress research variants (environment-controlled; defaults = stock MAME) ----
++namespace {
++// CHDV_DEFLATE = zlib (default) | libdeflate:<1-12> | zopfli:<iterations>
++long variant_deflate(const uint8_t *src, uint32_t srclen, uint8_t *dest, uint32_t destcap)
++{
++	static const char *mode = getenv("CHDV_DEFLATE");
++	if (!mode || !strncmp(mode, "zlib", 4)) return -1;
++	if (!strncmp(mode, "libdeflate:", 11))
++	{
++		static thread_local libdeflate_compressor *c = libdeflate_alloc_compressor(atoi(mode + 11));
++		size_t n = libdeflate_deflate_compress(c, src, srclen, dest, destcap);
++		return n ? long(n) : long(0x7fffffff);
++	}
++	if (!strncmp(mode, "zopfli:", 7))
++	{
++		ZopfliOptions o; ZopfliInitOptions(&o); o.numiterations = atoi(mode + 7);
++		unsigned char *out = nullptr; size_t outsize = 0;
++		ZopfliCompress(&o, ZOPFLI_FORMAT_DEFLATE, src, srclen, &out, &outsize);
++		long r = long(0x7fffffff);
++		if (outsize <= destcap) { memcpy(dest, out, outsize); r = long(outsize); }
++		free(out);
++		return r;
++	}
++	return -1;
++}
++}
++
+ #include <bit>
+ #include <cstring>
+ #include <new>
+@@ -935,6 +968,15 @@
+ 
+ uint32_t chd_zlib_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
+ {
++	{
++		long v = variant_deflate(src, srclen, dest, srclen);
++		if (v >= 0)
++		{
++			if (uint32_t(v) >= srclen)
++				throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
++			return uint32_t(v);
++		}
++	}
+ 	// reset the compressor
+ 	m_deflater.next_in = const_cast<Bytef *>(src);
+ 	m_deflater.avail_in = srclen;
+@@ -1061,7 +1103,8 @@
+ uint32_t chd_zstd_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
+ {
+ 	// reset the compressor
+-	auto result = ZSTD_initCStream(m_stream, ZSTD_maxCLevel());
++	static const int zlevel = getenv("CHDV_ZSTD") ? atoi(getenv("CHDV_ZSTD")) : ZSTD_maxCLevel();
++	auto result = ZSTD_initCStream(m_stream, zlevel);
+ 	if (ZSTD_isError(result))
+ 		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+ 
+@@ -1255,6 +1298,30 @@
+ {
+ 	// initialize the properties
+ 	configure_properties(m_props, hunkbytes);
++	// CHDV_LZMA = level=9,fb=273,mc=..,algo=1,bt=1,hb=4 (lc/lp/pb and the dictionary stay as the decoder expects)
++	if (const char *e = getenv("CHDV_LZMA"))
++	{
++		CLzmaEncProps p;
++		LzmaEncProps_Init(&p);
++		p.reduceSize = hunkbytes;
++		std::string spec(e);
++		for (size_t pos = 0; pos < spec.size(); )
++		{
++			size_t comma = spec.find(',', pos); if (comma == std::string::npos) comma = spec.size();
++			std::string kv = spec.substr(pos, comma - pos); pos = comma + 1;
++			size_t eq = kv.find('='); if (eq == std::string::npos) continue;
++			std::string k = kv.substr(0, eq); int v = atoi(kv.c_str() + eq + 1);
++			if (k == "level") p.level = v; else if (k == "fb") p.fb = v; else if (k == "mc") p.mc = v;
++			else if (k == "algo") p.algo = v; else if (k == "bt") p.btMode = v; else if (k == "hb") p.numHashBytes = v;
++		}
++		LzmaEncProps_Normalize(&p);
++		if (p.dictSize != m_props.dictSize || p.lc != m_props.lc || p.lp != m_props.lp || p.pb != m_props.pb)
++			fprintf(stderr, "CHDV_LZMA: decoder-visible props changed (dict %u vs %u)!\n", p.dictSize, m_props.dictSize);
++		static bool once = false;
++		if (!once) { once = true; fprintf(stderr, "CHDV_LZMA hunk=%u: level=%d dict=%u lc=%d lp=%d pb=%d algo=%d fb=%d bt=%d hb=%d mc=%u (stock: level=%d fb=%d algo=%d mc=%u)\n",
++			hunkbytes, p.level, p.dictSize, p.lc, p.lp, p.pb, p.algo, p.fb, p.btMode, p.numHashBytes, p.mc, m_props.level, m_props.fb, m_props.algo, m_props.mc); }
++		m_props = p;
++	}
+ }
+ 
+ 
+@@ -1646,6 +1713,16 @@
+ 	// finish up
+ 	uint32_t complen = m_encoder.finish();
+ 
++	{
++		long v = variant_deflate(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA], frames * cdrom_file::MAX_SUBCODE_DATA, &dest[complen], hunkbytes() - complen);
++		if (v >= 0)
++		{
++			complen += uint32_t(v);
++			if (uint32_t(v) == 0x7fffffff || complen >= srclen)
++				throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
++			return complen;
++		}
++	}
+ 	// deflate the subcode data
+ 	m_deflater.next_in = const_cast<Bytef *>(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA]);
+ 	m_deflater.avail_in = frames * cdrom_file::MAX_SUBCODE_DATA;

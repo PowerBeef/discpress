@@ -6,11 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Discpress is MAME 0.289's `chdman` compiled to WebAssembly and shipped as **one self-contained, offline HTML file** (`dist/discpress.html`) that converts game disc images to/from CHD in the browser, on phones and desktops. It also identifies the console/game and names outputs from a built-in Redump database. The app has no server, no bundler and no npm dependencies; the end-to-end tests and benchmarks in `tests/` (Playwright, see `tests/README.md`) are the only tooling with a `package.json`. There is no linter.
 
+Research for the planned chdman fork (CHD format, chdman internals, disc layouts, emulator compatibility, measurements, roadmap) lives in `docs/chd/`: start with `docs/chd/README.md` and `docs/chd/fork-plan.md`. Check a change against the compatibility contract there before it alters CHD output.
+
 ## Commands
 
 ```sh
 # one-time: Emscripten 6.0.10 (emsdk), then the pinned MAME source + browser patch
-./scripts/fetch-mame.sh            # -> third_party/mame (sparse checkout of MAME 76c7d19, applies wasm/mame.patch)
+./scripts/fetch-mame.sh            # -> third_party/mame (sparse checkout of MAME 76c7d19 = post-0.289 master, applies wasm/mame.patch)
 
 # full build: compiles SIMD and non-SIMD wasm, links, then assembles
 source ~/emsdk/emsdk_env.sh
@@ -37,7 +39,7 @@ python3 scripts/brand/render.py
 
 Compiler experiments: `make -C wasm ... EXTRA="<flags>"` adds flags to every compile (empty by default). Measured with Emscripten 6.0.10: single-threaded conversion is within about 10–12% of native chdman; `-flto` gave no measurable speedup and breaks C++ exceptions under `-fwasm-exceptions` (DVD creation dies with an uncaught `WebAssembly.Exception`), so don't use it. Never use flags that change results (e.g. `-ffast-math` alters FLAC output).
 
-`wasm/Makefile`'s `native` target (`T=native`, used by `build-native.sh`) builds the same sources without `wasm_helper.cpp`. For default settings the app's CHDs are byte-identical to this native chdman's, whatever the thread count or SIMD choice; the tests rely on that.
+`wasm/Makefile`'s `native` target (`T=native`, used by `build-native.sh`) builds the same sources without `wasm_helper.cpp`. For default settings the app's CHDs are byte-identical to this native chdman's, whatever the thread count or SIMD choice; the tests rely on that. Two known exceptions (see `docs/chd/`): CD-audio (FLAC) hunks can differ by a few bytes between the wasm and native builds, because libFLAC's window functions depend on libm (same CHD SHA-1; the synthetic test audio doesn't trigger it); and 76c7d19 is not the 0.289 release. Its LZMA level (6 vs 8) and GD-ROM layout differ from official 0.289, so files differ from official 0.289 even though the CHD SHA-1 matches, except for GD-ROM.
 
 ## Testing workflow
 
