@@ -835,7 +835,8 @@ function defaultFormat(type) {
 function linkParents() {
   jobs.forEach(function (job) {
     if (job.kind !== 'chd' || !job.info || !job.info.parent) return;
-    var p = jobs.find(function (o) { return o.kind === 'chd' && o.info && o.info.sha1 === job.info.parent; });
+    // never the job itself: a child whose data equals its parent's has the parent's SHA-1
+    var p = jobs.find(function (o) { return o !== job && o.kind === 'chd' && o.info && o.info.sha1 === job.info.parent; });
     var had = job.parentJob;
     job.parentJob = p || null;
     if (had !== job.parentJob && job.el) refreshJob(job, true);

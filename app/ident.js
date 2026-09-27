@@ -23,7 +23,8 @@ function sysName(s) { return SYSTEMS[s] ? SYSTEMS[s][1] : ''; }
 function normSerial(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
 
 var GameDB = {
-  loading: null, version: '', bySerial: new Map(), bySize: new Map(), count: 0,
+  // bySerial: exact serials; bySerialBase: serials with a suffix (T-8113H-50) under their base (T-8113H)
+  loading: null, version: '', bySerial: new Map(), bySerialBase: new Map(), bySize: new Map(), count: 0,
   ready: function () {
     if (!this.loading) this.loading = this._load();
     return this.loading;
@@ -42,15 +43,15 @@ var GameDB = {
         var e = { sys: sys, name: f[0], serial: f[1], size: +f[2], crc: f[3], track: f[4] ? +f[4] : 0, ext: f[5] };
         self.count++;
         if (e.serial) {
-          var keys = [normSerial(e.serial)];
-          var parts = e.serial.split(/[-\s]/);
-          if (parts.length > 2) keys.push(normSerial(parts[0] + parts[1]));
-          keys.forEach(function (k) {
+          var add = function (map, k) {
             if (!k) return;
-            var l = self.bySerial.get(k);
-            if (!l) self.bySerial.set(k, l = []);
+            var l = map.get(k);
+            if (!l) map.set(k, l = []);
             if (l.indexOf(e) < 0) l.push(e);
-          });
+          };
+          add(self.bySerial, normSerial(e.serial));
+          var parts = e.serial.split(/[-\s]/);
+          if (parts.length > 2) add(self.bySerialBase, normSerial(parts[0] + parts[1]));
         }
         var s = self.bySize.get(e.size);
         if (!s) self.bySize.set(e.size, s = []);
@@ -59,9 +60,15 @@ var GameDB = {
     });
     return this;
   },
+  // releases with this serial; regional variants (same base, extra suffix) only when none match exactly
   serial: function (serial, sys) {
-    var l = this.bySerial.get(normSerial(serial)) || [];
-    return sys ? l.filter(function (e) { return e.sys === sys; }) : l;
+    var k = normSerial(serial);
+    var pick = function (map) {
+      var l = map.get(k) || [];
+      return sys ? l.filter(function (e) { return e.sys === sys; }) : l;
+    };
+    var exact = pick(this.bySerial);
+    return exact.length ? exact : pick(this.bySerialBase);
   },
   size: function (n) { return this.bySize.get(n) || []; }
 };

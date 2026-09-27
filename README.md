@@ -186,7 +186,8 @@ source ~/emsdk/emsdk_env.sh
 ./build.sh                      # -> dist/discpress.html
 ```
 
-- If you only change files in `app/`, run `python3 scripts/assemble.py` instead of the full build.
+- If you only change files in `app/`, run `python3 scripts/assemble.py` instead of the full build. Without Emscripten, run `python3 scripts/extract-build.py` once first: it recovers the WebAssembly build from `dist/discpress.html`.
+- `tests/` has end-to-end UI tests (Playwright) that check every conversion against native chdman, plus conversion benchmarks. See [`tests/README.md`](tests/README.md).
 - To refresh the game database with the latest Redump data, run `./scripts/update-db.sh`, then `python3 scripts/assemble.py`.
 - The README graphics are rendered from `scripts/brand/brand.html` with `python3 scripts/brand/render.py` (needs Playwright).
 - Pushing a tag like `v1.0.0`, or running **Actions → Release → Run workflow**, publishes a GitHub release with `discpress.html` attached (see `.github/workflows/release.yml`). Release notes come from `.github/release-notes/<tag>.md` when that file exists.

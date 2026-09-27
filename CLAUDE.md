@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Discpress is MAME 0.289's `chdman` compiled to WebAssembly and shipped as **one self-contained, offline HTML file** (`dist/discpress.html`) that converts game disc images to/from CHD in the browser, on phones and desktops. It also identifies the console/game and names outputs from a built-in Redump database. There is no server, no bundler, no npm, and no test suite or linter.
+Discpress is MAME 0.289's `chdman` compiled to WebAssembly and shipped as **one self-contained, offline HTML file** (`dist/discpress.html`) that converts game disc images to/from CHD in the browser, on phones and desktops. It also identifies the console/game and names outputs from a built-in Redump database. The app has no server, no bundler and no npm dependencies; the end-to-end tests and benchmarks in `tests/` (Playwright, see `tests/README.md`) are the only tooling with a `package.json`. There is no linter.
 
 ## Commands
 
@@ -16,8 +16,17 @@ Discpress is MAME 0.289's `chdman` compiled to WebAssembly and shipped as **one 
 source ~/emsdk/emsdk_env.sh
 ./build.sh                         # -> build/ (gitignored) and dist/discpress.html; JOBS=, MAME_DIR= optional
 
-# after changing only app/ or db/ (requires build/chdman.js, chdman.wasm, chdman-nosimd.wasm from a prior full build)
+# after changing only app/ or db/: no Emscripten needed
+python3 scripts/extract-build.py   # once: recovers build/chdman.js + both .wasm from dist/discpress.html
 python3 scripts/assemble.py        # [output.html], default dist/discpress.html
+
+# native chdman 0.289 from the same source + patch (reference for tests/benchmarks)
+./scripts/build-native.sh          # -> build/chdman-native (fetches MAME if needed; ~3 min first time)
+
+# tests and benchmarks (run from tests/; see tests/README.md)
+npm test                           # UI tests on dist/discpress.html; `npm run test:dev` tests app/ as assembled now
+npx playwright test ui/convert.spec.js -g ps2 --project=desktop   # a single test
+npm run bench -- --quick           # conversion benchmark; `npm run bench:dev -- --compare latest` to compare
 
 # refresh the Redump game database, then re-assemble
 ./scripts/update-db.sh             # clones libretro-database into third_party/, runs db/mkdb.py -> db/db.json.gz
@@ -26,11 +35,17 @@ python3 scripts/assemble.py        # [output.html], default dist/discpress.html
 python3 scripts/brand/render.py
 ```
 
-`wasm/Makefile` also has a `native` target (`T=native`) that builds a native `chdman-native` from the same objects, useful for comparing output against the wasm build.
+Compiler experiments: `make -C wasm ... EXTRA="<flags>"` adds flags to every compile (empty by default). Measured with Emscripten 6.0.10: single-threaded conversion is within about 10–12% of native chdman; `-flto` gave no measurable speedup and breaks C++ exceptions under `-fwasm-exceptions` (DVD creation dies with an uncaught `WebAssembly.Exception`), so don't use it. Never use flags that change results (e.g. `-ffast-math` alters FLAC output).
+
+`wasm/Makefile`'s `native` target (`T=native`, used by `build-native.sh`) builds the same sources without `wasm_helper.cpp`. For default settings the app's CHDs are byte-identical to this native chdman's, whatever the thread count or SIMD choice; the tests rely on that.
+
+## Testing workflow
+
+When changing `app/`: `npm run dev-page` (in `tests/`) re-assembles `build/discpress-dev.html` in under a second, `npm run test:dev` runs the suite on it, and `npm run bench:dev -- --compare latest` checks performance. Tests fail on any console error or network request. Review UI changes with the screenshots the layout spec writes to `tests/.cache/screens/<size>/<theme>-<screen>.png`. Once satisfied, `python3 scripts/assemble.py` updates `dist/discpress.html`, which must be committed with the source change. Bugs found but not fixed yet are pinned with `test.fail()` in the relevant spec, or in the `ACCEPTED` list of `tests/ui/a11y.spec.js`; remove the marker when fixing one. Fixtures are synthetic (`tests/fixtures/`); never add real game data to the repo.
 
 The build is reproducible: a clean build must produce a byte-identical `dist/discpress.html` (gzip uses `mtime=0`; `build.sh` fails if the SIMD and non-SIMD JS glue differ). `dist/discpress.html` is committed and is what releases ship, so **regenerate and commit it whenever `app/`, `wasm/` or `db/` change**.
 
-To try the app, open `dist/discpress.html` directly in a browser (`file://` works). Setting `localStorage['chdman-web-debug'] = '{"stage":true}'` forces the input-staging fallback path and main-thread CRC (see below); `"stage":2` makes staging fail.
+To try the app, open `dist/discpress.html` directly in a browser (`file://` works). Setting `localStorage['chdman-web-debug'] = '{"stage":1}'` makes the worker copy every input into storage with async reads before running, and uses the main-thread CRC; `"stage":2` also makes those reads fail, so the page streams inputs to the worker (the iOS web view path, see below).
 
 ## How the single file is assembled
 

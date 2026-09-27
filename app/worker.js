@@ -144,17 +144,22 @@ MemStore.prototype.toBlob = function () {
   return new Blob(parts, { type: 'application/octet-stream' });
 };
 
+// Every access-handle write has a fixed cost (up to ~0.7 ms measured in Chromium), and chdman
+// writes each compressed hunk separately (4 KiB for DVDs), so small writes are gathered in
+// write-back buffers: hundreds of times fewer writes, and the job worker no longer starves the
+// helpers. A few independent ranges per file cover chdman's patterns (uncompressed CHDs
+// alternate between hunk data at the end and map entries near the start). Buffered ranges never
+// overlap, reads flush what they touch, and switching to another file writes this one's out,
+// so only one file holds buffers at a time.
+var WBUF = 2 << 20, NBUF = 4, lastWriter = null;
 function OpfsStore(slot) {
   this.slot = slot;
   this.h = slot.handle;
   this.sizeV = 0;
+  this.bufs = [];
+  this.tick = 0;
 }
-OpfsStore.prototype.read = function (dst, pos, len) {
-  if (pos >= this.sizeV) return 0;
-  len = Math.min(len, this.sizeV - pos);
-  return this.h.read(dst.subarray(0, len), { at: pos });
-};
-OpfsStore.prototype.write = function (src, pos) {
+OpfsStore.prototype.put = function (src, pos) {
   var n;
   try { n = this.h.write(src, { at: pos }); }
   catch (e) {
@@ -162,10 +167,70 @@ OpfsStore.prototype.write = function (src, pos) {
     throw { errno: ERR.ENOSPC };
   }
   if (n !== src.length) throw { errno: ERR.ENOSPC };
-  if (pos + n > this.sizeV) this.sizeV = pos + n;
-  return n;
+};
+OpfsStore.prototype.flushBuf = function (b) {
+  if (!b.len) return;
+  var len = b.len;
+  b.len = 0;
+  this.put(b.data.subarray(0, len), b.pos);
+};
+// write out buffered ranges overlapping [pos, pos + len), except `keep`
+OpfsStore.prototype.flushRange = function (pos, len, keep) {
+  for (var i = 0; i < this.bufs.length; i++) {
+    var b = this.bufs[i];
+    if (b !== keep && b.len && pos < b.pos + b.len && pos + len > b.pos) this.flushBuf(b);
+  }
+};
+OpfsStore.prototype.flush = function () {
+  for (var i = 0; i < this.bufs.length; i++) this.flushBuf(this.bufs[i]);
+};
+OpfsStore.prototype.release = function () {
+  this.flush();
+  this.bufs = [];
+  if (lastWriter === this) lastWriter = null;
+};
+OpfsStore.prototype.read = function (dst, pos, len) {
+  if (pos >= this.sizeV) return 0;
+  len = Math.min(len, this.sizeV - pos);
+  this.flushRange(pos, len, null);
+  return this.h.read(dst.subarray(0, len), { at: pos });
+};
+OpfsStore.prototype.write = function (src, pos) {
+  var len = src.length;
+  if (lastWriter !== this) {
+    if (lastWriter) lastWriter.release();
+    lastWriter = this;
+  }
+  if (len >= WBUF) {
+    this.flushRange(pos, len, null);
+    this.put(src, pos);
+  } else {
+    // a range this write extends or overwrites, else a free one, else the least recently used
+    var b = null, i;
+    for (i = 0; i < this.bufs.length && !b; i++) {
+      var c = this.bufs[i];
+      if (c.len && pos >= c.pos && pos <= c.pos + c.len && pos + len <= c.pos + WBUF) b = c;
+    }
+    this.flushRange(pos, len, b);
+    if (!b) {
+      for (i = 0; i < this.bufs.length && !b; i++) if (!this.bufs[i].len) b = this.bufs[i];
+      if (!b && this.bufs.length < NBUF) this.bufs.push(b = { pos: 0, len: 0, tick: 0, data: new Uint8Array(WBUF) });
+      if (!b) {
+        b = this.bufs[0];
+        for (i = 1; i < this.bufs.length; i++) if (this.bufs[i].tick < b.tick) b = this.bufs[i];
+        this.flushBuf(b);
+      }
+      b.pos = pos;
+    }
+    b.data.set(src, pos - b.pos);
+    b.len = Math.max(b.len, pos - b.pos + len);
+    b.tick = ++this.tick;
+  }
+  if (pos + len > this.sizeV) this.sizeV = pos + len;
+  return len;
 };
 OpfsStore.prototype.truncate = function (n) {
+  this.flush();
   this.h.truncate(n);
   this.sizeV = n;
 };
@@ -396,6 +461,16 @@ async function makeBacking(msg) {
       registry.push(store);
       return store;
     },
+    // write out buffered data; returns an error message if the storage refused it
+    flush: function () {
+      for (var i = 0; i < registry.length; i++) {
+        var st = registry[i];
+        if (!(st instanceof OpfsStore) || st.deleted) continue;
+        try { st.flush(); }
+        catch (e) { return 'Storage full: could not finish writing ' + st.name + '.'; }
+      }
+      return null;
+    },
     finalize: async function (keep) {
       var outputs = [];
       registry.forEach(function (st) {
@@ -406,7 +481,7 @@ async function makeBacking(msg) {
         }
         if (st.deleted || !keep) return;
         if (st instanceof OpfsStore) {
-          try { st.h.flush(); } catch (e) { /* ignore */ }
+          try { st.flush(); st.h.flush(); } catch (e) { /* ignore */ }
           outputs.push({ name: st.name, size: st.sizeV, kind: 'opfs', slot: st.slot.name });
         } else {
           outputs.push({ name: st.name, size: st.sizeV, kind: 'blob', blob: st.toBlob() });
@@ -560,7 +635,10 @@ function setupParallel(M, ports) {
     // the LaserDisc codec (avhu) reads settings from the CHD's own metadata: keep it single-threaded
     if (comps.indexOf(0x61766875) >= 0) return false;
     hunkbytes = hb;
-    batchSize = Math.max(1, Math.min(64, Math.floor((512 * 1024) / hb)));
+    // chdman keeps at most 256 hunks in flight and reads them 128 at a time, so a batch must be
+    // small enough for those 128 to give every helper two batches; otherwise helpers sit idle
+    // (with 4 KiB DVD hunks, 512 KiB batches meant only two helpers ever had work)
+    batchSize = Math.max(1, Math.min(64, Math.floor((512 * 1024) / hb), Math.floor(128 / (2 * helpers.length))));
     scratch = M._malloc(hb + 64);
     helpers.forEach(function (h) { h.port.postMessage({ type: 'init', hunkbytes: hb, unitbytes: ub, comps: comps }); });
     M.parActive = true;
@@ -737,6 +815,13 @@ async function runJob(msg) {
     return;
   }
   out.flush(); err.flush();
+  var flushError = code === 0 ? backing.flush() : null;
+  if (flushError) {
+    await backing.finalize(false);
+    await dropStages();
+    postMessage({ type: 'done', code: -1, error: flushError, outputs: [], ms: performance.now() - started });
+    return;
+  }
   var outputs = await backing.finalize(true);
   await dropStages();
   postMessage({ type: 'done', code: code, outputs: outputs, ms: performance.now() - started },

@@ -9,7 +9,7 @@ import base64, gzip, html, json, os, sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 A = os.path.join(ROOT, 'app')
 W = os.path.join(ROOT, 'wasm')
-B = os.path.join(ROOT, 'build')
+B = os.environ.get('DISCPRESS_BUILD_DIR') or os.path.join(ROOT, 'build')
 DB = os.path.join(ROOT, 'db', 'db.json.gz')
 
 
