@@ -188,12 +188,12 @@ This affects users today, so it ships as its own small release before any fork w
 ### Milestone 2: performance (1–2 weeks)
 
 **Status: 2.1, 2.3, 2.4 and 2.8 done (2.8 for extract and verify), and part of 2.2** (see `engine/README.md`; measured in measurements §2).
-- **2.3 deterministic libm.** libFLAC calls `engine/libm`'s `cosf` and `log`, Arm's optimized-routines code that glibc is built from. The `log` has explicit `fma()` where GCC fuses glibc's multiply-adds for FMA CPUs.
+- **2.3 deterministic libm.** libFLAC calls `engine/libm`'s `cosf` and `log`, Arm's optimized-routines code that glibc is built from. The `log` gives the fused results where GCC fuses glibc's multiply-adds for FMA CPUs.
   - Checked against glibc: `cosf` on all 1.97 billion window arguments, `log` on 200 million inputs. Both are identical natively and in wasm.
   - The page's CD-audio CHDs of 114 MB of real music now match unmodified chdman 0.289 byte for byte (before: different).
   - The `music-cd` fixture fails without it.
   - The autocorrelation was already the C one (`FLAC__NO_ASM`, as MAME's x86 GCC builds).
-  - Cost: wasm has no FMA instruction, so the seven `fma()` of each `log` run in exact software (143 ns against musl's 5 ns). Creating the benchmark CD takes about 4% longer with 1 thread and 1% with 4.
+  - Cost: wasm has no FMA instruction. With musl's exact software `fma()`, `log` took 160 ns against musl's own `log` at 6 ns, and DVD creation got 20% slower (a DVD hunk calls `log` about 670 times). Now `log` computes the fused results from plain operations: two exactly, the rest unfused where a proven bound shows that can't change the result, and emulated otherwise (about 1 call in 2,500; `engine/libm/README.md`). It takes 11–13 ns, and creating CHDs is within 1% of the time with musl's functions.
   - Still different: chdman on non-FMA x86, Apple's libm and MSVC's CRT round differently, and ARM64 builds sum the autocorrelation with NEON.
 - **2.8 parallel decompression.** In the page, helper workers decompress the hunks `verify` and the extract commands are about to read, a window at a time. The windows' stored data is read in one go, since each small read costs far more in the browser than its bytes do.
   - Benchmark CD (332 MB), extracting with 4 threads: 2.5× faster (7.2 s → 2.8 s).

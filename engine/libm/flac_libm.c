@@ -9,7 +9,8 @@
  *
  * Changes: one file, renamed functions, the configuration fixed (TOINT_INTRINSICS 0, a
  * 128-entry log table), unused paths removed, and in log the multiply-adds that GCC fuses when
- * glibc is built for x86-64 with FMA written as fma() calls. Build with -ffp-contract=off.
+ * glibc is built for x86-64 with FMA computed as fused, without an fma instruction (see
+ * discpress_log). Build with -ffp-contract=off.
  */
 
 #include "flac_libm.h"
@@ -21,6 +22,32 @@
 static inline uint32_t asuint(float f) { uint32_t i; memcpy(&i, &f, sizeof(i)); return i; }
 static inline uint64_t asuint64(double f) { uint64_t i; memcpy(&i, &f, sizeof(i)); return i; }
 static inline double asdouble(uint64_t i) { double f; memcpy(&f, &i, sizeof(f)); return f; }
+
+/* fma(a, b, c), exactly, from plain operations: a*b = ph + pl exactly (Veltkamp's split, Dekker's
+   product), c + ph = th + tl exactly (TwoSum), and th + (tl + pl) with the inner sum rounded to odd
+   (Boldo and Melquiond, "Emulation of a FMA and correctly rounded sums: proved algorithms using
+   rounding to odd", IEEE Trans. Computers 57(4), 2008). Exact for the operands of log below: no
+   overflow in the split, no underflow in pl. Wasm has no fma instruction, and musl's fma() takes
+   about 20 ns.  */
+static inline double
+fma_exact (double a, double b, double c)
+{
+  const double split = 0x1p27 + 1.0;
+  double t = split * a, ah = t - (t - a), al = a - ah;
+  t = split * b;
+  double bh = t - (t - b), bl = b - bh;
+  double ph = a * b, pl = ((ah * bh - ph) + ah * bl + al * bh) + al * bl;
+  double th = c + ph, v = th - c, tl = (c - (th - v)) + (ph - v);
+  double s = tl + pl, sv = s - tl, e = (tl - (s - sv)) + (pl - sv);
+  if (e != 0)
+    {
+      uint64_t u = asuint64 (s);
+      /* s is even: take the other neighbour of the exact sum, which is odd */
+      if (!(u & 1))
+	s = asdouble ((e > 0) == (s > 0) ? u + 1 : u - 1);
+    }
+  return th + s;
+}
 
 
 /* ---------------------------------------------------------------- cosf */
@@ -404,9 +431,15 @@ top16 (double x)
   return asuint64 (x) >> 48;
 }
 
-/* Worst-case error: 0.519 ULP (0.520 without fma).  The fma() calls are where GCC fuses the
-   upstream expressions (quoted before each block) when glibc is built for x86-64 with FMA, which
-   makes this glibc's log on such a CPU, and on any machine.  */
+/* Worst-case error: 0.519 ULP (0.520 without fma).  The fused multiply-adds are where GCC fuses
+   the upstream expressions (quoted before each block) when glibc is built for x86-64 with FMA,
+   which makes this glibc's log on such a CPU, on any machine.
+
+   Emulating each of them would make log 12 times slower than musl's in wasm, so the main path
+   computes the fused result another way: r and w exactly, as below, and the rest unfused, which
+   moves y by less than 0x1p-62 (by at most 0x1p-63.5, from the operands' ranges; 0x1p-69 seen).
+   When that can't change the final rounding, the result is the fused one; otherwise, about once
+   in 2,500 calls, the fused operations are emulated.  */
 double
 discpress_log (double x)
 {
@@ -431,10 +464,10 @@ discpress_log (double x)
       /* y = r3 * (B[1] + r * B[2] + r2 * B[3]
 		+ r3 * (B[4] + r * B[5] + r2 * B[6]
 			+ r3 * (B[7] + r * B[8] + r2 * B[9] + r3 * B[10])));  */
-      double const c1 = fma (B[3], r2, fma (B[2], r, B[1]));
-      double const c2 = fma (B[6], r2, fma (B[5], r, B[4]));
-      double const c3 = fma (B[10], r3, fma (B[9], r2, fma (B[8], r, B[7])));
-      double const c = fma (fma (c3, r3, c2), r3, c1);
+      double const c1 = fma_exact (B[3], r2, fma_exact (B[2], r, B[1]));
+      double const c2 = fma_exact (B[6], r2, fma_exact (B[5], r, B[4]));
+      double const c3 = fma_exact (B[10], r3, fma_exact (B[9], r2, fma_exact (B[8], r, B[7])));
+      double const c = fma_exact (fma_exact (c3, r3, c2), r3, c1);
       /* Worst-case error is around 0.507 ULP.
 	 w = r * 0x1p27;
 	 double rhi = r + w - w;
@@ -445,13 +478,13 @@ discpress_log (double x)
 	 lo += B[0] * rlo * (rhi + r);
 	 y += lo;
 	 y += hi;  */
-      double const rhi = fma (-r, 0x1p27, fma (r, 0x1p27, r));
+      double const rhi = fma_exact (-r, 0x1p27, fma_exact (r, 0x1p27, r));
       double const rlo = r - rhi;
       double const rhi2 = rhi * rhi;
-      hi = fma (rhi2, B[0], r);
-      lo = fma (rhi2, B[0], r - hi);
-      lo = fma (B[0] * rlo, r + rhi, lo);
-      y = fma (c, r3, lo);
+      hi = fma_exact (rhi2, B[0], r);
+      lo = fma_exact (rhi2, B[0], r - hi);
+      lo = fma_exact (B[0] * rlo, r + rhi, lo);
+      y = fma_exact (c, r3, lo);
       return hi + y;
     }
   if (top - 0x0010 >= 0x7ff0 - 0x0010)
@@ -482,20 +515,47 @@ discpress_log (double x)
   /* log(x) = log1p(z/c-1) + log(c) + k*Ln2.  */
   /* r ~= z/c - 1, |r| < 1/(2*N).  */
   /* rounding error: 0x1p-55/N.  */
-  r = fma (z, invc, -1.0);
+  /* r = fma (z, invc, -1.0): z*invc = ph + pl exactly, ph is within 2^-7 of 1 so ph - 1.0 is
+     exact, and (ph - 1.0) + pl then rounds once, as the fused operation does.  */
+  {
+    const double split = 0x1p27 + 1.0;
+    double t = split * z, zh = t - (t - z), zl = z - zh;
+    t = split * invc;
+    double ih = t - (t - invc), il = invc - ih;
+    double ph = z * invc, pl = ((zh * ih - ph) + zh * il + zl * ih) + zl * il;
+    r = (ph - 1.0) + pl;
+  }
   kd = (double) k;
 
   /* hi + lo = r + log(c) + k*Ln2.
      w = kd * Ln2hi + logc;
      hi = w + r;
      lo = w - hi + r + kd * Ln2lo;  */
-  w = fma (Ln2hi, kd, logc);
+  /* w = fma (Ln2hi, kd, logc): the table makes kd*Ln2hi + logc exact, so nothing rounds.  */
+  w = Ln2hi * kd + logc;
   hi = w + r;
-  lo = fma (Ln2lo, kd, w - hi + r);
+  double const t = w - hi + r;
 
   /* log(x) = lo + (log1p(r) - r) + hi.
      y = lo + r2 * A[0] + r * r2 * (A[1] + r * A[2] + r2 * (A[3] + r * A[4])) + hi;  */
   r2 = r * r; /* rounding error: 0x1p-54/N^2.  */
-  y = fma (r * r2, fma (fma (A[4], r, A[3]), r2, fma (A[2], r, A[1])), fma (A[0], r2, lo));
+  double const rr2 = r * r2;
+  {
+    /* the rest unfused: |r| < 2^-7, and |lo| < 2^-33 as |k| < 1100, bound y's change */
+    double const q1 = A[4] * r + A[3], q2 = A[2] * r + A[1];
+    double const q3 = q1 * r2 + q2;
+    double const q4 = A[0] * r2 + (Ln2lo * kd + t);
+    double const yu = rr2 * q3 + q4;
+    double const zu = yu + hi;
+    double const e = (hi - zu) + yu; /* exact, as |hi| > 0.06 > |yu| */
+    /* half the gap to zu's neighbours (a quarter of an ulp towards zero at a power of 2) */
+    uint64_t const zb = asuint64 (zu);
+    double const ulp = asdouble ((zb & 0x7ff0000000000000ULL) - (52ULL << 52));
+    double const half = (zb & 0x000fffffffffffffULL) ? 0.5 * ulp : 0.25 * ulp;
+    if (fabs (e) + 0x1p-62 < half)
+      return zu;
+  }
+  lo = fma_exact (Ln2lo, kd, t);
+  y = fma_exact (rr2, fma_exact (fma_exact (A[4], r, A[3]), r2, fma_exact (A[2], r, A[1])), fma_exact (A[0], r2, lo));
   return y + hi;
 }
