@@ -3,12 +3,14 @@
 // Chromium and compares them with native chdman on the same machine.
 //
 //   node bench/bench.js [options]
-//     --fixtures bench-cd,bench-dvd   fixture keys (see fixtures/make_fixtures.py; --quick uses small ones)
+//     --fixtures bench-cd,bench-dvd   fixture keys (see fixtures/make_fixtures.py; --quick uses small ones;
+//                                     bench-dvd-cso is bench-dvd as a CSO)
 //     --quick                         small test fixtures instead of the large benchmark images
 //     --ops create,extract            what to time: making CHDs and/or extracting them again
 //     --threads 1,2,4                 compression thread counts (default: 1, 2, 4 ... up to the CPU count)
 //     --simd on,off                   WebAssembly SIMD build, baseline build, or both
-//     --presets default,fast          compression presets: default, fast, zstd, none
+//     --presets default,fast          compression presets: default, plan, fast, zstd, none (plan and fast use the
+//                                     engine's own options and are checked against build/chdman-native)
 //     --repeat 1                      runs per configuration; the median is reported
 //     --no-native                     skip the native chdman baseline
 //     --no-native-timing              still verify against native chdman, but don't time it
@@ -25,7 +27,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { CACHE, FIXTURES, ROOT, TESTS } from '../support/paths.js';
-import { nativeChdman, sameVersion } from '../support/native.js';
+import { engineChdman, nativeChdman, sameVersion } from '../support/native.js';
 
 // ------------------------------------------------------------------ options
 const argv = process.argv.slice(2);
@@ -49,10 +51,10 @@ const cfg = {
   compare: opt('compare', null),
 };
 const CODECS = {
-  cd: { default: [], fast: ['-c', 'cdzl,cdfl'], zstd: ['-c', 'cdzs,cdfl'], none: ['-c', 'none'] },
-  other: { default: [], fast: ['-c', 'zlib,huff'], zstd: ['-c', 'zstd'], none: ['-c', 'none'] },
+  cd: { default: [], plan: ['--codecplan', '--libdeflate'], fast: ['-c', 'cdzl,cdfl', '--libdeflate'], zstd: ['-c', 'cdzs,cdfl'], none: ['-c', 'none'] },
+  other: { default: [], plan: ['--codecplan', '--libdeflate'], fast: ['-c', 'zlib,huff', '--libdeflate'], zstd: ['-c', 'zstd'], none: ['-c', 'none'] },
 };
-const PRESET_LABEL = { default: 'Smallest (default)', fast: 'Faster to create', zstd: 'Faster to load (Zstd)', none: 'No compression' };
+const PRESET_LABEL = { default: 'Smallest (default)', plan: 'Nearly as small, faster', fast: 'Faster to create', zstd: 'Faster to load (Zstd)', none: 'No compression' };
 
 // ------------------------------------------------------------------ fixtures
 const needBench = cfg.fixtures.some(k => k.startsWith('bench-'));
@@ -61,6 +63,8 @@ execFileSync('python3', [path.join(TESTS, 'fixtures', 'make_fixtures.py'), '--ou
 const manifest = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'manifest.json'), 'utf8'));
 const fixtures = cfg.fixtures.map(k => manifest.find(f => f.key === k) || die(`unknown fixture ${k}`));
 const mainInput = fx => fx.add.find(n => /\.(cue|gdi)$/i.test(n)) || fx.add[0];
+// what native chdman is given: `ref` when the page makes chdman's input itself (the ISO inside a .cso)
+const nativeInput = fx => fx.ref || mainInput(fx);
 const inputBytes = fx => fx.add.reduce((s, n) => s + fs.statSync(path.join(FIXTURES, n)).size, 0);
 const codecs = (fx, preset) => CODECS[fx.disc === 'cd' || fx.disc === 'gdrom' ? 'cd' : 'other'][preset];
 
@@ -70,9 +74,12 @@ const median = a => { const s = [...a].sort((x, y) => x - y); return s.length % 
 
 // ------------------------------------------------------------------ native baseline
 const work = fs.mkdtempSync(path.join(CACHE, 'bench-work-'));
+const engineOnly = args => args.includes('--codecplan') || args.includes('--libdeflate');
 function nativeRun(args) {
+  // the engine's own options need the engine's native build
+  const bin = engineOnly(args) ? engineChdman() || die('the engine\'s own options need a current build/chdman-native (scripts/build-native.sh)') : nativeChdman().bin;
   const t0 = process.hrtime.bigint();
-  const r = spawnSync(nativeChdman().bin, args, { cwd: FIXTURES, encoding: 'utf8', maxBuffer: 64 << 20 });
+  const r = spawnSync(bin, args, { cwd: FIXTURES, encoding: 'utf8', maxBuffer: 64 << 20 });
   if (r.status !== 0) die(`native chdman failed: ${args.join(' ')}\n${r.stderr}`);
   return Number(process.hrtime.bigint() - t0) / 1e9;
 }
@@ -81,7 +88,7 @@ function nativeRef(fx, preset) {
   const key = `${fx.key}-${preset}`;
   if (!nativeRefs[key]) {
     const out = path.join(work, `${key}.chd`);
-    nativeRun([fx.command, '-i', mainInput(fx), '-o', out, '-f', ...codecs(fx, preset)]);
+    nativeRun([fx.command, '-i', nativeInput(fx), '-o', out, '-f', ...codecs(fx, preset)]);
     nativeRefs[key] = out;
   }
   return nativeRefs[key];
@@ -182,7 +189,7 @@ for (const fx of fixtures) {
       const chdInput = op === 'extract' ? (cfg.native ? nativeRef(fx, preset) : null) : null;
       if (op === 'extract' && !chdInput) { log('extract needs native chdman to make the input CHD; skipped'); continue; }
       for (const simd of cfg.simd.map(s => s === 'on')) {
-        for (const threads of op === 'extract' ? [1] : cfg.threads) {
+        for (const threads of cfg.threads) {
           const runs = [];
           for (let r = 0; r < cfg.repeat; r++) {
             const res = await appRun({ fx, op, threads, simd, preset, chdInput });
@@ -194,12 +201,20 @@ for (const fx of fixtures) {
           if (cfg.verify && cfg.native) {
             if (op === 'create') {
               const ref = nativeRef(fx, preset);
-              verified = sameVersion() ? sha1(last.outs[0].path) === sha1(ref) : null;
+              verified = sameVersion() || engineOnly(codecs(fx, preset)) ? sha1(last.outs[0].path) === sha1(ref) : null;
             } else {
               const refDir = fs.mkdtempSync(path.join(work, 'x-'));
               const ext = { cd: '.cue', gdrom: '.gdi', dvd: '.iso', hd: '.img' }[fx.disc];
-              nativeRun([`extract${fx.disc === 'gdrom' ? 'cd' : fx.disc}`, '-i', chdInput, '-o', path.join(refDir, 'bench-out' + ext)]);
-              verified = last.outs.every(o => fs.existsSync(path.join(refDir, o.name)) && sha1(o.path) === sha1(path.join(refDir, o.name)));
+              // the page extracts CDs as Redump lays them out: its cue sheet with CRLF line ends, and one .bin per
+              // track unless there is only one. chdman 0.289 gives the same bins (split with -sb) and an LF cue sheet.
+              const main = last.outs.find(o => o.name.endsWith(ext));
+              const bins = last.outs.filter(o => o.name.endsWith('.bin')).length;
+              const args = [`extract${fx.disc === 'gdrom' ? 'cd' : fx.disc}`, '-i', chdInput, '-o', path.join(refDir, main ? main.name : 'bench-out' + ext)];
+              if (fx.disc === 'cd' && bins > 1) args.push('-sb');
+              nativeRun(args);
+              const text = f => fs.readFileSync(f, 'latin1').replace(/\r\n/g, '\n');
+              verified = last.outs.every(o => fs.existsSync(path.join(refDir, o.name)) &&
+                (fx.disc === 'cd' && o.name.endsWith('.cue') ? text(o.path) === text(path.join(refDir, o.name)) : sha1(o.path) === sha1(path.join(refDir, o.name))));
             }
             if (verified === false) die(`output of ${fx.key} ${op} ${preset} differs from native chdman`);
           }
@@ -217,11 +232,11 @@ for (const fx of fixtures) {
       }
       // native baseline for the same work
       if (cfg.native && cfg.nativeTiming) {
-        const threadsList = op === 'extract' ? [1] : cfg.threads;
+        const threadsList = cfg.threads;
         for (const threads of threadsList) {
           const times = [];
           for (let r = 0; r < cfg.repeat; r++) {
-            if (op === 'create') times.push(nativeRun([fx.command, '-i', mainInput(fx), '-o', path.join(work, 'n.chd'), '-f', '-np', String(threads), ...codecs(fx, preset)]));
+            if (op === 'create') times.push(nativeRun([fx.command, '-i', nativeInput(fx), '-o', path.join(work, 'n.chd'), '-f', '-np', String(threads), ...codecs(fx, preset)]));
             else { const d = fs.mkdtempSync(path.join(work, 'n-')); const ext = { cd: '.cue', gdrom: '.gdi', dvd: '.iso', hd: '.img' }[fx.disc]; times.push(nativeRun([`extract${fx.disc === 'gdrom' ? 'cd' : fx.disc}`, '-i', chdInput, '-o', path.join(d, 'o' + ext)])); fs.rmSync(d, { recursive: true }); }
           }
           const secs = median(times);

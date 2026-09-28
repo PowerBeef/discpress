@@ -1,6 +1,7 @@
 // Browser build helper: lets a secondary WebAssembly instance (running in a
 // helper Web Worker) compress CHD hunks exactly the way chd_file_compressor
-// would, so the main chdman instance can spread compression over many cores.
+// would, so the main chdman instance can spread compression over many cores,
+// and decompress them for extract and verify.
 #include "chd.h"
 #include "chdcodec.h"
 #include "hashing.h"
@@ -22,7 +23,8 @@ uint32_t s_hunkbytes = 0;
 std::unordered_set<uint64_t> s_seen; // hashes of hunks this helper already compressed
 }
 
-extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_init(uint32_t hunkbytes, uint32_t unitbytes, uint32_t c0, uint32_t c1, uint32_t c2, uint32_t c3)
+// flags: 1 = the deflate codec encodes with libdeflate, as the job's CHD does (chd_file::set_libdeflate)
+extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_init(uint32_t hunkbytes, uint32_t unitbytes, uint32_t c0, uint32_t c1, uint32_t c2, uint32_t c3, uint32_t flags)
 {
 	try
 	{
@@ -35,6 +37,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_init(uint32_t hunkbytes, uint32_
 		std::error_condition err = s_chd->create(std::move(file), uint64_t(hunkbytes), hunkbytes, unitbytes, comp);
 		if (err)
 			return -1;
+		s_chd->set_libdeflate(flags & 1);
 		s_group = std::make_unique<chd_compressor_group>(*s_chd, comp);
 		s_hunkbytes = hunkbytes;
 		s_seen.clear();
@@ -52,8 +55,9 @@ extern "C" EMSCRIPTEN_KEEPALIVE uint8_t *wasm_helper_inbuf() { return s_in.data(
 extern "C" EMSCRIPTEN_KEEPALIVE uint8_t *wasm_helper_outbuf() { return s_out.data(); }
 
 // result[0] = compressed length, result[1] = crc16; sha1out receives 20 bytes.
+// codecs: the codec slots to try, a bit each (the codec plan; 15 = all).
 // returns the codec index (-1 = stored uncompressed)
-extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_compress(uint32_t *result, uint8_t *sha1out)
+extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_compress(uint32_t *result, uint8_t *sha1out, uint32_t codecs)
 {
 	result[1] = uint16_t(util::crc16_creator::simple(s_in.data(), s_hunkbytes));
 	util::sha1_t const sha1 = util::sha1_creator::simple(s_in.data(), s_hunkbytes);
@@ -74,9 +78,107 @@ extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_compress(uint32_t *result, uint8
 		s_seen.clear();
 
 	uint32_t complen = s_hunkbytes;
-	int8_t const compression = s_group->find_best_compressor(s_in.data(), s_out.data(), complen);
+	int8_t const compression = s_group->find_best_compressor(s_in.data(), s_out.data(), complen, codecs);
 	result[0] = complen;
 	return compression;
+}
+
+
+// ---------------------------------------------------------------------------
+// Decompression for extract and verify: the job worker hands over a hunk's
+// compressed bytes and its codec slot, and gets the hunk back
+// (chd_file::wasm_read_ahead). The job worker still checks each hunk's CRC.
+// ---------------------------------------------------------------------------
+
+namespace {
+std::vector<uint8_t> d_store;
+std::unique_ptr<chd_file> d_chd;
+chd_decompressor::ptr d_codec[4];
+std::vector<uint8_t> d_in, d_out;
+uint32_t d_hunkbytes = 0;
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_dinit(uint32_t hunkbytes, uint32_t unitbytes, uint32_t c0, uint32_t c1, uint32_t c2, uint32_t c3)
+{
+	try
+	{
+		// codecs are made for a CHD: a scratch one with the same parameters
+		chd_codec_type comp[4] = { c0, c1, c2, c3 };
+		for (auto &codec : d_codec)
+			codec.reset();
+		d_chd.reset();
+		d_store.clear();
+		d_chd = std::make_unique<chd_file>();
+		util::random_read_write::ptr file = std::make_unique<util::vector_read_write_adapter<uint8_t>>(d_store);
+		std::error_condition err = d_chd->create(std::move(file), uint64_t(hunkbytes), hunkbytes, unitbytes, comp);
+		if (err)
+			return -1;
+		for (int i = 0; i < 4; i++)
+		{
+			if (comp[i] && !(d_codec[i] = chd_codec_list::new_decompressor(comp[i], *d_chd)))
+				return -1;
+		}
+		d_hunkbytes = hunkbytes;
+		d_in.assign(hunkbytes, 0);
+		d_out.assign(hunkbytes, 0);
+		return 0;
+	}
+	catch (...)
+	{
+		return -2;
+	}
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE uint8_t *wasm_helper_dinbuf() { return d_in.data(); }
+extern "C" EMSCRIPTEN_KEEPALIVE uint8_t *wasm_helper_doutbuf() { return d_out.data(); }
+
+// decompresses length bytes from the input buffer with codec slot 0-3; returns 0, or -1 on failure
+extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_decompress(uint32_t codec, uint32_t length)
+{
+	if ((codec > 3) || !d_codec[codec] || (length > d_in.size()))
+		return -1;
+	try
+	{
+		d_codec[codec]->decompress(d_in.data(), length, d_out.data(), d_hunkbytes);
+		return 0;
+	}
+	catch (...)
+	{
+		return -1;
+	}
+}
+
+
+// ---------------------------------------------------------------------------
+// Raw deflate, for CSO images (compressed ISOs) that the job worker presents to
+// chdman as the ISO itself: returns the bytes written to dst, or -1.
+// ---------------------------------------------------------------------------
+#include <zlib.h>
+
+namespace {
+z_stream i_stream;
+bool i_ready = false;
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE int wasm_inflate_raw(const uint8_t *src, uint32_t srclen, uint8_t *dst, uint32_t dstlen)
+{
+	if (!i_ready)
+	{
+		std::memset(&i_stream, 0, sizeof(i_stream));
+		if (inflateInit2(&i_stream, -MAX_WBITS) != Z_OK)
+			return -1;
+		i_ready = true;
+	}
+	else if (inflateReset(&i_stream) != Z_OK)
+		return -1;
+	i_stream.next_in = const_cast<Bytef *>(src);
+	i_stream.avail_in = srclen;
+	i_stream.next_out = dst;
+	i_stream.avail_out = dstlen;
+	int const err = inflate(&i_stream, Z_FINISH);
+	if ((err != Z_STREAM_END) && !((err == Z_BUF_ERROR || err == Z_OK) && (i_stream.avail_out == 0)))
+		return -1;
+	return int(dstlen - i_stream.avail_out);
 }
 
 

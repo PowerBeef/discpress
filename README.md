@@ -61,9 +61,9 @@ The standard tool for making CHDs is **chdman**, a command-line program from the
 <summary><b>Everything it can do</b></summary>
 <br>
 
-- **Real chdman output.** chdman from the official MAME 0.289 release, compiled to WebAssembly, makes standard CHD v5 files with the same checksums as desktop chdman 0.289 (for data, the very same bytes as the official build).
+- **Real chdman output.** chdman from the official MAME 0.289 release, compiled to WebAssembly, makes standard CHD v5 files, byte for byte the same as desktop chdman 0.289 makes on Linux, and with the same checksums as any chdman 0.289.
 - **The right command, picked for you:** `createcd`, `createdvd`, `createhd`, `createld`, `extractcd`, `extractdvd`, `extracthd`, `verify` and `info`. The **Advanced** tab gives you every chdman command and option, including `copy`, parent CHDs, `addmeta` and hard disk templates.
-- **Game recognition.** Discpress reads the disc's own boot files to find the console and serial number, then looks the game up in a built-in copy of the [Redump](http://redump.org) database (about 42,000 discs). When the size and CRC-32 match, the dump is marked as verified. When several releases share a serial number, you choose which one.
+- **Game recognition.** Discpress reads the disc's own boot files to find the console and serial number, then looks the game up in a built-in copy of the [Redump](http://redump.org) database (about 42,000 discs). When the size and CRC-32 match, the dump is marked as verified. When several releases share a serial number, you choose which one. Verifying a CHD also compares it with Redump, without extracting it.
 - **Official names.** For example `Metal Gear Solid (USA) (Disc 1).chd`. You can also type your own name, turn renaming off, or use **Rename** to fix the name of a CHD you already have.
 - **Fast.** Compression is spread over all your CPU cores, with WebAssembly SIMD when your browser supports it.
 - **Big files.** Results are written to the browser's private disk storage, so multi-gigabyte DVD images work. On desktop Chrome and Edge, results can go straight into a folder you choose.
@@ -85,13 +85,13 @@ The standard tool for making CHDs is **chdman**, a command-line program from the
 
 | System | Add these files | Becomes |
 |---|---|---|
-| PlayStation, Saturn, Sega CD, PC Engine CD, Neo Geo CD, 3DO, CD-i, Amiga CD32, PC-FX | `.cue` + `.bin` | CD CHD |
+| PlayStation, Saturn, Sega CD, PC Engine CD, Neo Geo CD, 3DO, CD-i, Amiga CD32, PC-FX | `.cue` + `.bin` (or ECM-packed `.bin.ecm`), or CloneCD `.ccd` + `.img` (+ `.sub`) | CD CHD |
 | Dreamcast | `.gdi` + tracks, or Redump `.cue` + `.bin` | CD CHD (GD-ROM detected) |
-| PlayStation 2 | DVD games: `.iso` · CD games: `.cue` + `.bin` | DVD or CD CHD |
-| PSP | `.iso` | DVD CHD |
+| PlayStation 2 | DVD games: `.iso`, or compressed `.cso`/`.zso` · CD games: `.cue` + `.bin` | DVD or CD CHD |
+| PSP | `.iso`, or compressed `.cso`/`.zso` | DVD CHD |
 | Arcade and computer hard disks | `.img`, `.hdd` | Hard disk CHD |
 | LaserDisc arcade games | `.avi` | LaserDisc CHD |
-| Any of the above | `.chd` | Back to `.cue`/`.bin`, `.gdi` or `.iso` |
+| Any of the above | `.chd` | Back to `.cue`/`.bin` (by default the Redump dump's own files), `.gdi` or `.iso` |
 
 ## See it in action
 
@@ -125,7 +125,7 @@ No. Discpress is a single file that runs entirely on your device. It makes no ne
 <details>
 <summary><b>Are the CHDs as good as the ones from desktop chdman?</b></summary>
 <br>
-Yes. Discpress runs chdman from the official MAME 0.289 release, so the files are standard CHD v5 with the same checksums as desktop chdman 0.289's. For data they are the same byte for byte as an official chdman 0.289 build's. With CD audio a few compressed bytes can differ, because the FLAC encoder's floating-point math isn't identical in every build; the audio itself is the same. The only changes are two small additions so it can run in a browser: a bridge for reading and writing files, and multi-core compression. You can read every change in <a href="wasm/mame.patch"><code>wasm/mame.patch</code></a>.
+Yes. Discpress runs chdman from the official MAME 0.289 release, so the files are standard CHD v5 with the same checksums as desktop chdman 0.289's, and byte for byte the same as chdman 0.289 makes on Linux, CD audio included. (chdman builds for Windows or macOS round the FLAC encoder's floating-point math differently, so their CD-audio bytes can differ from each other's and from Discpress's, never the audio itself.) Its source is in <a href="engine/README.md"><code>engine/</code></a>. The changes let it run in a browser and on several cores, make it faster without changing a byte, and fix chdman 0.289's crashes on bad input. Some opt-in choices change the bytes but not the checksums: the <i>Nearly as small, faster</i> and <i>Faster to create</i> compressions, and keeping cue sheets in CD CHDs. You can read every change in <a href="engine/mame-0.289.diff"><code>engine/mame-0.289.diff</code></a>.
 </details>
 
 <details>
@@ -144,7 +144,7 @@ Older browsers keep results in memory instead of on disk, which limits how big a
 <details>
 <summary><b>How big can a disc be?</b></summary>
 <br>
-Multi-gigabyte DVD images work as long as your device has the free space, because results are written to disk rather than memory. Creating a CHD is CPU-heavy, so expect a few minutes per CD on a computer and longer on a phone. <i>Faster to create</i> in Options trades a little size for a lot of speed.
+Multi-gigabyte DVD images work as long as your device has the free space, because results are written to disk rather than memory. Creating a CHD is CPU-heavy, so expect a few minutes per CD on a computer and longer on a phone. <i>Nearly as small, faster</i> in Options tries each track with only the codec that suits it: about 1.7 times as fast for CDs and 1.5 for DVDs, with files at most 0.3% bigger and the same checksums. <i>Faster to create</i> trades more size for more speed.
 </details>
 
 <details>
@@ -156,7 +156,7 @@ No. Hacks, translations, homebrew and modified dumps aren't in the Redump databa
 <details>
 <summary><b>Can I turn a CHD back into a .cue/.bin or .iso?</b></summary>
 <br>
-Yes. Add the <code>.chd</code> and choose Extract. You can also verify a CHD's checksums or view its details.
+Yes. Add the <code>.chd</code> and choose Extract. A CD comes back as its Redump dump: the same cue sheet and <code>.bin</code> files. For discs whose cue sheet holds more than a CHD stores (CATALOG, FLAGS, ISRC, extra indexes: common on Saturn, Sega CD, PC Engine CD, 3DO and CD-i), turn on Settings → *Keep the cue sheet in CD CHDs* before converting, and that sheet comes back too. You can also verify a CHD's checksums, which compares it with Redump too, or view its details.
 </details>
 
 <details>
@@ -173,13 +173,12 @@ The build is fully reproducible: building from a clean checkout gives a byte-ide
 <summary><b>Build instructions</b></summary>
 <br>
 
-Requirements: [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) 6.0.10, Python 3, make and git.
+Requirements: [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) 6.0.10, Python 3 and make. The chdman source is in `engine/` (see [`engine/README.md`](engine/README.md)).
 
 ```sh
 # one-time setup
 git clone https://github.com/emscripten-core/emsdk.git ~/emsdk
 ~/emsdk/emsdk install 6.0.10 && ~/emsdk/emsdk activate 6.0.10
-./scripts/fetch-mame.sh         # MAME 0.289 source (only what chdman needs) + the browser patch
 
 # build
 source ~/emsdk/emsdk_env.sh
@@ -222,7 +221,7 @@ source ~/emsdk/emsdk_env.sh
 
 ## Credits and license
 
-Discpress is released under the [BSD 3-Clause license](LICENSE). It is built on **chdman** and MAME's `lib/util` (BSD 3-Clause, © Aaron Giles, R. Belmont and the MAMEdev team), with zlib, LZMA SDK, FLAC, Zstandard, utf8proc, Expat and a few smaller libraries. Game data comes from [Redump](http://redump.org) via [libretro-database](https://github.com/libretro/libretro-database). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full list.
+Discpress is released under the [BSD 3-Clause license](LICENSE). It is built on **chdman** and MAME's `lib/util` (BSD 3-Clause, © Aaron Giles, R. Belmont and the MAMEdev team), with zlib, LZMA SDK, FLAC, Zstandard, libdeflate and a few smaller libraries. Game data comes from [Redump](http://redump.org) via [libretro-database](https://github.com/libretro/libretro-database). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full list.
 
 Discpress is not affiliated with the MAME team, Redump or libretro.
 

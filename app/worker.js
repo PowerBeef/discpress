@@ -1,5 +1,5 @@
-/* chdman web worker: runs one chdman command (role "job") or compresses hunks for
-   another worker (role "helper"). Appended after the Emscripten glue (createChdman). */
+/* chdman web worker: runs one chdman command (role "job"), or compresses and decompresses
+   hunks for another worker (role "helper"). Appended after the Emscripten glue (createChdman). */
 'use strict';
 
 var ERR = { ENOENT: 44, EPERM: 63, EIO: 29, EINVAL: 28, EEXIST: 20, ENOTEMPTY: 55, ENOSPC: 51, EISDIR: 31 };
@@ -143,6 +143,247 @@ MemStore.prototype.toBlob = function () {
   }
   return new Blob(parts, { type: 'application/octet-stream' });
 };
+
+// A CSO (CISO, versions 1 and 2) or ZSO (ZISO) compressed ISO, read as the ISO itself: blocks are
+// decompressed as they are read, a chunk of them at a time (chunkBytes, 4 MiB by default; formats:
+// maxcso's README_CSO/ZSO). Deflate blocks go through the module's zlib (setModule); LZ4 blocks are
+// decoded here. `label` names the file in the message about a damaged block.
+function CisoStore(base, chunkBytes, label) {
+  var h = new Uint8Array(24), dv;
+  if (base.read(h, 0, 24) !== 24) throw new Error('not a CSO/ZSO image');
+  dv = new DataView(h.buffer);
+  var magic = String.fromCharCode(h[0], h[1], h[2], h[3]);
+  if (magic !== 'CISO' && magic !== 'ZISO') throw new Error('not a CSO/ZSO image');
+  this.base = base;
+  this.zso = magic === 'ZISO';
+  this.v2 = !this.zso && h[20] === 2;
+  this.sizeV = dv.getUint32(8, true) + dv.getUint32(12, true) * 4294967296;
+  this.bs = dv.getUint32(16, true);
+  this.shift = Math.pow(2, h[21]);
+  if (!this.bs || this.bs > (1 << 24) || this.bs % 2048) throw new Error('unusual CSO block size ' + this.bs);
+  this.nblocks = Math.ceil(this.sizeV / this.bs);
+  var raw = new Uint8Array((this.nblocks + 1) * 4);
+  if (base.read(raw, 24, raw.length) !== raw.length) throw new Error('truncated CSO index');
+  this.index = new Uint32Array(raw.buffer);
+  this.readonly = true;
+  this.chunkBlocks = Math.max(1, Math.floor((chunkBytes || 4 << 20) / this.bs));
+  this.chunks = [];   // the two most recent chunks: {first, data}
+  this.M = null;
+  this.label = label || 'the image';
+  this.reported = false;
+}
+CisoStore.prototype.damaged = function (b) {
+  if (!this.reported) {
+    this.reported = true;
+    postMessage({ type: 'notice', level: 'error', message: '"' + this.label + '" is damaged or incomplete: block ' + b + ' of ' + this.nblocks + ' could not be read.' });
+  }
+  return { errno: ERR.EIO };
+};
+CisoStore.prototype.setModule = function (M) {
+  this.M = M;
+  this.srcCap = this.bs + 64;
+  this.src = M._malloc(this.srcCap);
+  this.dst = M._malloc(this.bs);
+};
+// the block's stored bytes start and length, and how they are stored: 0 raw, 1 deflate, 2 LZ4
+CisoStore.prototype.block = function (b) {
+  var e = this.index[b], next = this.index[b + 1];
+  var start = (e & 0x7fffffff) * this.shift, len = (next & 0x7fffffff) * this.shift - start;
+  var high = e >>> 31, how;
+  if (this.zso) how = high ? 0 : 2;
+  else if (this.v2) how = len >= this.bs ? 0 : high ? 2 : 1;
+  else how = high ? 0 : 1;
+  return { start: start, len: len, how: how };
+};
+CisoStore.prototype.chunk = function (c) {
+  for (var i = 0; i < this.chunks.length; i++) if (this.chunks[i].first === c) return this.chunks[i].data;
+  var first = c * this.chunkBlocks, last = Math.min(this.nblocks, first + this.chunkBlocks);
+  var b0 = this.block(first), end = (this.index[last] & 0x7fffffff) * this.shift;
+  // blocks are at most a little larger than block_size (padding; deflate's worst case), unless damaged
+  if (!(end >= b0.start && end - b0.start <= (last - first) * (2 * this.bs + this.shift) + 4096)) throw this.damaged(first);
+  var stored = new Uint8Array(end - b0.start), got = this.base.read(stored, b0.start, stored.length);
+  var bs = this.bs, out = new Uint8Array((last - first) * bs), M = this.M;
+  for (var b = first; b < last; b++) {
+    var blk = this.block(b), at = blk.start - b0.start, want = Math.min(bs, this.sizeV - b * bs), o = (b - first) * bs;
+    if (!(blk.len >= 0 && at + blk.len <= got)) throw this.damaged(b);
+    if (blk.how === 0) {
+      if (blk.len < want) throw this.damaged(b);
+      out.set(stored.subarray(at, at + want), o);
+    } else if (blk.how === 2) {
+      if (lz4Block(stored, at, at + blk.len, out, o, want) !== want) throw this.damaged(b);
+    } else {
+      if (!M) throw this.damaged(b);
+      if (blk.len > this.srcCap) { M._free(this.src); this.srcCap = blk.len; this.src = M._malloc(blk.len); }
+      M.HEAPU8.set(stored.subarray(at, at + blk.len), this.src);
+      if (M._wasm_inflate_raw(this.src, blk.len, this.dst, want) !== want) throw this.damaged(b);
+      out.set(M.HEAPU8.subarray(this.dst, this.dst + want), o);
+    }
+  }
+  this.chunks = [{ first: c, data: out }].concat(this.chunks.slice(0, 1));
+  return out;
+};
+CisoStore.prototype.read = function (dst, pos, len) {
+  if (pos >= this.sizeV) return 0;
+  len = Math.min(len, this.sizeV - pos);
+  var M = this.M, heap = M && dst.buffer === M.HEAPU8.buffer, addr = dst.byteOffset, done = 0, span = this.chunkBlocks * this.bs;
+  var parts = [];
+  while (done < len) {
+    var p = pos + done, c = Math.floor(p / span), data = this.chunk(c), off = p - c * span;
+    var n = Math.min(len - done, data.length - off);
+    if (n <= 0) break;
+    parts.push({ data: data, off: off, n: n, at: done });
+    done += n;
+  }
+  // chdman's buffer is in the module's memory, which may have grown (and moved) meanwhile
+  if (heap && dst.byteLength === 0) dst = M.HEAPU8.subarray(addr, addr + len);
+  parts.forEach(function (q) { dst.set(q.data.subarray(q.off, q.off + q.n), q.at); });
+  return done;
+};
+
+// An ECM image (the ecm tools' Error Code Modeler format, described in wasm/ecm.cpp), read as the
+// CD image it packs. A scan of its chunk headers maps the image's bytes to the file's, with a
+// checkpoint about every ECM_WINDOW bytes of the image (on a sector boundary, or inside a chunk
+// of bytes stored as they are); the windows between checkpoints are rebuilt by the module
+// (wasm_ecm_decode: sync, headers, EDC, ECC) as they are read. An image read in order to its end
+// must have the EDC the file ends with, as ecm2bin checks: otherwise it is damaged.
+var ECM_STORED = [1, 2051, 2052, 2328], ECM_SIZE = [1, 2352, 2336, 2336], ECM_WINDOW = 1 << 20;
+function EcmStore(base, label) {
+  var head = new Uint8Array(4);
+  if (base.read(head, 0, 4) !== 4 || head[0] !== 69 || head[1] !== 67 || head[2] !== 77 || head[3] !== 0) throw new Error('not an ECM image');
+  this.base = base;
+  this.label = label || 'the image';
+  this.readonly = true;
+  this.M = null;
+  this.reported = false;
+  // checkpoints: the image's offset, the file's, and the chunk's type and units left there (0: a header)
+  var cpOut = [], cpIn = [], cpType = [], cpLeft = [], next = 0;
+  var size = base.sizeV, pos = 4, out = 0, buf = new Uint8Array(1 << 20), bufAt = 0, bufLen = 0;
+  var fail = function (why) { return new Error(why + ' (at byte ' + pos + ' of ' + size + ')'); };
+  var byteAt = function (p) {
+    if (p >= bufAt + bufLen || p < bufAt) {
+      if (p >= size) throw fail('it ends before the image it holds does');
+      bufAt = p;
+      try { bufLen = base.read(buf, p, Math.min(buf.length, size - p)); } catch (e) { bufLen = 0; }
+      if (bufLen <= 0) throw fail('it could not be read');
+    }
+    return buf[p - bufAt];
+  };
+  var mark = function (o, i, type, left) { cpOut.push(o); cpIn.push(i); cpType.push(type); cpLeft.push(left); next = o + ECM_WINDOW; };
+  for (;;) {
+    if (out >= next) mark(out, pos, 0, 0);
+    var at = pos, c = byteAt(pos++), type = c & 3, n = (c >> 2) & 31, bits = 5;
+    while (c & 128) {
+      if (bits > 26) throw fail('a chunk header is invalid');
+      c = byteAt(pos++);
+      n += (c & 127) * Math.pow(2, bits);
+      bits += 7;
+    }
+    if (n > 0xFFFFFFFF) throw fail('a chunk header is invalid');
+    if (n === 0xFFFFFFFF) break; // the end; the EDC follows
+    var count = n + 1, isz = ECM_STORED[type], osz = ECM_SIZE[type];
+    if (pos + count * isz > size) throw fail('it ends before the image it holds does');
+    // checkpoints inside a long chunk
+    for (var u = Math.ceil((next - out) / osz); u < count; u = Math.ceil((next - out) / osz)) mark(out + u * osz, pos + u * isz, type, count - u);
+    pos += count * isz;
+    out += count * osz;
+  }
+  if (cpOut[cpOut.length - 1] !== out) mark(out, at, 0, 0);
+  if (pos + 4 > size) throw fail('it ends before its checksum');
+  this.edcWant = (byteAt(pos) | (byteAt(pos + 1) << 8) | (byteAt(pos + 2) << 16) | (byteAt(pos + 3) << 24)) >>> 0;
+  this.cp = { out: cpOut, inp: cpIn, type: cpType, left: cpLeft };
+  this.sizeV = out;
+  this.maxIn = 0;
+  this.maxOut = 0;
+  for (var w = 0; w + 1 < cpOut.length; w++) {
+    this.maxIn = Math.max(this.maxIn, cpIn[w + 1] - cpIn[w]);
+    this.maxOut = Math.max(this.maxOut, cpOut[w + 1] - cpOut[w]);
+  }
+  this.windows = []; // the two most recent: {w, data}
+  this.last = 0;
+  this.edc = 0;      // of the image read in order so far, up to edcAt
+  this.edcAt = 0;
+}
+EcmStore.prototype.damaged = function (o, why) {
+  if (!this.reported) {
+    this.reported = true;
+    postMessage({ type: 'notice', level: 'error', message: '"' + this.label + '" is damaged: ' + (why || 'the image it holds could not be rebuilt at byte ' + o + '.') });
+  }
+  return { errno: ERR.EIO };
+};
+EcmStore.prototype.setModule = function (M) {
+  this.M = M;
+  this.src = M._malloc(Math.max(1, this.maxIn));
+  this.dst = M._malloc(Math.max(1, this.maxOut));
+};
+// the window holding image offset p
+EcmStore.prototype.find = function (p) {
+  var o = this.cp.out, w = this.last;
+  if (o[w] <= p && p < o[w + 1]) return w;
+  if (o[w + 1] <= p && p < o[w + 2]) return (this.last = w + 1);
+  var lo = 0, hi = o.length - 2;
+  while (lo < hi) {
+    var mid = (lo + hi + 1) >> 1;
+    if (o[mid] <= p) lo = mid; else hi = mid - 1;
+  }
+  return (this.last = lo);
+};
+EcmStore.prototype.window = function (w) {
+  for (var i = 0; i < this.windows.length; i++) if (this.windows[i].w === w) return this.windows[i].data;
+  var M = this.M, cp = this.cp, inLen = cp.inp[w + 1] - cp.inp[w], outLen = cp.out[w + 1] - cp.out[w];
+  if (!M) throw this.damaged(cp.out[w]);
+  if (this.base.read(M.HEAPU8.subarray(this.src, this.src + inLen), cp.inp[w], inLen) !== inLen) throw this.damaged(cp.out[w]);
+  if (M._wasm_ecm_decode(this.src, inLen, this.dst, outLen, cp.type[w], cp.left[w]) !== inLen) throw this.damaged(cp.out[w]);
+  if (cp.out[w] === this.edcAt) {
+    this.edc = M._wasm_ecm_edc(this.edc, this.dst, outLen) >>> 0;
+    this.edcAt += outLen;
+    if (this.edcAt === this.sizeV && this.edc !== this.edcWant) throw this.damaged(0, 'the image rebuilt from it doesn’t match the checksum it ends with.');
+  }
+  var data = M.HEAPU8.slice(this.dst, this.dst + outLen);
+  this.windows = [{ w: w, data: data }].concat(this.windows.slice(0, 1));
+  return data;
+};
+EcmStore.prototype.read = function (dst, pos, len) {
+  if (pos >= this.sizeV) return 0;
+  len = Math.min(len, this.sizeV - pos);
+  var M = this.M, heap = M && dst.buffer === M.HEAPU8.buffer, addr = dst.byteOffset, done = 0, parts = [];
+  while (done < len) {
+    var p = pos + done, w = this.find(p), data = this.window(w), off = p - this.cp.out[w];
+    var n = Math.min(len - done, data.length - off);
+    if (n <= 0) break;
+    parts.push({ data: data, off: off, n: n, at: done });
+    done += n;
+  }
+  if (heap && dst.byteLength === 0) dst = M.HEAPU8.subarray(addr, addr + len);
+  parts.forEach(function (q) { dst.set(q.data.subarray(q.off, q.off + q.n), q.at); });
+  return done;
+};
+
+// LZ4 block format: decodes src[from, to) into out at o, up to `want` bytes; returns the count,
+// or -1 if the data is damaged. Like maxcso, it stops there: a block can be followed by padding,
+// and an image's last block can decode to more, the zeros that fill it to the block size.
+function lz4Block(src, from, to, out, o, want) {
+  var i = from, start = o, end = o + want;
+  while (i < to && o < end) {
+    var token = src[i++], n = token >>> 4;
+    if (n === 15) { var b; do { b = src[i++]; n += b; } while (b === 255 && i < to); }
+    if (i + n > to) return -1;
+    var lit = Math.min(n, end - o);
+    out.set(src.subarray(i, i + lit), o);
+    i += n; o += lit;
+    if (i >= to || o >= end) break; // the last sequence has only literals
+    if (i + 2 > to) return -1;
+    var off = src[i] | (src[i + 1] << 8);
+    i += 2;
+    var m = (token & 15) + 4;
+    if ((token & 15) === 15) { var c; do { c = src[i++]; m += c; } while (c === 255 && i < to); }
+    if (!off || off > o - start) return -1;
+    m = Math.min(m, end - o);
+    if (off >= m) out.copyWithin(o, o - off, o - off + m);
+    else for (var k = 0; k < m; k++) out[o + k] = out[o + k - off]; // overlapping: repeats the last bytes
+    o += m;
+  }
+  return o - start;
+}
 
 // Every access-handle write has a fixed cost (up to ~0.7 ms measured in Chromium), and chdman
 // writes each compressed hunk separately (4 KiB for DVDs), so small writes are gathered in
@@ -313,6 +554,29 @@ StreamStore.prototype.finish = function (keep) {
   postMessage({ type: 's-close', id: this.id, size: total });
 };
 
+// An output that is only checksummed (outMode 'crc', to compare with Redump): the CRC-32 of the file
+// as written. extractcd and extractdvd write each file front to back; a write elsewhere makes the
+// checksum unknown.
+function CrcStore(backing) {
+  this.backing = backing;
+  this.sizeV = 0;
+  this.crc = 0;
+  this.inOrder = true;
+}
+CrcStore.prototype.write = function (src, pos) {
+  var M = this.backing.M, n = src.length;
+  if (pos !== this.sizeV) this.inOrder = false;
+  else if (M && src.buffer === M.HEAPU8.buffer) this.crc = M._crc32(this.crc, src.byteOffset, n) >>> 0; // zlib's, on chdman's buffer
+  else this.crc = (crcUpdate(this.crc ^ -1, src) ^ -1) >>> 0;
+  this.sizeV = Math.max(this.sizeV, pos + n);
+  return n;
+};
+CrcStore.prototype.read = function () { throw { errno: ERR.EIO }; };
+CrcStore.prototype.truncate = function (n) {
+  if (n !== this.sizeV) this.inOrder = false;
+  this.sizeV = n;
+};
+
 /* ---------------- Emscripten filesystem driver ---------------- */
 
 function makeFS(FS) {
@@ -448,13 +712,15 @@ async function makeBacking(msg) {
       postMessage({ type: 'notice', level: 'info', storage: 'mem', message: 'Disk storage unavailable (' + (err && err.name || err) + '); keeping results in memory.' });
     }
   }
-  var streaming = msg.outMode === 'stream';
-  return {
-    mode: streaming ? 'stream' : dir ? 'opfs' : 'mem',
+  var streaming = msg.outMode === 'stream', crcOnly = msg.outMode === 'crc';
+  var backing = {
+    mode: crcOnly ? 'crc' : streaming ? 'stream' : dir ? 'opfs' : 'mem',
+    M: null, // the module, once instantiated (CrcStore uses its crc32)
     create: function (name, writableCopy) {
       var slot = slots.find(function (s) { return !s.used; });
       var store;
-      if (streaming && !writableCopy) store = new StreamStore(name);
+      if (crcOnly && !writableCopy) store = new CrcStore(backing);
+      else if (streaming && !writableCopy) store = new StreamStore(name);
       else if (slot) { slot.used = true; store = new OpfsStore(slot); slot.store = store; }
       else store = new MemStore();
       store.name = name;
@@ -474,6 +740,10 @@ async function makeBacking(msg) {
     finalize: async function (keep) {
       var outputs = [];
       registry.forEach(function (st) {
+        if (st instanceof CrcStore) {
+          if (keep && !st.deleted) outputs.push({ name: st.name, size: st.sizeV, kind: 'crc', crc: st.inOrder ? ('00000000' + st.crc.toString(16).toUpperCase()).slice(-8) : null });
+          return;
+        }
         if (st instanceof StreamStore) {
           st.finish(keep);
           if (keep && !st.deleted) outputs.push({ name: st.name, size: st.sizeV, kind: 'disk', id: st.id });
@@ -498,6 +768,7 @@ async function makeBacking(msg) {
       return outputs;
     }
   };
+  return backing;
 }
 
 /* ---------------- input staging ----------------
@@ -566,7 +837,7 @@ async function stageInput(msg, index, stages) {
   return dst;
 }
 
-/* ---------------- multi-core compression (job side) ---------------- */
+/* ---------------- multi-core compression and decompression (job side) ---------------- */
 
 function setupParallel(M, ports) {
   var helpers = ports.map(function (port, i) { return { port: port, inflight: 0, id: i }; });
@@ -588,9 +859,9 @@ function setupParallel(M, ports) {
         if (h.inflight > round) continue;
         var b = pending.shift();
         h.inflight++;
-        var items = b.items.slice(0, b.n);
+        var items = b.items.slice(0, b.n), codecs = b.codecs.slice(0, b.n);
         var data = b.n === batchSize ? b.buf : b.buf.slice(0, b.n * hunkbytes);
-        h.port.postMessage({ type: 'batch', id: ++seq, items: items, data: data.buffer }, [items.buffer, data.buffer]);
+        h.port.postMessage({ type: 'batch', id: ++seq, items: items, codecs: codecs, data: data.buffer }, [items.buffer, codecs.buffer, data.buffer]);
       }
     }
   }
@@ -613,6 +884,13 @@ function setupParallel(M, ports) {
         maybeWake();
         return;
       }
+      if (m.type === 'dresult') {
+        h.inflight--;
+        rdResult(m);
+        rdDispatch();
+        rdWake();
+        return;
+      }
       if (m.type !== 'result') return;
       h.inflight--;
       var items = m.items, meta = m.meta, sha1 = m.sha1, out = m.out, o = 0;
@@ -630,7 +908,8 @@ function setupParallel(M, ports) {
     };
   });
 
-  M.parSetup = function (hb, ub, comps) {
+  // flags: 1 = libdeflate for the deflate codec (--libdeflate)
+  M.parSetup = function (hb, ub, comps, flags) {
     if (!helpers.length) return false;
     // the LaserDisc codec (avhu) reads settings from the CHD's own metadata: keep it single-threaded
     if (comps.indexOf(0x61766875) >= 0) return false;
@@ -640,28 +919,111 @@ function setupParallel(M, ports) {
     // (with 4 KiB DVD hunks, 512 KiB batches meant only two helpers ever had work)
     batchSize = Math.max(1, Math.min(64, Math.floor((512 * 1024) / hb), Math.floor(128 / (2 * helpers.length))));
     scratch = M._malloc(hb + 64);
-    helpers.forEach(function (h) { h.port.postMessage({ type: 'init', hunkbytes: hb, unitbytes: ub, comps: comps }); });
+    helpers.forEach(function (h) { h.port.postMessage({ type: 'init', hunkbytes: hb, unitbytes: ub, comps: comps, flags: flags || 0 }); });
     M.parActive = true;
     postMessage({ type: 'notice', level: 'debug', message: 'multi-core compression: ' + helpers.length + ' helper threads, batch ' + batchSize });
     return true;
   };
-  M.parSubmit = function (item, ptr, len) {
-    if (!open) open = { n: 0, items: new Uint32Array(batchSize), buf: new Uint8Array(batchSize * hunkbytes) };
+  // codecs: the codec slots the codec plan tries for this hunk, a bit each (15 = all)
+  M.parSubmit = function (item, ptr, len, codecs) {
+    if (!open) open = { n: 0, items: new Uint32Array(batchSize), codecs: new Uint8Array(batchSize), buf: new Uint8Array(batchSize * hunkbytes) };
     open.buf.set(M.HEAPU8.subarray(ptr, ptr + len), open.n * hunkbytes);
+    open.codecs[open.n] = codecs;
     open.items[open.n++] = item;
     fifo.push(item);
     if (open.n === batchSize) flushOpen();
   };
-  M.parYield = function (wakeUp) {
-    if (failed) {
-      // abort the whole run: helper failed, results would be incomplete
-      postMessage({ type: 'fatal', message: 'Multi-core compression failed (' + failed + '). Try again with 1 thread in Settings.' });
-      return; // never wake: the job worker is terminated by the page
+  // chdman paused after a compression step: resolves when it can go on (its next hunk is in)
+  M.parWait = function () {
+    return new Promise(function (resolve) {
+      if (failed) {
+        // abort the whole run: helper failed, results would be incomplete
+        postMessage({ type: 'fatal', message: 'Multi-core compression failed (' + failed + '). Try again with 1 thread in Settings.' });
+        return; // never resolves: the job worker is terminated by the page
+      }
+      dispatch();
+      headDone();
+      sleeper = resolve;
+      maybeWake();
+    });
+  };
+
+  // Extract and verify: helpers decompress the hunks chdman is about to read (chd_file::wasm_read_ahead
+  // hands them over with wasm_rd_submit); the results go straight into the engine's cache slots.
+  // One file at a time; a closed file's late results are dropped by generation.
+  var rd = { chd: 0, gen: 0, hb: 0, batch: 1, open: null, queue: [], busy: 0, waiting: null };
+  function rdFlush() {
+    if (rd.open && rd.open.n) rd.queue.push(rd.open);
+    rd.open = null;
+  }
+  // Every batch goes out at once, to the least busy helper: the job worker can't hand out work while
+  // chdman uses a window of hunks, so helpers need their queue (at most two windows, see wasm_read_ahead)
+  function rdDispatch() {
+    rdFlush();
+    while (rd.queue.length) {
+      var h = helpers[0];
+      for (var i = 1; i < helpers.length; i++) if (helpers[i].inflight < h.inflight) h = helpers[i];
+      var b = rd.queue.shift();
+      h.inflight++;
+      var meta = b.meta.slice(0, b.n * 3), data = b.data.slice(0, b.used);
+      h.port.postMessage({ type: 'dbatch', gen: b.gen, meta: meta, data: data.buffer }, [meta.buffer, data.buffer]);
     }
-    dispatch();
-    headDone();
-    sleeper = wakeUp;
-    maybeWake();
+  }
+  function rdResult(m) {
+    var live = rd.chd && m.gen === rd.gen, meta = m.meta, ok = m.ok, out = m.out;
+    for (var i = 0; i < ok.length; i++) {
+      rd.busy--;
+      if (!live) continue;
+      var hunk = meta[i * 3];
+      var slot = ok[i] ? M._wasm_rd_slot(rd.chd, hunk) : 0;
+      if (slot) M.HEAPU8.set(out.subarray(i * rd.hb, (i + 1) * rd.hb), slot);
+      M._wasm_rd_done(rd.chd, hunk, slot ? 1 : 0);
+    }
+  }
+  function rdWake() {
+    if (rd.waiting) { var w = rd.waiting; rd.waiting = null; wake(w); }
+  }
+  M.rdSetup = function (chd, hb, ub, comps) {
+    if (!helpers.length || rd.chd) return false;
+    // the LaserDisc codec (avhu) reads settings from the CHD's own metadata
+    if (comps.indexOf(0x61766875) >= 0) return false;
+    rd.chd = chd; rd.gen++; rd.hb = hb;
+    rd.batch = Math.max(1, Math.min(64, Math.floor((512 * 1024) / hb)));
+    helpers.forEach(function (h) { h.port.postMessage({ type: 'dinit', hunkbytes: hb, unitbytes: ub, comps: comps }); });
+    postMessage({ type: 'notice', level: 'debug', message: 'multi-core decompression: ' + helpers.length + ' helper threads, batch ' + rd.batch });
+    return true;
+  };
+  M.rdSubmit = function (chd, hunk, codec, ptr, len) {
+    if (chd !== rd.chd) return;
+    if (!rd.open) rd.open = { gen: rd.gen, n: 0, used: 0, meta: new Uint32Array(3 * rd.batch), data: new Uint8Array(rd.batch * rd.hb) };
+    var o = rd.open;
+    o.data.set(M.HEAPU8.subarray(ptr, ptr + len), o.used);
+    o.meta[o.n * 3] = hunk; o.meta[o.n * 3 + 1] = codec; o.meta[o.n * 3 + 2] = len;
+    o.used += len;
+    o.n++;
+    rd.busy++;
+    if (o.n === rd.batch) rdDispatch();
+  };
+  M.rdClose = function (chd) {
+    if (chd !== rd.chd) return;
+    rdFlush();
+    rd.queue.forEach(function (b) { rd.busy -= b.n; });
+    rd.queue = [];
+    rd.chd = 0;
+    rd.gen++;
+  };
+  M.rdBusy = function () { return rd.busy > 0; };
+  // chdman paused until hunks it is about to read are in: resolves when more results arrive
+  M.rdWait = function () {
+    return new Promise(function (resolve) {
+      if (failed) {
+        postMessage({ type: 'fatal', message: 'Multi-core decompression failed (' + failed + '). Try again with 1 thread in Settings.' });
+        return; // never resolves: the job worker is terminated by the page
+      }
+      rdDispatch();
+      rd.waiting = resolve;
+      if (!rd.busy) rdWake();
+    });
   };
 }
 
@@ -672,11 +1034,36 @@ async function runHelper(msg) {
   var M = await instantiate({});
   var port = msg.port;
   var inbuf = 0, outbuf = 0, res = M._malloc(16), sha = M._malloc(32), hb = 0;
+  var dinbuf = 0, doutbuf = 0, dhb = 0;
   port.onmessage = function (e) {
     var m = e.data;
     try {
+      if (m.type === 'dinit') {
+        var dr = M._wasm_helper_dinit(m.hunkbytes, m.unitbytes, m.comps[0], m.comps[1], m.comps[2], m.comps[3]);
+        if (dr !== 0) throw new Error('codec init failed (' + dr + ')');
+        dinbuf = M._wasm_helper_dinbuf();
+        doutbuf = M._wasm_helper_doutbuf();
+        dhb = m.hunkbytes;
+        return;
+      }
+      if (m.type === 'dbatch') {
+        // a hunk that fails here is decompressed again by the job worker, which reports the error
+        var dmeta = m.meta, ddata = new Uint8Array(m.data), dn = dmeta.length / 3;
+        var ok = new Uint8Array(dn), dout = new Uint8Array(dn * dhb), doff = 0;
+        for (var di = 0; di < dn; di++) {
+          var dlen = dmeta[di * 3 + 2];
+          M.HEAPU8.set(ddata.subarray(doff, doff + dlen), dinbuf);
+          doff += dlen;
+          if (M._wasm_helper_decompress(dmeta[di * 3 + 1], dlen) === 0) {
+            ok[di] = 1;
+            dout.set(M.HEAPU8.subarray(doutbuf, doutbuf + dhb), di * dhb);
+          }
+        }
+        port.postMessage({ type: 'dresult', gen: m.gen, meta: dmeta, ok: ok, out: dout }, [dmeta.buffer, ok.buffer, dout.buffer]);
+        return;
+      }
       if (m.type === 'init') {
-        var r = M._wasm_helper_init(m.hunkbytes, m.unitbytes, m.comps[0], m.comps[1], m.comps[2], m.comps[3]);
+        var r = M._wasm_helper_init(m.hunkbytes, m.unitbytes, m.comps[0], m.comps[1], m.comps[2], m.comps[3], m.flags || 0);
         if (r !== 0) throw new Error('codec init failed (' + r + ')');
         inbuf = M._wasm_helper_inbuf();
         outbuf = M._wasm_helper_outbuf();
@@ -684,11 +1071,11 @@ async function runHelper(msg) {
         return;
       }
       if (m.type === 'batch') {
-        var n = m.items.length, data = new Uint8Array(m.data);
+        var n = m.items.length, data = new Uint8Array(m.data), codecs = m.codecs;
         var meta = new Int32Array(n * 3), sha1 = new Uint8Array(n * 20), parts = [], total = 0;
         for (var i = 0; i < n; i++) {
           M.HEAPU8.set(data.subarray(i * hb, (i + 1) * hb), inbuf);
-          var c = M._wasm_helper_compress(res, sha);
+          var c = M._wasm_helper_compress(res, sha, codecs ? codecs[i] : 15);
           var heap32 = M.HEAPU32, heap8 = M.HEAPU8;
           var len = heap32[res >>> 2], crc = heap32[(res >>> 2) + 1];
           meta[i * 3] = c; meta[i * 3 + 1] = len; meta[i * 3 + 2] = crc;
@@ -726,6 +1113,22 @@ function makeLineSink(stream) {
   };
 }
 
+// Runs a chdman command line and resolves with its exit code. A command that compresses with
+// helper workers pauses after each step (chdman_begin/chdman_resume return -1) until M.parWait()
+// says the next hunk is in, so the worker keeps receiving their results. Extract and verify pause
+// the same way while helpers decompress the hunks they are about to read (M.rdWait()).
+async function runChdman(M, args) {
+  var argv = M._malloc(4 * (args.length + 2));
+  ['chdman'].concat(args).forEach(function (a, i) { var p = M.stringToNewUTF8(a); M.HEAPU32[(argv >>> 2) + i] = p; });
+  M.HEAPU32[(argv >>> 2) + args.length + 1] = 0;
+  var code = M._chdman_begin(args.length + 1, argv);
+  while (code === -1) {
+    await (M.rdBusy && M.rdBusy() ? M.rdWait() : M.parWait());
+    code = M._chdman_resume();
+  }
+  return code;
+}
+
 async function runJob(msg) {
   await loadModule(msg);
   var backing = await makeBacking(msg);
@@ -760,6 +1163,17 @@ async function runJob(msg) {
         return;
       }
     }
+    // a CSO/ZSO compressed ISO, or an ECM image: chdman reads what they hold
+    if (inputs[ii].ciso || inputs[ii].ecm) {
+      var label = inputs[ii].blob.name || inputs[ii].name;
+      try { bs = inputs[ii].ciso ? new CisoStore(bs, 0, label) : new EcmStore(bs, label); }
+      catch (e) {
+        await dropStages();
+        await backing.finalize(false);
+        postMessage({ type: 'done', code: -1, error: '"' + label + '" could not be read as ' + (inputs[ii].ciso ? 'a compressed ISO' : 'an ECM image') + ': ' + (e && e.message || e), outputs: [] });
+        return;
+      }
+    }
     inStores.push({ name: inputs[ii].name, store: bs });
   }
   async function dropStages() {
@@ -769,17 +1183,16 @@ async function runJob(msg) {
     }
   }
 
-  var out = makeLineSink(1), err = makeLineSink(2);
-  var resolveExit, rejectExit, finished = false;
-  var exited = new Promise(function (res, rej) { resolveExit = res; rejectExit = rej; });
+  var out = makeLineSink(1), err = makeLineSink(2), aborted = null;
   var M = await instantiate({
     stdin: function () { return null; },
     stdout: function (c) { out.put(c); },
     stderr: function (c) { err.put(c); },
-    onExit: function (code) { if (!finished) { finished = true; resolveExit(code); } },
-    onAbort: function (what) { if (!finished) { finished = true; rejectExit(new Error('chdman stopped unexpectedly: ' + what)); } }
+    onAbort: function (what) { aborted = 'chdman stopped unexpectedly: ' + what; }
   });
 
+  inStores.forEach(function (st) { if (st.store.setModule) st.store.setModule(M); });
+  backing.M = M;
   var FS = M.FS, CHDFS = makeFS(FS);
   FS.mkdir('/in');
   FS.mount(CHDFS, { files: inStores }, '/in');
@@ -789,29 +1202,15 @@ async function runJob(msg) {
 
   if (msg.ports && msg.ports.length) setupParallel(M, msg.ports);
 
-  var started = performance.now();
+  var started = performance.now(), code;
   try {
-    var ret = M.callMain(msg.args);
-    var A = M.__asyncify;
-    if (A && A.currData) {
-      // main() is suspended waiting for helper threads; it finishes asynchronously
-      A.whenDone().then(function (code) {
-        try { M._fflush(0); } catch (e) { /* ignore */ }
-        if (!finished) { finished = true; resolveExit(code); }
-      }, function (e) { if (!finished) { finished = true; rejectExit(e); } });
-    } else if (typeof ret === 'number' && !finished) { finished = true; resolveExit(ret); }
+    code = await runChdman(M, msg.args);
+    M._fflush(0);
   } catch (e) {
-    if (!(e && e.name === 'ExitStatus')) {
-      if (!finished) { finished = true; rejectExit(e); }
-    }
-  }
-  var code;
-  try { code = await exited; }
-  catch (e) {
     out.flush(); err.flush();
     await backing.finalize(false);
     await dropStages();
-    postMessage({ type: 'done', code: -1, error: String(e && e.message || e), outputs: [], ms: performance.now() - started });
+    postMessage({ type: 'done', code: -1, error: aborted || String(e && e.message || e), outputs: [], ms: performance.now() - started });
     return;
   }
   out.flush(); err.flush();
@@ -831,9 +1230,12 @@ async function runJob(msg) {
 /* ---------------- game identification helpers ---------------- */
 
 // CHD sector reader: answers {type:'read', id, track, lba} with 2048 bytes of user data
+// (msg.ciso: a CSO/ZSO compressed ISO instead, read like a DVD CHD; msg.ecm: ECM images)
 async function runReader(msg) {
   await loadModule(msg);
   var M = await instantiate({});
+  if (msg.ciso) return runCisoReader(M, msg);
+  if (msg.ecm) return runEcmReader(M, msg);
   var FS = M.FS, CHDFS = makeFS(FS);
   FS.mkdir('/in');
   FS.mount(CHDFS, { files: [{ name: msg.name, store: new BlobStore(msg.blob) }].concat((msg.parent ? [{ name: 'parent.chd', store: new BlobStore(msg.parent) }] : [])) }, '/in');
@@ -854,6 +1256,43 @@ async function runReader(msg) {
     if (m.type !== 'read') return;
     var r = M._wasm_probe_read(m.track | 0, m.lba >>> 0, buf);
     postMessage({ type: 'sector', id: m.id, data: r === 0 ? M.HEAPU8.slice(buf, buf + 2048) : null });
+  };
+}
+
+function runCisoReader(M, msg) {
+  var iso = new CisoStore(new BlobStore(msg.blob), 2048);
+  iso.setModule(M);
+  postMessage({ type: 'reader-ready', kind: 2, tracks: [], logical: iso.sizeV });
+  self.onmessage = function (e) {
+    var m = e.data, data = null;
+    if (m.type !== 'read') return;
+    try {
+      var b = new Uint8Array(2048);
+      if (iso.read(b, m.lba * 2048, 2048) === 2048) data = b;
+    } catch (err) { /* unreadable: null */ }
+    postMessage({ type: 'sector', id: m.id, data: data });
+  };
+}
+
+// the CD images in a job's ECM files (msg.ecm): reports their sizes (null: not an ECM image, or
+// damaged), then answers {type:'read', id, file, pos, len} with the image's bytes
+function runEcmReader(M, msg) {
+  var images = msg.ecm.map(function (blob) {
+    try {
+      var s = new EcmStore(new BlobStore(blob), blob.name);
+      s.setModule(M);
+      return s;
+    } catch (e) { return null; }
+  });
+  postMessage({ type: 'reader-ready', kind: 3, tracks: [], logical: 0, sizes: images.map(function (s) { return s ? s.sizeV : null; }) });
+  self.onmessage = function (e) {
+    var m = e.data, data = null;
+    if (m.type !== 'read') return;
+    try {
+      var s = images[m.file], n = Math.max(0, Math.min(m.len, s.sizeV - m.pos)), b = new Uint8Array(n);
+      if (s.read(b, m.pos, n) === n) data = b;
+    } catch (err) { /* unreadable: null */ }
+    postMessage({ type: 'sector', id: m.id, data: data });
   };
 }
 
@@ -888,7 +1327,7 @@ async function runCrc(msg) {
   var blob = msg.blob, start = msg.start || 0, end = msg.end != null ? msg.end : blob.size;
   var step = 8 << 20, r = getReader(), last = 0;
   // zlib's crc32 in WebAssembly is several times faster than the JavaScript loop below it
-  var M = null, buf = 0;
+  var M = null, buf = 0, iso = null;
   if (msg.wasmModule || msg.wasmBytes) {
     try {
       await loadModule(msg);
@@ -896,11 +1335,25 @@ async function runCrc(msg) {
       if (typeof M._crc32 === 'function') buf = M._malloc(step); else M = null;
     } catch (e) { M = null; }
   }
+  // msg.ciso: the checksum of the ISO inside a CSO/ZSO image, which needs the module's inflate;
+  // msg.ecm: of the CD image inside an ECM file (and that image's EDC is checked)
+  if (msg.ciso || msg.ecm) {
+    if (!M) throw new Error('cannot decompress');
+    iso = msg.ciso ? new CisoStore(new BlobStore(blob)) : new EcmStore(new BlobStore(blob), blob.name);
+    iso.setModule(M);
+    if (msg.end == null) end = iso.sizeV;
+  }
   var crc = M ? 0 : -1;
   for (var pos = start; pos < end; pos += step) {
-    var chunk = new Uint8Array(r.readAsArrayBuffer(blob.slice(pos, Math.min(end, pos + step))));
-    if (M) { M.HEAPU8.set(chunk, buf); crc = M._crc32(crc, buf, chunk.length) >>> 0; }
-    else crc = crcUpdate(crc, chunk);
+    var n = Math.min(end, pos + step) - pos;
+    if (iso) {
+      if (iso.read(M.HEAPU8.subarray(buf, buf + n), pos, n) !== n) throw new Error('truncated image');
+      crc = M._crc32(crc, buf, n) >>> 0;
+    } else {
+      var chunk = new Uint8Array(r.readAsArrayBuffer(blob.slice(pos, pos + n)));
+      if (M) { M.HEAPU8.set(chunk, buf); crc = M._crc32(crc, buf, chunk.length) >>> 0; }
+      else crc = crcUpdate(crc, chunk);
+    }
     var now = Date.now();
     if (now - last > 250) { last = now; postMessage({ type: 'crc-progress', done: pos - start, total: end - start }); }
   }

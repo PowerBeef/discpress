@@ -1,11 +1,20 @@
-M ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST)))../third_party/mame)
-UTIL := aes256cbc avhuff aviio bitmap cdrom chd chdcodec corealloc corefile corestr coreutil delegate disasmintf dvdrom dynamicclass flac harddisk hash hashing huffman ioprocs ioprocsfilter jedparse language md5 mfpresolve msdib nanosvg opresolv options palette path path_to_regex plaparse png simh_tape_file strformat timeconv unicode unzip un7z vbiparse vecstream wavwrite xmlfile zippath
+# The chdman engine (engine/mame, see engine/README.md): chdman and exactly the parts of MAME it links.
+# M can point at a MAME 0.289 checkout instead, with UPSTREAM=1 (scripts/build-upstream.sh).
+# (set once: MAKEFILE_LIST changes as the Makefile includes the objects' .d files)
+ifndef M
+M := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))../engine/mame)
+endif
+UTIL := avhuff aviio bitmap cdrom chd chdcodec corefile corestr flac hashing huffman ioprocs palette path strformat unicode vbiparse vecstream
 UTIL_SRC := $(addprefix $(M)/src/lib/util/,$(addsuffix .cpp,$(UTIL)))
-OSD_SRC := $(M)/src/osd/osdcore.cpp $(M)/src/osd/strconv.cpp $(M)/src/osd/osdsync.cpp $(M)/src/osd/modules/lib/osdlib_unix.cpp $(M)/src/osd/modules/file/posixdir.cpp $(M)/src/osd/modules/file/posixfile.cpp $(M)/src/osd/modules/file/posixptty.cpp $(M)/src/osd/modules/file/posixsocket.cpp
-TOOL_SRC := $(M)/src/tools/chdman.cpp version.cpp wasm_helper.cpp
-ZLIB_SRC := $(addprefix $(M)/3rdparty/zlib/,adler32.c compress.c crc32.c deflate.c inffast.c inflate.c infback.c inftrees.c trees.c uncompr.c zutil.c)
-ZSTD_SRC := $(addprefix $(M)/3rdparty/zstd/lib/,common/debug.c common/entropy_common.c common/error_private.c common/fse_decompress.c common/pool.c common/threading.c common/xxhash.c common/zstd_common.c compress/fse_compress.c compress/hist.c compress/huf_compress.c compress/zstd_compress.c compress/zstd_compress_literals.c compress/zstd_compress_sequences.c compress/zstd_compress_superblock.c compress/zstd_double_fast.c compress/zstd_fast.c compress/zstd_lazy.c compress/zstd_ldm.c compress/zstdmt_compress.c compress/zstd_opt.c decompress/huf_decompress.c decompress/zstd_ddict.c decompress/zstd_decompress_block.c decompress/zstd_decompress.c)
-FLAC_SRC := $(addprefix $(M)/3rdparty/flac/src/libFLAC/,bitmath.c bitreader.c bitwriter.c cpu.c crc.c fixed.c float.c format.c lpc.c md5.c memory.c stream_decoder.c stream_encoder.c stream_encoder_framing.c window.c)
-LZMA_SRC := $(addprefix $(M)/3rdparty/lzma/C/,7zAlloc.c 7zArcIn.c 7zBuf.c 7zBuf2.c 7zCrc.c 7zCrcOpt.c 7zDec.c 7zFile.c 7zStream.c Aes.c AesOpt.c Alloc.c Bcj2.c Bra.c Bra86.c BraIA64.c CpuArch.c Delta.c LzFind.c LzFindOpt.c Lzma2Dec.c LzmaDec.c LzmaEnc.c Ppmd7.c Ppmd7Dec.c Sha256.c Sha256Opt.c Sort.c)
-UTF8_SRC := $(M)/3rdparty/utf8proc/utf8proc.c
-EXPAT_SRC := $(addprefix $(M)/3rdparty/expat/lib/,xmlparse.c xmlrole.c xmltok.c)
+OSD_SRC := $(addprefix $(M)/src/osd/,osdcore.cpp strconv.cpp osdsync.cpp modules/lib/osdlib_unix.cpp modules/file/posixfile.cpp modules/file/posixptty.cpp modules/file/posixsocket.cpp)
+TOOL_SRC := $(M)/src/tools/chdman.cpp version.cpp wasm_helper.cpp ecm.cpp
+ZLIB_SRC := $(addprefix $(M)/3rdparty/zlib/,adler32.c crc32.c deflate.c inffast.c inflate.c inftrees.c trees.c zutil.c)
+ZSTD_SRC := $(addprefix $(M)/3rdparty/zstd/lib/,common/entropy_common.c common/error_private.c common/fse_decompress.c common/pool.c common/xxhash.c common/zstd_common.c compress/fse_compress.c compress/hist.c compress/huf_compress.c compress/zstd_compress.c compress/zstd_compress_literals.c compress/zstd_compress_sequences.c compress/zstd_compress_superblock.c compress/zstd_double_fast.c compress/zstd_fast.c compress/zstd_lazy.c compress/zstd_ldm.c compress/zstdmt_compress.c compress/zstd_opt.c decompress/huf_decompress.c decompress/zstd_ddict.c decompress/zstd_decompress_block.c decompress/zstd_decompress.c)
+# libFLAC's cosf and log, the same in every build (engine/libm; upstream MAME uses the system libm)
+LIBM_SRC := $(if $(UPSTREAM),,$(M)/../libm/flac_libm.c)
+FLAC_SRC := $(addprefix $(M)/3rdparty/flac/src/libFLAC/,bitmath.c bitreader.c bitwriter.c cpu.c crc.c fixed.c format.c lpc.c md5.c memory.c stream_decoder.c stream_encoder.c stream_encoder_framing.c window.c)
+LZMA_SRC := $(addprefix $(M)/3rdparty/lzma/C/,CpuArch.c LzFind.c LzmaDec.c LzmaEnc.c)
+# libdeflate's compressor, for --libdeflate (engine/libdeflate; not in upstream MAME)
+DEFLATE_SRC := $(if $(UPSTREAM),,$(addprefix $(M)/../libdeflate/lib/,deflate_compress.c utils.c))
+# upstream unicode.cpp still uses utf8proc (the engine dropped the functions that need it)
+UTF8_SRC := $(if $(UPSTREAM),$(M)/3rdparty/utf8proc/utf8proc.c)

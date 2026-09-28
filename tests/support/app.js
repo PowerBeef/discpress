@@ -7,7 +7,7 @@ import { test as base, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { FIXTURES, pageUnderTest } from './paths.js';
+import { FIXTURES, TESTS, pageUnderTest } from './paths.js';
 
 export { expect };
 
@@ -21,12 +21,24 @@ export function fixture(key) {
 }
 export const fixturePath = name => path.join(FIXTURES, name);
 
-// Runs in the page before any app code.
-function initScript(o) {
+// Stores the requested settings before the app loads. Runs on a blank page of the same origin:
+// written from an init script at document start instead, Chromium sometimes never saved the
+// page's own storage (seen with file:// pages).
+function seedStorage(o) {
   try {
     if (o.settings) localStorage.setItem('chdman-web-settings', JSON.stringify(o.settings));
     if (o.debug) localStorage.setItem('chdman-web-debug', JSON.stringify(o.debug));
-  } catch (e) { /* file:// may block storage */ }
+    // a stored per-device speed test, so tests don't each spend seconds measuring (tuned: false opts out)
+    if (o.tuned !== false) {
+      const cores = Math.max(1, o.cores || navigator.hardwareConcurrency || 4);
+      localStorage.setItem('chdman-web-tuning', JSON.stringify({ key: cores + '|' + navigator.userAgent,
+        threads: Math.min(4, cores), rate: 1, steps: [[1, 1]], cores, date: Date.now() }));
+    }
+  } catch (e) { /* storage may be blocked */ }
+}
+
+// Runs in the page before any app code.
+function initScript(o) {
   if (o.noSimd) {
     // the app feature-tests SIMD with a tiny module that contains the 0xFD opcode prefix
     const validate = WebAssembly.validate;
@@ -40,14 +52,6 @@ function initScript(o) {
     Object.defineProperty(navigator.storage, 'getDirectory', { value: undefined });
   }
   if (o.cores) Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => o.cores });
-  // a stored per-device speed test, so tests don't each spend seconds measuring (tuned: false opts out)
-  if (o.tuned !== false) {
-    try {
-      const cores = Math.max(1, navigator.hardwareConcurrency || 4);
-      localStorage.setItem('chdman-web-tuning', JSON.stringify({ key: cores + '|' + navigator.userAgent,
-        threads: Math.min(4, cores), rate: 1, steps: [[1, 1]], cores, date: Date.now() }));
-    } catch (e) { /* file:// may block storage */ }
-  }
 }
 
 export class App {
@@ -69,6 +73,9 @@ export class App {
   async open(opts = {}) {
     const o = { ...opts };
     if (o.theme) o.settings = { ...(o.settings || {}), theme: o.theme };
+    await this.page.goto(this.fileUrl ? pathToFileURL(path.join(TESTS, 'support', 'blank.html')).href : '/blank.html');
+    await this.page.evaluate(seedStorage, o);
+    this.requests = [];
     await this.page.addInitScript(initScript, o);
     this.url = this.fileUrl ? pathToFileURL(pageUnderTest()).href : '/discpress.html' + (o.testdb ? '?testdb=1' : '');
     await this.page.goto(this.url);

@@ -162,6 +162,9 @@
     </label>
     <div class="row" id="folderRow" hidden><button class="btn sm" id="pickFolder"><svg><use href="#i-folder"/></svg>Choose folder</button><span class="small muted">Current: <b id="folderName">none</b>. Files with the same name are replaced.</span></div>
     <label class="check"><input type="checkbox" id="setRename"> Name results after the official (Redump) game title</label>
+    <div class="field"><label class="check"><input type="checkbox" id="setKeepCue"> Keep the cue sheet in CD CHDs</label>
+      <span class="hint">Extracting as Redump then gives back the very same cue sheet, with what CHDs don't otherwise keep (CATALOG, FLAGS, ISRC, extra indexes). The CHD's checksums stay the same and emulators ignore the sheet, but the file is no longer byte for byte desktop chdman's.</span>
+    </div>
     <label class="check"><input type="checkbox" id="setWake"> Keep the screen awake while working</label>
     <label class="field"><span>Appearance</span>
       <select id="setTheme"><option value="">Match system</option><option value="light">Light</option><option value="dark">Dark</option></select>

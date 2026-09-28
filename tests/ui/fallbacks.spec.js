@@ -1,6 +1,6 @@
 // Paths the app takes on older or restricted browsers, forced on in Chromium.
 import { test, expect, fixture } from '../support/app.js';
-import { info, nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
+import { engineReference, info, nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
 
 async function convertAgent(app) {
   await app.add(fixture('ps2-dvd').add);
@@ -22,6 +22,25 @@ test('without WebAssembly SIMD the baseline build is used and gives the same res
   // the build that was loaded has its embedded copy cleared
   expect(await page.locator('#wasm-base').evaluate(n => n.textContent.length)).toBe(0);
   expect(await page.locator('#wasm-simd').evaluate(n => n.textContent.length)).toBeGreaterThan(0);
+});
+
+// the faster presets use the engine's codec plan and libdeflate, whose output must not depend on SIMD
+test('without SIMD the faster presets give the native engine\'s CHDs', async ({ app }) => {
+  await app.open({ noSimd: true, settings: { threads: 2 } });
+  for (const [key, input, command, label, own] of [
+    ['ps1-multitrack', 'mgs disc1.cue', 'createcd', 'Nearly as small, faster', ['--codecplan', '--libdeflate']],
+    ['ps2-dvd', 'agent.iso', 'createdvd', 'Faster to create', ['-c', 'zlib,huff', '--libdeflate']],
+  ]) {
+    await app.add(fixture(key).add);
+    const card = app.jobs().last();
+    await app.settled(card);
+    await card.locator('details.opts summary').click();
+    await card.locator('label.field', { hasText: 'Compression' }).locator('select').selectOption({ label });
+    await app.run(card);
+    const [out] = await app.downloads(card);
+    const engine = engineReference(command, input, own);
+    if (engine) expect(sha1File(out.path), `${input}, ${label}`).toBe(sha1File(engine));
+  }
 });
 
 test('with SIMD the SIMD build is used', async ({ app, page }) => {
@@ -57,6 +76,36 @@ test('if the worker cannot read them at all, the page streams inputs to it (iOS 
   await app.open({ debug: { stage: 2 } });
   const card = await convertAgent(app);
   await expect(card.locator('pre.logtext')).toContainText('is copied to private storage first');
+});
+
+test('a compressed ISO the worker cannot read directly is copied, then decompressed as usual', async ({ app }) => {
+  await app.open({ debug: { stage: 2 } });
+  await app.add(['umd v2.cso']);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await app.run(card);
+  await expect(card.locator('pre.logtext')).toContainText('is copied to private storage first');
+  const [out] = await app.downloads(card);
+  if (nativeChdman()) {
+    const ref = reference('createdvd', 'umd.iso', ['-hs', '2048']);
+    if (sameVersion()) expect(sha1File(out.path)).toBe(sha1File(ref));
+    else expect(info(out.path).dataSha1).toBe(info(ref).dataSha1);
+  }
+});
+
+test('ECM images the worker cannot read directly are copied, then unpacked as usual', async ({ app }) => {
+  await app.open({ debug: { stage: 2 } });
+  await app.add(fixture('segacd-ecm').add);
+  const card = app.job('ax101');
+  await app.settled(card);
+  await app.run(card);
+  await expect(card.locator('pre.logtext')).toContainText('is copied to private storage first');
+  const [out] = await app.downloads(card);
+  if (nativeChdman()) {
+    const ref = reference('createcd', 'ax101.cue');
+    if (sameVersion()) expect(sha1File(out.path)).toBe(sha1File(ref));
+    else expect(info(out.path).dataSha1).toBe(info(ref).dataSha1);
+  }
 });
 
 test('a single CPU core still converts (no helper workers)', async ({ app, page }) => {

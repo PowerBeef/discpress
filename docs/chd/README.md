@@ -55,7 +55,7 @@ Found during this research and verified independently of the lane that found the
 Three separate causes:
 
 - **The LZMA level changed.** Commit `c23567b509` (2026-08-04, after 0.289) lowered it from 8 to 6. Every CHD with LZMA hunks differs from 0.289 in its file bytes, and the size is within ±0.05%. I rebuilt the actual `mame0289` tag and compared all fixtures; lanes B and C showed that setting the level back to 8 alone restores identity.
-- **CD audio isn't deterministic across builds.** libFLAC's window functions use `cosf`/`log`, and Emscripten's libm differs from glibc by one unit in the last place. The app's wasm output therefore differs from its own native build by a few bytes on real music (reproduced here on a Chopin recording). Official ARM64 builds (NEON) differ from x86 for the same kind of reason. The tests missed this because their audio is synthetic sine waves and the oracle was built from the same tree.
+- **CD audio isn't deterministic across builds.** libFLAC's window functions use `cosf`/`log`, and Emscripten's libm differs from glibc by one unit in the last place. The app's wasm output therefore differs from its own native build by a few bytes on real music (reproduced here on a Chopin recording). Official ARM64 builds (NEON) differ from x86 for the same kind of reason. The tests missed this because their audio is synthetic sine waves and the oracle was built from the same tree. **Fixed in milestone 2.3:** libFLAC now uses copies of glibc's `cosf` and `log` in every build (`engine/libm`), and the page's CD audio matches chdman on Linux byte for byte. The `music-cd` fixture, 10 s of synthetic piano, would catch a regression.
 - **What does hold is the CHD SHA-1**, i.e. content identity (data plus metadata), for everything except GD-ROM. That is what MAME and DAT tools check.
 
 The claim in the README, the help page, CLAUDE.md and the release notes should be reworded until the fork restores identity (fork-plan.md, milestones 0 and 2.3).
@@ -126,11 +126,12 @@ Separately, the generic FLAC codec encodes each hunk two or three times.
 | Codec plan per track type, CD audio | **2.8× faster** | identical |
 | Codec plan per track type, CD data | 2.0× faster | +0.22% |
 | Codec plan per track type, DVD | 1.55× faster | +0.06% |
-| Byte-identical early abort | 1.2–1.65× faster | identical |
+| Byte-identical early abort (built, milestone 2.4) | 1.06× (CD data), 1.47× (CD audio), 1.10× (DVD) less CPU | identical |
+| Codec plan (built, milestone 2.5, opt-in; on top of early abort) | 1.81× (CD data), 1.91× (CD audio), 1.38× (DVD) less CPU | +0.22%, identical, +0.06% |
 
 There are serial bottlenecks too:
 
-- MAME's SHA-1 runs at about 80 MB/s in wasm (about 150 MB/s native), for the whole-image hash on one thread;
+- MAME's SHA-1 runs at about 80 MB/s in wasm (about 150 MB/s native), for the whole-image hash on one thread (the engine's runs at 650 MB/s since milestone 2.1);
 - `-np N` gives N−1 workers, capped at 16;
 - `-np 1` busy-waits;
 - verify and extract are single-threaded.

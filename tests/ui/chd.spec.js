@@ -25,6 +25,12 @@ function sameFiles(outs, native) {
   for (const o of outs) expect(sha1File(o.path), o.name).toBe(sha1File(path.join(native.dir, o.name)));
 }
 
+/** The fixture's own files: its cue sheets are written as Redump's (CRLF, Redump's file names). */
+function sameAsFixture(outs, names) {
+  expect(outs.map(o => o.name).sort()).toEqual([...names].sort());
+  for (const o of outs) expect(sha1File(o.path), o.name).toBe(sha1File(path.join(FIXTURES, o.name)));
+}
+
 async function openChd(app, rel, title) {
   await app.open();
   await app.add([rel]);
@@ -56,6 +62,53 @@ for (const [label, fmt, args, ext] of [
   });
 }
 
+// Redump's layout (the engine's extractcd --redump, the default for CDs): the files of the original
+// dump come back byte for byte, cue sheet included, with one .bin per track unless there is only one
+for (const [key, title] of [['ps1-multitrack', 'mgs disc1'], ['ps1-single', 'twine'], ['music-cd', 'piano']]) {
+  test(`extracting a CD CHD gives back the Redump dump it was made from: ${key}`, async ({ app }) => {
+    const fx = fixture(key);
+    const card = await openChd(app, chdInput(key, 'createcd', fx.add.find(n => n.endsWith('.cue'))), key);
+    await expect(card.locator('label.field', { hasText: 'Save as' }).locator('select')).toHaveValue('redump');
+    await expect(card.locator('label.field', { hasText: 'Save as' })).toContainText('match Redump');
+    await card.locator('label.field', { hasText: 'Output name' }).locator('input').fill(title);
+    await expect(card.locator('code.cmd')).toContainText(title.includes(' ') ? `-o "${title}.cue" --redump` : `-o ${title}.cue --redump`);
+    await app.run(card);
+    sameAsFixture(await app.downloads(card), fx.add);
+  });
+}
+
+test('a GD-ROM CHD extracts as its Redump dump too', async ({ app }) => {
+  const fx = fixture('dreamcast-cue');
+  const card = await openChd(app, chdInput('aerowings-cue', 'createcd', 'aerowings.cue'), 'aerowings-cue');
+  await card.locator('label.field', { hasText: 'Save as' }).locator('select').selectOption({ label: 'CUE + BIN, as Redump' });
+  await card.locator('label.field', { hasText: 'Output name' }).locator('input').fill('aerowings');
+  await app.run(card);
+  sameAsFixture(await app.downloads(card), fx.add);
+});
+
+test('with "keep the cue sheet" on, extracting gives back the dump, CATALOG, FLAGS, ISRC and INDEX 02 included', async ({ app }) => {
+  const fx = fixture('cue-fidelity');
+  await app.open();
+  await app.add(fx.add);
+  const card = app.job('fidelity');
+  await app.settled(card);
+  await expect(card.locator('code.cmd')).not.toContainText('--keepcue'); // off by default: chdman's own CHD
+  await app.settings({ setKeepCue: true });
+  await expect(card.locator('code.cmd')).toContainText('--keepcue');
+  await app.run(card);
+  const [chd] = await app.downloads(card);
+  // the checksums of desktop chdman's CHD, which has no cue sheet
+  const ref = info(reference('createcd', 'fidelity.cue')), mine = info(chd.path);
+  expect([mine.sha1, mine.dataSha1]).toEqual([ref.sha1, ref.dataSha1]);
+  fs.mkdirSync(path.join(FIXTURES, 'chd'), { recursive: true });
+  fs.copyFileSync(chd.path, path.join(FIXTURES, 'chd', 'fidelity kept.chd'));
+  const kept = await openChd(app, 'chd/fidelity kept.chd', 'fidelity kept');
+  await expect(kept.locator('label.field', { hasText: 'Save as' })).toContainText('the cue sheet kept in this CHD');
+  await kept.locator('label.field', { hasText: 'Output name' }).locator('input').fill('fidelity');
+  await app.run(kept);
+  sameAsFixture(await app.downloads(kept), fx.add);
+});
+
 test('extract a GD-ROM CHD as GDI', async ({ app }) => {
   const card = await openChd(app, chdInput('aerowings', 'createcd', 'aerowings.gdi'), 'aerowings');
   await expect(card.locator('.sub')).toContainText('GD-ROM');
@@ -81,14 +134,22 @@ for (const [name, command, input, xcmd, ext] of [
   });
 }
 
-test('verify passes on a good CHD and fails on a damaged one', async ({ app }) => {
+/** agent.chd with 64 bytes of its compressed data changed, as chd/damaged.chd */
+function damagedChd() {
   const good = chdInput('agent', 'createdvd', 'agent.iso');
   const badPath = path.join(FIXTURES, 'chd', 'damaged.chd');
   if (!fs.existsSync(badPath)) {
     const b = fs.readFileSync(path.join(FIXTURES, good));
     for (let i = 0; i < 64; i++) b[Math.floor(b.length * 0.6) + i] ^= 0x5a; // inside the compressed data
-    fs.writeFileSync(badPath, b);
+    fs.writeFileSync(badPath + '.tmp' + process.pid, b);
+    fs.renameSync(badPath + '.tmp' + process.pid, badPath);
   }
+  return 'chd/damaged.chd';
+}
+
+test('verify passes on a good CHD and fails on a damaged one', async ({ app }) => {
+  const good = chdInput('agent', 'createdvd', 'agent.iso');
+  damagedChd();
   await app.open();
   await app.add([good, 'chd/damaged.chd']);
   for (const [title, state, text] of [['agent', 'done', 'Verified.'], ['damaged', 'error', 'Verification failed.']]) {
@@ -98,6 +159,76 @@ test('verify passes on a good CHD and fails on a damaged one', async ({ app }) =
     await app.run(card, { expectState: state });
     await expect(card).toContainText(text);
   }
+});
+
+// Extract and verify read ahead: helper workers decompress the hunks about to be read, or with one
+// thread the stored data of a window is read in one go and kept (chd_file::wasm_read_ahead). Either
+// way the files are native chdman's, and so is the error for damaged data.
+for (const threads of [1, 4]) {
+  test(`extract and verify with ${threads} thread${threads > 1 ? 's' : ''}: same files and errors as desktop chdman`, async ({ app }) => {
+    const cd = chdInput('codec-mix-cd', 'createcd', 'codec mix cd.cue');
+    const dvd = chdInput('agent', 'createdvd', 'agent.iso');
+    await app.open({ settings: { threads } });
+    await app.add([cd, dvd, damagedChd()]);
+
+    let card = app.job('codec-mix-cd');
+    await app.settled(card);
+    await card.locator('label.field', { hasText: 'Output name' }).locator('input').fill('codec mix cd');
+    await app.run(card);
+    sameAsFixture(await app.downloads(card), fixture('codec-mix-cd').add); // Redump's layout, the default
+
+    card = app.job('agent');
+    await app.settled(card);
+    await card.locator('label.field', { hasText: 'Output name' }).locator('input').fill('x');
+    await app.run(card);
+    const [iso] = await app.downloads(card);
+    expect(sha1File(iso.path)).toBe(sha1File(path.join(FIXTURES, 'agent.iso')));
+
+    card = app.job('damaged');
+    await app.settled(card);
+    await card.locator('.seg button', { hasText: 'Verify' }).click();
+    await app.run(card, { expectState: 'error' });
+    await expect(card).toContainText('Verification failed.');
+    await expect(card).toContainText('Decompression error'); // chdman's own message
+  });
+}
+
+// After verifying, the CHD is compared with Redump: extracted with Redump's layout into checksums
+// only, and the file the database lists (the ISO, the only .bin, or the main data track) looked up.
+// Synthetic discs match only the test rows (tests/support/server.js); real rows show a mismatch.
+for (const [what, name, command, input, extra, testdb, text] of [
+  ['a CD that is the Redump dump', 'verified', 'createcd', 'verified.cue', [], true,
+    ['\u2713 The Redump dump.', 'The disc has the size and CRC-32 that Redump lists for Checksum Verified Game (USA).']],
+  ['a PSP DVD that is the Redump dump', 'umd', 'createdvd', 'umd.iso', ['-hs', '2048'], true,
+    ['\u2713 The Redump dump.', 'Redump lists for Checksum Verified PSP Game (USA).']],
+  ['a CD that is not', 'twine', 'createcd', 'twine.cue', [], false,
+    ['Not the Redump dump.', 'The disc has another size than what Redump lists for 007 - The World Is Not Enough (USA).']],
+  ['a multi-track CD that is not', 'mgs', 'createcd', 'mgs disc1.cue', [], false,
+    ['Not the Redump dump.', 'Track 1 has another size than what Redump lists for Metal Gear Solid (USA) (Disc 1)']],
+]) {
+  test(`verify compares the CHD with Redump: ${what}`, async ({ app }) => {
+    await app.open({ testdb });
+    await app.add([chdInput(name, command, input, extra)]);
+    const card = app.job(name);
+    await app.settled(card);
+    await card.locator('.seg button', { hasText: 'Verify' }).click();
+    await app.run(card);
+    await expect(card.locator('.result')).toContainText('Verified.');
+    for (const t of text) await expect(card.locator('.result')).toContainText(t);
+    if (text[0].startsWith('\u2713')) await expect(card.locator('.ident-how')).toHaveText('\u2713 Exact match in the Redump database (checksum verified)');
+  });
+}
+
+test('verify fails when the data does not match the checksum in the header', async ({ app }) => {
+  // chdman 0.289 only prints the mismatch and exits 0, so the page reported "Verified."
+  const good = chdInput('agent', 'createdvd', 'agent.iso');
+  const b = fs.readFileSync(path.join(FIXTURES, good));
+  b[64] ^= 0xff; // first byte of the raw SHA-1 in the CHD v5 header
+  fs.writeFileSync(path.join(FIXTURES, 'chd', 'badsum.chd'), b);
+  const card = await openChd(app, 'chd/badsum.chd', 'badsum');
+  await card.locator('.seg button', { hasText: 'Verify' }).click();
+  await app.run(card, { expectState: 'error' });
+  await expect(card).toContainText('Verification failed.');
 });
 
 test('info shows the same checksums as desktop chdman', async ({ app }) => {

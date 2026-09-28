@@ -74,7 +74,7 @@ var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform
 var cores = Math.max(1, navigator.hardwareConcurrency || 4);
 var maxThreads = Math.min(cores, 16);
 // threads: 'auto' (measured per device, see Tuning) or a fixed number of compression threads
-var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto' };
+var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false };
 var outDir = null; // folder picked for direct writing (not persisted)
 try {
   var saved = JSON.parse(localStorage.getItem('chdman-web-settings') || '{}');
@@ -451,6 +451,12 @@ function threadCount() {
   if (settings.threads !== 'auto') return settings.threads;
   return Tuning.result ? Tuning.result.threads : Math.min(maxThreads, isMobile ? 4 : 8);
 }
+// helper workers for verify and extract, which decompress the hunks chdman is about to read. The job
+// worker stays busy reading, checking and writing (most of the work for DVDs), so it keeps a core.
+function readHelpers() {
+  var nt = threadCount();
+  return nt > 1 ? Math.max(1, Math.min(nt, cores - 1)) : 0;
+}
 // before a compressing job in automatic mode: measure the device once
 async function ensureTuned(report) {
   if (settings.threads !== 'auto' || Tuning.result) return;
@@ -602,6 +608,40 @@ function tocFrames(a, first) {
   if (num(len)) { var after = a[i++] || ''; return tocMsf(num(after) ? after : len); }
   return first ? offset : 0;
 }
+// A CloneCD control file (.ccd, INI style) as a cue sheet for its image: the .img holds raw 2,352-byte
+// sectors from LBA 0, and each [TRACK n] gives MODE (0 audio, 1 or 2 data) and INDEX n=LBA.
+// Returns {text, changed, problem} like fixDescriptor. The .sub (subchannel) has no place in the CHD.
+function ccdToCue(text, img) {
+  var sec = {}, cur = null;
+  text.split(/\r\n|\r|\n/).forEach(function (ln) {
+    var m = /^\s*\[([^\]]+)\]\s*$/.exec(ln);
+    if (m) { cur = sec[m[1].trim().toUpperCase().replace(/\s+/g, ' ')] = {}; return; }
+    m = /^\s*([^=;]+?)\s*=\s*(.*?)\s*$/.exec(ln);
+    if (m && cur) cur[m[1].toUpperCase().replace(/\s+/g, ' ')] = m[2];
+  });
+  var fail = function (why) { return { text: '', changed: true, problem: why }; };
+  if (!sec.CLONECD) return fail('This .ccd file is not a CloneCD control file.');
+  var disc = sec.DISC || {};
+  if (+disc.SESSIONS > 1) return fail('This CloneCD image has ' + (+disc.SESSIONS) + ' sessions; only single-session images can be converted.');
+  if (+disc.DATATRACKSSCRAMBLED) return fail('This CloneCD image has scrambled data tracks.');
+  var msf = function (f) { var p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(Math.floor(f / 4500)) + ':' + p(Math.floor(f / 75) % 60) + ':' + p(f % 75); };
+  var types = ['AUDIO', 'MODE1/2352', 'MODE2/2352'], lines = ['FILE "' + img + '" BINARY'], n = 0, last = -1;
+  for (var t = 1; t <= 99; t++) {
+    var tr = sec['TRACK ' + t];
+    if (!tr) continue;
+    var type = /^\d+$/.test(tr.MODE || '') ? types[+tr.MODE] : null, i1 = tr['INDEX 1'], i0 = tr['INDEX 0'];
+    if (!type) return fail('Track ' + t + ' has a mode (' + (tr.MODE || 'none') + ') CloneCD images don\u2019t use.');
+    if (!/^\d+$/.test(i1 || '') || (i0 != null && !/^\d+$/.test(i0)) || (i0 != null && +i0 > +i1) || +(i0 != null ? i0 : i1) < last)
+      return fail('Track ' + t + ' has unreadable or out-of-order index positions.');
+    last = +i1;
+    // numbered from 1 in order, as chdman reads a cue's track numbers as positions
+    lines.push('  TRACK ' + (++n < 10 ? '0' : '') + n + ' ' + type);
+    if (i0 != null && +i0 < +i1) lines.push('    INDEX 00 ' + msf(+i0));
+    lines.push('    INDEX 01 ' + msf(+i1));
+  }
+  if (!n) return fail('This .ccd file lists no tracks (CloneCD 3 and later list them as [TRACK n]).');
+  return { text: lines.join('\n') + '\n', changed: true, problem: '' };
+}
 // returns {text, changed, problem}: the text chdman should read, and why it can't be converted.
 // Lines may end in CR alone (classic Mac OS), which chdman reads as a single line.
 function fixDescriptor(kind, text) {
@@ -651,6 +691,33 @@ function fixDescriptor(kind, text) {
   }
   var out = lines.join('\n');
   return { text: out, changed: out !== text.split(/\r?\n/).join('\n'), problem: problem };
+}
+// a CSO (v1 or v2) or ZSO compressed ISO's header: {size} of the ISO inside (0 if the file can't be
+// read here: converting it then says why), or null if it is not one
+async function sniffCiso(file) {
+  var b;
+  try { b = new Uint8Array(await file.slice(0, 24).arrayBuffer()); } catch (e) { return { size: 0 }; }
+  if (b.length < 24) return null;
+  var magic = String.fromCharCode(b[0], b[1], b[2], b[3]), dv = new DataView(b.buffer);
+  var size = dv.getUint32(8, true) + dv.getUint32(12, true) * 4294967296, bs = dv.getUint32(16, true);
+  if ((magic !== 'CISO' && magic !== 'ZISO') || !bs || bs % 2048 || bs > 1 << 24 || !size) return null;
+  return { size: size };
+}
+// an ECM image (the ecm tools' format, described in wasm/ecm.cpp): null if the file is not one, else
+// {sync} of the CD image inside as sniffSync tells it (0: no sync pattern), from its first chunk
+async function sniffEcm(file) {
+  var b;
+  try { b = new Uint8Array(await file.slice(0, 64).arrayBuffer()); } catch (e) { return { sync: 0, unread: true }; }
+  if (b.length < 5 || b[0] !== 69 || b[1] !== 67 || b[2] !== 77 || b[3] !== 0) return null;
+  var c = b[4], i = 5, n = (c >> 2) & 31, bits = 5;
+  if ((c & 3) === 1) return { sync: 1 }; // Mode 1 sectors, stored without their sync pattern
+  if (c & 3) return { sync: 0 };         // Mode 2 sectors without sync and header
+  while (c & 128 && i < b.length) { c = b[i++]; n += (c & 127) * Math.pow(2, bits); bits += 7; }
+  // bytes stored as they are: the image's own
+  var s = n >= 15 && i + 16 <= b.length ? b.subarray(i, i + 16) : null;
+  if (!s || s[0] !== 0 || s[11] !== 0) return { sync: 0 };
+  for (var k = 1; k < 11; k++) if (s[k] !== 255) return { sync: 0 };
+  return { sync: s[15] === 2 ? 2 : 1 };
 }
 async function sniffSync(file) {
   try {
@@ -718,10 +785,10 @@ function applyIdent(job, starting) {
   if (settings.rename && id.name && !job.outEdited && !locked) job.opts.out = id.name;
   if (job.kind !== 'create' || locked) return;
   // pick the right CHD flavour for the system
-  if (job.src === 'iso' || (job.src === 'bin' && job.choices)) {
+  if (job.src === 'iso' || job.src === 'cso' || (job.src === 'bin' && job.choices)) {
     if (id.sys === 'psp') { job.disc = 'dvd'; if (!job.hunkEdited) job.opts.hunk = '2048'; }
     else if (id.sys === 'ps2') {
-      var cdGame = id.entry ? id.entry.ext === 'bin' : job.files[0].file.size < 800 * 1048576;
+      var cdGame = id.entry ? id.entry.ext === 'bin' : (job.isoSize || job.files[0].file.size) < 800 * 1048576;
       job.disc = cdGame ? 'cd' : 'dvd';
     } else if (id.sys === 'gc' || id.sys === 'wii') { /* leave as is */ }
     else if (id.sys !== 'pc') job.disc = 'cd';
@@ -799,9 +866,10 @@ var KIND = {
   raw: { badge: 'RAW', cmd: 'createraw', label: 'Raw' },
   ld: { badge: 'LD', cmd: 'createld', label: 'LaserDisc' }
 };
+// [value, label, codecs (-c), hint, other options]
 var PRESETS = {
-  cd: [['default', 'Smallest (default)', null, 'chdman default: CD LZMA + Deflate + FLAC. Works everywhere.'], ['fast', 'Faster to create', 'cdzl,cdfl', 'CD Deflate + FLAC: several times faster, files a little bigger.'], ['zstd', 'Faster to load (Zstd)', 'cdzs,cdfl', 'CD Zstandard + FLAC: quick to read on weak devices; needs a recent emulator.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']],
-  other: [['default', 'Smallest (default)', null, 'chdman default: LZMA + Deflate + Huffman + FLAC. Works everywhere.'], ['fast', 'Faster to create', 'zlib,huff', 'Deflate + Huffman: several times faster, files a little bigger.'], ['zstd', 'Faster to load (Zstd)', 'zstd', 'Zstandard: quick to read on weak devices; needs a recent emulator.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']],
+  cd: [['default', 'Smallest (default)', null, 'chdman default: CD LZMA + Deflate + FLAC. Works everywhere.'], ['plan', 'Nearly as small, faster', null, 'The same codecs, but each track tries only the one that suits it: LZMA for data, FLAC for audio. About 1.7 times as fast, files at most 0.3% bigger, same checksums. Works everywhere.', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'cdzl,cdfl', 'CD Deflate (by libdeflate) + FLAC: several times faster, files a little bigger, same checksums.', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'cdzs,cdfl', 'CD Zstandard + FLAC: quick to read on weak devices; needs a recent emulator.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']],
+  other: [['default', 'Smallest (default)', null, 'chdman default: LZMA + Deflate + Huffman + FLAC. Works everywhere.'], ['plan', 'Nearly as small, faster', null, 'The same codecs but FLAC, which almost never wins on data. About 1.5 times as fast, and as small, same checksums. Works everywhere.', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'zlib,huff', 'Deflate (by libdeflate) + Huffman: several times faster, files a little bigger, same checksums.', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'zstd', 'Zstandard: quick to read on weak devices; needs a recent emulator.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']],
   ld: [['default', 'Default (A/V Huffman)', null, 'chdman default for LaserDisc video.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']]
 };
 var HUNKS = {
@@ -824,9 +892,23 @@ function newJob(props) {
   return job;
 }
 function jobInputBytes(job) { return job.files.reduce(function (s, f) { return s + f.file.size; }, 0); }
+// a job's file for a descriptor's reference: an ECM image stands for the file it holds (Game.bin.ecm
+// for Game.bin), and chdman reads that under the referenced name
+function trackFile(file, path, ref) {
+  var name = base(path);
+  if (!/\.ecm$/i.test(file.name || name)) return { file: file, name: name, ref: ref };
+  if (/\.ecm$/i.test(name) && !/\.ecm$/i.test(ref)) name = name.slice(0, -4);
+  return { file: file, name: name, ref: ref, ecm: true };
+}
+function refMatches(e, ref) {
+  var n = base(e.path).toLowerCase(), want = base(ref).toLowerCase();
+  return n === want || n === want + '.ecm';
+}
+// the type the file shows on a job's card (bin.ecm for an ECM image of a .bin)
+function fileKind(f) { return f.ecm ? (ext(f.name) ? ext(f.name) + '.' : '') + 'ecm' : ext(f.name); }
 
 /* ---------- grouping new files into jobs ---------- */
-var IGNORE = /^(txt|nfo|sbi|sub|ccd|m3u|dat|md5|sfv|sha1|jpg|jpeg|png|gif|webp|pdf|url|ini|cfg|xml|json|html|htm|db|ds_store|zip|7z|rar)$/;
+var IGNORE = /^(txt|nfo|sbi|sub|m3u|dat|md5|sfv|sha1|jpg|jpeg|png|gif|webp|pdf|url|ini|cfg|xml|json|html|htm|db|ds_store|zip|7z|rar)$/;
 
 async function addEntries(entries) {
   var fresh = [];
@@ -845,18 +927,19 @@ async function addEntries(entries) {
   jobs.forEach(function (job) {
     if (!job.missing.length || job.state !== 'blocked') return;
     job.missing = job.missing.filter(function (ref) {
-      var hit = fresh.find(function (e) { return !claimed.has(e) && base(e.path).toLowerCase() === base(ref).toLowerCase(); });
+      var free = fresh.filter(function (e) { return !claimed.has(e) && refMatches(e, ref); });
+      var hit = free.find(function (e) { return base(e.path).toLowerCase() === base(ref).toLowerCase(); }) || free[0];
       if (!hit) return true;
       claimed.add(hit);
-      job.files.push({ file: hit.file, name: base(hit.path), ref: ref });
+      job.files.push(trackFile(hit.file, hit.path, ref));
       return false;
     });
     if (!job.missing.length) finalizeDescriptorJob(job);
   });
 
-  // 2) descriptor files (.cue/.gdi/.toc) claim their tracks
+  // 2) descriptor files (.cue/.gdi/.toc, and CloneCD .ccd) claim their tracks
   var pool = looseFiles.concat(fresh);
-  var descs = fresh.filter(function (e) { return /^(cue|gdi|toc)$/.test(ext(e.path)); });
+  var descs = fresh.filter(function (e) { return /^(cue|gdi|toc|ccd)$/.test(ext(e.path)); });
   for (var i = 0; i < descs.length; i++) {
     var d = descs[i];
     claimed.add(d);
@@ -879,6 +962,33 @@ async function addEntries(entries) {
       // track by file size alone (Mode 2 for any raw image, 2,048-byte sectors when the size allows)
       job2 = newJob({ kind: 'create', src: 'iso', title: t, files: [{ file: file, name: name }], disc: sync ? 'cd' : (x === 'iso' ? 'dvd' : 'cd'), choices: ['dvd', 'cd'], syncMode: sync, autoCue: sync ? (sync === 2 ? 'MODE2/2352' : 'MODE1/2352') : '' });
       if (sync) job2.warnings.push('This .' + x + ' file contains raw 2,352-byte CD sectors, so it will be converted as a CD.');
+    } else if (x === 'cso' || x === 'zso') {
+      // a compressed ISO (maxcso's CSO or ZSO, for PSP and PS2): chdman is given the ISO inside it
+      var ciso = await sniffCiso(file);
+      job2 = newJob({ kind: 'create', src: 'cso', title: t, files: [{ file: file, name: name }], disc: 'dvd', choices: ['dvd', 'cd'], isoSize: ciso ? ciso.size : 0 });
+      if (!ciso) {
+        job2.invalid = true;
+        job2.state = 'error';
+        job2.errorText = 'This is not a CSO or ZSO compressed ISO that Discpress can read.';
+      }
+    } else if (x === 'ecm') {
+      // an ECM image (usually a .bin): chdman reads the image it holds, under its name without .ecm
+      var inner = name.slice(0, -4), ecm = await sniffEcm(file), tn = /\(track\s*0*(\d+)\)/i.exec(inner);
+      var fe = { file: file, name: inner, ecm: true }, sync = ecm ? ecm.sync : 0;
+      t = stem(inner);
+      if (ecm && !ecm.unread && tn && +tn[1] > 1) {
+        job2 = newJob({ kind: 'create', src: 'bin', lone: true, title: t, files: [fe], disc: 'cd', autoCue: sync ? (sync === 2 ? 'MODE2/2352' : 'MODE1/2352') : 'AUDIO', state: 'blocked', needCue: true });
+      } else {
+        job2 = newJob({ kind: 'create', src: 'bin', lone: true, title: t, files: [fe], disc: 'cd', autoCue: sync === 2 ? 'MODE2/2352' : 'MODE1/2352' });
+        if (!ecm || ecm.unread || !sync) {
+          job2.invalid = true;
+          job2.state = 'error';
+          job2.errorText = !ecm ? 'This is not an ECM image that Discpress can read.' : ecm.unread ? 'This file could not be read.' :
+            'This ECM image doesn\u2019t start with a CD data track, so its tracks are unknown. Add the .cue file that lists it.';
+        } else {
+          job2.warnings.push('No .cue file was added, so one is generated (a single ' + (sync === 2 ? 'MODE2' : 'MODE1') + ' data track). If the disc has music tracks, add the original .cue and all its files instead.');
+        }
+      }
     } else if (x === 'nrg') {
       job2 = newJob({ kind: 'create', src: 'nrg', title: t, files: [{ file: file, name: name }], disc: 'cd' });
     } else if (x === 'avi') {
@@ -938,9 +1048,21 @@ async function descriptorJob(d, pool, claimed) {
   try { dec = decodeText(new Uint8Array(await d.file.slice(0, 1 << 20).arrayBuffer())); } catch (e) { /* unreadable */ }
   // not a text file, e.g. a drive's raw table of contents that some dumping tools save as .toc: not a job
   if (dec && (d.file.size > 1 << 20 || dec.text.indexOf('\0') >= 0)) return null;
-  var fix = dec ? fixDescriptor(kind, dec.text) : { text: '', changed: false, problem: 'This file could not be read.' };
+  var fix = !dec ? { text: '', changed: false, problem: 'This file could not be read.' } : kind === 'ccd' ? ccdToCue(dec.text, stem(d.path) + '.img') : fixDescriptor(kind, dec.text);
+  var ccd = kind === 'ccd';
+  if (ccd) kind = 'cue'; // CloneCD: chdman gets a cue sheet for the .img instead
   var text = fix.text, refs = parseRefs(kind, text);
-  var job = newJob({ kind: 'create', src: kind, title: stem(d.path), disc: kind === 'gdi' ? 'gdrom' : 'cd', descFile: d.file, descName: base(d.path), descText: text, descDirty: !!dec && (dec.recoded || fix.changed), files: [] });
+  var job = newJob({ kind: 'create', src: kind, title: stem(d.path), disc: kind === 'gdi' ? 'gdrom' : 'cd', descFile: d.file, descName: ccd ? stem(d.path) + '.cue' : base(d.path), descText: text, descDirty: !!dec && (dec.recoded || fix.changed), files: [] });
+  if (ccd) {
+    job.fromCcd = true;
+    var sub = pool.find(function (e) { return !claimed.has(e) && e !== d && base(e.path).toLowerCase() === (stem(d.path) + '.sub').toLowerCase(); });
+    if (sub) {
+      claimed.add(sub);
+      var si = looseFiles.indexOf(sub);
+      if (si >= 0) looseFiles.splice(si, 1);
+      if (!fix.problem) job.warnings.push('The .sub file (subchannel data) is not kept: CHDs store the discs\u2019 data and audio. For PlayStation games with LibCrypt protection, keep an .sbi file next to the CHD.');
+    }
+  }
   if (fix.problem) {
     job.invalid = true;
     job.state = 'error';
@@ -950,6 +1072,8 @@ async function descriptorJob(d, pool, claimed) {
   refs.forEach(function (ref) {
     var want = base(ref).toLowerCase();
     var cands = pool.filter(function (e) { return e !== d && base(e.path).toLowerCase() === want; });
+    // or an ECM image of it (Game.bin.ecm for Game.bin)
+    if (!cands.length) cands = pool.filter(function (e) { return e !== d && base(e.path).toLowerCase() === want + '.ecm'; });
     // also steal files from not-yet-started auto-cue jobs
     if (!cands.length) {
       jobs.forEach(function (other) {
@@ -964,7 +1088,7 @@ async function descriptorJob(d, pool, claimed) {
     claimed.add(hit);
     var li = looseFiles.indexOf(hit);
     if (li >= 0) looseFiles.splice(li, 1);
-    job.files.push({ file: hit.file, name: base(hit.path), ref: ref });
+    job.files.push(trackFile(hit.file, hit.path, ref));
   });
   if (!refs.length && !job.invalid) job.warnings.push('No track files are listed in this ' + kind.toUpperCase() + ' file.');
   if (job.missing.length && !job.invalid) job.state = 'blocked';
@@ -1055,7 +1179,7 @@ function parseInfo(lines) {
   return info;
 }
 function defaultFormat(type) {
-  return { cd: 'cue', gdrom: 'gdi', dvd: 'iso', hd: 'img', ld: 'avi', raw: 'raw' }[type] || 'raw';
+  return { cd: 'redump', gdrom: 'gdi', dvd: 'iso', hd: 'img', ld: 'avi', raw: 'raw' }[type] || 'raw';
 }
 function linkParents() {
   jobs.forEach(function (job) {
@@ -1070,59 +1194,70 @@ function linkParents() {
 
 /* ---------- building the chdman command for a job ---------- */
 var FORMATS = {
-  cd: [['cue', 'CUE + BIN (one .bin)'], ['cue-split', 'CUE + BIN (one .bin per track)'], ['gdi', 'GDI + tracks'], ['toc', 'TOC + BIN (cdrdao)']],
-  gdrom: [['gdi', 'GDI + tracks'], ['cue-split', 'CUE + BIN (Redump style, one .bin per track)']],
+  cd: [['redump', 'CUE + BIN, as Redump'], ['cue', 'CUE + BIN (one .bin)'], ['cue-split', 'CUE + BIN (one .bin per track)'], ['gdi', 'GDI + tracks'], ['toc', 'TOC + BIN (cdrdao)']],
+  gdrom: [['gdi', 'GDI + tracks'], ['redump', 'CUE + BIN, as Redump']],
   dvd: [['iso', 'ISO image']], hd: [['img', 'Raw disk image (.img)']], ld: [['avi', 'AVI video']], raw: [['raw', 'Raw data (.raw)']]
 };
 function outBase(job) {
   var s = (job.opts.out || job.title || 'output').replace(/[\/\\:*?"<>|]+/g, '_').trim();
   return s || 'output';
 }
+// a CHD job's inputs for chdman, with its parent CHD if it has one
+function chdInputs(job) {
+  var name = job.files[0].name, r = { name: name, inputs: [{ name: name, blob: job.files[0].file }], parentArgs: [], parentDisp: [] };
+  if (job.parentJob) {
+    var pn = job.parentJob.files[0].name;
+    if (pn === name) pn = 'parent-' + pn;
+    r.inputs.push({ name: pn, blob: job.parentJob.files[0].file });
+    r.parentArgs = ['-ip', '/in/' + pn];
+    r.parentDisp = ['-ip', job.parentJob.files[0].name];
+  }
+  return r;
+}
 function buildJob(job) {
   var args = [], inputs = [], writable = [], slots = 3, helpers = 0, expected = 0, display = [];
   var o = job.opts, ob = outBase(job);
-  function codecsFor(disc) {
+  function presetFor(disc) {
     var list = PRESETS[disc === 'cd' || disc === 'gdrom' ? 'cd' : disc === 'ld' ? 'ld' : 'other'];
-    var p = list.find(function (x) { return x[0] === o.preset; });
-    return p ? p[2] : null;
+    return list.find(function (x) { return x[0] === o.preset; }) || list[0];
   }
   if (job.kind === 'create') {
     var disc = job.disc, cmd = KIND[disc].cmd, inName;
     if (job.descFile) {
       inName = job.descName;
       inputs.push({ name: job.descName, blob: job.descBlob || job.descFile });
-      job.files.forEach(function (f) { inputs.push({ name: f.name, blob: f.file }); });
+      job.files.forEach(function (f) { inputs.push({ name: f.name, blob: f.file, ecm: f.ecm }); }); // ECM: the job worker rebuilds the image
+    } else if (job.src === 'cso') {
+      // the job worker decompresses the image as chdman reads it
+      inName = stem(job.files[0].name) + '.iso';
+      inputs.push({ name: inName, blob: job.files[0].file, ciso: true });
     } else if (job.autoCue && disc === 'cd') {
       inName = stem(job.files[0].name) + '.cue';
       var cue = 'FILE "' + job.files[0].name + '" BINARY\n  TRACK 01 ' + job.autoCue + '\n    INDEX 01 00:00:00\n';
       inputs.push({ name: inName, blob: new Blob([cue], { type: 'text/plain' }) });
-      inputs.push({ name: job.files[0].name, blob: job.files[0].file });
+      inputs.push({ name: job.files[0].name, blob: job.files[0].file, ecm: job.files[0].ecm });
     } else {
       inName = job.files[0].name;
       inputs.push({ name: inName, blob: job.files[0].file });
     }
     args = [cmd, '-i', '/in/' + inName, '-o', '/out/' + ob + '.chd'];
     display = [cmd, '-i', inName, '-o', ob + '.chd'];
-    var c = codecsFor(disc);
+    var preset = presetFor(disc), c = preset[2];
     if (c) { args.push('-c', c); display.push('-c', c); }
+    (preset[4] || []).forEach(function (a) { args.push(a); display.push(a); });
     var hs = disc === 'raw' ? (o.hunk || '4096') : o.hunk;
     if (hs) { args.push('-hs', hs); display.push('-hs', hs); }
+    // the setting: keep a real cue sheet (not one written for chdman here) in the CHD (the engine's --keepcue)
+    if (settings.keepCue && job.src === 'cue' && !job.fromCcd && cmd === 'createcd') { args.push('--keepcue'); display.push('--keepcue'); }
     if (disc === 'raw') { args.push('-us', o.unit || '512'); display.push('-us', o.unit || '512'); }
     slots = 2;
     var nt = threadCount();
     helpers = nt > 1 && c !== 'none' ? nt : 0;
     expected = jobInputBytes(job);
   } else {
-    var info = job.info || {}, name = job.files[0].name;
-    inputs.push({ name: name, blob: job.files[0].file });
-    var parentArgs = [], parentDisp = [];
-    if (job.parentJob) {
-      var pn = job.parentJob.files[0].name;
-      if (pn === name) pn = 'parent-' + pn;
-      inputs.push({ name: pn, blob: job.parentJob.files[0].file });
-      parentArgs = ['-ip', '/in/' + pn];
-      parentDisp = ['-ip', job.parentJob.files[0].name];
-    }
+    var info = job.info || {}, ci = chdInputs(job), name = ci.name;
+    inputs = ci.inputs;
+    var parentArgs = ci.parentArgs, parentDisp = ci.parentDisp;
     if (job.action === 'rename') {
       return { args: [], inputs: [], writable: [], slots: 0, helpers: 0, outMode: 'mem', expected: 0, cmdline: '(no processing: the CHD is saved again as "' + outBase(job) + '.chd")', rename: true };
     }
@@ -1135,12 +1270,14 @@ function buildJob(job) {
       args = ['verify', '-i', '/in/' + name].concat(parentArgs);
       display = ['verify', '-i', name].concat(parentDisp);
       slots = 0;
+      helpers = readHelpers();
     } else {
       var fmt = o.format || defaultFormat(info.type), cmdx, oname, extra = [];
       if (info.type === 'cd' || info.type === 'gdrom') {
         cmdx = 'extractcd';
         oname = ob + (fmt === 'gdi' ? '.gdi' : fmt === 'toc' ? '.toc' : '.cue');
         if (fmt === 'cue-split') extra = ['-sb'];
+        else if (fmt === 'redump') extra = ['--redump']; // the engine's: Redump's CRLF cue sheet, a .bin per track
         slots = (info.tracks || 99) + 3;
       } else {
         cmdx = { dvd: 'extractdvd', hd: 'extracthd', ld: 'extractld', raw: 'extractraw' }[info.type] || 'extractraw';
@@ -1150,6 +1287,7 @@ function buildJob(job) {
       args = [cmdx, '-i', '/in/' + name, '-o', '/out/' + oname].concat(extra, parentArgs);
       display = [cmdx, '-i', name, '-o', oname].concat(extra, parentDisp);
       expected = info.logical || 0;
+      if (cmdx !== 'extractld') helpers = readHelpers();
     }
   }
   var outMode = settings.storage === 'memory' || !Store.available ? 'mem' : 'opfs';
@@ -1239,10 +1377,13 @@ function subtitle(job) {
     if (i.version && i.version !== '5') parts.push('CHD v' + i.version);
     return parts.join(' · ');
   }
+  if (job.src === 'cso') return (ext(job.files[0].name) === 'zso' ? 'ZSO' : 'CSO') + ' compressed ISO · ' + fmtBytes(n) + (job.isoSize ? ' → ' + fmtBytes(job.isoSize) + ' unpacked' : '');
   var what;
-  if (job.descFile) what = job.src.toUpperCase() + ' + ' + plural(job.files.length, 'track file');
-  else if (job.autoCue && job.src !== 'iso') what = '.' + ext(job.files[0].name) + ' image (no cue)';
-  else what = '.' + ext(job.files[0].name) + ' image';
+  var ecms = job.files.filter(function (f) { return f.ecm; }).length;
+  if (job.fromCcd) what = 'CloneCD image (.ccd + .' + (job.files[0] ? fileKind(job.files[0]) : 'img') + ')';
+  else if (job.descFile) what = job.src.toUpperCase() + ' + ' + plural(job.files.length, 'track file') + (!ecms ? '' : ecms === job.files.length ? ' (ECM)' : ' (' + ecms + ' ECM)');
+  else if (job.autoCue && job.src !== 'iso') what = '.' + fileKind(job.files[0]) + ' image (no cue)';
+  else what = '.' + fileKind(job.files[0]) + ' image';
   var total = n + (job.descFile ? job.descFile.size : 0);
   return what + ' · ' + fmtBytes(total);
 }
@@ -1302,7 +1443,7 @@ function renderControls(job) {
     if (job.ui.optsOpen) det.open = true;
     det.addEventListener('toggle', function () { job.ui.optsOpen = det.open; });
     box.append(det);
-    if (job.disc === 'dvd' && job.src === 'iso' && !(job.ident && job.ident.sys && job.ident.sys !== 'pc')) {
+    if (job.disc === 'dvd' && (job.src === 'iso' || job.src === 'cso') && !(job.ident && job.ident.sys && job.ident.sys !== 'pc')) {
       box.append(el('p', { class: 'small muted', style: 'margin:0' }, 'Use DVD for PS2 DVD games and PSP. Choose CD for CD-based games stored as .iso.'));
     }
   } else {
@@ -1322,7 +1463,10 @@ function renderControls(job) {
     }, busy)));
     var f2 = el('div', { class: 'fields' });
     if (job.action === 'extract') {
-      f2.append(selectField('Save as', FORMATS[info.type] || FORMATS.raw, o.format || defaultFormat(info.type), function (v) { o.format = v; soft(); }, null, busy));
+      var fmt = o.format || defaultFormat(info.type);
+      f2.append(selectField('Save as', FORMATS[info.type] || FORMATS.raw, fmt, function (v) { o.format = v; refresh(); },
+        fmt === 'redump' ? (info.tags && info.tags.indexOf('CUES') >= 0 ? 'The files of a Redump dump: the cue sheet kept in this CHD, and one .bin per track.' :
+          'The files of a Redump dump: its cue sheet, and one .bin per track, so they match Redump\u2019s checksums.') : null, busy));
       f2.append(textField('Output name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { disabled: busy }));
     } else if (job.action === 'rename') {
       f2.append(textField('New name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { hint: 'Saved as ' + outBase(job) + '.chd (the CHD itself is not changed)', disabled: busy }));
@@ -1340,7 +1484,7 @@ function renderNotes(job) {
   var idn = identNote(job);
   if (idn) box.append(idn);
   if (job.missing.length) {
-    box.append(el('div', { class: 'note warn' }, el('b', null, 'Missing ' + plural(job.missing.length, 'file') + ' listed in ' + job.descName + ':'),
+    box.append(el('div', { class: 'note warn' }, el('b', null, 'Missing ' + plural(job.missing.length, 'file') + ' listed in ' + (job.fromCcd ? stem(job.descName) + '.ccd' : job.descName) + ':'),
       el('ul', null, job.missing.map(function (m) { return el('li', null, base(m)); })),
       el('div', { style: 'margin-top:6px' }, el('button', { class: 'btn sm', onclick: function () { pickFiles('fileInput', function (l) { addEntries(filesFromList(l)); }); } }, 'Add missing files'))));
   }
@@ -1363,6 +1507,9 @@ function renderResult(job) {
   box.hidden = false;
   if (job.kind === 'chd' && job.action === 'verify') {
     box.append(el('div', { class: 'note ok' }, el('b', null, 'Verified. '), 'The data matches the SHA-1 checksums stored in the CHD.'));
+    var rd = job.redump, what = rd && (rd.track ? 'Track ' + rd.track : 'The disc');
+    if (rd && rd.match) box.append(el('div', { class: 'note ok' }, el('b', null, '\u2713 The Redump dump. '), what + ' has the size and CRC-32 that Redump lists for ' + rd.entry.name + (rd.track ? ', the track the built-in database has' : '') + '.'));
+    else if (rd) box.append(el('div', { class: 'note warn' }, el('b', null, 'Not the Redump dump. '), what + (rd.otherSize ? ' has another size than' : ' differs from') + ' what Redump lists for ' + rd.entry.name + '. It may be another release or a modified copy.'));
   } else if (job.kind === 'chd' && job.action === 'info' && job.lastInfo) {
     var kv = el('dl', { class: 'kv' });
     var skip = { 'Input file': 1 };
@@ -1554,6 +1701,7 @@ async function runJobNow(job) {
   job.stalled = false;
   job.log = [];
   job.outputs = [];
+  job.redump = null;
   refreshJob(job, false);
   setProgress(job, null, 'Starting…');
   try { await Engine.ready(); }
@@ -1602,7 +1750,7 @@ async function runJobNow(job) {
       toast('Browser storage may be too small for this job (' + fmtBytes(est.quota - est.usage) + ' free).', 'err');
     }
   }
-  var t0 = performance.now(), phaseStart = t0, lastPhase = '', lastPct = 0;
+  var t0 = performance.now(), phaseStart = t0, lastPhase = '', lastPct = 0, workerError = '';
   job.run = Engine.run({
     jobId: job.id, dirPath: Store.dirPath(job.id), args: spec.args, inputs: spec.inputs, writable: spec.writable,
     slots: spec.slots, helpers: spec.helpers, outMode: spec.outMode, outDir: outDir,
@@ -1628,7 +1776,7 @@ async function runJobNow(job) {
     },
     onNotice: function (m) {
       if (m.level !== 'debug') appendLog(job, m.message);
-      if (m.level === 'error') toast(m.message, 'err');
+      if (m.level === 'error') { toast(m.message, 'err'); workerError = workerError || m.message; }
     },
     onStorage: function (mode) {
       job.storage = mode;
@@ -1641,6 +1789,7 @@ async function runJobNow(job) {
     job.elapsed = performance.now() - t0;
     if (res.error) appendLog(job, res.error);
     if (res.code === 0) {
+      if (job.kind === 'chd' && job.action === 'verify') await redumpCheck(job);
       job.state = 'done';
       job.folderName = spec.outMode === 'stream' && outDir ? outDir.name : '';
       job.outputs = (res.outputs || []).filter(function (o) { return o.name; }).sort(function (a, b) {
@@ -1654,6 +1803,8 @@ async function runJobNow(job) {
       if (res.readFail) { job.errorText = readFailHint(res.error); Store.removeJob(job.id); refreshJob(job, true); return; }
       var errs = job.log.filter(function (l) { return /error|failed|invalid|unsupported|missing|not /i.test(l) && !/^\$ /.test(l); });
       job.errorText = (errs.slice(-3).join('\n') || res.error || 'chdman exited with code ' + res.code) + (job.action === 'verify' ? '' : '');
+      // the worker's own report (a damaged compressed ISO, an unreadable input, full storage) explains chdman's error best
+      if (workerError && job.errorText.indexOf(workerError) < 0) job.errorText = workerError + '\n' + job.errorText;
       if (job.kind === 'chd' && job.action === 'verify') job.errorText = 'Verification failed. ' + job.errorText;
       Store.removeJob(job.id);
     }
@@ -1664,6 +1815,54 @@ async function runJobNow(job) {
     Store.removeJob(job.id);
   }
   refreshJob(job, true);
+}
+
+/* ---------- comparing a CHD with Redump ---------- */
+// After a successful verify: extract with Redump's layout into checksums only (the worker's 'crc'
+// output, no files), and look the files up in the database by size and CRC-32. The database lists
+// one file per disc: the ISO, the only .bin, or the main data track's.
+async function redumpCheck(job) {
+  job.redump = null;
+  var type = job.info && job.info.type;
+  if (!/^(cd|gdrom|dvd)$/.test(type)) return;
+  var ci = chdInputs(job), cd = type !== 'dvd', res;
+  var args = [cd ? 'extractcd' : 'extractdvd', '-i', '/in/' + ci.name, '-o', '/out/check' + (cd ? '.cue' : '.iso')].concat(cd ? ['--redump'] : [], ci.parentArgs);
+  setProgress(job, null, 'Comparing with Redump…');
+  try {
+    await GameDB.ready();
+    job.run = Engine.run({
+      jobId: job.id, args: args, inputs: ci.inputs, slots: 0, helpers: readHelpers(), outMode: 'crc',
+      onLine: function () {},
+      onProgress: function (t) {
+        var m = /([\d.]+)% complete/.exec(t);
+        if (m) setProgress(job, parseFloat(m[1]), 'Comparing with Redump ' + parseFloat(m[1]).toFixed(1) + '%');
+      }
+    });
+    res = await job.run.promise;
+  } catch (e) {
+    if (e.canceled) throw e;
+    appendLog(job, 'Could not compare with Redump: ' + e.message);
+    return;
+  }
+  if (res.code !== 0) { appendLog(job, 'Could not compare with Redump (chdman exited with code ' + res.code + ').'); return; }
+  var files = (res.outputs || []).filter(function (o) { return o.crc && !/\.cue$/i.test(o.name); });
+  var whole = files.length === 1, id = job.ident || {};
+  var trackOf = function (n) { var m = /\(Track 0*(\d+)\)\.\w+$/.exec(n); return m ? m[1] : ''; };
+  var hits = [];
+  files.forEach(function (f) { GameDB.size(f.size).forEach(function (e) { if (e.crc === f.crc) hits.push({ e: e, f: f }); }); });
+  if (hits.length) {
+    var serial = normSerial(id.serial), hit = hits.find(function (h) { return serial && normSerial(h.e.serial) === serial; }) || hits[0];
+    var names = hits.map(function (h) { return h.e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
+    job.redump = { match: true, entry: hit.e, track: whole ? '' : trackOf(hit.f.name) };
+    // the checksum settles which release it is
+    var entry = names.length > 1 ? Object.assign({}, hit.e, { alternatives: names }) : hit.e;
+    job.ident = Object.assign({}, id, { sys: hit.e.sys, entry: entry, name: hit.e.name, method: 'hash', serial: id.serial || hit.e.serial });
+    applyIdent(job);
+    return;
+  }
+  // not Redump's: the file Redump lists for the identified release differs
+  var e = id.entry, f = e && (whole ? files[0] : files.find(function (x) { return trackOf(x.name) === String(e.track || 1); }));
+  if (f) job.redump = { match: false, entry: e, track: whole ? '' : trackOf(f.name), otherSize: f.size !== e.size };
 }
 
 async function acquireWake() {
@@ -1817,6 +2016,10 @@ function updateDock() {
 var OPT = {
   input: ['i', 'Input file', 'file'], inputparent: ['ip', 'Input parent CHD', 'file'], output: ['o', 'Output file name', 'out'],
   outputbin: ['ob', 'Output .bin name', 'out'], outputparent: ['op', 'Output parent CHD', 'file'], splitbin: ['sb', 'One .bin file per track', 'bool'],
+  redump: ['rd', 'As Redump: CRLF cue sheet, a .bin per track (Discpress)', 'bool'],
+  keepcue: ['kc', 'Keep the .cue in the CHD for extractcd --redump; checksums unchanged (Discpress)', 'bool'],
+  codecplan: ['cp', 'Try each hunk only with the codecs meant for it (audio: FLAC, CD data: LZMA, other data: all but FLAC); checksums unchanged (Discpress)', 'bool'],
+  libdeflate: ['ld', 'Deflate with libdeflate: 2–3× faster, a little smaller; checksums unchanged (Discpress)', 'bool'],
   verbose: ['v', 'Verbose output', 'bool'], fix: ['f', 'Fix the SHA-1 if it is incorrect', 'bool'],
   inputstartbyte: ['isb', 'Input start byte', 'num'], inputstarthunk: ['ish', 'Input start hunk', 'num'], inputbytes: ['ib', 'Input length (bytes)', 'num'],
   inputhunks: ['ih', 'Input length (hunks)', 'num'], inputstartframe: ['isf', 'Input start frame', 'num'], inputframes: ['if', 'Input length (frames)', 'num'],
@@ -1828,12 +2031,12 @@ var OPT = {
 };
 var SLICE = ['inputstartbyte', 'inputstarthunk', 'inputbytes', 'inputhunks'];
 var CMDS = [
-  ['createcd', 'Create a CD CHD from a .cue, .gdi, .toc, .nrg or .iso', ['*input', '*output', 'compression', 'hunksize', 'outputparent'], 'Create'],
-  ['createdvd', 'Create a DVD CHD from an .iso', ['*input', '*output', 'compression', 'hunksize', 'outputparent'].concat(SLICE), 'Create'],
-  ['createhd', 'Create a hard disk CHD from a raw image (or a blank one)', ['input', '*output', 'compression', 'hunksize', 'template', 'chs', 'size', 'sectorsize', 'ident', 'outputparent'].concat(SLICE), 'Create'],
-  ['createraw', 'Create a raw CHD from any file', ['*input', '*output', '*hunksize', '*unitsize', 'compression', 'outputparent'].concat(SLICE), 'Create'],
+  ['createcd', 'Create a CD CHD from a .cue, .gdi, .toc, .nrg or .iso', ['*input', '*output', 'compression', 'codecplan', 'libdeflate', 'hunksize', 'outputparent', 'keepcue'], 'Create'],
+  ['createdvd', 'Create a DVD CHD from an .iso', ['*input', '*output', 'compression', 'codecplan', 'libdeflate', 'hunksize', 'outputparent'].concat(SLICE), 'Create'],
+  ['createhd', 'Create a hard disk CHD from a raw image (or a blank one)', ['input', '*output', 'compression', 'codecplan', 'libdeflate', 'hunksize', 'template', 'chs', 'size', 'sectorsize', 'ident', 'outputparent'].concat(SLICE), 'Create'],
+  ['createraw', 'Create a raw CHD from any file', ['*input', '*output', '*hunksize', '*unitsize', 'compression', 'codecplan', 'libdeflate', 'outputparent'].concat(SLICE), 'Create'],
   ['createld', 'Create a LaserDisc CHD from an .avi', ['*input', '*output', 'compression', 'hunksize', 'inputstartframe', 'inputframes', 'outputparent'], 'Create'],
-  ['extractcd', 'Extract a CD CHD to .cue/.bin, .gdi or .toc', ['*input', '*output', 'outputbin', 'splitbin', 'inputparent'], 'Extract'],
+  ['extractcd', 'Extract a CD CHD to .cue/.bin, .gdi or .toc', ['*input', '*output', 'outputbin', 'splitbin', 'redump', 'inputparent'], 'Extract'],
   ['extractdvd', 'Extract a DVD CHD to an .iso', ['*input', '*output', 'inputparent'].concat(SLICE), 'Extract'],
   ['extracthd', 'Extract a hard disk CHD to a raw image', ['*input', '*output', 'inputparent'].concat(SLICE), 'Extract'],
   ['extractraw', 'Extract raw data from a CHD', ['*input', '*output', 'inputparent'].concat(SLICE), 'Extract'],
@@ -2034,7 +2237,7 @@ async function cliRun() {
       jobId: cjob.id, dirPath: Store.dirPath(cjob.id), args: args, inputs: inputs, writable: writable,
       slots: /^(info|listtemplates)$/.test(args[0]) || (args[0] === 'verify' && !writable.length) ? 0 : args[0] === 'extractcd' ? 101 : 3,
       outMode: settings.storage === 'folder' && outDir ? 'stream' : settings.storage === 'memory' || !Store.available ? 'mem' : 'opfs', outDir: outDir,
-      helpers: isCreate && comp !== 'none' && nt > 1 ? nt : 0,
+      helpers: isCreate && comp !== 'none' && nt > 1 ? nt : /^(verify|extract(cd|dvd|hd|raw))$/.test(args[0]) ? readHelpers() : 0,
       onLine: function (s, t) { con.textContent += t + '\n'; con.scrollTop = con.scrollHeight; },
       onProgress: function (t) {
         if (stalledProgress(t)) { if (!stalled) { stalled = true; cli.run.cancel(); } return; }
@@ -2412,6 +2615,11 @@ function init() {
       j.opts.out = settings.rename && j.ident && j.ident.name ? j.ident.name : j.title;
       refreshJob(j, true);
     });
+  });
+  $('#setKeepCue').checked = !!settings.keepCue;
+  $('#setKeepCue').addEventListener('change', function (e) {
+    settings.keepCue = e.target.checked; saveSettings();
+    jobs.forEach(function (j) { if (j.el && j.kind === 'create') refreshJob(j); });
   });
   $('#setWake').checked = settings.wake;
   $('#setWake').addEventListener('change', function (e) { settings.wake = e.target.checked; saveSettings(); if (!settings.wake) releaseWake(); });

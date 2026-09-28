@@ -98,20 +98,20 @@ function fileReader(file, start, sectorSize) {
   };
 }
 
-// opens a CHD in a worker and reads sectors from it
-function chdReader(file) {
+// a worker that opens images for reading (the reader role) as msg says; request(q) asks it for data
+function readerWorker(msg, timeout) {
   return Engine.ready().then(function () {
     return new Promise(function (resolve, reject) {
       var w = new Worker(Engine.url), seq = 0, waiting = {};
-      var timer = setTimeout(function () { w.terminate(); reject(new Error('timeout')); }, 30000);
+      var timer = setTimeout(function () { w.terminate(); reject(new Error('timeout')); }, timeout || 30000);
       w.onmessage = function (e) {
         var m = e.data;
         if (m.type === 'reader-ready') {
           clearTimeout(timer);
           resolve({
-            kind: m.kind, tracks: m.tracks, logical: m.logical,
-            read: function (track, lba) {
-              return new Promise(function (res) { var id = ++seq; waiting[id] = res; w.postMessage({ type: 'read', id: id, track: track, lba: lba }); });
+            info: m,
+            request: function (q) {
+              return new Promise(function (res) { var id = ++seq; waiting[id] = res; q.type = 'read'; q.id = id; w.postMessage(q); });
             },
             close: function () { w.terminate(); }
           });
@@ -121,8 +121,36 @@ function chdReader(file) {
         } else if (m.type === 'fatal') { clearTimeout(timer); w.terminate(); reject(new Error(m.message)); }
       };
       w.onerror = function (e) { clearTimeout(timer); w.terminate(); reject(new Error(e.message || 'worker error')); };
-      Engine.post(w, { type: 'reader', name: 'x.chd', blob: file });
+      Engine.post(w, msg);
     });
+  });
+}
+// opens a CHD in a worker and reads sectors from it (ciso: a CSO/ZSO compressed ISO, read like a DVD CHD)
+function chdReader(file, ciso) {
+  return readerWorker({ type: 'reader', name: 'x.chd', blob: file, ciso: !!ciso }).then(function (r) {
+    var m = r.info;
+    return { kind: m.kind, tracks: m.tracks, logical: m.logical, read: function (track, lba) { return r.request({ track: track, lba: lba }); }, close: r.close };
+  });
+}
+// opens ECM images in a worker (which scans each whole file): for each, a stand-in for the image it
+// holds that reads like a file (size, slice(a, b).arrayBuffer(), and ecm: the file), or null if it
+// can't be read; and close()
+function ecmImages(files) {
+  return readerWorker({ type: 'reader', ecm: files }, 180000).then(function (r) {
+    var views = files.map(function (f, i) {
+      var size = r.info.sizes[i];
+      return size == null ? null : {
+        size: size, ecm: f,
+        slice: function (a, b) {
+          return {
+            arrayBuffer: function () {
+              return r.request({ file: i, pos: a, len: b - a }).then(function (d) { if (!d) throw new Error('unreadable'); return d.buffer; });
+            }
+          };
+        }
+      };
+    });
+    return { views: views, close: r.close };
   });
 }
 
@@ -144,13 +172,15 @@ async function crcHere(blob, start, end, onProgress) {
   crc = (crc ^ -1) >>> 0;
   return ('00000000' + crc.toString(16).toUpperCase()).slice(-8);
 }
-function crcOf(blob, start, end, onProgress) {
-  var w = DEBUG.stage ? Promise.reject(new Error('debug')) : crcWorker(blob, start, end, onProgress);
-  var p = w.catch(function () { return crcHere(blob, start, end, onProgress); });
+// how: 'ciso', the checksum of the ISO inside a CSO/ZSO image, or 'ecm', of the image inside an ECM
+// file, which only a worker can unpack
+function crcOf(blob, start, end, onProgress, how) {
+  var w = DEBUG.stage && !how ? Promise.reject(new Error('debug')) : crcWorker(blob, start, end, onProgress, how);
+  var p = how ? w : w.catch(function () { return crcHere(blob, start, end, onProgress); });
   // DEBUG.crcDelay (ms): a slow checksum, for testing that conversions don't wait for it
   return DEBUG.crcDelay ? p.then(function (c) { return sleep(DEBUG.crcDelay).then(function () { return c; }); }) : p;
 }
-function crcWorker(blob, start, end, onProgress) {
+function crcWorker(blob, start, end, onProgress, how) {
   return Engine.ready().then(function () {
     return new Promise(function (resolve, reject) {
       var w = new Worker(Engine.url);
@@ -161,7 +191,7 @@ function crcWorker(blob, start, end, onProgress) {
         else if (m.type === 'fatal') { w.terminate(); reject(new Error(m.message)); }
       };
       w.onerror = function (e) { w.terminate(); reject(new Error(e.message || 'worker error')); };
-      Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end }); // with the compiled module, for zlib's crc32
+      Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end, ciso: how === 'ciso', ecm: how === 'ecm' }); // with the compiled module, for zlib's crc32
     });
   });
 }
@@ -282,13 +312,13 @@ function msfFrames(s) {
   var m = /(\d+):(\d+):(\d+)/.exec(s || '');
   return m ? (+m[1] * 60 + +m[2]) * 75 + +m[3] : 0;
 }
-// data tracks + hashable files of a "create" job
-function probePlan(job) {
+// data tracks + hashable files of a "create" job; images: the stand-ins for its ECM files (ecmImages)
+function probePlan(job, images) {
   var readers = [], hashes = [];
+  var fileOf = function (f) { return f && (f.ecm ? images && images.get(f) : f.file); };
   var byName = function (n) {
     var lc = base(n).toLowerCase();
-    var f = job.files.find(function (x) { return x.name.toLowerCase() === lc || (x.ref && base(x.ref).toLowerCase() === lc); });
-    return f && f.file;
+    return fileOf(job.files.find(function (x) { return x.name.toLowerCase() === lc || (x.ref && base(x.ref).toLowerCase() === lc); }));
   };
   if (job.src === 'cue' && job.descText) {
     var cur = null, curMode = null, fileTracks = [];
@@ -317,13 +347,17 @@ function probePlan(job) {
       if (t[2] === '4') readers.push(fileReader(f, 0, +t[3] || 2352));
     });
     readers.reverse(); // the high-density data track carries the IP.BIN header
+  } else if (job.src === 'cso') {
+    // a compressed ISO: identifyJob reads it through a worker; the checksum is the ISO's
+    hashes.push({ file: job.files[0].file, track: 0, size: job.isoSize, ciso: true });
   } else if (job.files.length === 1) {
-    var f1 = job.files[0].file, x = ext(job.files[0].name);
+    var f1 = fileOf(job.files[0]), x = ext(job.files[0].name);
+    if (!f1) return { readers: readers, hashes: hashes };
     hashes.push({ file: f1, track: 0 });
     if (job.autoCue) readers.push(fileReader(f1, 0, /2048/.test(job.autoCue) ? 2048 : 2352));
     else if (x === 'iso' || x === 'cdr' || x === 'toast' || x === 'bin' || x === 'img') readers.push(fileReader(f1, 0, job.disc === 'cd' && job.syncMode ? 2352 : 2048));
   } else {
-    job.files.forEach(function (f) { hashes.push({ file: f.file, track: 0 }); });
+    job.files.forEach(function (f) { if (fileOf(f)) hashes.push({ file: fileOf(f), track: 0 }); });
   }
   return { readers: readers, hashes: hashes };
 }
@@ -334,7 +368,7 @@ function probePlan(job) {
 async function identifyJob(job, onStatus, onProvisional) {
   await GameDB.ready();
   var det = null, sizes = [], exact = null, cands = [];
-  var chd = null;
+  var chd = null, ecm = null;
   try {
     if (job.kind === 'chd') {
       chd = await chdReader(job.files[0].file);
@@ -355,33 +389,53 @@ async function identifyJob(job, onStatus, onProvisional) {
         sizes.push(chd.logical);
       }
     } else {
-      var plan = probePlan(job);
+      // ECM images: a worker rebuilds the images they hold
+      var ecms = job.files.filter(function (f) { return f.ecm; }), images = null;
+      if (ecms.length) {
+        onStatus && onStatus('Reading the ECM image' + (ecms.length > 1 ? 's' : '') + '\u2026', 0);
+        var ei = await ecmImages(ecms.map(function (f) { return f.file; }));
+        ecm = ei;
+        images = new Map();
+        ecms.forEach(function (f, i) { if (ei.views[i]) images.set(f, ei.views[i]); });
+      }
+      var plan = probePlan(job, images);
+      if (job.src === 'cso') {
+        chd = await chdReader(job.files[0].file, true);
+        plan.readers.push({ read: function (lba) { return chd.read(0, lba); } });
+      }
       for (var i = 0; i < plan.readers.length && (!det || det.weak); i++) {
         var d = await detectTrack(plan.readers[i]);
         if (d && (!det || !d.weak)) det = d;
       }
+      if (chd) { chd.close(); chd = null; }
+      if (ecm) { ecm.close(); ecm = null; }
       // exact match: size + CRC-32 of a data file against the Redump database
       var toHash = [];
       plan.hashes.forEach(function (hsh) {
-        sizes.push(hsh.file.size);
-        var bySize = GameDB.size(hsh.file.size);
+        var size = hsh.size != null ? hsh.size : hsh.file.size;
+        sizes.push(size);
+        var bySize = GameDB.size(size);
         if (det && !det.weak) {
           var same = bySize.filter(function (e) { return e.sys === det.sys; });
           if (same.length) bySize = same;
         }
-        if (bySize.length) toHash.push({ file: hsh.file, bySize: bySize });
+        // the checksum of what a CSO/ZSO or ECM file holds: a worker unpacks it again
+        if (bySize.length) toHash.push({ file: hsh.file.ecm || hsh.file, size: size, how: hsh.ciso ? 'ciso' : hsh.file.ecm ? 'ecm' : '', bySize: bySize });
       });
       if (toHash.length && onProvisional) onProvisional(result(null, true));
       for (var k = 0; k < toHash.length && !exact; k++) {
         var th = toHash[k];
         onStatus && onStatus('Checking against the game database…', 0);
-        var crc = await crcOf(th.file, 0, th.file.size, function (p) { onStatus && onStatus('Checking against the game database…', p); });
+        var crc = null;
+        try { crc = await crcOf(th.file, 0, th.size, function (p) { onStatus && onStatus('Checking against the game database…', p); }, th.how); }
+        catch (e) { if (!th.how) throw e; } // a damaged compressed ISO or ECM image: no exact match (converting it reports the damage)
         var hits = th.bySize.filter(function (e) { return e.crc === crc; });
         if (hits.length) exact = hits;
       }
     }
   } finally {
     if (chd) chd.close();
+    if (ecm) ecm.close();
   }
   return result(exact, false);
 

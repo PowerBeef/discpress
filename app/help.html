@@ -1,12 +1,12 @@
 <div class="card">
   <h2>How to use</h2>
   <ol style="margin:6px 0 0;padding-left:20px">
-    <li>On the <b>Convert</b> tab, choose or drop your disc files. Pick the <code>.cue</code> (or <code>.gdi</code>) <i>together with</i> all of its <code>.bin</code>/track files.</li>
+    <li>On the <b>Convert</b> tab, choose or drop your disc files. Pick the <code>.cue</code> (or <code>.gdi</code>, or CloneCD <code>.ccd</code>) <i>together with</i> all of its <code>.bin</code>/track files (for CloneCD, the <code>.img</code>).</li>
     <li>Each game appears as a card. The right chdman command is chosen automatically; open <b>Options</b> to change compression, hunk size or the output name.</li>
     <li>Press <b>Create CHD</b> on a card, or <b>Start all</b> at the bottom. Jobs run one after another.</li>
     <li>When a job finishes, press <b>Download</b> (on iPhone and iPad the button is called <b>Save to Files</b> and opens the share sheet, which also works inside apps that cannot download). On desktop Chrome/Edge you can <b>Save all to folder</b>.</li>
   </ol>
-  <p class="small muted">Add <code>.chd</code> files to extract them back to <code>.cue/.bin</code>, <code>.gdi</code>, <code>.iso</code> or a raw image, to verify their checksums, or to see their details.</p>
+  <p class="small muted">Add <code>.chd</code> files to extract them back to <code>.cue/.bin</code>, <code>.gdi</code>, <code>.iso</code> or a raw image, to verify their checksums, or to see their details. A CD comes back as a Redump dump by default: the same cue sheet and one <code>.bin</code> per track, so the files match Redump's checksums. With Settings → <i>Keep the cue sheet in CD CHDs</i>, new CHDs also keep the original cue sheet, so what CHDs don't otherwise hold (CATALOG, FLAGS, ISRC, extra indexes, CD-i track types) comes back too.</p>
 </div>
 
 <div class="card">
@@ -17,21 +17,22 @@
     <tbody>
       <tr><td>PlayStation, Saturn, Sega CD / Mega CD, PC Engine CD, Neo Geo CD, 3DO, CD-i, Amiga CD32, PC-FX</td><td><code>.cue</code> + <code>.bin</code></td><td>CD</td></tr>
       <tr><td>Dreamcast</td><td><code>.gdi</code> + tracks, or Redump <code>.cue</code> + <code>.bin</code></td><td>CD (GD-ROM is detected)</td></tr>
-      <tr><td>PlayStation 2</td><td>DVD games: <code>.iso</code> · CD games: <code>.cue</code> + <code>.bin</code></td><td>DVD · CD</td></tr>
-      <tr><td>PSP</td><td><code>.iso</code></td><td>DVD, hunk size 2,048</td></tr>
+      <tr><td>PlayStation 2</td><td>DVD games: <code>.iso</code>, or compressed <code>.cso</code>/<code>.zso</code> · CD games: <code>.cue</code> + <code>.bin</code></td><td>DVD · CD</td></tr>
+      <tr><td>PSP</td><td><code>.iso</code>, or compressed <code>.cso</code>/<code>.zso</code></td><td>DVD, hunk size 2,048</td></tr>
       <tr><td>Arcade and computer hard disks</td><td><code>.img</code>, <code>.hdd</code> (raw)</td><td>Hard disk</td></tr>
       <tr><td>LaserDisc arcade games</td><td><code>.avi</code></td><td>LaserDisc</td></tr>
     </tbody>
   </table>
   </div>
   <p class="small muted">A lone <code>.bin</code> without its <code>.cue</code> still works for single-track data discs (a cue is generated), but for discs with music tracks always add the original <code>.cue</code>.</p>
+  <p class="small muted">ECM images (<code>.bin.ecm</code>, packed with the ecm tools) can take the place of their <code>.bin</code>: add them with the <code>.cue</code>. They are unpacked as they are read, and a damaged one is reported.</p>
 </div>
 
 <div class="card">
   <h2>Game identification and renaming</h2>
   <p>Every disc you add is examined to find its console (PlayStation 1/2/PSP, Saturn, Sega CD, Dreamcast, PC Engine CD, PC-FX, Neo Geo CD, 3DO, CD-i, Amiga CD32/CDTV, NAOMI and more) and its serial number, read from the disc's own boot files and headers.</p>
   <p>The game is then looked up in a built-in copy of the <a href="https://redump.org" target="_blank" rel="noopener">Redump</a> database (about 42,000 discs, via <a href="https://github.com/libretro/libretro-database" target="_blank" rel="noopener">libretro-database</a>, /*DBVER*/). When a track's size and CRC-32 checksum match, the dump is an exact, verified copy; otherwise the serial number is used. Results are named after the official title, for example <code>Metal Gear Solid (USA) (Disc 1) (Rev 1).chd</code>. You can turn this off in Settings or type your own name in Options.</p>
-  <p>For existing <code>.chd</code> files, choose <b>Rename</b> to save a copy with the official name.</p>
+  <p>For existing <code>.chd</code> files, choose <b>Rename</b> to save a copy with the official name. <b>Verify</b> checks the CHD's own checksums, then compares it with Redump without extracting it: the file the built-in database lists for the disc (its ISO, its only <code>.bin</code>, or its main data track) must have Redump's size and CRC-32.</p>
 </div>
 
 <div class="card">
@@ -41,20 +42,32 @@
   <h3>Big files</h3>
   <p>Results are written to the browser's private storage on disk (not to memory), so multi-gigabyte DVD images work if your device has the free space. Download results when they are ready; the storage is cleared when you use <i>Free temporary storage</i> or reopen the page. On desktop Chrome and Edge you can instead have results written straight into a folder of your choice (Settings → Where to keep results).</p>
   <h3>Speed</h3>
-  <p>Creating a CHD is CPU-heavy. This page spreads compression over several CPU threads (see Settings). Expect a few minutes for a CD on a computer and longer on a phone. <i>Faster to create</i> in Options trades a little size for a lot of speed.</p>
+  <p>Creating a CHD is CPU-heavy. This page spreads compression over several CPU threads (see Settings). Expect a few minutes for a CD on a computer and longer on a phone. <i>Nearly as small, faster</i> in Options tries each track with only the codec that suits it: about 1.7 times as fast for CDs and 1.5 for DVDs, with files at most 0.3% bigger. <i>Faster to create</i> trades more size for more speed.</p>
   <h3>On phones and tablets</h3>
   <p>The layout adapts to your screen, text size, notch, rotation and keyboard. In a normal browser the whole page scrolls; inside apps that preview files (and when installed on the home screen) the header stays fixed and only the content scrolls. If scrolling ever feels wrong, change it in Settings → Scrolling; Settings → Screen info shows what your device reports. </p>
   <p>Keep this page open and in the foreground while it works; the screen is kept awake automatically. If the browser suspends the tab, the job may stop and need to be restarted.</p>
   <h3>Compatibility of the results</h3>
-  <p>The CHDs are standard CHD v5 files made by chdman from the official MAME 0.289 release, with the same checksums as desktop chdman 0.289 (for data, the very same bytes as the official build), so they work in MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast and other emulators. The <i>Zstandard</i> option needs a recent emulator build.</p>
+  <p>The CHDs are standard CHD v5 files made by chdman from the official MAME 0.289 release, with the same checksums as desktop chdman 0.289 and the very same bytes as chdman 0.289 on Linux (unless you choose <i>Nearly as small, faster</i> or <i>Faster to create</i>, or keep cue sheets in CD CHDs, which change the bytes but not the checksums), so they work in MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast and other emulators. The <i>Zstandard</i> option needs a recent emulator build.</p>
   <h3>Everything else</h3>
   <p>The <b>Advanced</b> tab exposes every chdman command and option: <code>copy</code>, <code>createraw</code>, parent CHDs, hard disk templates, <code>addmeta</code>, <code>delmeta</code>, <code>dumpmeta</code>, <code>listtemplates</code> and more.</p>
 </div>
 
 <div class="card">
   <h2>About and licenses</h2>
-  <p>Discpress contains chdman from <a href="https://github.com/mamedev/mame" target="_blank" rel="noopener">MAME</a> 0.289 (the official release, tag <code>mame0289</code>), compiled to WebAssembly with Emscripten. Two small browser-specific changes were made: a file-system bridge for reading your files and writing results, and multi-threaded compression through helper workers. The full list of source changes is below.</p>
-  <p>chdman and MAME's <code>lib/util</code> are licensed under the BSD 3-Clause license (copyright Aaron Giles, R. Belmont and the MAMEdev team). MAME as a whole is GPL-2.0-or-later. Bundled libraries: zlib (zlib license, © Jean-loup Gailly and Mark Adler), LZMA SDK (public domain, Igor Pavlov), FLAC (BSD 3-Clause, © Josh Coalson, Xiph.Org Foundation), Zstandard (BSD, © Meta Platforms, Inc. and affiliates), utf8proc (MIT, © Steven G. Johnson, Jiahao Chen, Tony Kelman, Jonas Fonseca and contributors), Expat (MIT, © Thai Open Source Software Center Ltd, Clark Cooper and the Expat maintainers), AES-256-CBC (MIT, © Hallo Weeks), NanoSVG (zlib license, © Mikko Mononen), MD5 (public domain, Colin Plumb), path_to_regex (MIT, © Alfred Bratterud). Discpress is not affiliated with the MAME team.</p>
+  <p>Discpress contains chdman from <a href="https://github.com/mamedev/mame" target="_blank" rel="noopener">MAME</a> 0.289 (the official release, tag <code>mame0289</code>), compiled to WebAssembly with Emscripten. Its source, with only the parts of MAME that chdman uses, is kept in the Discpress repository (<code>engine/</code>). The changes:</p>
+  <ul>
+    <li>a file-system bridge for reading your files and writing results;</li>
+    <li>helper workers that compress, and decompress for extracting and verifying, on several cores;</li>
+    <li>faster codec trials, hashing and CD error-correction codes that give the same bytes;</li>
+    <li>Redump's layout for extracted CDs (<code>extractcd --redump</code>), and an option to keep a disc's cue sheet in its CHD for that (<code>createcd --keepcue</code>);</li>
+    <li>a codec plan that tries each hunk only with the codecs meant for what it holds (<code>--codecplan</code>), and deflate by libdeflate (<code>--libdeflate</code>), for the faster presets;</li>
+    <li>reading CSO/ZSO compressed ISOs and ECM images as the images they hold;</li>
+    <li>fixes for chdman 0.289's crashes and silent failures on bad input;</li>
+    <li>the same floating-point math for the FLAC encoder in every build, so CD audio comes out byte for byte as with chdman on Linux;</li>
+    <li>unused code removed.</li>
+  </ul>
+  <p>The full list of source changes is below.</p>
+  <p>chdman and the parts of MAME it uses are licensed under the BSD 3-Clause license (copyright Aaron Giles, R. Belmont, Vas Crabb and the MAMEdev team). MAME as a whole is GPL-2.0-or-later. Bundled libraries: zlib (zlib license, © Jean-loup Gailly and Mark Adler), LZMA SDK (public domain, Igor Pavlov), FLAC (BSD 3-Clause, © Josh Coalson, Xiph.Org Foundation), Zstandard (BSD, © Meta Platforms, Inc. and affiliates), MD5 (public domain, Colin Plumb), the FLAC encoder's <code>cosf</code> and <code>log</code> from Arm's optimized-routines (MIT, © Arm Limited), libdeflate's compressor (MIT, © Eric Biggers and Google LLC). Discpress is not affiliated with the MAME team.</p>
   <details class="log"><summary>BSD 3-Clause license text</summary>
 <div class="lic">Copyright (c) the respective copyright holders listed above.
 
@@ -68,14 +81,40 @@ Redistribution and use in source and binary forms, with or without modification,
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.</div>
   </details>
-  <details class="log"><summary>MIT license text (utf8proc, Expat, AES-256-CBC, path_to_regex)</summary>
-<div class="lic">Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+  <details class="log"><summary>MIT license text (Arm optimized-routines)</summary>
+<div class="lic">Copyright (c) 1999-2022, Arm Limited.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.</div>
   </details>
-  <details class="log"><summary>Source changes made for the browser build</summary>
+  <details class="log"><summary>MIT license text (libdeflate)</summary>
+<div class="lic">Copyright 2016 Eric Biggers
+Copyright 2024 Google LLC
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation files
+(the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of the Software,
+and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.</div>
+  </details>
+  <details class="log"><summary>Source changes made to MAME 0.289, and the new files</summary>
 <div class="lic">/*PATCH*/</div>
   </details>
 </div>

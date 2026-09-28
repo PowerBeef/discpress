@@ -96,6 +96,51 @@ How easy this is depends on the library:
 - libFLAC can abort from its write callback, at frame granularity.
 - The LZMA SDK has a pack-size stop in `LzmaEnc_CodeOneBlock` (used by LZMA2). In the one-shot LZMA1 path, however, the encoder only returns every 128 KB and the range coder buffers 64 KB. Early abort for hunk-sized inputs therefore needs a small SDK patch, which cannot change the bits.
 
+**Measured, as built (milestone 2.4, `engine/README.md`).** CPU time over all threads, `-np 4`, the engine against unmodified chdman 0.289, same bytes every time (4-core Xeon, 2.1 GHz):
+
+| Input | chdman 0.289 | Engine | Less CPU |
+|---|---|---|---|
+| CD data (`data_m2`, 96 MB) | 30.2 s | 28.5 s | 1.06× |
+| CD audio (the music, 114 MB) | 20.4 s | 13.9 s | 1.47× |
+| DVD (`payload.iso`, 83 MB) | 30.5 s | 27.8 s | 1.10× |
+| Benchmark CD (300 MB, 70% data) | 58.5 s | 50.6 s | 1.16× |
+| Benchmark DVD (1 GB) | 211.8 s | 192.0 s | 1.10× |
+
+The gains are below the estimate because codecs don't emit output evenly. Deflate writes a hunk as one block, so it can't stop early. Generic FLAC on 4 KB DVD hunks encodes one frame. CD FLAC stops after the first of its two frames. LZMA stops as soon as its output passes the best result, which is where CD audio gains the most. The DVD figure also includes the generic `flac` codec no longer encoding a third time (milestone 2.2).
+
+**The codec plan, as built (milestone 2.5, `--codecplan`, opt-in).** Data tracks `cdlz` only, audio tracks `cdfl` only, other CHDs every codec but `flac`; a CD hunk that holds both tries all of them. Against the engine's default (which already has early abort), `-np 4`, CPU over all threads; the SHA-1s are the same and 0.289 verifies every result:
+
+| Input | Default | Plan | Less CPU | Size |
+|---|---|---|---|---|
+| CD data (`data_m2`, 96 MB) | 33.1 s | 18.3 s | 1.81× | +0.22% |
+| CD data, Mode 1 (`data_m1`) | 32.4 s | 18.6 s | 1.74× | +0.24% |
+| CD audio (the music, 114 MB) | 15.3 s | 8.0 s | 1.91× | ±0 |
+| Mixed CD (`mixed.cue`, 210 MB) | 52.2 s | 26.1 s | 2.00× | +0.11% |
+| DVD (`payload.iso`, 83 MB) | 33.7 s | 24.4 s | 1.38× | +0.06% |
+
+In the page (4-core Xeon, SIMD), the "Nearly as small, faster" preset against the default: the benchmark CD in 35.8 s instead of 62.0 s with 1 thread (1.73×) and 10.9 s instead of 17.6 s with 4 (1.62×); the benchmark DVD in 158.0 s instead of 241.3 s (1.53×) and 55.5 s instead of 72.6 s (1.31×). Each CHD equals the native engine's byte for byte. With 4 threads less of the time is compression, so the gain is smaller.
+
+**libdeflate for the deflate codec, as built (milestone 2.6, `--libdeflate`, opt-in).** Raw deflate of each hunk, one core: zlib level 9 (chdman's) against libdeflate v1.24.
+
+| Hunks | zlib-9 | libdeflate-6 | libdeflate-9 | libdeflate-12 |
+|---|---|---|---|---|
+| DVD (`payload.iso`, 4 KiB) | 4.05 s, 37,499,481 | 1.09 s, −0.17% | 2.01 s, −0.46% | 14.65 s, −2.32% |
+| CD data (`data_m2`, 18,816 bytes) | 7.20 s, 48,438,103 | 1.14 s, −0.08% | 2.54 s, −0.41% | 17.77 s, −2.00% |
+
+In the engine, `-np 4`, CPU and size against the same options without it:
+
+| Input | Options | Less CPU | Size |
+|---|---|---|---|
+| CD data (`data_m2`) | default | 1.33× | −0.03% |
+| Mixed CD (`mixed.cue`) | default | 1.50× | −0.02% |
+| DVD (`payload.iso`) | default | 1.13× | −0.20% |
+| CD data | `-c cdzl,cdfl` | 1.83× | −0.71% |
+| Mixed CD | `-c cdzl,cdfl` | 1.53× | −0.38% |
+| DVD | `-c zlib,huff` | 1.68× | −0.31% |
+| DVD | `--codecplan` | 1.17× | −0.20% (−0.14% against chdman's default) |
+
+In the page (SIMD) with 1 thread: "Faster to create" 23.3 → 18.5 s on the benchmark CD (45.0% → 43.8% of the input) and 40.3 → 30.5 s on the benchmark DVD; "Nearly as small, faster" 152.3 → 139.0 s on the DVD. With 4 threads the job worker sets the pace and the times don't change.
+
 ## 3. Encoder tuning that every reader can decode
 
 This test used a chdman variant whose encoders are selected by environment variables (`lab/chdcodec-variants.diff`, `lab/flac-variants.diff`). With no variable set it is byte-identical to stock.

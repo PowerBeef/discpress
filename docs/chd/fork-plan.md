@@ -149,6 +149,25 @@ This affects users today, so it ships as its own small release before any fork w
 
 ### Milestone 1: the engine fork (1–2 weeks)
 
+**Status: step 1 done.**
+- The engine is in `engine/` (see `engine/README.md`): 75 MAME 0.289 source files and their headers, with the browser patch applied as ordinary code.
+- The unused utf8proc-backed functions are gone, and so are disasmintf, nanosvg, expat and the unused LZMA/7z files.
+- It builds without a MAME checkout. The objects are byte-identical to the old build's (except `unicode.o`), and the build stays reproducible.
+- The tests now compare with unmodified chdman 0.289 (`scripts/build-upstream.sh`).
+
+**Step 2 (Asyncify) done.**
+- The compressing commands are C++20 coroutines, so the page drives them step by step (`chdman_begin`/`chdman_resume`) and the whole CLI keeps working, the Advanced tab included.
+- Asyncify is gone from the build, so the wasm and its glue are smaller.
+- Natively, output, messages and exit codes match upstream.
+- Still to do in step 2: structured progress events and the push-input API that would retire `FileReaderSync` and the iOS staging protocol.
+
+**Step 3, the defect fixes: done** (see `engine/README.md`).
+- `verify` exits 1 on a mismatch.
+- `copy x→x` no longer destroys the input; no output is ever written over an input.
+- `extractcd` of a non-CD, and `-us 0`/`-ss 0`, are errors, not crashes.
+- `dumpmeta` keeps stdout clean.
+- Still open: the `-np 1` busy-wait and a native thread pool without the 16-thread cap. Both matter for the native CLI only.
+
 1. **Extract `engine/`.** Take the 78-object closure (B §7.1) at the reference tag, re-apply `mame.patch` as ordinary code, and drop `disasmintf`, `nanosvg`, expat and the unused LZMA/7z files. Fix `THIRD_PARTY_NOTICES.md`.
 2. **Library API instead of `callMain`.** `chd_file_compressor` is already a resumable state machine (`compress_begin`/`compress_continue`). Expose:
    - `create_open` → `step` → `finish`;
@@ -168,6 +187,38 @@ This affects users today, so it ships as its own small release before any fork w
 
 ### Milestone 2: performance (1–2 weeks)
 
+**Status: 2.1, 2.3, 2.4, 2.5, 2.6 and 2.8 done (2.8 for extract and verify), and part of 2.2** (see `engine/README.md`; measured in measurements §2).
+- **2.5 codec plan (done, opt-in).** `--codecplan` (`-cp`) on `createcd`, `createdvd`, `createhd` and `createraw`: a CD hunk in audio tracks tries `cdfl`, one in data tracks `cdlz` (the "+`cdzl`" variant would give 1.23× for ±0), any other hunk every codec but `flac` (no FLAC-0 probe); a CD hunk holding both tries all. The page's "Nearly as small, faster" preset.
+  - Same codec list, data and SHA-1s as the default; 0.289 verifies the result. The same CHD at any thread count, and in the page.
+  - Native, `-np 4`, CPU against the default (after 2.4): CD data 1.81× (+0.22%), CD audio 1.91× (±0), a mixed CD 2.00× (+0.11%), DVD 1.38× (+0.06%).
+  - In the page: the benchmark CD 1.73× faster with 1 thread and 1.62× with 4 (44.3% → 44.5% of the input), the benchmark DVD 1.53× and 1.31× (41.0% either way).
+- **2.6 libdeflate (done, opt-in).** `--libdeflate` (`-ld`): the deflate codec (`zlib`, `cdzl`, `cdlz`'s subcode) encodes with libdeflate's level 9 (`engine/libdeflate`, MIT, unmodified) instead of zlib's level 9. Both faster presets use it.
+  - Per hunk: 2.0× (DVD) and 2.8× (CD) faster than zlib-9, 0.4–0.5% smaller. Level 6 would be 3.7–6× faster at zlib-9's size; level 12 2.0–2.3% smaller at 2.5–3.6× zlib's time (a "Smallest" preset, 2.7).
+  - Native, `-np 4`, CPU: default list 1.1–1.5× less; `cdzl,cdfl` 1.5–1.8× less and 0.3–0.7% smaller; plan + libdeflate on DVD 1.17× less than the plan alone and smaller than chdman's default.
+  - In the page with 1 thread: "Faster to create" 1.26× (CD, 1.1% smaller) and 1.32× (DVD); "Nearly as small, faster" 1.10× on DVD. With 4 threads the job worker sets the pace, and neither changes.
+  - The same CHDs natively, in wasm with and without SIMD, and at any thread count.
+- **2.3 deterministic libm.** libFLAC calls `engine/libm`'s `cosf` and `log`, Arm's optimized-routines code that glibc is built from. The `log` gives the fused results where GCC fuses glibc's multiply-adds for FMA CPUs.
+  - Checked against glibc: `cosf` on all 1.97 billion window arguments, `log` on 200 million inputs. Both are identical natively and in wasm.
+  - The page's CD-audio CHDs of 114 MB of real music now match unmodified chdman 0.289 byte for byte (before: different).
+  - The `music-cd` fixture fails without it.
+  - The autocorrelation was already the C one (`FLAC__NO_ASM`, as MAME's x86 GCC builds).
+  - Cost: wasm has no FMA instruction. With musl's exact software `fma()`, `log` took 160 ns against musl's own `log` at 6 ns, and DVD creation got 20% slower (a DVD hunk calls `log` about 670 times). Now `log` computes the fused results from plain operations: two exactly, the rest unfused where a proven bound shows that can't change the result, and emulated otherwise (about 1 call in 2,500; `engine/libm/README.md`). It takes 11–13 ns, and creating CHDs is within 1% of the time with musl's functions.
+  - Still different: chdman on non-FMA x86, Apple's libm and MSVC's CRT round differently, and ARM64 builds sum the autocorrelation with NEON.
+- **2.8 parallel decompression.** In the page, helper workers decompress the hunks `verify` and the extract commands are about to read, a window at a time. The windows' stored data is read in one go, since each small read costs far more in the browser than its bytes do.
+  - Benchmark CD (332 MB), extracting with 4 threads: 2.5× faster (7.2 s → 2.8 s).
+  - Benchmark DVD (1 GB): 1.4× faster (13.4 s → 9.3 s). Its 4 KB hunks leave most of the time to the job worker, which reads, checks and writes 1 GB.
+  - With 1 thread: 5–12% faster, from the larger reads.
+  - Still open for 2.8: the parent walk (creating with `-op`) and `copy`. Identification of a CHD only reads a few sectors, so it doesn't need it.
+- **2.1 hashing.** SHA-1 is unrolled and reads whole big-endian words; CRC-16 is slice-by-8. Both give the same results, 5× faster in wasm (SHA-1 650 MB/s, CRC-16 1,450 MB/s). So the whole-image SHA-1 no longer limits the job worker, and Web Crypto isn't needed.
+- In the page, 2.1 makes the benchmark CD and DVD convert 5–10% faster. Together with milestone 1's coroutines and 2.4, conversions are about 25% faster than in 1.2.1.
+- **2.4 early abort.** Each hunk tries the previous hunk's winner first, and every other codec stops once it can't beat the best result. The output is byte-identical: 294 fixture, stress-image and codec-list combinations match unmodified 0.289, and `tests/ui/engine.spec.js` keeps checking it.
+- Measured CPU savings: 1.06× on CD data, 1.47× on CD audio, 1.10× on DVD. That is below the estimate, because deflate and single-frame FLAC can't stop partway through a hunk.
+- In the page, the benchmark CD and DVD convert 5–8% faster with 1 or 4 threads.
+- **2.2, done so far:** FLAC skips its MD5 in memory, and generic `flac` never encodes a hunk a third time.
+- **2.2, ECC (done):** `ecc_verify` and `ecc_generate` compute P and Q eight vectors at a time in 64-bit words, 3.4 times faster, with the same results (`engine/README.md`). Native `createcd` of the benchmark CD takes 2% less CPU and `extractcd` 12% less. Verifying once per CD hunk instead of once per codec would now save about 1% more, so it isn't done.
+- **2.2, still open:** in-flight dedupe.
+- **Build fix found on the way:** `wasm/Makefile` now tracks header dependencies. A stale object had disagreed with a changed class layout.
+
 Numbers are single-core CPU unless noted (measurements §1–2, G §11–12).
 
 | # | Change | Tier | Measured or estimated gain |
@@ -184,18 +235,20 @@ Numbers are single-core CPU unless noted (measurements §1–2, G §11–12).
 
 Presets:
 - **Compatible** (default) = 2.1–2.4 + 2.8.
-- **Fast** = plus 2.5 and 2.6, for phones: G measured Snapdragon parts throttling to 30–58% and iPhones exposing 2 performance cores.
+- **Fast** = plus 2.5 and 2.6 (now "Nearly as small, faster"; "Faster to create" also uses 2.6), for phones: G measured Snapdragon parts throttling to 30–58% and iPhones exposing 2 performance cores.
 - **Smallest** = plus 2.7.
 - Anything in tier X is an explicit expert choice with reader warnings.
 
 ### Milestone 3: fidelity and verification (2–3 weeks)
 
-1. **Redump-exact extraction.**
+**Status: Redump-exact extraction done.** `extractcd --redump` (the page's default for CDs) writes Redump's layout. Real Redump cue sheets, 500 per system with synthetic bins, come back byte for byte through createcd and `extractcd --redump`: PS2 99.8%, PS1 98.4%, Naomi 100%, Dreamcast 94% (the rest are multi-session MIL-CDs), CDTV 92%, 53% of all 5,676. With the cue sheet kept (`createcd --keepcue`, opt-in, below), all 5,676 do, on all 19 systems. The built-in database (libretro-database) has one ROM per game, so verifying every track needs Redump's own DATs. With it, **Verify** now also compares a CHD with Redump: the page extracts with Redump's layout into checksums only (the worker's `crc` output) and looks the files up by size and CRC-32, which checks the ISO, the only `.bin` or the main data track, and confirms the exact release.
+
+1. **Redump-exact extraction.** **Done:** `createcd --keepcue` stores the original cue text as it is, as non-checksummed metadata (`CUES`) after the CD tags; `extractcd --redump` writes it back with the names of the files it writes, when those are laid out as the sheet's (one `BINARY` file per track). Tier C, so opt-in (a page setting, off by default). chdman 0.289 reads, verifies and extracts such CHDs as usual (`tests/ui/engine.spec.js`).
    - Store CATALOG, ISRC, FLAGS, INDEX ≥ 2, the original track-type string and the original cue text as **non-checksummed metadata**, appended after the CD tags. The CHD SHA-1 is unchanged and every reader ignores them (C §2, §7).
    - Extract with CRLF line endings and Redump naming.
    - This lifts cue reproducibility from 77% of 72,022 Redump cues to about 100%.
 2. **Verify inside the CHD.** Hash each track range straight from the CHD, with audio swapped back to little-endian and stored pregaps included, and match it against a per-track Redump DB. This extends `db/mkdb.py`, which today keeps only the first ROM per game. It also gives the app a "Verified dump" badge with no extraction step (C §7.2, D1 §2.1).
-3. **Fix the cue/TOC/NRG parser bugs** (C §12), each with a synthetic fixture:
+3. **Fix the cue/TOC/NRG parser bugs** (C §12), each with a synthetic fixture. **Status:** B3 (no tracks, or tracks without data), B4 (100 tracks), B5 (MOTOROLA), B6 (a shared file after another file) and B7 (several tracks in one `.wav`) are fixed, with fixtures that have plain twins; 5,676 real Redump cue sheets still give upstream's CHDs. B8 (EAC gaps at the end of the previous file needs a track that spans two files), B9 (NRG), B10 (`parse_iso`, which the page works around) and B11 (cdrdao TOC) remain.
    - MOTOROLA audio double-swapped;
    - shared-file offsets;
    - multi-track WAVE files;
@@ -208,12 +261,18 @@ Presets:
 
 ### Milestone 4: more inputs (ongoing, by demand)
 
+**Status: CloneCD (single-session), CSO/ZSO and ECM done.**
+- CloneCD: the page turns a `.ccd` into a cue sheet for its `.img` (`ccdToCue`). The `.sub` is noted and left out; subchannel ingest stays tier X. Multi-session, scrambled and track-list-less (CloneCD 2) files are refused with the reason.
+- CSO v1 and v2 and ZSO (maxcso's formats, for PSP and PS2): the job worker hands chdman the ISO inside, decompressing blocks as they are read (`CisoStore`), so the CHD is the one chdman makes from that ISO. Identification reads the ISO the same way, and its checksum is the ISO's. A damaged block stops the job with its number.
+- Found on the way: 0.289's `createraw`/`createhd`/`createdvd` ignore input read errors and write a CHD they can't open. The engine now stops with an error (`tests/ui/engine.spec.js`).
+- ECM (`.bin.ecm`, the ecm tools' format; common in PS1 collections, and emulators don't read it): an ECM image stands for the file it packs, the track a cue sheet, GDI or CloneCD `.ccd` names, or a lone `.bin`. The job worker rebuilds the image as chdman reads it (`EcmStore`, `wasm/ecm.cpp`), so the CHD is the one chdman makes from the unpacked image. It rebuilds ECC with the engine's `ecc_generate`, which works a word at a time since 2.2. The image's EDC, at the end of the file, is checked when the image is read in order, so a damaged file stops the job instead of making a CHD of the wrong data. Identification reads the image through a worker, and the checksum that confirms the release is the image's. The fixture encoder writes the same bytes as the ecm tools' `bin2ecm` (checked with a local build of it, not part of the repository).
+
 Priority order (C §9):
 1. CloneCD `.ccd/.img/.sub`, which also enables subchannel ingest for LibCrypt and CD+G;
 2. DiscJuggler `.cdi` for Dreamcast homebrew and MIL-CD;
-3. ECM;
+3. ECM (done);
 4. FLAC, WAV or AIFF audio referenced from cues;
-5. CSO/ZSO → DVD;
+5. CSO/ZSO → DVD (done);
 6. MDS/MDF;
 7. fuller NRG support.
 

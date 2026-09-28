@@ -51,17 +51,44 @@ test('missing required options are reported instead of run', async ({ app, page 
   await expect(page.locator('#toasts')).toContainText('Please fill in: Input file');
 });
 
-for (const threads of [1, 4]) {
-  test(`a command chdman would never finish is stopped (${threads} thread${threads > 1 ? 's' : ''})`, async ({ app, page }) => {
-    // given a .bin, createcd parses it as a cdrdao TOC, finds no tracks and never finishes
-    await app.open({ settings: { threads } });
+// chdman 0.289 never finishes on these (0% forever, or -nan%); the engine reports an error
+for (const [label, file, text, message] of [
+  ['a .bin read as a cdrdao TOC, with no tracks', 'lone.bin', null, 'no tracks found'],
+  ['a TOC without track lengths', 'nolength.toc', 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "lone.bin"\n', 'the tracks hold no data'],
+]) {
+  test(`a command chdman would never finish is an error: ${label}`, async ({ app, page }) => {
+    if (text) fs.writeFileSync(path.join(FIXTURES, file), text);
+    await app.open({ settings: { threads: 4 } });
     await page.click('.tab[data-tab="cli"]');
-    await addCliFiles(app, ['lone.bin']);
+    await addCliFiles(app, text ? [file, 'lone.bin'] : [file]);
     await page.click('#cliEditToggle');
-    await page.locator('#cliText').fill('chdman createcd -i lone.bin -o stuck.chd');
+    await page.locator('#cliText').fill(`chdman createcd -i ${file} -o stuck.chd`);
     await page.click('#cliRun');
-    await expect(page.locator('#cliConsole')).toContainText('[stopped] chdman found no data to convert', { timeout: 60_000 });
+    await expect(page.locator('#cliConsole')).toContainText(message, { timeout: 20_000 });
     await expect(page.locator('#cliRun')).toBeEnabled();
+  });
+}
+
+// chdman 0.289 aborts (throw nullptr) or divides by zero on these; the engine reports an error instead
+for (const [label, input, command, message] of [
+  ['extracting a DVD CHD as a CD', 'dvd', 'chdman extractcd -i agent-dvd.chd -o out.cue', 'is not a CD-ROM or GD-ROM'],
+  ['a unit size of 0', 'agent.iso', 'chdman createraw -i agent.iso -o raw.chd -us 0', 'Invalid unit size'],
+]) {
+  test(`${label} is an error, not a crash`, async ({ app, page }) => {
+    let file = input;
+    if (input === 'dvd') {
+      test.skip(!nativeChdman(), 'needs native chdman to make the CHD');
+      fs.mkdirSync(path.join(FIXTURES, 'chd'), { recursive: true });
+      fs.copyFileSync(reference('createdvd', 'agent.iso'), path.join(FIXTURES, 'chd', 'agent-dvd.chd'));
+      file = 'chd/agent-dvd.chd';
+    }
+    await openCli(app, page);
+    await addCliFiles(app, [file]);
+    await page.click('#cliEditToggle');
+    await page.locator('#cliText').fill(command);
+    const out = await runCli(page);
+    expect(out).toContain('[exit code 1]');
+    expect(out).toContain(message);
   });
 }
 
