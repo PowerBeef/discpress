@@ -33,7 +33,7 @@
 extern "C" {
 	// provided by the JavaScript host (browser build): offload hunk compression to helper workers
 	int wasm_par_enabled(uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression);
-	void wasm_par_submit(void *item, const uint8_t *data, uint32_t length);
+	void wasm_par_submit(void *item, const uint8_t *data, uint32_t length, uint32_t codecs);
 	// and decompression, for commands that read (see chd_file::wasm_read_ahead)
 	int wasm_rd_enabled(const void *chd, uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression);
 	void wasm_rd_submit(const void *chd, uint32_t hunknum, uint32_t codec, const uint8_t *data, uint32_t length);
@@ -3166,7 +3166,7 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 #ifdef __EMSCRIPTEN__
 				// a helper worker skipped this hunk as a probable duplicate, but it is not in the map: compress it here
 				if (item.m_compression == -2)
-					item.m_compression = item.m_codecs->find_best_compressor(item.m_data, item.m_compressed, item.m_complen);
+					item.m_compression = item.m_codecs->find_best_compressor(item.m_data, item.m_compressed, item.m_complen, item.m_try);
 #endif
 				// otherwise, append it compressed and add to the self map
 				hunk_write_compressed(item.m_hunknum, item.m_compression, item.m_compressed, item.m_complen, item.m_hash[0].m_crc16);
@@ -3308,10 +3308,42 @@ void chd_file_compressor::async_compress_hunk(work_item &item, int threadid)
 	// TODO: data race
 	if ((m_current_map.find(item.m_hash[0].m_crc16, item.m_hash[0].m_sha1) == hashmap::NOT_FOUND) &&
 			(m_parent_map.find(item.m_hash[0].m_crc16, item.m_hash[0].m_sha1) == hashmap::NOT_FOUND))
-		item.m_compression = item.m_codecs->find_best_compressor(item.m_data, item.m_compressed, item.m_complen);
+		item.m_compression = item.m_codecs->find_best_compressor(item.m_data, item.m_compressed, item.m_complen, item.m_try);
 
 	// mark us complete
 	item.m_status = WS_COMPLETE;
+}
+
+//-------------------------------------------------
+//  codec_plan_codecs - Discpress: the codec slots
+//  the codec plan tries for a hunk that holds
+//  content, a bit per slot
+//-------------------------------------------------
+
+uint32_t chd_file_compressor::codec_plan_codecs(hunk_content content) const noexcept
+{
+	// CD audio: cdfl; CD data: cdlz, which wins almost every data hunk (cdzl wins about one in
+	// ten by a few bytes, cdfl none); other data: every codec but flac, which wins almost none
+	// and is the slowest. Without those codecs in the list, or for a hunk that holds both
+	// kinds, every codec is tried.
+	uint32_t all = 0, flac = 0, cdlz = 0;
+	for (int slot = 0; slot < 4; slot++)
+	{
+		chd_codec_type const type = m_compression[slot];
+		if (type == CHD_CODEC_NONE)
+			continue;
+		all |= 1 << slot;
+		if ((type == CHD_CODEC_CD_FLAC) || (type == CHD_CODEC_FLAC))
+			flac |= 1 << slot;
+		if (type == CHD_CODEC_CD_LZMA)
+			cdlz |= 1 << slot;
+	}
+	uint32_t codecs = all;
+	if (content == hunk_content::AUDIO)
+		codecs = flac;
+	else if (content == hunk_content::DATA)
+		codecs = cdlz ? cdlz : (all & ~flac);
+	return codecs ? codecs : all;
 }
 
 /**
@@ -3390,12 +3422,13 @@ void chd_file_compressor::async_read()
 			assert(item.m_status == WS_READING);
 			item.m_status = WS_QUEUED;
 			item.m_hunknum = hunknum;
+			item.m_try = (m_codec_plan && !m_walking_parent) ? codec_plan_codecs(read_content(curoffs, hunk_bytes())) : 0x0f;
 #ifdef __EMSCRIPTEN__
 			if (s_wasm_par && !m_walking_parent && compressed())
 			{
 				item.m_osd = nullptr;
 				item.m_codecs = m_codecs[0];
-				wasm_par_submit(&item, item.m_data, hunk_bytes());
+				wasm_par_submit(&item, item.m_data, hunk_bytes(), item.m_try);
 				continue;
 			}
 #endif

@@ -108,6 +108,18 @@ How easy this is depends on the library:
 
 The gains are below the estimate because codecs don't emit output evenly. Deflate writes a hunk as one block, so it can't stop early. Generic FLAC on 4 KB DVD hunks encodes one frame. CD FLAC stops after the first of its two frames. LZMA stops as soon as its output passes the best result, which is where CD audio gains the most. The DVD figure also includes the generic `flac` codec no longer encoding a third time (milestone 2.2).
 
+**The codec plan, as built (milestone 2.5, `--codecplan`, opt-in).** Data tracks `cdlz` only, audio tracks `cdfl` only, other CHDs every codec but `flac`; a CD hunk that holds both tries all of them. Against the engine's default (which already has early abort), `-np 4`, CPU over all threads; the SHA-1s are the same and 0.289 verifies every result:
+
+| Input | Default | Plan | Less CPU | Size |
+|---|---|---|---|---|
+| CD data (`data_m2`, 96 MB) | 33.1 s | 18.3 s | 1.81× | +0.22% |
+| CD data, Mode 1 (`data_m1`) | 32.4 s | 18.6 s | 1.74× | +0.24% |
+| CD audio (the music, 114 MB) | 15.3 s | 8.0 s | 1.91× | ±0 |
+| Mixed CD (`mixed.cue`, 210 MB) | 52.2 s | 26.1 s | 2.00× | +0.11% |
+| DVD (`payload.iso`, 83 MB) | 33.7 s | 24.4 s | 1.38× | +0.06% |
+
+In the page (4-core Xeon, SIMD), the "Nearly as small, faster" preset against the default: the benchmark CD in 35.8 s instead of 62.0 s with 1 thread (1.73×) and 10.9 s instead of 17.6 s with 4 (1.62×); the benchmark DVD in 158.0 s instead of 241.3 s (1.53×) and 55.5 s instead of 72.6 s (1.31×). Each CHD equals the native engine's byte for byte. With 4 threads less of the time is compression, so the gain is smaller.
+
 ## 3. Encoder tuning that every reader can decode
 
 This test used a chdman variant whose encoders are selected by environment variables (`lab/chdcodec-variants.diff`, `lab/flac-variants.diff`). With no variable set it is byte-identical to stock.

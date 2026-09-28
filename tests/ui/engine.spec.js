@@ -243,3 +243,51 @@ test('codec trials that stop early still make the same CHDs', () => {
     expect(sha1(en), what).toBe(sha1(up));
   }
 });
+
+// The codec plan (--codecplan, the page's "Nearly as small, faster"): each hunk tries only the codecs
+// meant for what it holds (engine/README.md). Its bytes differ where a codec left out would have
+// won, but not its data: 0.289 gives the CHD the same checksums and verifies it. It is also the
+// same CHD at any thread count.
+test('the codec plan keeps the checksums, and 0.289 verifies what it makes', () => {
+  const sha1 = file => crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex');
+  const upstreamInfo = (file, verbose) => run(UPSTREAM, ['info', ...(verbose ? ['-v'] : []), '-i', file]).out.toString();
+  const checksums = file => { const o = upstreamInfo(file); return [/^SHA1:\s+(\w+)/m.exec(o)[1], /^Data SHA1:\s+(\w+)/m.exec(o)[1]]; };
+  const codecsUsed = file => { // codecs that won hunks, from the table of 0.289's info -v
+    const used = [];
+    for (const m of upstreamInfo(file, true).matchAll(/^\s*[\d,]+\s+[\d.]+%\s+(.+?)\s*$/gm))
+      if (!/^(Uncompressed|Copy from self|Copy from parent)$/.test(m[1])) used.push(m[1]);
+    return used.sort();
+  };
+  const DATA = ['Deflate', 'Huffman', 'LZMA'];
+  const cases = [
+    // [command, input, options, the codecs the plan may use (null: any, a hunk can hold audio and data)]
+    ['createcd', 'twine.cue', [], ['CD LZMA']],
+    ['createcd', 'xa.cue', [], ['CD LZMA']],
+    ['createcd', 'piano.cue', [], ['CD FLAC']],
+    ['createcd', 'mgs disc1.cue', [], null],
+    ['createcd', 'aerowings.gdi', [], null],
+    ['createcd', 'codec mix cd.cue', [], null],
+    ['createcd', 'codec mix cd.cue', ['-c', 'cdzl,cdfl'], null],
+    ['createdvd', 'agent.iso', [], DATA],
+    ['createhd', 'codec mix.img', [], DATA],
+    ['createraw', 'codec mix.img', ['-hs', '16384', '-us', '4', '-c', 'zstd,flac,lzma'], ['LZMA', 'Zstandard']],
+  ];
+  for (const [command, input, extra, allowed] of cases) {
+    const what = [command, input, ...extra].join(' ');
+    const up = tmp('up.chd'), plan = tmp('plan.chd'), plan1 = tmp('plan1.chd');
+    expect(run(UPSTREAM, [command, '-i', input, '-o', up, '-f', ...extra]).code, `upstream ${what}`).toBe(0);
+    expect(run(ENGINE, [command, '-i', input, '-o', plan, '-f', '--codecplan', ...extra]).code, what).toBe(0);
+    expect(run(ENGINE, [command, '-i', input, '-o', plan1, '-f', '-cp', '-np', '1', ...extra]).code, `${what}, 1 thread`).toBe(0);
+    expect(checksums(plan), what).toEqual(checksums(up));
+    expect(run(UPSTREAM, ['verify', '-i', plan]).code, `upstream verifies ${what}`).toBe(0);
+    expect(sha1(plan1), `${what}: 1 thread and several`).toBe(sha1(plan));
+    if (allowed) expect(allowed, `${what}: ${codecsUsed(plan)}`).toEqual(expect.arrayContaining(codecsUsed(plan)));
+  }
+  // the plan leaves out codecs that win hunks of these, so the bytes differ from chdman's
+  for (const [command, input] of [['createcd', 'mgs disc1.cue'], ['createdvd', 'agent.iso']]) {
+    const up = tmp('up.chd'), plan = tmp('plan.chd');
+    run(UPSTREAM, [command, '-i', input, '-o', up, '-f']);
+    run(ENGINE, [command, '-i', input, '-o', plan, '-f', '-cp']);
+    expect(sha1(plan), `${command} ${input}`).not.toBe(sha1(up));
+  }
+});

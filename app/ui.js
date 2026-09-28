@@ -866,9 +866,10 @@ var KIND = {
   raw: { badge: 'RAW', cmd: 'createraw', label: 'Raw' },
   ld: { badge: 'LD', cmd: 'createld', label: 'LaserDisc' }
 };
+// [value, label, codecs (-c), hint, other options]
 var PRESETS = {
-  cd: [['default', 'Smallest (default)', null, 'chdman default: CD LZMA + Deflate + FLAC. Works everywhere.'], ['fast', 'Faster to create', 'cdzl,cdfl', 'CD Deflate + FLAC: several times faster, files a little bigger.'], ['zstd', 'Faster to load (Zstd)', 'cdzs,cdfl', 'CD Zstandard + FLAC: quick to read on weak devices; needs a recent emulator.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']],
-  other: [['default', 'Smallest (default)', null, 'chdman default: LZMA + Deflate + Huffman + FLAC. Works everywhere.'], ['fast', 'Faster to create', 'zlib,huff', 'Deflate + Huffman: several times faster, files a little bigger.'], ['zstd', 'Faster to load (Zstd)', 'zstd', 'Zstandard: quick to read on weak devices; needs a recent emulator.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']],
+  cd: [['default', 'Smallest (default)', null, 'chdman default: CD LZMA + Deflate + FLAC. Works everywhere.'], ['plan', 'Nearly as small, faster', null, 'The same codecs, but each track tries only the one that suits it: LZMA for data, FLAC for audio. About 1.7 times as fast, files at most 0.3% bigger, same checksums. Works everywhere.', ['--codecplan']], ['fast', 'Faster to create', 'cdzl,cdfl', 'CD Deflate + FLAC: several times faster, files a little bigger.'], ['zstd', 'Faster to load (Zstd)', 'cdzs,cdfl', 'CD Zstandard + FLAC: quick to read on weak devices; needs a recent emulator.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']],
+  other: [['default', 'Smallest (default)', null, 'chdman default: LZMA + Deflate + Huffman + FLAC. Works everywhere.'], ['plan', 'Nearly as small, faster', null, 'The same codecs but FLAC, which almost never wins on data. About 1.4 times as fast, files about 0.1% bigger, same checksums. Works everywhere.', ['--codecplan']], ['fast', 'Faster to create', 'zlib,huff', 'Deflate + Huffman: several times faster, files a little bigger.'], ['zstd', 'Faster to load (Zstd)', 'zstd', 'Zstandard: quick to read on weak devices; needs a recent emulator.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']],
   ld: [['default', 'Default (A/V Huffman)', null, 'chdman default for LaserDisc video.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']]
 };
 var HUNKS = {
@@ -1216,10 +1217,9 @@ function chdInputs(job) {
 function buildJob(job) {
   var args = [], inputs = [], writable = [], slots = 3, helpers = 0, expected = 0, display = [];
   var o = job.opts, ob = outBase(job);
-  function codecsFor(disc) {
+  function presetFor(disc) {
     var list = PRESETS[disc === 'cd' || disc === 'gdrom' ? 'cd' : disc === 'ld' ? 'ld' : 'other'];
-    var p = list.find(function (x) { return x[0] === o.preset; });
-    return p ? p[2] : null;
+    return list.find(function (x) { return x[0] === o.preset; }) || list[0];
   }
   if (job.kind === 'create') {
     var disc = job.disc, cmd = KIND[disc].cmd, inName;
@@ -1242,8 +1242,9 @@ function buildJob(job) {
     }
     args = [cmd, '-i', '/in/' + inName, '-o', '/out/' + ob + '.chd'];
     display = [cmd, '-i', inName, '-o', ob + '.chd'];
-    var c = codecsFor(disc);
+    var preset = presetFor(disc), c = preset[2];
     if (c) { args.push('-c', c); display.push('-c', c); }
+    (preset[4] || []).forEach(function (a) { args.push(a); display.push(a); });
     var hs = disc === 'raw' ? (o.hunk || '4096') : o.hunk;
     if (hs) { args.push('-hs', hs); display.push('-hs', hs); }
     // the setting: keep a real cue sheet (not one written for chdman here) in the CHD (the engine's --keepcue)
@@ -2017,6 +2018,7 @@ var OPT = {
   outputbin: ['ob', 'Output .bin name', 'out'], outputparent: ['op', 'Output parent CHD', 'file'], splitbin: ['sb', 'One .bin file per track', 'bool'],
   redump: ['rd', 'As Redump: CRLF cue sheet, a .bin per track (Discpress)', 'bool'],
   keepcue: ['kc', 'Keep the .cue in the CHD for extractcd --redump; checksums unchanged (Discpress)', 'bool'],
+  codecplan: ['cp', 'Try each hunk only with the codecs meant for it (audio: FLAC, CD data: LZMA, other data: all but FLAC); checksums unchanged (Discpress)', 'bool'],
   verbose: ['v', 'Verbose output', 'bool'], fix: ['f', 'Fix the SHA-1 if it is incorrect', 'bool'],
   inputstartbyte: ['isb', 'Input start byte', 'num'], inputstarthunk: ['ish', 'Input start hunk', 'num'], inputbytes: ['ib', 'Input length (bytes)', 'num'],
   inputhunks: ['ih', 'Input length (hunks)', 'num'], inputstartframe: ['isf', 'Input start frame', 'num'], inputframes: ['if', 'Input length (frames)', 'num'],
@@ -2028,10 +2030,10 @@ var OPT = {
 };
 var SLICE = ['inputstartbyte', 'inputstarthunk', 'inputbytes', 'inputhunks'];
 var CMDS = [
-  ['createcd', 'Create a CD CHD from a .cue, .gdi, .toc, .nrg or .iso', ['*input', '*output', 'compression', 'hunksize', 'outputparent', 'keepcue'], 'Create'],
-  ['createdvd', 'Create a DVD CHD from an .iso', ['*input', '*output', 'compression', 'hunksize', 'outputparent'].concat(SLICE), 'Create'],
-  ['createhd', 'Create a hard disk CHD from a raw image (or a blank one)', ['input', '*output', 'compression', 'hunksize', 'template', 'chs', 'size', 'sectorsize', 'ident', 'outputparent'].concat(SLICE), 'Create'],
-  ['createraw', 'Create a raw CHD from any file', ['*input', '*output', '*hunksize', '*unitsize', 'compression', 'outputparent'].concat(SLICE), 'Create'],
+  ['createcd', 'Create a CD CHD from a .cue, .gdi, .toc, .nrg or .iso', ['*input', '*output', 'compression', 'codecplan', 'hunksize', 'outputparent', 'keepcue'], 'Create'],
+  ['createdvd', 'Create a DVD CHD from an .iso', ['*input', '*output', 'compression', 'codecplan', 'hunksize', 'outputparent'].concat(SLICE), 'Create'],
+  ['createhd', 'Create a hard disk CHD from a raw image (or a blank one)', ['input', '*output', 'compression', 'codecplan', 'hunksize', 'template', 'chs', 'size', 'sectorsize', 'ident', 'outputparent'].concat(SLICE), 'Create'],
+  ['createraw', 'Create a raw CHD from any file', ['*input', '*output', '*hunksize', '*unitsize', 'compression', 'codecplan', 'outputparent'].concat(SLICE), 'Create'],
   ['createld', 'Create a LaserDisc CHD from an .avi', ['*input', '*output', 'compression', 'hunksize', 'inputstartframe', 'inputframes', 'outputparent'], 'Create'],
   ['extractcd', 'Extract a CD CHD to .cue/.bin, .gdi or .toc', ['*input', '*output', 'outputbin', 'splitbin', 'redump', 'inputparent'], 'Extract'],
   ['extractdvd', 'Extract a DVD CHD to an .iso', ['*input', '*output', 'inputparent'].concat(SLICE), 'Extract'],

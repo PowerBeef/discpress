@@ -790,7 +790,7 @@
 +extern "C" {
 +	// provided by the JavaScript host (browser build): offload hunk compression to helper workers
 +	int wasm_par_enabled(uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression);
-+	void wasm_par_submit(void *item, const uint8_t *data, uint32_t length);
++	void wasm_par_submit(void *item, const uint8_t *data, uint32_t length, uint32_t codecs);
 +	// and decompression, for commands that read (see chd_file::wasm_read_ahead)
 +	int wasm_rd_enabled(const void *chd, uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression);
 +	void wasm_rd_submit(const void *chd, uint32_t hunknum, uint32_t codec, const uint8_t *data, uint32_t length);
@@ -866,28 +866,75 @@
 +#ifdef __EMSCRIPTEN__
 +				// a helper worker skipped this hunk as a probable duplicate, but it is not in the map: compress it here
 +				if (item.m_compression == -2)
-+					item.m_compression = item.m_codecs->find_best_compressor(item.m_data, item.m_compressed, item.m_complen);
++					item.m_compression = item.m_codecs->find_best_compressor(item.m_data, item.m_compressed, item.m_complen, item.m_try);
 +#endif
  				// otherwise, append it compressed and add to the self map
  				hunk_write_compressed(item.m_hunknum, item.m_compression, item.m_compressed, item.m_complen, item.m_hash[0].m_crc16);
  				m_total_out += item.m_complen;
-@@ -3345,6 +3390,15 @@
+@@ -3263,12 +3308,44 @@
+ 	// TODO: data race
+ 	if ((m_current_map.find(item.m_hash[0].m_crc16, item.m_hash[0].m_sha1) == hashmap::NOT_FOUND) &&
+ 			(m_parent_map.find(item.m_hash[0].m_crc16, item.m_hash[0].m_sha1) == hashmap::NOT_FOUND))
+-		item.m_compression = item.m_codecs->find_best_compressor(item.m_data, item.m_compressed, item.m_complen);
++		item.m_compression = item.m_codecs->find_best_compressor(item.m_data, item.m_compressed, item.m_complen, item.m_try);
+ 
+ 	// mark us complete
+ 	item.m_status = WS_COMPLETE;
+ }
+ 
++//-------------------------------------------------
++//  codec_plan_codecs - Discpress: the codec slots
++//  the codec plan tries for a hunk that holds
++//  content, a bit per slot
++//-------------------------------------------------
++
++uint32_t chd_file_compressor::codec_plan_codecs(hunk_content content) const noexcept
++{
++	// CD audio: cdfl; CD data: cdlz, which wins almost every data hunk (cdzl wins about one in
++	// ten by a few bytes, cdfl none); other data: every codec but flac, which wins almost none
++	// and is the slowest. Without those codecs in the list, or for a hunk that holds both
++	// kinds, every codec is tried.
++	uint32_t all = 0, flac = 0, cdlz = 0;
++	for (int slot = 0; slot < 4; slot++)
++	{
++		chd_codec_type const type = m_compression[slot];
++		if (type == CHD_CODEC_NONE)
++			continue;
++		all |= 1 << slot;
++		if ((type == CHD_CODEC_CD_FLAC) || (type == CHD_CODEC_FLAC))
++			flac |= 1 << slot;
++		if (type == CHD_CODEC_CD_LZMA)
++			cdlz |= 1 << slot;
++	}
++	uint32_t codecs = all;
++	if (content == hunk_content::AUDIO)
++		codecs = flac;
++	else if (content == hunk_content::DATA)
++		codecs = cdlz ? cdlz : (all & ~flac);
++	return codecs ? codecs : all;
++}
++
+ /**
+  * @fn  void *chd_file_compressor::async_read_static(void *param, int threadid)
+  *
+@@ -3345,6 +3422,16 @@
  			assert(item.m_status == WS_READING);
  			item.m_status = WS_QUEUED;
  			item.m_hunknum = hunknum;
++			item.m_try = (m_codec_plan && !m_walking_parent) ? codec_plan_codecs(read_content(curoffs, hunk_bytes())) : 0x0f;
 +#ifdef __EMSCRIPTEN__
 +			if (s_wasm_par && !m_walking_parent && compressed())
 +			{
 +				item.m_osd = nullptr;
 +				item.m_codecs = m_codecs[0];
-+				wasm_par_submit(&item, item.m_data, hunk_bytes());
++				wasm_par_submit(&item, item.m_data, hunk_bytes(), item.m_try);
 +				continue;
 +			}
 +#endif
  			item.m_osd = osd_work_item_queue(m_work_queue, m_walking_parent ? async_walk_parent_static : async_compress_hunk_static, &item, 0);
  		}
  
-@@ -3512,3 +3566,179 @@
+@@ -3512,3 +3599,179 @@
  	metadata_entry metaentry;
  	return metadata_find(AV_METADATA_TAG, 0, metaentry);
  }
@@ -1117,10 +1164,16 @@
  };
  
  
-@@ -450,6 +477,11 @@
+@@ -450,11 +477,28 @@
  	void compress_begin();
  	std::error_condition compress_continue(double &progress, double &ratio);
  
++	// Discpress: the codec plan (chdman's --codecplan). Each hunk is tried only with the codecs
++	// meant for what it holds, instead of all of them: CD audio with cdfl, CD data with cdlz, and
++	// other data with every codec but flac (codec_plan_codecs). The data and both SHA-1s are the
++	// same; the bytes differ where a codec left out would have won. Set before compress_begin.
++	void set_codec_plan(bool plan) noexcept { m_codec_plan = plan; }
++
 +#ifdef __EMSCRIPTEN__
 +	// browser build: completion callback for hunks compressed by helper workers
 +	static void wasm_par_complete_item(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen, const uint8_t *data);
@@ -1129,9 +1182,52 @@
  protected:
  	// required override: read more data
  	virtual uint32_t read_data(void *dest, uint64_t offset, uint32_t length) = 0;
+ 
++	// Discpress: what a range of the data holds, for the codec plan (called from the read thread)
++	enum class hunk_content { MIXED, DATA, AUDIO };
++	virtual hunk_content read_content(uint64_t offset, uint32_t length) const { return hunk_content::DATA; }
++
+ private:
++	uint32_t codec_plan_codecs(hunk_content content) const noexcept;
++
+ 	// hash map for looking up values
+ 	class hashmap
+ 	{
+@@ -524,6 +568,7 @@
+ 			, m_complen(0)
+ 			, m_compression(0)
+ 			, m_codecs(nullptr)
++			, m_try(0x0f)
+ 		{ }
+ 
+ 		osd_work_item *     m_osd;              // OSD work item running on this block
+@@ -537,6 +582,7 @@
+ 		uint32_t              m_complen;          // compressed data length
+ 		int8_t                m_compression;      // type of compression used
+ 		chd_compressor_group *m_codecs;         // codec instance
++		uint32_t              m_try;              // Discpress: codec slots to try (the codec plan)
+ 		std::vector<hash_pair> m_hash;        // array of hashes
+ 	};
+ 
+@@ -549,6 +595,7 @@
+ 	void async_read();
+ 
+ 	// current compression status
++	bool                    m_codec_plan = false; // Discpress: try each hunk only with the codecs for its content
+ 	bool                    m_walking_parent;   // are we building the parent map?
+ 	uint64_t                m_total_in;         // total bytes in
+ 	uint64_t                m_total_out;        // total bytes out
 --- a/src/lib/util/chdcodec.cpp
 +++ b/src/lib/util/chdcodec.cpp
-@@ -259,6 +259,7 @@
+@@ -23,6 +23,7 @@
+ 
+ #include <cstring>
+ #include <new>
++#include <type_traits>
+ 
+ 
+ namespace {
+@@ -259,6 +260,7 @@
  	// internal state
  	bool            m_big_endian;
  	flac_encoder    m_encoder;
@@ -1139,7 +1235,7 @@
  };
  
  
-@@ -376,7 +377,8 @@
+@@ -376,7 +378,8 @@
  			}
  		}
  
@@ -1149,7 +1245,13 @@
  		uint32_t complen = m_base_compressor.compress(&m_buffer[0], frames * cdrom_file::MAX_SECTOR_DATA, &dest[header_bytes]);
  		if (complen >= srclen)
  			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
-@@ -740,12 +742,27 @@
+@@ -735,17 +738,33 @@
+ //  compression for this hunk
+ //-------------------------------------------------
+ 
+-int8_t chd_compressor_group::find_best_compressor(const uint8_t *src, uint8_t *compressed, uint32_t &complen)
++int8_t chd_compressor_group::find_best_compressor(const uint8_t *src, uint8_t *compressed, uint32_t &complen, uint32_t codecs)
+ {
  	// determine best compression technique
  	complen = m_hunkbytes;
  	int8_t compression = -1;
@@ -1157,15 +1259,17 @@
 +	// Discpress: the codec that won the previous hunk goes first, and every other codec only
 +	// has to beat the best result so far, so it can give up as soon as it can't (set_limit).
 +	// Ties still go to the lower codec number, so the choice and the data are upstream's.
-+	int order[std::size(m_compressor)], count = 0;
++	// Only the codecs in codecs are tried: all of them unless a codec plan says otherwise.
++	int order[std::extent_v<decltype(m_compressor)>], count = 0;
 +	if (m_last_best >= 0)
 +		order[count++] = m_last_best;
  	for (int codecnum = 0; codecnum < std::size(m_compressor); codecnum++)
+-		if (m_compressor[codecnum])
 +		if (codecnum != m_last_best)
 +			order[count++] = codecnum;
 +
 +	for (int const codecnum : order)
- 		if (m_compressor[codecnum])
++		if (m_compressor[codecnum] && ((codecs >> codecnum) & 1))
  		{
  			// attempt to compress, swallowing errors
  			try
@@ -1177,7 +1281,7 @@
  				// if this is the best one, copy the data into the permanent buffer
  				uint32_t compbytes = m_compressor[codecnum]->compress(src, m_hunkbytes, &m_compress_test[0]);
  #if CHDCODEC_VERIFY_COMPRESSION
-@@ -772,7 +789,7 @@
+@@ -772,7 +791,7 @@
  				}
  printf("   codec%d=%d bytes            \n", codecnum, compbytes);
  #endif
@@ -1186,7 +1290,7 @@
  				{
  					compression = codecnum;
  					complen = compbytes;
-@@ -787,6 +804,7 @@
+@@ -787,6 +806,7 @@
  	// if the best is none, copy it over
  	if (compression == -1)
  		memcpy(compressed, src, m_hunkbytes);
@@ -1194,7 +1298,7 @@
  	return compression;
  }
  
-@@ -938,8 +956,9 @@
+@@ -938,8 +958,9 @@
  	m_deflater.next_in = const_cast<Bytef *>(src);
  	m_deflater.avail_in = srclen;
  	m_deflater.total_in = 0;
@@ -1205,7 +1309,7 @@
  	m_deflater.total_out = 0;
  	int zerr = deflateReset(&m_deflater);
  	if (zerr != Z_OK)
-@@ -949,7 +968,7 @@
+@@ -949,7 +970,7 @@
  	zerr = deflate(&m_deflater, Z_FINISH);
  
  	// if we ended up with more data than we started with, return an error
@@ -1214,7 +1318,7 @@
  		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  
  	// otherwise, return the length
-@@ -1066,7 +1085,7 @@
+@@ -1066,7 +1087,7 @@
  
  	// do it
  	ZSTD_inBuffer input{ src, srclen, 0 };
@@ -1223,7 +1327,7 @@
  	while (output.pos < output.size)
  	{
  		result = ZSTD_compressStream2(m_stream, &output, &input, ZSTD_e_end);
-@@ -1284,8 +1303,8 @@
+@@ -1284,8 +1305,8 @@
  		if (res != SZ_OK)
  			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  
@@ -1234,7 +1338,7 @@
  		res = LzmaEnc_MemEncode(encoder, dest, &complen, src, srclen, 0, nullptr, &m_allocator, &m_allocator);
  		if (res != SZ_OK)
  			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
-@@ -1419,7 +1438,7 @@
+@@ -1419,7 +1440,7 @@
  uint32_t chd_huffman_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
  	uint32_t complen;
@@ -1243,7 +1347,7 @@
  		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  	return complen;
  }
-@@ -1474,6 +1493,7 @@
+@@ -1474,6 +1495,7 @@
  	m_encoder.set_num_channels(2);
  	m_encoder.set_block_size(blocksize(hunkbytes));
  	m_encoder.set_strip_metadata(true);
@@ -1251,7 +1355,7 @@
  }
  
  
-@@ -1483,32 +1503,47 @@
+@@ -1483,32 +1505,47 @@
  
  uint32_t chd_flac_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
@@ -1312,7 +1416,7 @@
  	}
  	return complen + 1;
  }
-@@ -1642,14 +1677,16 @@
+@@ -1642,14 +1679,16 @@
  		memcpy(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA + framenum * cdrom_file::MAX_SUBCODE_DATA], &src[framenum * cdrom_file::FRAME_SIZE + cdrom_file::MAX_SECTOR_DATA], cdrom_file::MAX_SUBCODE_DATA);
  	}
  
@@ -1348,7 +1452,17 @@
  };
  
  
-@@ -126,6 +133,7 @@
+@@ -118,14 +125,15 @@
+ 	chd_compressor_group(chd_file &file, chd_codec_type compressor_list[4]);
+ 	~chd_compressor_group();
+ 
+-	// find the best compressor
+-	int8_t find_best_compressor(const uint8_t *src, uint8_t *compressed, uint32_t &complen);
++	// find the best compressor (Discpress: among the codecs whose slot bits are set in codecs)
++	int8_t find_best_compressor(const uint8_t *src, uint8_t *compressed, uint32_t &complen, uint32_t codecs = 0x0f);
+ 
+ private:
+ 	// internal state
  	uint32_t                m_hunkbytes;        // number of bytes in a hunk
  	chd_compressor::ptr     m_compressor[4];    // array of active codecs
  	std::vector<uint8_t>    m_compress_test;    // test buffer for compression
@@ -1990,16 +2104,17 @@
  // osd printf verbosity
  constexpr bool OSD_PRINTF_VERBOSE = false;
  
-@@ -103,6 +224,8 @@
+@@ -103,6 +224,9 @@
  #define OPTION_OUTPUT "output"
  #define OPTION_OUTPUT_BIN "outputbin"
  #define OPTION_OUTPUT_SPLITBIN "splitbin"
 +#define OPTION_REDUMP "redump"
 +#define OPTION_KEEPCUE "keepcue"
++#define OPTION_CODEC_PLAN "codecplan"
  #define OPTION_OUTPUT_FORCE "force"
  #define OPTION_INPUT_START_BYTE "inputstartbyte"
  #define OPTION_INPUT_START_HUNK "inputstarthunk"
-@@ -140,15 +263,15 @@
+@@ -140,15 +264,15 @@
  [[noreturn]] static void report_error(int error, Format &&fmt, Params &&...args);
  
  static void do_info(parameters_map &params);
@@ -2024,7 +2139,7 @@
  static void do_extract_ld(parameters_map &params);
  static void do_add_metadata(parameters_map &params);
  static void do_del_metadata(parameters_map &params);
-@@ -214,10 +337,19 @@
+@@ -214,12 +338,21 @@
  
  // ======================> command_description
  
@@ -2043,9 +2158,12 @@
 -	void (*handler)(parameters_map &);
 +	command_handler handler;
  	const char *description;
- 	const char *valid_options[16];
+-	const char *valid_options[16];
++	const char *valid_options[20]; // Discpress: 16 in 0.289, and createhd now has 17
  };
-@@ -329,9 +461,15 @@
+ 
+ 
+@@ -329,9 +462,15 @@
  			return 0;
  		if (offset + length > m_maxoffset)
  			length = m_maxoffset - offset;
@@ -2064,7 +2182,39 @@
  		return actual;
  	}
  
-@@ -676,6 +814,8 @@
+@@ -433,6 +572,31 @@
+ 	{
+ 	}
+ 
++protected:
++	// Discpress: for the codec plan, whether a range lies in audio tracks, data tracks or both
++	virtual hunk_content read_content(uint64_t offset, uint32_t length) const
++	{
++		uint64_t const first = offset / cdrom_file::FRAME_SIZE, end = (offset + length + cdrom_file::FRAME_SIZE - 1) / cdrom_file::FRAME_SIZE;
++		bool audio = false, data = false;
++		uint64_t start = 0;
++		for (int tracknum = 0; (tracknum < m_toc.numtrks) && (start < end); tracknum++)
++		{
++			const cdrom_file::track_info &trackinfo = m_toc.tracks[tracknum];
++			uint64_t const next = start + trackinfo.frames + trackinfo.extraframes;
++			if (next > first)
++			{
++				if (trackinfo.trktype == cdrom_file::CD_TRACK_AUDIO)
++					audio = true;
++				else
++					data = true;
++			}
++			start = next;
++		}
++		return (audio && data) ? hunk_content::MIXED : audio ? hunk_content::AUDIO : hunk_content::DATA;
++	}
++
++public:
++
+ 	// read interface
+ 	virtual uint32_t read_data(void *_dest, uint64_t offset, uint32_t length)
+ 	{
+@@ -676,6 +840,8 @@
  	{ OPTION_OUTPUT,                "o",    true, " <filename>: output file name" },
  	{ OPTION_OUTPUT_BIN,            "ob",   true, " <filename>: output file name for binary data" },
  	{ OPTION_OUTPUT_SPLITBIN,       "sb",   false, ": output one binary file per track" },
@@ -2073,17 +2223,56 @@
  	{ OPTION_OUTPUT_FORCE,          "f",    false, ": force overwriting an existing file" },
  	{ OPTION_OUTPUT_PARENT,         "op",   true, " <filename>: parent file name for output CHD" },
  	{ OPTION_INPUT_START_BYTE,      "isb",  true, " <offset>: starting byte offset within the input" },
-@@ -767,7 +907,8 @@
+@@ -687,6 +853,7 @@
+ 	{ OPTION_HUNK_SIZE,             "hs",   true, " <bytes>: size of each hunk, in bytes" },
+ 	{ OPTION_UNIT_SIZE,             "us",   true, " <bytes>: size of each unit, in bytes" },
+ 	{ OPTION_COMPRESSION,           "c",    true, " <none|type1[,type2[,...]]>: which compression codecs to use (up to 4)" },
++	{ OPTION_CODEC_PLAN,            "cp",   false, ": try each hunk only with the codecs meant for its content (CD audio: cdfl, CD data: cdlz, other data: all but flac): up to twice as fast, the same checksums, slightly larger" },
+ 	{ OPTION_IDENT,                 "id",   true, " <filename>: name of ident file to provide CHS information" },
+ 	{ OPTION_CHS,                   "chs",  true, " <cylinders,heads,sectors>: specifies CHS geometry directly" },
+ 	{ OPTION_SECTOR_SIZE,           "ss",   true, " <bytes>: size of each hard disk sector" },
+@@ -734,7 +901,8 @@
+ 			OPTION_HUNK_SIZE,
+ 			OPTION_UNIT_SIZE,
+ 			OPTION_COMPRESSION,
+-			OPTION_NUMPROCESSORS
++			OPTION_NUMPROCESSORS,
++			OPTION_CODEC_PLAN
+ 		}
+ 	},
+ 
+@@ -755,7 +923,8 @@
+ 			OPTION_CHS,
+ 			OPTION_SIZE,
+ 			OPTION_SECTOR_SIZE,
+-			OPTION_NUMPROCESSORS
++			OPTION_NUMPROCESSORS,
++			OPTION_CODEC_PLAN
+ 		}
+ 	},
+ 
+@@ -767,7 +936,9 @@
  			REQUIRED OPTION_INPUT,
  			OPTION_HUNK_SIZE,
  			OPTION_COMPRESSION,
 -			OPTION_NUMPROCESSORS
 +			OPTION_NUMPROCESSORS,
-+			OPTION_KEEPCUE
++			OPTION_KEEPCUE,
++			OPTION_CODEC_PLAN
  		}
  	},
  	{ COMMAND_CREATE_DVD, do_create_dvd, ": create a DVD CHD from the input file",
-@@ -831,6 +972,7 @@
+@@ -782,7 +953,8 @@
+ 			OPTION_INPUT_LENGTH_HUNKS,
+ 			OPTION_HUNK_SIZE,
+ 			OPTION_COMPRESSION,
+-			OPTION_NUMPROCESSORS
++			OPTION_NUMPROCESSORS,
++			OPTION_CODEC_PLAN
+ 		}
+ 	},
+ 
+@@ -831,6 +1003,7 @@
  			REQUIRED OPTION_OUTPUT,
  			OPTION_OUTPUT_BIN,
  			OPTION_OUTPUT_SPLITBIN,
@@ -2091,7 +2280,7 @@
  			OPTION_OUTPUT_FORCE,
  			REQUIRED OPTION_INPUT,
  			OPTION_INPUT_PARENT,
-@@ -1285,6 +1427,15 @@
+@@ -1285,6 +1458,15 @@
  
  static void check_existing_output_file(const parameters_map &params, std::string_view filename)
  {
@@ -2107,7 +2296,7 @@
  	if (params.find(OPTION_OUTPUT_FORCE) == params.end())
  	{
  		util::core_file::ptr file;
-@@ -1498,7 +1649,7 @@
+@@ -1498,7 +1680,7 @@
  //  compress_common - standard compression loop
  //-------------------------------------------------
  
@@ -2116,7 +2305,7 @@
  {
  	// begin compressing
  	chd.compress_begin();
-@@ -1507,10 +1658,13 @@
+@@ -1507,10 +1689,13 @@
  	double complete, ratio;
  	std::error_condition err;
  	while ((err = chd.compress_continue(complete, ratio)) == chd_file::error::WALKING_PARENT || err == chd_file::error::COMPRESSING)
@@ -2130,7 +2319,7 @@
  
  	// handle errors
  	if (err)
-@@ -1522,11 +1676,36 @@
+@@ -1522,11 +1707,36 @@
  
  
  //-------------------------------------------------
@@ -2168,7 +2357,7 @@
  {
  	if (mode == MODE_GDI)
  	{
-@@ -1781,7 +1960,7 @@
+@@ -1781,7 +1991,7 @@
  //  do_verify - validate the SHA-1 on a CHD
  //-------------------------------------------------
  
@@ -2177,7 +2366,7 @@
  {
  	bool fix_sha1 = params.find(OPTION_FIX) != params.end();
  	// parse out input files
-@@ -1820,6 +1999,7 @@
+@@ -1820,6 +2030,7 @@
  
  		// determine how much to read
  		uint32_t bytes_to_read = (std::min<uint64_t>)(buffer.size(), input_chd.logical_bytes() - offset);
@@ -2185,7 +2374,7 @@
  		std::error_condition err = input_chd.read_bytes(offset, &buffer[0], bytes_to_read);
  		if (err)
  			report_error(1, "Error reading CHD file (%s): %s", *input_chd_str->second, err.message());
-@@ -1830,7 +2010,8 @@
+@@ -1830,7 +2041,8 @@
  	}
  	util::sha1_t computed_sha1 = rawsha1.finish();
  
@@ -2195,7 +2384,7 @@
  	if (raw_sha1 != computed_sha1)
  	{
  		util::stream_format(std::cerr, "Error: Raw SHA1 in header = %s\n", raw_sha1.as_string());
-@@ -1844,6 +2025,8 @@
+@@ -1844,6 +2056,8 @@
  				report_error(1, "Error updating SHA1: %s", err.message());
  			util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
  		}
@@ -2204,7 +2393,7 @@
  	}
  	else
  	{
-@@ -1868,9 +2051,13 @@
+@@ -1868,9 +2082,13 @@
  						report_error(1, "Error updating SHA1: %s", err.message());
  					util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
  				}
@@ -2218,7 +2407,7 @@
  }
  
  
-@@ -1879,7 +2066,7 @@
+@@ -1879,7 +2097,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -2227,7 +2416,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -1894,6 +2081,8 @@
+@@ -1894,6 +2112,8 @@
  	if (unit_size_str != params.end())
  	{
  		unit_size = parse_number(unit_size_str->second->c_str());
@@ -2236,7 +2425,14 @@
  		if (output_parent.opened() && (output_parent.unit_bytes() != unit_size))
  			report_error(1, "Specified unit size %u bytes does not match output parent CHD unit size %u bytes", unit_size, output_parent.unit_bytes());
  	}
-@@ -1943,7 +2132,7 @@
+@@ -1937,13 +2157,14 @@
+ 		// create the new CHD
+ 		auto chd = std::make_unique<chd_rawfile_compressor>(*input_file, input_start, input_end);
+ 		create_output_chd(*chd, *output_chd_str, input_end - input_start, hunk_size, unit_size, compression, output_parent);
++		chd->set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
+ 
+ 		// if we have a parent, copy forward all the metadata
+ 		if (output_parent.opened())
  			chd->clone_all_metadata(output_parent);
  
  		// compress it generically
@@ -2245,7 +2441,7 @@
  	}
  	catch (...)
  	{
-@@ -1959,7 +2148,7 @@
+@@ -1959,7 +2180,7 @@
  //  disk image from a raw file
  //-------------------------------------------------
  
@@ -2254,7 +2450,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2008,6 +2197,8 @@
+@@ -2008,6 +2229,8 @@
  		if (template_str != params.end())
  			report_error(1, "Sector size cannot be specified separately when a template is specified");
  		sector_size = parse_number(sectorsize_str->second->c_str());
@@ -2263,7 +2459,15 @@
  	}
  	if (output_parent.opened() && (output_parent.unit_bytes() != sector_size))
  		report_error(1, "Sector size %u bytes does not match output parent CHD sector size %u bytes", sector_size, output_parent.unit_bytes());
-@@ -2147,7 +2338,7 @@
+@@ -2129,6 +2352,7 @@
+ 		else
+ 			chd.reset(new chd_zero_compressor(input_start, input_end));
+ 		create_output_chd(*chd, *output_chd_str, uint64_t(totalsectors) * sector_size, hunk_size, sector_size, compression, output_parent);
++		chd->set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
+ 
+ 		// add the standard hard disk metadata
+ 		std::string metadata = string_format(HARD_DISK_METADATA_FORMAT, cylinders, heads, sectors, sector_size);
+@@ -2147,7 +2371,7 @@
  
  		// compress it generically
  		if (input_file)
@@ -2272,7 +2476,7 @@
  	}
  	catch (...)
  	{
-@@ -2163,7 +2354,7 @@
+@@ -2163,7 +2387,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -2281,7 +2485,7 @@
  {
  	// process input file
  	cdrom_file::track_input_info track_info;
-@@ -2174,6 +2365,22 @@
+@@ -2174,6 +2398,22 @@
  		std::error_condition err = cdrom_file::parse_toc(*input_file_str->second, toc, track_info);
  		if (err)
  			report_error(1, "Error parsing input file (%s: %s)\n", *input_file_str->second, err.message());
@@ -2304,7 +2508,7 @@
  	}
  
  	// process output CHD
-@@ -2203,6 +2410,9 @@
+@@ -2203,6 +2443,9 @@
  		origtotalsectors += trackinfo.frames;
  		totalsectors += trackinfo.frames + trackinfo.extraframes;
  	}
@@ -2314,7 +2518,14 @@
  
  	// print some info
  	util::stream_format(std::cout, "Output CHD:   %s\n", *output_chd_str);
-@@ -2226,8 +2436,16 @@
+@@ -2220,14 +2463,23 @@
+ 		// create the new CD
+ 		auto chd = std::make_unique<chd_cd_compressor>(toc, track_info);
+ 		create_output_chd(*chd, *output_chd_str, uint64_t(totalsectors) * cdrom_file::FRAME_SIZE, hunk_size, cdrom_file::FRAME_SIZE, compression, output_parent);
++		chd->set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
+ 
+ 		// add the standard CD metadata; we do this even if we have a parent because it might be different
+ 		const std::error_condition err = cdrom_file::write_metadata(chd.get(), toc);
  		if (err)
  			report_error(1, "Error adding CD metadata: %s", err.message());
  
@@ -2332,7 +2543,7 @@
  	}
  	catch (...)
  	{
-@@ -2243,7 +2461,7 @@
+@@ -2243,7 +2495,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -2341,7 +2552,15 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2295,7 +2513,7 @@
+@@ -2288,6 +2540,7 @@
+ 		// create the new DVD
+ 		auto chd = std::make_unique<chd_rawfile_compressor>(*input_file, input_start, input_end);
+ 		create_output_chd(*chd, *output_chd_str, input_end - input_start, hunk_size, 2048, compression, output_parent);
++		chd->set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
+ 
+ 		// add the standard DVD type tag
+ 		const std::error_condition err = chd->write_metadata(DVD_METADATA_TAG, 0, "");
+@@ -2295,7 +2548,7 @@
  			report_error(1, "Error adding DVD metadata: %s", err.message());
  
  		// compress it generically
@@ -2350,7 +2569,7 @@
  	}
  	catch (...)
  	{
-@@ -2311,7 +2529,7 @@
+@@ -2311,7 +2564,7 @@
  //  input AVI file and metadata
  //-------------------------------------------------
  
@@ -2359,7 +2578,7 @@
  {
  	// process input file
  	avi_file::ptr input_file;
-@@ -2399,7 +2617,7 @@
+@@ -2399,7 +2652,7 @@
  			report_error(1, "Error adding AV metadata: %s\n", err.message());
  
  		// create the compressor and then run it generically
@@ -2368,7 +2587,7 @@
  
  		// write the final LD metadata
  		if (info.height == 524/2 || info.height == 624/2)
-@@ -2456,7 +2674,7 @@
+@@ -2456,7 +2709,7 @@
  //  another CHD
  //-------------------------------------------------
  
@@ -2377,7 +2596,7 @@
  {
  	// parse out input files
  	chd_file input_parent_chd;
-@@ -2547,7 +2765,7 @@
+@@ -2547,7 +2800,7 @@
  		}
  
  		// compress it generically
@@ -2386,7 +2605,7 @@
  	}
  	catch (...)
  	{
-@@ -2563,7 +2781,7 @@
+@@ -2563,7 +2816,7 @@
  //  CHD image
  //-------------------------------------------------
  
@@ -2395,7 +2614,7 @@
  {
  	// parse out input files
  	chd_file input_parent_chd;
-@@ -2604,6 +2822,7 @@
+@@ -2604,6 +2857,7 @@
  
  			// determine how much to read
  			uint32_t bytes_to_read = (std::min<uint64_t>)(buffer.size(), input_end - offset);
@@ -2403,7 +2622,7 @@
  			std::error_condition err = input_chd.read_bytes(offset, &buffer[0], bytes_to_read);
  			if (err)
  				report_error(1, "Error reading CHD file (%s): %s", *params.find(OPTION_INPUT)->second, err.message());
-@@ -2639,14 +2858,109 @@
+@@ -2639,14 +2893,109 @@
  //  CHD image
  //-------------------------------------------------
  
@@ -2515,7 +2734,7 @@
  	cdrom_file *cdrom = new cdrom_file(&input_chd);
  	const cdrom_file::toc &toc = cdrom->get_toc();
  
-@@ -2671,8 +2985,13 @@
+@@ -2671,8 +3020,13 @@
  	if (chop != std::string::npos)
  		default_name.erase(chop, default_name.size());
  
@@ -2530,7 +2749,7 @@
  	if (!is_splitbin && cdrom->is_gdrom() && mode == MODE_CUEBIN)
  	{
  		// GD-ROM cue/bin is in Redump format which should always be split by tracks
-@@ -2730,6 +3049,7 @@
+@@ -2730,6 +3084,7 @@
  		std::error_condition filerr = util::core_file::open(*output_file_str->second, OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_NO_BOM, output_toc_file);
  		if (filerr)
  			report_error(1, "Unable to open file (%s): %s", *output_file_str->second, filerr.message());
@@ -2538,7 +2757,7 @@
  
  		uint64_t total_bytes = 0;
  		for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
-@@ -2807,10 +3127,24 @@
+@@ -2807,10 +3162,24 @@
  			track_filenames.push_back(filename_formatted);
  		}
  
@@ -2564,7 +2783,7 @@
  		}
  		else if (mode == MODE_NORMAL)
  		{
-@@ -2842,11 +3176,11 @@
+@@ -2842,11 +3211,11 @@
  			}
  
  			if (mode2)
@@ -2579,7 +2798,7 @@
  		}
  
  		if (cdrom->is_gdrom() && mode == MODE_CUEBIN)
-@@ -2920,6 +3254,7 @@
+@@ -2920,6 +3289,7 @@
  		uint64_t outputoffs = 0;
  		uint32_t discoffs = 0;
  		std::vector<uint8_t> buffer;
@@ -2587,7 +2806,7 @@
  
  		for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
  		{
-@@ -2942,17 +3277,18 @@
+@@ -2942,17 +3312,18 @@
  				output_bin_filenames.push_back(trackbin_name);
  			}
  
@@ -2611,7 +2830,7 @@
  
  			// If this is bin/cue output and the CHD contains subdata, warn the user and don't include
  			// the subdata size in the buffer calculation.
-@@ -2987,6 +3323,15 @@
+@@ -2987,6 +3358,15 @@
  					frameofs = frame - trackinfo.splitframes;
  				}
  
@@ -2627,7 +2846,7 @@
  				// read the data
  				cdrom->read_data(cdrom->get_track_start_phys(trk) + frameofs, &buffer[bufferoffs], toc.tracks[trk].trktype, true);
  
-@@ -3387,7 +3732,8 @@
+@@ -3387,7 +3767,8 @@
  	{
  		// delete the output file
  		output_file.reset();
@@ -2637,7 +2856,7 @@
  		throw;
  	}
  }
-@@ -3425,14 +3771,39 @@
+@@ -3425,14 +3806,39 @@
  //  main - entry point
  //-------------------------------------------------
  
@@ -2652,7 +2871,8 @@
 +	parameters_map parameters;
 +	chdman_task task;
 +};
-+
+ 
+-	// print the header
 +std::unique_ptr<chdman_run> s_run;
 +constexpr int CHDMAN_PAUSED = -1;
 +
@@ -2663,8 +2883,7 @@
 +}
 +
 +} // anonymous namespace
- 
--	// print the header
++
 +
 +// parses the command line and prepares the command: returns CHDMAN_PAUSED when it is ready to
 +// run (chdman_continue), otherwise the exit code
@@ -2681,7 +2900,7 @@
  
  	// handle help specially
  	if (args.size() < 2)
-@@ -3459,7 +3830,7 @@
+@@ -3459,7 +3865,7 @@
  				return print_help(args[0], desc);
  
  			// otherwise, verify the parameters
@@ -2690,7 +2909,7 @@
  			while (argnum < args.size())
  			{
  				// should be an option name
-@@ -3519,30 +3890,86 @@
+@@ -3519,30 +3925,86 @@
  					return print_help(args[0], desc, "Required parameters missing");
  			}
  

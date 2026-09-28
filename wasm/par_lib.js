@@ -5,8 +5,9 @@ addToLibrary({
     var list = [HEAPU32[p], HEAPU32[p + 1], HEAPU32[p + 2], HEAPU32[p + 3]];
     return Module['parSetup'](hunkbytes >>> 0, unitbytes >>> 0, list) ? 1 : 0;
   },
-  wasm_par_submit: function (item, data, length) {
-    Module['parSubmit'](item >>> 0, data >>> 0, length >>> 0);
+  // codecs: the codec slots to try for this hunk, a bit each (the codec plan; 15 = all)
+  wasm_par_submit: function (item, data, length, codecs) {
+    Module['parSubmit'](item >>> 0, data >>> 0, length >>> 0, codecs >>> 0);
   },
   // while helper workers compress, chdman pauses after each compression step
   // (chdman_begin/chdman_resume return -1) so that their results can arrive

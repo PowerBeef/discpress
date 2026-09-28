@@ -859,9 +859,9 @@ function setupParallel(M, ports) {
         if (h.inflight > round) continue;
         var b = pending.shift();
         h.inflight++;
-        var items = b.items.slice(0, b.n);
+        var items = b.items.slice(0, b.n), codecs = b.codecs.slice(0, b.n);
         var data = b.n === batchSize ? b.buf : b.buf.slice(0, b.n * hunkbytes);
-        h.port.postMessage({ type: 'batch', id: ++seq, items: items, data: data.buffer }, [items.buffer, data.buffer]);
+        h.port.postMessage({ type: 'batch', id: ++seq, items: items, codecs: codecs, data: data.buffer }, [items.buffer, codecs.buffer, data.buffer]);
       }
     }
   }
@@ -923,9 +923,11 @@ function setupParallel(M, ports) {
     postMessage({ type: 'notice', level: 'debug', message: 'multi-core compression: ' + helpers.length + ' helper threads, batch ' + batchSize });
     return true;
   };
-  M.parSubmit = function (item, ptr, len) {
-    if (!open) open = { n: 0, items: new Uint32Array(batchSize), buf: new Uint8Array(batchSize * hunkbytes) };
+  // codecs: the codec slots the codec plan tries for this hunk, a bit each (15 = all)
+  M.parSubmit = function (item, ptr, len, codecs) {
+    if (!open) open = { n: 0, items: new Uint32Array(batchSize), codecs: new Uint8Array(batchSize), buf: new Uint8Array(batchSize * hunkbytes) };
     open.buf.set(M.HEAPU8.subarray(ptr, ptr + len), open.n * hunkbytes);
+    open.codecs[open.n] = codecs;
     open.items[open.n++] = item;
     fifo.push(item);
     if (open.n === batchSize) flushOpen();
@@ -1068,11 +1070,11 @@ async function runHelper(msg) {
         return;
       }
       if (m.type === 'batch') {
-        var n = m.items.length, data = new Uint8Array(m.data);
+        var n = m.items.length, data = new Uint8Array(m.data), codecs = m.codecs;
         var meta = new Int32Array(n * 3), sha1 = new Uint8Array(n * 20), parts = [], total = 0;
         for (var i = 0; i < n; i++) {
           M.HEAPU8.set(data.subarray(i * hb, (i + 1) * hb), inbuf);
-          var c = M._wasm_helper_compress(res, sha);
+          var c = M._wasm_helper_compress(res, sha, codecs ? codecs[i] : 15);
           var heap32 = M.HEAPU32, heap8 = M.HEAPU8;
           var len = heap32[res >>> 2], crc = heap32[(res >>> 2) + 1];
           meta[i * 3] = c; meta[i * 3 + 1] = len; meta[i * 3 + 2] = crc;

@@ -187,7 +187,11 @@ This affects users today, so it ships as its own small release before any fork w
 
 ### Milestone 2: performance (1–2 weeks)
 
-**Status: 2.1, 2.3, 2.4 and 2.8 done (2.8 for extract and verify), and part of 2.2** (see `engine/README.md`; measured in measurements §2).
+**Status: 2.1, 2.3, 2.4, 2.5 and 2.8 done (2.8 for extract and verify), and part of 2.2** (see `engine/README.md`; measured in measurements §2).
+- **2.5 codec plan (done, opt-in).** `--codecplan` (`-cp`) on `createcd`, `createdvd`, `createhd` and `createraw`: a CD hunk in audio tracks tries `cdfl`, one in data tracks `cdlz` (the "+`cdzl`" variant would give 1.23× for ±0), any other hunk every codec but `flac` (no FLAC-0 probe); a CD hunk holding both tries all. The page's "Nearly as small, faster" preset.
+  - Same codec list, data and SHA-1s as the default; 0.289 verifies the result. The same CHD at any thread count, and in the page.
+  - Native, `-np 4`, CPU against the default (after 2.4): CD data 1.81× (+0.22%), CD audio 1.91× (±0), a mixed CD 2.00× (+0.11%), DVD 1.38× (+0.06%).
+  - In the page: the benchmark CD 1.73× faster with 1 thread and 1.62× with 4 (44.3% → 44.5% of the input), the benchmark DVD 1.53× and 1.31× (41.0% either way).
 - **2.3 deterministic libm.** libFLAC calls `engine/libm`'s `cosf` and `log`, Arm's optimized-routines code that glibc is built from. The `log` gives the fused results where GCC fuses glibc's multiply-adds for FMA CPUs.
   - Checked against glibc: `cosf` on all 1.97 billion window arguments, `log` on 200 million inputs. Both are identical natively and in wasm.
   - The page's CD-audio CHDs of 114 MB of real music now match unmodified chdman 0.289 byte for byte (before: different).
@@ -226,7 +230,7 @@ Numbers are single-core CPU unless noted (measurements §1–2, G §11–12).
 
 Presets:
 - **Compatible** (default) = 2.1–2.4 + 2.8.
-- **Fast** = plus 2.5 and 2.6, for phones: G measured Snapdragon parts throttling to 30–58% and iPhones exposing 2 performance cores.
+- **Fast** = plus 2.5 (now "Nearly as small, faster") and 2.6, for phones: G measured Snapdragon parts throttling to 30–58% and iPhones exposing 2 performance cores.
 - **Smallest** = plus 2.7.
 - Anything in tier X is an explicit expert choice with reader warnings.
 

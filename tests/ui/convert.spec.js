@@ -1,6 +1,6 @@
 // Creating CHDs from every kind of input, checked against desktop chdman.
 import { test, expect, manifest, fixture } from '../support/app.js';
-import { info, nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
+import { engineReference, info, nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
 
 const SYSTEM_BADGE = { ps1: 'PS1', ps2: 'PS2', psp: 'PSP', saturn: 'SAT', segacd: 'SCD', dc: 'DC' };
 
@@ -101,6 +101,31 @@ for (const [label, codecs] of PRESETS) {
       await app.run(card);
       const [out] = await app.downloads(card);
       expectSameAsNative(out.path, fx.command, inputOf(fx), codecs[disc]);
+    });
+  }
+}
+
+// "Nearly as small, faster" is the engine's codec plan (--codecplan): not chdman 0.289's bytes, but
+// its checksums, and the native engine's bytes whether helper workers compress or not
+for (const [key, disc] of [['ps1-multitrack', 'cd'], ['ps2-dvd', 'dvd']]) {
+  for (const threads of [1, 4]) {
+    test(`compression "Nearly as small, faster" on ${disc.toUpperCase()}, ${threads} thread(s)`, async ({ app }) => {
+      const fx = fixture(key);
+      await app.open({ settings: { threads } });
+      await app.add(fx.add);
+      const card = app.jobs().first();
+      await app.settled(card);
+      await card.locator('details.opts summary').click();
+      await card.locator('label.field', { hasText: 'Compression' }).locator('select').selectOption({ label: 'Nearly as small, faster' });
+      await expect(card.locator('code.cmd')).toContainText('--codecplan');
+      await expect(card.locator('code.cmd')).not.toContainText(/\s-c\s/);
+      await app.run(card);
+      const [out] = await app.downloads(card);
+      if (!nativeChdman()) return;
+      const ref = info(reference(fx.command, inputOf(fx))), mine = info(out.path);
+      expect([mine.sha1, mine.dataSha1]).toEqual([ref.sha1, ref.dataSha1]);
+      const engine = engineReference(fx.command, inputOf(fx), ['--codecplan']);
+      if (engine) expect(sha1File(out.path), 'the native engine\'s CHD, byte for byte').toBe(sha1File(engine));
     });
   }
 }

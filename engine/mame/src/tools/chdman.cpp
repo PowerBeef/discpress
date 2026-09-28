@@ -226,6 +226,7 @@ constexpr bool OSD_PRINTF_VERBOSE = false;
 #define OPTION_OUTPUT_SPLITBIN "splitbin"
 #define OPTION_REDUMP "redump"
 #define OPTION_KEEPCUE "keepcue"
+#define OPTION_CODEC_PLAN "codecplan"
 #define OPTION_OUTPUT_FORCE "force"
 #define OPTION_INPUT_START_BYTE "inputstartbyte"
 #define OPTION_INPUT_START_HUNK "inputstarthunk"
@@ -351,7 +352,7 @@ struct command_description
 	const char *name;
 	command_handler handler;
 	const char *description;
-	const char *valid_options[16];
+	const char *valid_options[20]; // Discpress: 16 in 0.289, and createhd now has 17
 };
 
 
@@ -570,6 +571,31 @@ public:
 	~chd_cd_compressor()
 	{
 	}
+
+protected:
+	// Discpress: for the codec plan, whether a range lies in audio tracks, data tracks or both
+	virtual hunk_content read_content(uint64_t offset, uint32_t length) const
+	{
+		uint64_t const first = offset / cdrom_file::FRAME_SIZE, end = (offset + length + cdrom_file::FRAME_SIZE - 1) / cdrom_file::FRAME_SIZE;
+		bool audio = false, data = false;
+		uint64_t start = 0;
+		for (int tracknum = 0; (tracknum < m_toc.numtrks) && (start < end); tracknum++)
+		{
+			const cdrom_file::track_info &trackinfo = m_toc.tracks[tracknum];
+			uint64_t const next = start + trackinfo.frames + trackinfo.extraframes;
+			if (next > first)
+			{
+				if (trackinfo.trktype == cdrom_file::CD_TRACK_AUDIO)
+					audio = true;
+				else
+					data = true;
+			}
+			start = next;
+		}
+		return (audio && data) ? hunk_content::MIXED : audio ? hunk_content::AUDIO : hunk_content::DATA;
+	}
+
+public:
 
 	// read interface
 	virtual uint32_t read_data(void *_dest, uint64_t offset, uint32_t length)
@@ -827,6 +853,7 @@ static const option_description s_options[] =
 	{ OPTION_HUNK_SIZE,             "hs",   true, " <bytes>: size of each hunk, in bytes" },
 	{ OPTION_UNIT_SIZE,             "us",   true, " <bytes>: size of each unit, in bytes" },
 	{ OPTION_COMPRESSION,           "c",    true, " <none|type1[,type2[,...]]>: which compression codecs to use (up to 4)" },
+	{ OPTION_CODEC_PLAN,            "cp",   false, ": try each hunk only with the codecs meant for its content (CD audio: cdfl, CD data: cdlz, other data: all but flac): up to twice as fast, the same checksums, slightly larger" },
 	{ OPTION_IDENT,                 "id",   true, " <filename>: name of ident file to provide CHS information" },
 	{ OPTION_CHS,                   "chs",  true, " <cylinders,heads,sectors>: specifies CHS geometry directly" },
 	{ OPTION_SECTOR_SIZE,           "ss",   true, " <bytes>: size of each hard disk sector" },
@@ -874,7 +901,8 @@ static const command_description s_commands[] =
 			OPTION_HUNK_SIZE,
 			OPTION_UNIT_SIZE,
 			OPTION_COMPRESSION,
-			OPTION_NUMPROCESSORS
+			OPTION_NUMPROCESSORS,
+			OPTION_CODEC_PLAN
 		}
 	},
 
@@ -895,7 +923,8 @@ static const command_description s_commands[] =
 			OPTION_CHS,
 			OPTION_SIZE,
 			OPTION_SECTOR_SIZE,
-			OPTION_NUMPROCESSORS
+			OPTION_NUMPROCESSORS,
+			OPTION_CODEC_PLAN
 		}
 	},
 
@@ -908,7 +937,8 @@ static const command_description s_commands[] =
 			OPTION_HUNK_SIZE,
 			OPTION_COMPRESSION,
 			OPTION_NUMPROCESSORS,
-			OPTION_KEEPCUE
+			OPTION_KEEPCUE,
+			OPTION_CODEC_PLAN
 		}
 	},
 	{ COMMAND_CREATE_DVD, do_create_dvd, ": create a DVD CHD from the input file",
@@ -923,7 +953,8 @@ static const command_description s_commands[] =
 			OPTION_INPUT_LENGTH_HUNKS,
 			OPTION_HUNK_SIZE,
 			OPTION_COMPRESSION,
-			OPTION_NUMPROCESSORS
+			OPTION_NUMPROCESSORS,
+			OPTION_CODEC_PLAN
 		}
 	},
 
@@ -2126,6 +2157,7 @@ static chdman_task do_create_raw(parameters_map &params)
 		// create the new CHD
 		auto chd = std::make_unique<chd_rawfile_compressor>(*input_file, input_start, input_end);
 		create_output_chd(*chd, *output_chd_str, input_end - input_start, hunk_size, unit_size, compression, output_parent);
+		chd->set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
 
 		// if we have a parent, copy forward all the metadata
 		if (output_parent.opened())
@@ -2320,6 +2352,7 @@ static chdman_task do_create_hd(parameters_map &params)
 		else
 			chd.reset(new chd_zero_compressor(input_start, input_end));
 		create_output_chd(*chd, *output_chd_str, uint64_t(totalsectors) * sector_size, hunk_size, sector_size, compression, output_parent);
+		chd->set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
 
 		// add the standard hard disk metadata
 		std::string metadata = string_format(HARD_DISK_METADATA_FORMAT, cylinders, heads, sectors, sector_size);
@@ -2430,6 +2463,7 @@ static chdman_task do_create_cd(parameters_map &params)
 		// create the new CD
 		auto chd = std::make_unique<chd_cd_compressor>(toc, track_info);
 		create_output_chd(*chd, *output_chd_str, uint64_t(totalsectors) * cdrom_file::FRAME_SIZE, hunk_size, cdrom_file::FRAME_SIZE, compression, output_parent);
+		chd->set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
 
 		// add the standard CD metadata; we do this even if we have a parent because it might be different
 		const std::error_condition err = cdrom_file::write_metadata(chd.get(), toc);
@@ -2506,6 +2540,7 @@ static chdman_task do_create_dvd(parameters_map &params)
 		// create the new DVD
 		auto chd = std::make_unique<chd_rawfile_compressor>(*input_file, input_start, input_end);
 		create_output_chd(*chd, *output_chd_str, input_end - input_start, hunk_size, 2048, compression, output_parent);
+		chd->set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
 
 		// add the standard DVD type tag
 		const std::error_condition err = chd->write_metadata(DVD_METADATA_TAG, 0, "");

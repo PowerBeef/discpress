@@ -125,8 +125,8 @@ public:
 	chd_compressor_group(chd_file &file, chd_codec_type compressor_list[4]);
 	~chd_compressor_group();
 
-	// find the best compressor
-	int8_t find_best_compressor(const uint8_t *src, uint8_t *compressed, uint32_t &complen);
+	// find the best compressor (Discpress: among the codecs whose slot bits are set in codecs)
+	int8_t find_best_compressor(const uint8_t *src, uint8_t *compressed, uint32_t &complen, uint32_t codecs = 0x0f);
 
 private:
 	// internal state

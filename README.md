@@ -125,7 +125,7 @@ No. Discpress is a single file that runs entirely on your device. It makes no ne
 <details>
 <summary><b>Are the CHDs as good as the ones from desktop chdman?</b></summary>
 <br>
-Yes. Discpress runs chdman from the official MAME 0.289 release, so the files are standard CHD v5 with the same checksums as desktop chdman 0.289's, and byte for byte the same as chdman 0.289 makes on Linux, CD audio included. (chdman builds for Windows or macOS round the FLAC encoder's floating-point math differently, so their CD-audio bytes can differ from each other's and from Discpress's, never the audio itself.) Its source is in <a href="engine/README.md"><code>engine/</code></a>. The changes let it run in a browser and on several cores, make it faster without changing a byte, and fix chdman 0.289's crashes on bad input. You can read every change in <a href="engine/mame-0.289.diff"><code>engine/mame-0.289.diff</code></a>.
+Yes. Discpress runs chdman from the official MAME 0.289 release, so the files are standard CHD v5 with the same checksums as desktop chdman 0.289's, and byte for byte the same as chdman 0.289 makes on Linux, CD audio included. (chdman builds for Windows or macOS round the FLAC encoder's floating-point math differently, so their CD-audio bytes can differ from each other's and from Discpress's, never the audio itself.) Its source is in <a href="engine/README.md"><code>engine/</code></a>. The changes let it run in a browser and on several cores, make it faster without changing a byte, and fix chdman 0.289's crashes on bad input. Two opt-in choices change the bytes but not the checksums: the <i>Nearly as small, faster</i> compression and keeping cue sheets in CD CHDs. You can read every change in <a href="engine/mame-0.289.diff"><code>engine/mame-0.289.diff</code></a>.
 </details>
 
 <details>
@@ -144,7 +144,7 @@ Older browsers keep results in memory instead of on disk, which limits how big a
 <details>
 <summary><b>How big can a disc be?</b></summary>
 <br>
-Multi-gigabyte DVD images work as long as your device has the free space, because results are written to disk rather than memory. Creating a CHD is CPU-heavy, so expect a few minutes per CD on a computer and longer on a phone. <i>Faster to create</i> in Options trades a little size for a lot of speed.
+Multi-gigabyte DVD images work as long as your device has the free space, because results are written to disk rather than memory. Creating a CHD is CPU-heavy, so expect a few minutes per CD on a computer and longer on a phone. <i>Nearly as small, faster</i> in Options tries each track with only the codec that suits it: about 1.7 times as fast for CDs and 1.4 for DVDs, with files at most 0.3% bigger and the same checksums. <i>Faster to create</i> trades more size for more speed.
 </details>
 
 <details>

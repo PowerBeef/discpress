@@ -53,8 +53,9 @@ extern "C" EMSCRIPTEN_KEEPALIVE uint8_t *wasm_helper_inbuf() { return s_in.data(
 extern "C" EMSCRIPTEN_KEEPALIVE uint8_t *wasm_helper_outbuf() { return s_out.data(); }
 
 // result[0] = compressed length, result[1] = crc16; sha1out receives 20 bytes.
+// codecs: the codec slots to try, a bit each (the codec plan; 15 = all).
 // returns the codec index (-1 = stored uncompressed)
-extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_compress(uint32_t *result, uint8_t *sha1out)
+extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_compress(uint32_t *result, uint8_t *sha1out, uint32_t codecs)
 {
 	result[1] = uint16_t(util::crc16_creator::simple(s_in.data(), s_hunkbytes));
 	util::sha1_t const sha1 = util::sha1_creator::simple(s_in.data(), s_hunkbytes);
@@ -75,7 +76,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_compress(uint32_t *result, uint8
 		s_seen.clear();
 
 	uint32_t complen = s_hunkbytes;
-	int8_t const compression = s_group->find_best_compressor(s_in.data(), s_out.data(), complen);
+	int8_t const compression = s_group->find_best_compressor(s_in.data(), s_out.data(), complen, codecs);
 	result[0] = complen;
 	return compression;
 }

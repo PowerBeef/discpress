@@ -477,6 +477,12 @@ public:
 	void compress_begin();
 	std::error_condition compress_continue(double &progress, double &ratio);
 
+	// Discpress: the codec plan (chdman's --codecplan). Each hunk is tried only with the codecs
+	// meant for what it holds, instead of all of them: CD audio with cdfl, CD data with cdlz, and
+	// other data with every codec but flac (codec_plan_codecs). The data and both SHA-1s are the
+	// same; the bytes differ where a codec left out would have won. Set before compress_begin.
+	void set_codec_plan(bool plan) noexcept { m_codec_plan = plan; }
+
 #ifdef __EMSCRIPTEN__
 	// browser build: completion callback for hunks compressed by helper workers
 	static void wasm_par_complete_item(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen, const uint8_t *data);
@@ -486,7 +492,13 @@ protected:
 	// required override: read more data
 	virtual uint32_t read_data(void *dest, uint64_t offset, uint32_t length) = 0;
 
+	// Discpress: what a range of the data holds, for the codec plan (called from the read thread)
+	enum class hunk_content { MIXED, DATA, AUDIO };
+	virtual hunk_content read_content(uint64_t offset, uint32_t length) const { return hunk_content::DATA; }
+
 private:
+	uint32_t codec_plan_codecs(hunk_content content) const noexcept;
+
 	// hash map for looking up values
 	class hashmap
 	{
@@ -556,6 +568,7 @@ private:
 			, m_complen(0)
 			, m_compression(0)
 			, m_codecs(nullptr)
+			, m_try(0x0f)
 		{ }
 
 		osd_work_item *     m_osd;              // OSD work item running on this block
@@ -569,6 +582,7 @@ private:
 		uint32_t              m_complen;          // compressed data length
 		int8_t                m_compression;      // type of compression used
 		chd_compressor_group *m_codecs;         // codec instance
+		uint32_t              m_try;              // Discpress: codec slots to try (the codec plan)
 		std::vector<hash_pair> m_hash;        // array of hashes
 	};
 
@@ -581,6 +595,7 @@ private:
 	void async_read();
 
 	// current compression status
+	bool                    m_codec_plan = false; // Discpress: try each hunk only with the codecs for its content
 	bool                    m_walking_parent;   // are we building the parent map?
 	uint64_t                m_total_in;         // total bytes in
 	uint64_t                m_total_out;        // total bytes out

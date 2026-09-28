@@ -23,6 +23,7 @@
 
 #include <cstring>
 #include <new>
+#include <type_traits>
 
 
 namespace {
@@ -737,7 +738,7 @@ chd_compressor_group::~chd_compressor_group()
 //  compression for this hunk
 //-------------------------------------------------
 
-int8_t chd_compressor_group::find_best_compressor(const uint8_t *src, uint8_t *compressed, uint32_t &complen)
+int8_t chd_compressor_group::find_best_compressor(const uint8_t *src, uint8_t *compressed, uint32_t &complen, uint32_t codecs)
 {
 	// determine best compression technique
 	complen = m_hunkbytes;
@@ -746,7 +747,8 @@ int8_t chd_compressor_group::find_best_compressor(const uint8_t *src, uint8_t *c
 	// Discpress: the codec that won the previous hunk goes first, and every other codec only
 	// has to beat the best result so far, so it can give up as soon as it can't (set_limit).
 	// Ties still go to the lower codec number, so the choice and the data are upstream's.
-	int order[std::size(m_compressor)], count = 0;
+	// Only the codecs in codecs are tried: all of them unless a codec plan says otherwise.
+	int order[std::extent_v<decltype(m_compressor)>], count = 0;
 	if (m_last_best >= 0)
 		order[count++] = m_last_best;
 	for (int codecnum = 0; codecnum < std::size(m_compressor); codecnum++)
@@ -754,7 +756,7 @@ int8_t chd_compressor_group::find_best_compressor(const uint8_t *src, uint8_t *c
 			order[count++] = codecnum;
 
 	for (int const codecnum : order)
-		if (m_compressor[codecnum])
+		if (m_compressor[codecnum] && ((codecs >> codecnum) & 1))
 		{
 			// attempt to compress, swallowing errors
 			try
