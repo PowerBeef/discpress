@@ -95,7 +95,7 @@ logic problems but not WebKit-specific rendering.
 Times real conversions through the UI (from pressing the button to the finished state, measured
 with the page's own clock) and the same work with native chdman. Options:
 `--fixtures`, `--quick`, `--ops create,extract`, `--threads 1,2,4`, `--simd on,off`,
-`--presets default,plan,fast,zstd,none` (`plan` is checked against `build/chdman-native`), `--repeat N`, `--html PATH`, `--label NAME`,
+`--presets default,plan,fast,zstd,none` (`plan` and `fast` use the engine's own options and are checked against `build/chdman-native`), `--repeat N`, `--html PATH`, `--label NAME`,
 `--compare FILE|latest`, `--cd-mb`, `--dvd-mb`, `--no-native`, `--no-verify`.
 
 Each run writes `.cache/bench/<time>-<label>.json` and `.md`: seconds (median), throughput,

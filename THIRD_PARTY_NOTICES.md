@@ -11,6 +11,7 @@
 | Zstandard | BSD 3-Clause | Meta Platforms, Inc. and affiliates |
 | MD5 (`src/lib/util/md5.h`, libFLAC's `md5.c`) | Public domain | Colin Plumb |
 | [Arm optimized-routines](https://github.com/ARM-software/optimized-routines): `cosf` and `log` for libFLAC ([`engine/libm`](engine/libm/README.md)) | MIT (chosen from MIT OR Apache-2.0 WITH LLVM-exception) | Arm Limited |
+| [libdeflate](https://github.com/ebiggers/libdeflate) v1.24: its compressor, for `--libdeflate` ([`engine/libdeflate`](engine/libdeflate/README.md)) | MIT | Eric Biggers, Google LLC |
 | [libretro-database](https://github.com/libretro/libretro-database) Redump DATs (`db/db.json.gz`: game names, serials, sizes, CRC-32) | See libretro-database; data from [Redump](http://redump.org) | libretro and Redump contributors |
 
 MAME as a whole is licensed under GPL-2.0-or-later. Only BSD-licensed parts of MAME (and the public-domain `md5.h`) are in `engine/` and compiled into Discpress. Every change made to them is in [`engine/mame-0.289.diff`](engine/mame-0.289.diff).

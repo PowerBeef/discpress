@@ -20,6 +20,7 @@
 
 #include <zlib.h>
 #include <zstd.h>
+#include <libdeflate.h>
 
 #include <cstring>
 #include <new>
@@ -81,6 +82,7 @@ private:
 	// internal state
 	z_stream                m_deflater;
 	chd_zlib_allocator      m_allocator;
+	libdeflate_compressor * m_libdeflate = nullptr; // Discpress: libdeflate instead (chd_file::libdeflate)
 };
 
 
@@ -935,6 +937,13 @@ chd_zlib_compressor::chd_zlib_compressor(chd_file &chd, uint32_t hunkbytes, bool
 		throw std::bad_alloc();
 	else if (zerr != Z_OK)
 		throw std::error_condition(chd_file::error::CODEC_ERROR);
+
+	// Discpress: libdeflate at its level 9, if asked for (zlib's level 9 is its best)
+	if (chd.libdeflate() && !(m_libdeflate = libdeflate_alloc_compressor(9)))
+	{
+		deflateEnd(&m_deflater);
+		throw std::bad_alloc();
+	}
 }
 
 
@@ -945,6 +954,8 @@ chd_zlib_compressor::chd_zlib_compressor(chd_file &chd, uint32_t hunkbytes, bool
 chd_zlib_compressor::~chd_zlib_compressor()
 {
 	deflateEnd(&m_deflater);
+	if (m_libdeflate)
+		libdeflate_free_compressor(m_libdeflate);
 }
 
 
@@ -954,6 +965,17 @@ chd_zlib_compressor::~chd_zlib_compressor()
 
 uint32_t chd_zlib_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
 {
+	// Discpress: libdeflate returns 0 when the result doesn't fit, which here means it must be
+	// smaller than the hunk and the limit, as with zlib below
+	if (m_libdeflate)
+	{
+		uint32_t const destlen = std::min(srclen, m_limit);
+		size_t const complen = (destlen > 1) ? libdeflate_deflate_compress(m_libdeflate, src, srclen, dest, destlen - 1) : 0;
+		if (!complen)
+			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+		return uint32_t(complen);
+	}
+
 	// reset the compressor
 	m_deflater.next_in = const_cast<Bytef *>(src);
 	m_deflater.avail_in = srclen;

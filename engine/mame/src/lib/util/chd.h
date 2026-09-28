@@ -313,6 +313,12 @@ public:
 	uint64_t unit_count() const noexcept { return m_unitcount; }
 	bool compressed() const noexcept { return (m_compression[0] != CHD_CODEC_NONE); }
 	chd_codec_type compression(int index) const noexcept { return m_compression[index]; }
+
+	// Discpress: the deflate codec encodes with libdeflate instead of zlib (chdman's --libdeflate):
+	// standard deflate that every reader decodes, 2 to 3 times faster and a little smaller, but not
+	// zlib's bytes. Read when a compressor group is made (compress_begin).
+	void set_libdeflate(bool libdeflate) noexcept { m_libdeflate = libdeflate; }
+	bool libdeflate() const noexcept { return m_libdeflate; }
 	chd_file *parent() const noexcept { return m_parent.get(); }
 	bool parent_missing() const noexcept;
 	util::sha1_t sha1() const noexcept;
@@ -447,6 +453,8 @@ private:
 	// caching
 	std::vector<uint8_t>    m_cache;            // single-hunk cache for partial reads/writes
 	uint32_t                m_cachehunk;        // which hunk is in the cache?
+
+	bool                    m_libdeflate = false; // Discpress: see set_libdeflate
 
 #ifdef __EMSCRIPTEN__
 	// Discpress: hunks handed to helper workers, by hunk number (see wasm_read_ahead)

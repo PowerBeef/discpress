@@ -908,7 +908,8 @@ function setupParallel(M, ports) {
     };
   });
 
-  M.parSetup = function (hb, ub, comps) {
+  // flags: 1 = libdeflate for the deflate codec (--libdeflate)
+  M.parSetup = function (hb, ub, comps, flags) {
     if (!helpers.length) return false;
     // the LaserDisc codec (avhu) reads settings from the CHD's own metadata: keep it single-threaded
     if (comps.indexOf(0x61766875) >= 0) return false;
@@ -918,7 +919,7 @@ function setupParallel(M, ports) {
     // (with 4 KiB DVD hunks, 512 KiB batches meant only two helpers ever had work)
     batchSize = Math.max(1, Math.min(64, Math.floor((512 * 1024) / hb), Math.floor(128 / (2 * helpers.length))));
     scratch = M._malloc(hb + 64);
-    helpers.forEach(function (h) { h.port.postMessage({ type: 'init', hunkbytes: hb, unitbytes: ub, comps: comps }); });
+    helpers.forEach(function (h) { h.port.postMessage({ type: 'init', hunkbytes: hb, unitbytes: ub, comps: comps, flags: flags || 0 }); });
     M.parActive = true;
     postMessage({ type: 'notice', level: 'debug', message: 'multi-core compression: ' + helpers.length + ' helper threads, batch ' + batchSize });
     return true;
@@ -1062,7 +1063,7 @@ async function runHelper(msg) {
         return;
       }
       if (m.type === 'init') {
-        var r = M._wasm_helper_init(m.hunkbytes, m.unitbytes, m.comps[0], m.comps[1], m.comps[2], m.comps[3]);
+        var r = M._wasm_helper_init(m.hunkbytes, m.unitbytes, m.comps[0], m.comps[1], m.comps[2], m.comps[3], m.flags || 0);
         if (r !== 0) throw new Error('codec init failed (' + r + ')');
         inbuf = M._wasm_helper_inbuf();
         outbuf = M._wasm_helper_outbuf();

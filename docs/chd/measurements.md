@@ -120,6 +120,27 @@ The gains are below the estimate because codecs don't emit output evenly. Deflat
 
 In the page (4-core Xeon, SIMD), the "Nearly as small, faster" preset against the default: the benchmark CD in 35.8 s instead of 62.0 s with 1 thread (1.73×) and 10.9 s instead of 17.6 s with 4 (1.62×); the benchmark DVD in 158.0 s instead of 241.3 s (1.53×) and 55.5 s instead of 72.6 s (1.31×). Each CHD equals the native engine's byte for byte. With 4 threads less of the time is compression, so the gain is smaller.
 
+**libdeflate for the deflate codec, as built (milestone 2.6, `--libdeflate`, opt-in).** Raw deflate of each hunk, one core: zlib level 9 (chdman's) against libdeflate v1.24.
+
+| Hunks | zlib-9 | libdeflate-6 | libdeflate-9 | libdeflate-12 |
+|---|---|---|---|---|
+| DVD (`payload.iso`, 4 KiB) | 4.05 s, 37,499,481 | 1.09 s, −0.17% | 2.01 s, −0.46% | 14.65 s, −2.32% |
+| CD data (`data_m2`, 18,816 bytes) | 7.20 s, 48,438,103 | 1.14 s, −0.08% | 2.54 s, −0.41% | 17.77 s, −2.00% |
+
+In the engine, `-np 4`, CPU and size against the same options without it:
+
+| Input | Options | Less CPU | Size |
+|---|---|---|---|
+| CD data (`data_m2`) | default | 1.33× | −0.03% |
+| Mixed CD (`mixed.cue`) | default | 1.50× | −0.02% |
+| DVD (`payload.iso`) | default | 1.13× | −0.20% |
+| CD data | `-c cdzl,cdfl` | 1.83× | −0.71% |
+| Mixed CD | `-c cdzl,cdfl` | 1.53× | −0.38% |
+| DVD | `-c zlib,huff` | 1.68× | −0.31% |
+| DVD | `--codecplan` | 1.17× | −0.20% (−0.14% against chdman's default) |
+
+In the page (SIMD) with 1 thread: "Faster to create" 23.3 → 18.5 s on the benchmark CD (45.0% → 43.8% of the input) and 40.3 → 30.5 s on the benchmark DVD; "Nearly as small, faster" 152.3 → 139.0 s on the DVD. With 4 threads the job worker sets the pace and the times don't change.
+
 ## 3. Encoder tuning that every reader can decode
 
 This test used a chdman variant whose encoders are selected by environment variables (`lab/chdcodec-variants.diff`, `lab/flac-variants.diff`). With no variable set it is byte-identical to stock.

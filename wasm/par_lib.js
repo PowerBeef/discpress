@@ -1,9 +1,10 @@
 addToLibrary({
-  wasm_par_enabled: function (hunkbytes, unitbytes, comp) {
+  // flags: 1 = the deflate codec encodes with libdeflate (--libdeflate)
+  wasm_par_enabled: function (hunkbytes, unitbytes, comp, flags) {
     if (!Module['parSetup']) return 0;
     var p = comp >>> 2;
     var list = [HEAPU32[p], HEAPU32[p + 1], HEAPU32[p + 2], HEAPU32[p + 3]];
-    return Module['parSetup'](hunkbytes >>> 0, unitbytes >>> 0, list) ? 1 : 0;
+    return Module['parSetup'](hunkbytes >>> 0, unitbytes >>> 0, list, flags >>> 0) ? 1 : 0;
   },
   // codecs: the codec slots to try for this hunk, a bit each (the codec plan; 15 = all)
   wasm_par_submit: function (item, data, length, codecs) {

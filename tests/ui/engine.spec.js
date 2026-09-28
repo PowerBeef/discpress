@@ -291,3 +291,32 @@ test('the codec plan keeps the checksums, and 0.289 verifies what it makes', () 
     expect(sha1(plan), `${command} ${input}`).not.toBe(sha1(up));
   }
 });
+
+// --libdeflate (the page's faster presets): the deflate codec encodes with libdeflate instead of
+// zlib. Standard deflate, so 0.289 decodes it: the same checksums, verified by 0.289, and the same
+// CHD at any thread count, whether deflate wins a hunk, loses it or gives up at the limit.
+test('libdeflate keeps the checksums, and 0.289 verifies what it makes', () => {
+  const sha1 = file => crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex');
+  const checksums = file => { const o = run(UPSTREAM, ['info', '-i', file]).out.toString(); return [/^SHA1:\s+(\w+)/m.exec(o)[1], /^Data SHA1:\s+(\w+)/m.exec(o)[1]]; };
+  const cases = [
+    ['createcd', 'twine.cue', []],
+    ['createcd', 'mgs disc1.cue', ['-c', 'cdzl,cdfl']],
+    ['createcd', 'mgs disc1.cue', ['--codecplan']],
+    ['createcd', 'codec mix cd.cue', ['-c', 'cdzl,cdlz,cdfl']],
+    ['createdvd', 'agent.iso', ['-c', 'zlib,huff']],
+    ['createhd', 'codec mix.img', ['-c', 'zlib,flac']],
+    ['createraw', 'codec mix.img', ['-hs', '16384', '-us', '4', '-c', 'flac,zlib,lzma']],
+  ];
+  for (const [command, input, extra] of cases) {
+    const what = [command, input, ...extra].join(' ');
+    const up = tmp('up.chd'), ld = tmp('ld.chd'), ld1 = tmp('ld1.chd');
+    const upExtra = extra.filter(a => a !== '--codecplan');
+    expect(run(UPSTREAM, [command, '-i', input, '-o', up, '-f', ...upExtra]).code, `upstream ${what}`).toBe(0);
+    expect(run(ENGINE, [command, '-i', input, '-o', ld, '-f', '--libdeflate', ...extra]).code, what).toBe(0);
+    expect(run(ENGINE, [command, '-i', input, '-o', ld1, '-f', '-ld', '-np', '1', ...extra]).code, `${what}, 1 thread`).toBe(0);
+    expect(checksums(ld), what).toEqual(checksums(up));
+    expect(run(UPSTREAM, ['verify', '-i', ld]).code, `upstream verifies ${what}`).toBe(0);
+    expect(sha1(ld1), `${what}: 1 thread and several`).toBe(sha1(ld));
+    if (upExtra.includes('-c')) expect(sha1(ld), `${what}: not zlib's bytes`).not.toBe(sha1(up));
+  }
+});

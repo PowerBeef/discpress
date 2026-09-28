@@ -42,12 +42,12 @@
   <h3>Big files</h3>
   <p>Results are written to the browser's private storage on disk (not to memory), so multi-gigabyte DVD images work if your device has the free space. Download results when they are ready; the storage is cleared when you use <i>Free temporary storage</i> or reopen the page. On desktop Chrome and Edge you can instead have results written straight into a folder of your choice (Settings → Where to keep results).</p>
   <h3>Speed</h3>
-  <p>Creating a CHD is CPU-heavy. This page spreads compression over several CPU threads (see Settings). Expect a few minutes for a CD on a computer and longer on a phone. <i>Nearly as small, faster</i> in Options tries each track with only the codec that suits it: about 1.7 times as fast for CDs and 1.4 for DVDs, with files at most 0.3% bigger. <i>Faster to create</i> trades more size for more speed.</p>
+  <p>Creating a CHD is CPU-heavy. This page spreads compression over several CPU threads (see Settings). Expect a few minutes for a CD on a computer and longer on a phone. <i>Nearly as small, faster</i> in Options tries each track with only the codec that suits it: about 1.7 times as fast for CDs and 1.5 for DVDs, with files at most 0.3% bigger. <i>Faster to create</i> trades more size for more speed.</p>
   <h3>On phones and tablets</h3>
   <p>The layout adapts to your screen, text size, notch, rotation and keyboard. In a normal browser the whole page scrolls; inside apps that preview files (and when installed on the home screen) the header stays fixed and only the content scrolls. If scrolling ever feels wrong, change it in Settings → Scrolling; Settings → Screen info shows what your device reports. </p>
   <p>Keep this page open and in the foreground while it works; the screen is kept awake automatically. If the browser suspends the tab, the job may stop and need to be restarted.</p>
   <h3>Compatibility of the results</h3>
-  <p>The CHDs are standard CHD v5 files made by chdman from the official MAME 0.289 release, with the same checksums as desktop chdman 0.289 and the very same bytes as chdman 0.289 on Linux (unless you choose <i>Nearly as small, faster</i> or keep cue sheets in CD CHDs, which change the bytes but not the checksums), so they work in MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast and other emulators. The <i>Zstandard</i> option needs a recent emulator build.</p>
+  <p>The CHDs are standard CHD v5 files made by chdman from the official MAME 0.289 release, with the same checksums as desktop chdman 0.289 and the very same bytes as chdman 0.289 on Linux (unless you choose <i>Nearly as small, faster</i> or <i>Faster to create</i>, or keep cue sheets in CD CHDs, which change the bytes but not the checksums), so they work in MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast and other emulators. The <i>Zstandard</i> option needs a recent emulator build.</p>
   <h3>Everything else</h3>
   <p>The <b>Advanced</b> tab exposes every chdman command and option: <code>copy</code>, <code>createraw</code>, parent CHDs, hard disk templates, <code>addmeta</code>, <code>delmeta</code>, <code>dumpmeta</code>, <code>listtemplates</code> and more.</p>
 </div>
@@ -60,14 +60,14 @@
     <li>helper workers that compress, and decompress for extracting and verifying, on several cores;</li>
     <li>faster codec trials, hashing and CD error-correction codes that give the same bytes;</li>
     <li>Redump's layout for extracted CDs (<code>extractcd --redump</code>), and an option to keep a disc's cue sheet in its CHD for that (<code>createcd --keepcue</code>);</li>
-    <li>a codec plan that tries each hunk only with the codecs meant for what it holds (<code>--codecplan</code>, for <i>Nearly as small, faster</i>);</li>
+    <li>a codec plan that tries each hunk only with the codecs meant for what it holds (<code>--codecplan</code>), and deflate by libdeflate (<code>--libdeflate</code>), for the faster presets;</li>
     <li>reading CSO/ZSO compressed ISOs and ECM images as the images they hold;</li>
     <li>fixes for chdman 0.289's crashes and silent failures on bad input;</li>
     <li>the same floating-point math for the FLAC encoder in every build, so CD audio comes out byte for byte as with chdman on Linux;</li>
     <li>unused code removed.</li>
   </ul>
   <p>The full list of source changes is below.</p>
-  <p>chdman and the parts of MAME it uses are licensed under the BSD 3-Clause license (copyright Aaron Giles, R. Belmont, Vas Crabb and the MAMEdev team). MAME as a whole is GPL-2.0-or-later. Bundled libraries: zlib (zlib license, © Jean-loup Gailly and Mark Adler), LZMA SDK (public domain, Igor Pavlov), FLAC (BSD 3-Clause, © Josh Coalson, Xiph.Org Foundation), Zstandard (BSD, © Meta Platforms, Inc. and affiliates), MD5 (public domain, Colin Plumb), the FLAC encoder's <code>cosf</code> and <code>log</code> from Arm's optimized-routines (MIT, © Arm Limited). Discpress is not affiliated with the MAME team.</p>
+  <p>chdman and the parts of MAME it uses are licensed under the BSD 3-Clause license (copyright Aaron Giles, R. Belmont, Vas Crabb and the MAMEdev team). MAME as a whole is GPL-2.0-or-later. Bundled libraries: zlib (zlib license, © Jean-loup Gailly and Mark Adler), LZMA SDK (public domain, Igor Pavlov), FLAC (BSD 3-Clause, © Josh Coalson, Xiph.Org Foundation), Zstandard (BSD, © Meta Platforms, Inc. and affiliates), MD5 (public domain, Colin Plumb), the FLAC encoder's <code>cosf</code> and <code>log</code> from Arm's optimized-routines (MIT, © Arm Limited), libdeflate's compressor (MIT, © Eric Biggers and Google LLC). Discpress is not affiliated with the MAME team.</p>
   <details class="log"><summary>BSD 3-Clause license text</summary>
 <div class="lic">Copyright (c) the respective copyright holders listed above.
 
@@ -89,6 +89,30 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.</div>
+  </details>
+  <details class="log"><summary>MIT license text (libdeflate)</summary>
+<div class="lic">Copyright 2016 Eric Biggers
+Copyright 2024 Google LLC
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation files
+(the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of the Software,
+and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.</div>
   </details>
   <details class="log"><summary>Source changes made to MAME 0.289, and the new files</summary>
 <div class="lic">/*PATCH*/</div>

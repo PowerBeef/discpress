@@ -9,8 +9,8 @@
 //     --ops create,extract            what to time: making CHDs and/or extracting them again
 //     --threads 1,2,4                 compression thread counts (default: 1, 2, 4 ... up to the CPU count)
 //     --simd on,off                   WebAssembly SIMD build, baseline build, or both
-//     --presets default,fast          compression presets: default, plan, fast, zstd, none (plan, the engine's
-//                                     --codecplan, is checked against build/chdman-native)
+//     --presets default,fast          compression presets: default, plan, fast, zstd, none (plan and fast use the
+//                                     engine's own options and are checked against build/chdman-native)
 //     --repeat 1                      runs per configuration; the median is reported
 //     --no-native                     skip the native chdman baseline
 //     --no-native-timing              still verify against native chdman, but don't time it
@@ -51,8 +51,8 @@ const cfg = {
   compare: opt('compare', null),
 };
 const CODECS = {
-  cd: { default: [], plan: ['--codecplan'], fast: ['-c', 'cdzl,cdfl'], zstd: ['-c', 'cdzs,cdfl'], none: ['-c', 'none'] },
-  other: { default: [], plan: ['--codecplan'], fast: ['-c', 'zlib,huff'], zstd: ['-c', 'zstd'], none: ['-c', 'none'] },
+  cd: { default: [], plan: ['--codecplan', '--libdeflate'], fast: ['-c', 'cdzl,cdfl', '--libdeflate'], zstd: ['-c', 'cdzs,cdfl'], none: ['-c', 'none'] },
+  other: { default: [], plan: ['--codecplan', '--libdeflate'], fast: ['-c', 'zlib,huff', '--libdeflate'], zstd: ['-c', 'zstd'], none: ['-c', 'none'] },
 };
 const PRESET_LABEL = { default: 'Smallest (default)', plan: 'Nearly as small, faster', fast: 'Faster to create', zstd: 'Faster to load (Zstd)', none: 'No compression' };
 
@@ -74,9 +74,10 @@ const median = a => { const s = [...a].sort((x, y) => x - y); return s.length % 
 
 // ------------------------------------------------------------------ native baseline
 const work = fs.mkdtempSync(path.join(CACHE, 'bench-work-'));
+const engineOnly = args => args.includes('--codecplan') || args.includes('--libdeflate');
 function nativeRun(args) {
   // the engine's own options need the engine's native build
-  const bin = args.includes('--codecplan') ? engineChdman() || die('--codecplan needs a current build/chdman-native (scripts/build-native.sh)') : nativeChdman().bin;
+  const bin = engineOnly(args) ? engineChdman() || die('the engine\'s own options need a current build/chdman-native (scripts/build-native.sh)') : nativeChdman().bin;
   const t0 = process.hrtime.bigint();
   const r = spawnSync(bin, args, { cwd: FIXTURES, encoding: 'utf8', maxBuffer: 64 << 20 });
   if (r.status !== 0) die(`native chdman failed: ${args.join(' ')}\n${r.stderr}`);
@@ -200,7 +201,7 @@ for (const fx of fixtures) {
           if (cfg.verify && cfg.native) {
             if (op === 'create') {
               const ref = nativeRef(fx, preset);
-              verified = sameVersion() || preset === 'plan' ? sha1(last.outs[0].path) === sha1(ref) : null;
+              verified = sameVersion() || engineOnly(codecs(fx, preset)) ? sha1(last.outs[0].path) === sha1(ref) : null;
             } else {
               const refDir = fs.mkdtempSync(path.join(work, 'x-'));
               const ext = { cd: '.cue', gdrom: '.gdi', dvd: '.iso', hd: '.img' }[fx.disc];

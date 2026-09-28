@@ -23,7 +23,8 @@ uint32_t s_hunkbytes = 0;
 std::unordered_set<uint64_t> s_seen; // hashes of hunks this helper already compressed
 }
 
-extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_init(uint32_t hunkbytes, uint32_t unitbytes, uint32_t c0, uint32_t c1, uint32_t c2, uint32_t c3)
+// flags: 1 = the deflate codec encodes with libdeflate, as the job's CHD does (chd_file::set_libdeflate)
+extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_init(uint32_t hunkbytes, uint32_t unitbytes, uint32_t c0, uint32_t c1, uint32_t c2, uint32_t c3, uint32_t flags)
 {
 	try
 	{
@@ -36,6 +37,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_init(uint32_t hunkbytes, uint32_
 		std::error_condition err = s_chd->create(std::move(file), uint64_t(hunkbytes), hunkbytes, unitbytes, comp);
 		if (err)
 			return -1;
+		s_chd->set_libdeflate(flags & 1);
 		s_group = std::make_unique<chd_compressor_group>(*s_chd, comp);
 		s_hunkbytes = hunkbytes;
 		s_seen.clear();

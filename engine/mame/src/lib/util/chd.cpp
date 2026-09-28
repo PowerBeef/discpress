@@ -32,7 +32,7 @@
 #include <emscripten.h>
 extern "C" {
 	// provided by the JavaScript host (browser build): offload hunk compression to helper workers
-	int wasm_par_enabled(uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression);
+	int wasm_par_enabled(uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression, uint32_t flags);
 	void wasm_par_submit(void *item, const uint8_t *data, uint32_t length, uint32_t codecs);
 	// and decompression, for commands that read (see chd_file::wasm_read_ahead)
 	int wasm_rd_enabled(const void *chd, uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression);
@@ -3060,7 +3060,7 @@ void chd_file_compressor::compress_begin()
 	m_write_hunk = 0;
 
 #ifdef __EMSCRIPTEN__
-	s_wasm_par = compressed() ? wasm_par_enabled(hunk_bytes(), unit_bytes(), m_compression) : 0;
+	s_wasm_par = compressed() ? wasm_par_enabled(hunk_bytes(), unit_bytes(), m_compression, m_libdeflate ? 1 : 0) : 0; // flags: 1 = libdeflate
 #endif
 }
 

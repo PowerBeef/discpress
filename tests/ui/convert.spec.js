@@ -82,51 +82,37 @@ test('renaming can be turned off in settings', async ({ app }) => {
   await expect(card.locator('code.cmd')).toContainText('-o twine.chd');
 });
 
+// [label, codec options, the engine's own options (not chdman 0.289's; its checksums, the native engine's bytes)]
 const PRESETS = [
-  ['Faster to create', { cd: ['-c', 'cdzl,cdfl'], dvd: ['-c', 'zlib,huff'] }],
-  ['Faster to load (Zstd)', { cd: ['-c', 'cdzs,cdfl'], dvd: ['-c', 'zstd'] }],
-  ['No compression', { cd: ['-c', 'none'], dvd: ['-c', 'none'] }],
+  ['Nearly as small, faster', { cd: [], dvd: [] }, ['--codecplan', '--libdeflate']],
+  ['Faster to create', { cd: ['-c', 'cdzl,cdfl'], dvd: ['-c', 'zlib,huff'] }, ['--libdeflate']],
+  ['Faster to load (Zstd)', { cd: ['-c', 'cdzs,cdfl'], dvd: ['-c', 'zstd'] }, []],
+  ['No compression', { cd: ['-c', 'none'], dvd: ['-c', 'none'] }, []],
 ];
-for (const [label, codecs] of PRESETS) {
+for (const [label, codecs, own] of PRESETS) {
   for (const [key, disc] of [['ps1-multitrack', 'cd'], ['ps2-dvd', 'dvd']]) {
-    test(`compression "${label}" on ${disc.toUpperCase()}`, async ({ app }) => {
-      const fx = fixture(key);
-      await app.open();
-      await app.add(fx.add);
-      const card = app.jobs().first();
-      await app.settled(card);
-      await card.locator('details.opts summary').click();
-      await card.locator('label.field', { hasText: 'Compression' }).locator('select').selectOption({ label });
-      await expect(card.locator('code.cmd')).toContainText(codecs[disc].join(' '));
-      await app.run(card);
-      const [out] = await app.downloads(card);
-      expectSameAsNative(out.path, fx.command, inputOf(fx), codecs[disc]);
-    });
-  }
-}
-
-// "Nearly as small, faster" is the engine's codec plan (--codecplan): not chdman 0.289's bytes, but
-// its checksums, and the native engine's bytes whether helper workers compress or not
-for (const [key, disc] of [['ps1-multitrack', 'cd'], ['ps2-dvd', 'dvd']]) {
-  for (const threads of [1, 4]) {
-    test(`compression "Nearly as small, faster" on ${disc.toUpperCase()}, ${threads} thread(s)`, async ({ app }) => {
-      const fx = fixture(key);
-      await app.open({ settings: { threads } });
-      await app.add(fx.add);
-      const card = app.jobs().first();
-      await app.settled(card);
-      await card.locator('details.opts summary').click();
-      await card.locator('label.field', { hasText: 'Compression' }).locator('select').selectOption({ label: 'Nearly as small, faster' });
-      await expect(card.locator('code.cmd')).toContainText('--codecplan');
-      await expect(card.locator('code.cmd')).not.toContainText(/\s-c\s/);
-      await app.run(card);
-      const [out] = await app.downloads(card);
-      if (!nativeChdman()) return;
-      const ref = info(reference(fx.command, inputOf(fx))), mine = info(out.path);
-      expect([mine.sha1, mine.dataSha1]).toEqual([ref.sha1, ref.dataSha1]);
-      const engine = engineReference(fx.command, inputOf(fx), ['--codecplan']);
-      if (engine) expect(sha1File(out.path), 'the native engine\'s CHD, byte for byte').toBe(sha1File(engine));
-    });
+    // with the engine's options, at 1 and 4 threads: they must reach the helper workers too
+    for (const threads of own.length ? [1, 4] : [null]) {
+      test(`compression "${label}" on ${disc.toUpperCase()}${threads ? `, ${threads} thread(s)` : ''}`, async ({ app }) => {
+        const fx = fixture(key);
+        await app.open(threads ? { settings: { threads } } : {});
+        await app.add(fx.add);
+        const card = app.jobs().first();
+        await app.settled(card);
+        await card.locator('details.opts summary').click();
+        await card.locator('label.field', { hasText: 'Compression' }).locator('select').selectOption({ label });
+        await expect(card.locator('code.cmd')).toContainText([...codecs[disc], ...own].join(' '));
+        if (!codecs[disc].length) await expect(card.locator('code.cmd')).not.toContainText(/\s-c\s/);
+        await app.run(card);
+        const [out] = await app.downloads(card);
+        if (!own.length) return expectSameAsNative(out.path, fx.command, inputOf(fx), codecs[disc]);
+        if (!nativeChdman()) return;
+        const ref = info(reference(fx.command, inputOf(fx), codecs[disc])), mine = info(out.path);
+        expect([mine.sha1, mine.dataSha1]).toEqual([ref.sha1, ref.dataSha1]);
+        const engine = engineReference(fx.command, inputOf(fx), [...codecs[disc], ...own]);
+        if (engine) expect(sha1File(out.path), 'the native engine\'s CHD, byte for byte').toBe(sha1File(engine));
+      });
+    }
   }
 }
 

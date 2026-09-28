@@ -14,5 +14,7 @@ ZSTD_SRC := $(addprefix $(M)/3rdparty/zstd/lib/,common/entropy_common.c common/e
 LIBM_SRC := $(if $(UPSTREAM),,$(M)/../libm/flac_libm.c)
 FLAC_SRC := $(addprefix $(M)/3rdparty/flac/src/libFLAC/,bitmath.c bitreader.c bitwriter.c cpu.c crc.c fixed.c format.c lpc.c md5.c memory.c stream_decoder.c stream_encoder.c stream_encoder_framing.c window.c)
 LZMA_SRC := $(addprefix $(M)/3rdparty/lzma/C/,CpuArch.c LzFind.c LzmaDec.c LzmaEnc.c)
+# libdeflate's compressor, for --libdeflate (engine/libdeflate; not in upstream MAME)
+DEFLATE_SRC := $(if $(UPSTREAM),,$(addprefix $(M)/../libdeflate/lib/,deflate_compress.c utils.c))
 # upstream unicode.cpp still uses utf8proc (the engine dropped the functions that need it)
 UTF8_SRC := $(if $(UPSTREAM),$(M)/3rdparty/utf8proc/utf8proc.c)

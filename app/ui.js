@@ -868,8 +868,8 @@ var KIND = {
 };
 // [value, label, codecs (-c), hint, other options]
 var PRESETS = {
-  cd: [['default', 'Smallest (default)', null, 'chdman default: CD LZMA + Deflate + FLAC. Works everywhere.'], ['plan', 'Nearly as small, faster', null, 'The same codecs, but each track tries only the one that suits it: LZMA for data, FLAC for audio. About 1.7 times as fast, files at most 0.3% bigger, same checksums. Works everywhere.', ['--codecplan']], ['fast', 'Faster to create', 'cdzl,cdfl', 'CD Deflate + FLAC: several times faster, files a little bigger.'], ['zstd', 'Faster to load (Zstd)', 'cdzs,cdfl', 'CD Zstandard + FLAC: quick to read on weak devices; needs a recent emulator.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']],
-  other: [['default', 'Smallest (default)', null, 'chdman default: LZMA + Deflate + Huffman + FLAC. Works everywhere.'], ['plan', 'Nearly as small, faster', null, 'The same codecs but FLAC, which almost never wins on data. About 1.4 times as fast, files about 0.1% bigger, same checksums. Works everywhere.', ['--codecplan']], ['fast', 'Faster to create', 'zlib,huff', 'Deflate + Huffman: several times faster, files a little bigger.'], ['zstd', 'Faster to load (Zstd)', 'zstd', 'Zstandard: quick to read on weak devices; needs a recent emulator.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']],
+  cd: [['default', 'Smallest (default)', null, 'chdman default: CD LZMA + Deflate + FLAC. Works everywhere.'], ['plan', 'Nearly as small, faster', null, 'The same codecs, but each track tries only the one that suits it: LZMA for data, FLAC for audio. About 1.7 times as fast, files at most 0.3% bigger, same checksums. Works everywhere.', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'cdzl,cdfl', 'CD Deflate (by libdeflate) + FLAC: several times faster, files a little bigger, same checksums.', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'cdzs,cdfl', 'CD Zstandard + FLAC: quick to read on weak devices; needs a recent emulator.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']],
+  other: [['default', 'Smallest (default)', null, 'chdman default: LZMA + Deflate + Huffman + FLAC. Works everywhere.'], ['plan', 'Nearly as small, faster', null, 'The same codecs but FLAC, which almost never wins on data. About 1.5 times as fast, and as small, same checksums. Works everywhere.', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'zlib,huff', 'Deflate (by libdeflate) + Huffman: several times faster, files a little bigger, same checksums.', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'zstd', 'Zstandard: quick to read on weak devices; needs a recent emulator.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']],
   ld: [['default', 'Default (A/V Huffman)', null, 'chdman default for LaserDisc video.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']]
 };
 var HUNKS = {
@@ -2019,6 +2019,7 @@ var OPT = {
   redump: ['rd', 'As Redump: CRLF cue sheet, a .bin per track (Discpress)', 'bool'],
   keepcue: ['kc', 'Keep the .cue in the CHD for extractcd --redump; checksums unchanged (Discpress)', 'bool'],
   codecplan: ['cp', 'Try each hunk only with the codecs meant for it (audio: FLAC, CD data: LZMA, other data: all but FLAC); checksums unchanged (Discpress)', 'bool'],
+  libdeflate: ['ld', 'Deflate with libdeflate: 2–3× faster, a little smaller; checksums unchanged (Discpress)', 'bool'],
   verbose: ['v', 'Verbose output', 'bool'], fix: ['f', 'Fix the SHA-1 if it is incorrect', 'bool'],
   inputstartbyte: ['isb', 'Input start byte', 'num'], inputstarthunk: ['ish', 'Input start hunk', 'num'], inputbytes: ['ib', 'Input length (bytes)', 'num'],
   inputhunks: ['ih', 'Input length (hunks)', 'num'], inputstartframe: ['isf', 'Input start frame', 'num'], inputframes: ['if', 'Input length (frames)', 'num'],
@@ -2030,10 +2031,10 @@ var OPT = {
 };
 var SLICE = ['inputstartbyte', 'inputstarthunk', 'inputbytes', 'inputhunks'];
 var CMDS = [
-  ['createcd', 'Create a CD CHD from a .cue, .gdi, .toc, .nrg or .iso', ['*input', '*output', 'compression', 'codecplan', 'hunksize', 'outputparent', 'keepcue'], 'Create'],
-  ['createdvd', 'Create a DVD CHD from an .iso', ['*input', '*output', 'compression', 'codecplan', 'hunksize', 'outputparent'].concat(SLICE), 'Create'],
-  ['createhd', 'Create a hard disk CHD from a raw image (or a blank one)', ['input', '*output', 'compression', 'codecplan', 'hunksize', 'template', 'chs', 'size', 'sectorsize', 'ident', 'outputparent'].concat(SLICE), 'Create'],
-  ['createraw', 'Create a raw CHD from any file', ['*input', '*output', '*hunksize', '*unitsize', 'compression', 'codecplan', 'outputparent'].concat(SLICE), 'Create'],
+  ['createcd', 'Create a CD CHD from a .cue, .gdi, .toc, .nrg or .iso', ['*input', '*output', 'compression', 'codecplan', 'libdeflate', 'hunksize', 'outputparent', 'keepcue'], 'Create'],
+  ['createdvd', 'Create a DVD CHD from an .iso', ['*input', '*output', 'compression', 'codecplan', 'libdeflate', 'hunksize', 'outputparent'].concat(SLICE), 'Create'],
+  ['createhd', 'Create a hard disk CHD from a raw image (or a blank one)', ['input', '*output', 'compression', 'codecplan', 'libdeflate', 'hunksize', 'template', 'chs', 'size', 'sectorsize', 'ident', 'outputparent'].concat(SLICE), 'Create'],
+  ['createraw', 'Create a raw CHD from any file', ['*input', '*output', '*hunksize', '*unitsize', 'compression', 'codecplan', 'libdeflate', 'outputparent'].concat(SLICE), 'Create'],
   ['createld', 'Create a LaserDisc CHD from an .avi', ['*input', '*output', 'compression', 'hunksize', 'inputstartframe', 'inputframes', 'outputparent'], 'Create'],
   ['extractcd', 'Extract a CD CHD to .cue/.bin, .gdi or .toc', ['*input', '*output', 'outputbin', 'splitbin', 'redump', 'inputparent'], 'Extract'],
   ['extractdvd', 'Extract a DVD CHD to an .iso', ['*input', '*output', 'inputparent'].concat(SLICE), 'Extract'],
