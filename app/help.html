@@ -25,6 +25,7 @@
   </table>
   </div>
   <p class="small muted">A lone <code>.bin</code> without its <code>.cue</code> still works for single-track data discs (a cue is generated), but for discs with music tracks always add the original <code>.cue</code>.</p>
+  <p class="small muted">ECM images (<code>.bin.ecm</code>, packed with the ecm tools) can take the place of their <code>.bin</code>: add them with the <code>.cue</code>. They are unpacked as they are read, and a damaged one is reported.</p>
 </div>
 
 <div class="card">
@@ -59,6 +60,7 @@
     <li>helper workers that compress, and decompress for extracting and verifying, on several cores;</li>
     <li>faster codec trials and hashing that give the same bytes;</li>
     <li>Redump's layout for extracted CDs (<code>extractcd --redump</code>);</li>
+    <li>reading CSO/ZSO compressed ISOs and ECM images as the images they hold;</li>
     <li>fixes for chdman 0.289's crashes and silent failures on bad input;</li>
     <li>the same floating-point math for the FLAC encoder in every build, so CD audio comes out byte for byte as with chdman on Linux;</li>
     <li>unused code removed.</li>

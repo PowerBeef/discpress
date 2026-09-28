@@ -703,6 +703,22 @@ async function sniffCiso(file) {
   if ((magic !== 'CISO' && magic !== 'ZISO') || !bs || bs % 2048 || bs > 1 << 24 || !size) return null;
   return { size: size };
 }
+// an ECM image (the ecm tools' format, described in wasm/ecm.cpp): null if the file is not one, else
+// {sync} of the CD image inside as sniffSync tells it (0: no sync pattern), from its first chunk
+async function sniffEcm(file) {
+  var b;
+  try { b = new Uint8Array(await file.slice(0, 64).arrayBuffer()); } catch (e) { return { sync: 0, unread: true }; }
+  if (b.length < 5 || b[0] !== 69 || b[1] !== 67 || b[2] !== 77 || b[3] !== 0) return null;
+  var c = b[4], i = 5, n = (c >> 2) & 31, bits = 5;
+  if ((c & 3) === 1) return { sync: 1 }; // Mode 1 sectors, stored without their sync pattern
+  if (c & 3) return { sync: 0 };         // Mode 2 sectors without sync and header
+  while (c & 128 && i < b.length) { c = b[i++]; n += (c & 127) * Math.pow(2, bits); bits += 7; }
+  // bytes stored as they are: the image's own
+  var s = n >= 15 && i + 16 <= b.length ? b.subarray(i, i + 16) : null;
+  if (!s || s[0] !== 0 || s[11] !== 0) return { sync: 0 };
+  for (var k = 1; k < 11; k++) if (s[k] !== 255) return { sync: 0 };
+  return { sync: s[15] === 2 ? 2 : 1 };
+}
 async function sniffSync(file) {
   try {
     var b = new Uint8Array(await file.slice(0, 16).arrayBuffer());
@@ -875,6 +891,20 @@ function newJob(props) {
   return job;
 }
 function jobInputBytes(job) { return job.files.reduce(function (s, f) { return s + f.file.size; }, 0); }
+// a job's file for a descriptor's reference: an ECM image stands for the file it holds (Game.bin.ecm
+// for Game.bin), and chdman reads that under the referenced name
+function trackFile(file, path, ref) {
+  var name = base(path);
+  if (!/\.ecm$/i.test(file.name || name)) return { file: file, name: name, ref: ref };
+  if (/\.ecm$/i.test(name) && !/\.ecm$/i.test(ref)) name = name.slice(0, -4);
+  return { file: file, name: name, ref: ref, ecm: true };
+}
+function refMatches(e, ref) {
+  var n = base(e.path).toLowerCase(), want = base(ref).toLowerCase();
+  return n === want || n === want + '.ecm';
+}
+// the type the file shows on a job's card (bin.ecm for an ECM image of a .bin)
+function fileKind(f) { return f.ecm ? (ext(f.name) ? ext(f.name) + '.' : '') + 'ecm' : ext(f.name); }
 
 /* ---------- grouping new files into jobs ---------- */
 var IGNORE = /^(txt|nfo|sbi|sub|m3u|dat|md5|sfv|sha1|jpg|jpeg|png|gif|webp|pdf|url|ini|cfg|xml|json|html|htm|db|ds_store|zip|7z|rar)$/;
@@ -896,10 +926,11 @@ async function addEntries(entries) {
   jobs.forEach(function (job) {
     if (!job.missing.length || job.state !== 'blocked') return;
     job.missing = job.missing.filter(function (ref) {
-      var hit = fresh.find(function (e) { return !claimed.has(e) && base(e.path).toLowerCase() === base(ref).toLowerCase(); });
+      var free = fresh.filter(function (e) { return !claimed.has(e) && refMatches(e, ref); });
+      var hit = free.find(function (e) { return base(e.path).toLowerCase() === base(ref).toLowerCase(); }) || free[0];
       if (!hit) return true;
       claimed.add(hit);
-      job.files.push({ file: hit.file, name: base(hit.path), ref: ref });
+      job.files.push(trackFile(hit.file, hit.path, ref));
       return false;
     });
     if (!job.missing.length) finalizeDescriptorJob(job);
@@ -938,6 +969,24 @@ async function addEntries(entries) {
         job2.invalid = true;
         job2.state = 'error';
         job2.errorText = 'This is not a CSO or ZSO compressed ISO that Discpress can read.';
+      }
+    } else if (x === 'ecm') {
+      // an ECM image (usually a .bin): chdman reads the image it holds, under its name without .ecm
+      var inner = name.slice(0, -4), ecm = await sniffEcm(file), tn = /\(track\s*0*(\d+)\)/i.exec(inner);
+      var fe = { file: file, name: inner, ecm: true }, sync = ecm ? ecm.sync : 0;
+      t = stem(inner);
+      if (ecm && !ecm.unread && tn && +tn[1] > 1) {
+        job2 = newJob({ kind: 'create', src: 'bin', lone: true, title: t, files: [fe], disc: 'cd', autoCue: sync ? (sync === 2 ? 'MODE2/2352' : 'MODE1/2352') : 'AUDIO', state: 'blocked', needCue: true });
+      } else {
+        job2 = newJob({ kind: 'create', src: 'bin', lone: true, title: t, files: [fe], disc: 'cd', autoCue: sync === 2 ? 'MODE2/2352' : 'MODE1/2352' });
+        if (!ecm || ecm.unread || !sync) {
+          job2.invalid = true;
+          job2.state = 'error';
+          job2.errorText = !ecm ? 'This is not an ECM image that Discpress can read.' : ecm.unread ? 'This file could not be read.' :
+            'This ECM image doesn\u2019t start with a CD data track, so its tracks are unknown. Add the .cue file that lists it.';
+        } else {
+          job2.warnings.push('No .cue file was added, so one is generated (a single ' + (sync === 2 ? 'MODE2' : 'MODE1') + ' data track). If the disc has music tracks, add the original .cue and all its files instead.');
+        }
       }
     } else if (x === 'nrg') {
       job2 = newJob({ kind: 'create', src: 'nrg', title: t, files: [{ file: file, name: name }], disc: 'cd' });
@@ -1022,6 +1071,8 @@ async function descriptorJob(d, pool, claimed) {
   refs.forEach(function (ref) {
     var want = base(ref).toLowerCase();
     var cands = pool.filter(function (e) { return e !== d && base(e.path).toLowerCase() === want; });
+    // or an ECM image of it (Game.bin.ecm for Game.bin)
+    if (!cands.length) cands = pool.filter(function (e) { return e !== d && base(e.path).toLowerCase() === want + '.ecm'; });
     // also steal files from not-yet-started auto-cue jobs
     if (!cands.length) {
       jobs.forEach(function (other) {
@@ -1036,7 +1087,7 @@ async function descriptorJob(d, pool, claimed) {
     claimed.add(hit);
     var li = looseFiles.indexOf(hit);
     if (li >= 0) looseFiles.splice(li, 1);
-    job.files.push({ file: hit.file, name: base(hit.path), ref: ref });
+    job.files.push(trackFile(hit.file, hit.path, ref));
   });
   if (!refs.length && !job.invalid) job.warnings.push('No track files are listed in this ' + kind.toUpperCase() + ' file.');
   if (job.missing.length && !job.invalid) job.state = 'blocked';
@@ -1175,7 +1226,7 @@ function buildJob(job) {
     if (job.descFile) {
       inName = job.descName;
       inputs.push({ name: job.descName, blob: job.descBlob || job.descFile });
-      job.files.forEach(function (f) { inputs.push({ name: f.name, blob: f.file }); });
+      job.files.forEach(function (f) { inputs.push({ name: f.name, blob: f.file, ecm: f.ecm }); }); // ECM: the job worker rebuilds the image
     } else if (job.src === 'cso') {
       // the job worker decompresses the image as chdman reads it
       inName = stem(job.files[0].name) + '.iso';
@@ -1184,7 +1235,7 @@ function buildJob(job) {
       inName = stem(job.files[0].name) + '.cue';
       var cue = 'FILE "' + job.files[0].name + '" BINARY\n  TRACK 01 ' + job.autoCue + '\n    INDEX 01 00:00:00\n';
       inputs.push({ name: inName, blob: new Blob([cue], { type: 'text/plain' }) });
-      inputs.push({ name: job.files[0].name, blob: job.files[0].file });
+      inputs.push({ name: job.files[0].name, blob: job.files[0].file, ecm: job.files[0].ecm });
     } else {
       inName = job.files[0].name;
       inputs.push({ name: inName, blob: job.files[0].file });
@@ -1325,10 +1376,11 @@ function subtitle(job) {
   }
   if (job.src === 'cso') return (ext(job.files[0].name) === 'zso' ? 'ZSO' : 'CSO') + ' compressed ISO · ' + fmtBytes(n) + (job.isoSize ? ' → ' + fmtBytes(job.isoSize) + ' unpacked' : '');
   var what;
-  if (job.fromCcd) what = 'CloneCD image (.ccd + .img)';
-  else if (job.descFile) what = job.src.toUpperCase() + ' + ' + plural(job.files.length, 'track file');
-  else if (job.autoCue && job.src !== 'iso') what = '.' + ext(job.files[0].name) + ' image (no cue)';
-  else what = '.' + ext(job.files[0].name) + ' image';
+  var ecms = job.files.filter(function (f) { return f.ecm; }).length;
+  if (job.fromCcd) what = 'CloneCD image (.ccd + .' + (job.files[0] ? fileKind(job.files[0]) : 'img') + ')';
+  else if (job.descFile) what = job.src.toUpperCase() + ' + ' + plural(job.files.length, 'track file') + (!ecms ? '' : ecms === job.files.length ? ' (ECM)' : ' (' + ecms + ' ECM)');
+  else if (job.autoCue && job.src !== 'iso') what = '.' + fileKind(job.files[0]) + ' image (no cue)';
+  else what = '.' + fileKind(job.files[0]) + ' image';
   var total = n + (job.descFile ? job.descFile.size : 0);
   return what + ' · ' + fmtBytes(total);
 }

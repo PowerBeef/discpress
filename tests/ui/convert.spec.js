@@ -13,7 +13,7 @@ function expectSameAsNative(outPath, command, input, extra = []) {
 }
 
 const inputOf = fx => fx.add.find(n => /\.(cue|gdi)$/i.test(n)) || fx.add[0];
-const titleOf = fx => inputOf(fx).replace(/\.[^.]+$/, '');
+const titleOf = fx => fx.title || inputOf(fx).replace(/\.[^.]+$/, '');
 
 for (const fx of manifest().filter(f => f.job === 'create' && !f.bench && !f.testdb)) {
   test(`create: ${fx.key}`, async ({ app }) => {

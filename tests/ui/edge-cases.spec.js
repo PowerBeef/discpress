@@ -223,6 +223,100 @@ test('a damaged compressed ISO stops with an error that names the block', async 
   await expect(card.locator('.note.err')).toContainText(`"damaged umd.cso" is damaged or incomplete: block ${b} of 666 could not be read.`);
 });
 
+// data as an ECM file that stores all of it as it is (valid, if not what bin2ecm makes of CD sectors;
+// the format: wasm/ecm.cpp): a header, the bytes, the end and the EDC of the image
+function ecmOf(data) {
+  let edc = 0;
+  for (const b of data) {
+    edc ^= b;
+    for (let k = 0; k < 8; k++) edc = (edc >>> 1) ^ (edc & 1 ? 0xd8018001 : 0);
+  }
+  const head = [];
+  let v = data.length - 1;
+  head.push((v >= 32 ? 128 : 0) | (v & 31) << 2);
+  for (v = Math.floor(v / 32); v; v = Math.floor(v / 128)) head.push((v >= 128 ? 128 : 0) | (v & 127));
+  const tail = Buffer.alloc(9);
+  Buffer.from([0xfc, 0xff, 0xff, 0xff, 0x3f]).copy(tail); // count - 1 = 0xffffffff: the end
+  tail.writeUInt32LE(edc >>> 0, 5);
+  return Buffer.concat([Buffer.from('ECM\0'), Buffer.from(head), data, tail]);
+}
+
+test('ECM track files find their cue sheet, whichever comes first', async ({ app }) => {
+  const t2 = fs.readFileSync(path.join(FIXTURES, 'mgs disc1 (Track 2).bin'));
+  fs.writeFileSync(path.join(FIXTURES, 'mgs disc1 (Track 2).bin.ecm'), ecmOf(t2));
+  await app.open();
+  // the data track alone gets a generated cue; a later track waits for its cue sheet
+  await app.add(['mgs disc1 (Track 1).bin.ecm', 'mgs disc1 (Track 2).bin.ecm']);
+  await expect(app.jobs()).toHaveCount(2);
+  await expect(app.job('mgs disc1 (Track 1)').locator('.sub')).toContainText('.bin.ecm image (no cue)');
+  await app.waitState(app.jobs().nth(1), 'blocked');
+  // the cue sheet takes both over, as the files it lists without .ecm
+  await app.add(['mgs disc1.cue']);
+  await expect(app.jobs()).toHaveCount(1);
+  const card = app.job('mgs disc1');
+  await app.settled(card);
+  await expect(card.locator('.sub')).toContainText('CUE + 2 track files (ECM)');
+  await app.run(card);
+  const [out] = await app.downloads(card);
+  if (nativeChdman()) {
+    const ref = reference('createcd', 'mgs disc1.cue');
+    if (sameVersion()) expect(sha1File(out.path)).toBe(sha1File(ref));
+    else expect(info(out.path).dataSha1).toBe(info(ref).dataSha1);
+  }
+});
+
+test('an ECM image completes a cue sheet that waits for its track', async ({ app }) => {
+  await app.open();
+  await app.add(['ax101.cue', 'ax101.bin.ecm']);
+  const card = app.job('ax101');
+  await app.waitState(card, 'blocked');
+  await expect(card.locator('.note.warn li')).toHaveText(['ax101 audio.bin']);
+  await app.add(['ax101 audio.bin.ecm']);
+  await app.settled(card);
+  await expect(card.locator('.sub')).toContainText('CUE + 2 track files (ECM)');
+});
+
+test('a file named .ecm that is not an ECM image is refused', async ({ app }) => {
+  fs.writeFileSync(path.join(FIXTURES, 'not really.bin.ecm'), 'ECM but not really');
+  await app.open();
+  await app.add(['not really.bin.ecm']);
+  const card = app.job('not really');
+  await app.waitState(card, 'error');
+  await expect(card.locator('.note.err')).toContainText('This is not an ECM image that Discpress can read.');
+  await expect(card.locator('.job-foot')).toContainText('Can’t convert');
+});
+
+test('a lone ECM image that holds no data track asks for its cue sheet', async ({ app }) => {
+  fs.writeFileSync(path.join(FIXTURES, 'song.bin.ecm'), ecmOf(fs.readFileSync(path.join(FIXTURES, 'piano.bin'))));
+  await app.open();
+  await app.add(['song.bin.ecm']);
+  const card = app.job('song');
+  await app.waitState(card, 'error');
+  await expect(card.locator('.note.err')).toContainText('doesn’t start with a CD data track, so its tracks are unknown. Add the .cue file that lists it.');
+});
+
+test('a damaged ECM image stops with an error, and so does a truncated one', async ({ app }) => {
+  // lone.bin.ecm: each sector is 16 bytes stored as they are, then a Mode 2 Form 1 sector (make_fixtures.py)
+  const src = Buffer.from(fs.readFileSync(path.join(FIXTURES, 'lone.bin.ecm')));
+  const unit = 1 + 16 + 1 + 4 + 2048, sector = 400;
+  src[4 + sector * unit + 1 + 16 + 1 + 4 + 100] ^= 0x40; // a data byte of sector 400: its EDC and ECC are rebuilt to fit
+  fs.writeFileSync(path.join(FIXTURES, 'damaged lone.bin.ecm'), src);
+  fs.writeFileSync(path.join(FIXTURES, 'cut lone.bin.ecm'), src.subarray(0, Math.floor(src.length * 0.6)));
+  await app.open();
+  await app.add(['damaged lone.bin.ecm']);
+  const card = app.job('damaged lone');
+  await app.settled(card);
+  await expect(card.locator('.ident-how')).toHaveText('Matched by serial number'); // the file system is intact
+  await app.run(card, { expectState: 'error' });
+  // only the checksum of the whole image, at its end, tells
+  await expect(card.locator('.note.err')).toContainText('"damaged lone.bin.ecm" is damaged: the image rebuilt from it doesn’t match the checksum it ends with.');
+  await app.add(['cut lone.bin.ecm']);
+  const cut = app.job('cut lone');
+  await app.settled(cut);
+  await app.run(cut, { expectState: 'error' });
+  await expect(cut.locator('.note.err')).toContainText('"cut lone.bin.ecm" could not be read as an ECM image: it ends before the image it holds does');
+});
+
 test('a running job can be cancelled and run again', async ({ app, page }) => {
   await app.open({ settings: { threads: 1 } });
   await app.add(fixture('ps2-dvd').add);

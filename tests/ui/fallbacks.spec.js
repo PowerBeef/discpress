@@ -74,6 +74,21 @@ test('a compressed ISO the worker cannot read directly is copied, then decompres
   }
 });
 
+test('ECM images the worker cannot read directly are copied, then unpacked as usual', async ({ app }) => {
+  await app.open({ debug: { stage: 2 } });
+  await app.add(fixture('segacd-ecm').add);
+  const card = app.job('ax101');
+  await app.settled(card);
+  await app.run(card);
+  await expect(card.locator('pre.logtext')).toContainText('is copied to private storage first');
+  const [out] = await app.downloads(card);
+  if (nativeChdman()) {
+    const ref = reference('createcd', 'ax101.cue');
+    if (sameVersion()) expect(sha1File(out.path)).toBe(sha1File(ref));
+    else expect(info(out.path).dataSha1).toBe(info(ref).dataSha1);
+  }
+});
+
 test('a single CPU core still converts (no helper workers)', async ({ app, page }) => {
   await app.open({ cores: 1 });
   await expect(page.locator('#chipThreads')).toContainText('1 thread');

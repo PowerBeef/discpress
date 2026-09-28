@@ -341,6 +341,45 @@ fixture('cue-wave-tracks', {
 }, add=['wavs.cue', 'wavs (Track 1).bin', 'wavs audio.wav', 'wavs (Track 4).bin'], ref='wavs-ref.cue',
    job='create', disc='cd', command='createcd', sys=None, ident='none', name='wavs')
 
+# ---------------------------------------------------------------- ECM images
+# CD images packed by the ecm tools (g.ecm writes what their bin2ecm does). The page gives chdman the
+# image inside, so the CHD must be the one desktop chdman makes from the image itself: from the files
+# the cue sheet names, or `ref`.
+ecm_of = lambda name: g.ecm(open(os.path.join(OUT, name), 'rb').read())
+# a PlayStation disc with XA sectors among its data: Mode 2 Form 2, which keep an EDC but no ECC
+def xa_bin():
+    iso = ps1_iso('SLUS_012.72', 'XA', 1, 17)
+    return g.raw_sectors(iso, 2, 0, [i >= 100 and i % 4 == 3 for i in range(len(iso) // g.SECTOR)])
+fixture('ps1-ecm', {
+    'xa.cue': lambda: cue([('xa.bin', 'MODE2/2352', 0)]),
+    'xa.bin': xa_bin,
+    'xa.bin.ecm': lambda: ecm_of('xa.bin'),
+}, add=['xa.cue', 'xa.bin.ecm'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-01272',
+   ident='serial', name='007 - The World Is Not Enough (USA)')
+# Mode 1 data, and an audio track whose silence the encoder stores as Mode 2 sectors (zeros are one)
+fixture('segacd-ecm', {
+    'ax101.bin.ecm': lambda: ecm_of('ax101.bin'),
+    'ax101 audio.bin.ecm': lambda: ecm_of('ax101 audio.bin'),
+}, add=['ax101.cue', 'ax101.bin.ecm', 'ax101 audio.bin.ecm'], job='create', disc='cd', command='createcd', sys='segacd',
+   serial='T-86015', ident='serial', name='A-X-101 (USA)')
+# only the data track packed
+fixture('ps1-ecm-mixed', {
+    'mgs disc1 (Track 1).bin.ecm': lambda: ecm_of('mgs disc1 (Track 1).bin'),
+}, add=['mgs disc1.cue', 'mgs disc1 (Track 1).bin.ecm', 'mgs disc1 (Track 2).bin'], job='create', disc='cd', command='createcd',
+   sys='ps1', serial='SLUS-00594', ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'])
+# without its cue sheet: the page writes one, as for a lone .bin (`ref`)
+fixture('ps1-ecm-lone', {
+    'lone.bin.ecm': lambda: ecm_of('lone.bin'),
+    'lone-ref.cue': lambda: b'FILE "lone.bin" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n',
+}, add=['lone.bin.ecm'], ref='lone-ref.cue', title='lone', job='create', disc='cd', command='createcd', sys='ps1',
+   serial='SLUS-00975', ident='serial', name='007 - Tomorrow Never Dies (USA)', warning='No .cue file was added')
+# a CloneCD image packed: data and audio in one file
+fixture('ps1-clonecd-ecm', {
+    'mgs ccd.img.ecm': lambda: ecm_of('mgs ccd.img'),
+}, add=['mgs ccd.ccd', 'mgs ccd.img.ecm', 'mgs ccd.sub'], ref='mgs ccd-ref.cue', job='create', disc='cd', command='createcd',
+   sys='ps1', serial='SLUS-00594', ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'],
+   warning='subchannel data')
+
 # ---------------------------------------------------------------- benchmark images
 if args.bench:
     cd_audio_frames = int(args.cd_mb * 0.3 * (1 << 20)) // 2352 // 3
@@ -356,6 +395,11 @@ if args.bench:
             'SYSTEM.CNF': b'BOOT2 = cdrom0:\\SLUS_202.65;1\r\nVER = 1.00\r\n', 'SLUS_202.65': exe('SLUS_202.65'),
             'DATA.BIN': g.filler((args.dvd_mb << 20) - (1 << 20), 95)}, 'BENCH', 'PLAYSTATION')),
     }, add=['bench-dvd.iso'], job='create', disc='dvd', command='createdvd', sys='ps2', bench=True)
+    # its data track as an ECM image: what rebuilding the sectors while converting costs
+    fixture('bench-cd-ecm', {
+        'bench-cd (Track 1).bin.ecm': lambda: ecm_of('bench-cd (Track 1).bin'),
+    }, add=['bench-cd.cue', 'bench-cd (Track 1).bin.ecm'] + ['bench-cd (Track %d).bin' % i for i in (2, 3, 4)], ref='bench-cd.cue',
+       job='create', disc='cd', command='createcd', sys='ps1', bench=True)
     # the same image as a CSO: what decompressing it while converting costs
     fixture('bench-dvd-cso', {
         'bench-dvd.cso': lambda: g.ciso(open(os.path.join(OUT, 'bench-dvd.iso'), 'rb').read()),
@@ -366,8 +410,9 @@ def row(name, serial, data, ext):
     return '\t'.join([name, serial, str(len(data)), '%08X' % zlib.crc32(data), '', ext])
 vb = open(os.path.join(OUT, 'verified.bin'), 'rb').read()
 ui = open(os.path.join(OUT, 'umd.iso'), 'rb').read()  # the ISO inside the umd.* compressed ISOs
+xb = open(os.path.join(OUT, 'xa.bin'), 'rb').read()   # the image inside xa.bin.ecm
 with open(os.path.join(OUT, 'testdb.json'), 'w') as f:
-    json.dump({'ps1': [row('Checksum Verified Game (USA)', 'SLUS-99999', vb, 'bin')],
+    json.dump({'ps1': [row('Checksum Verified Game (USA)', 'SLUS-99999', vb, 'bin'), row('Checksum Verified ECM Game (USA)', 'SLUS-99998', xb, 'bin')],
                'psp': [row('Checksum Verified PSP Game (USA)', 'ULUS-99999', ui, 'iso')]}, f)
 
 with open(os.path.join(OUT, 'manifest.json'), 'w') as f:

@@ -22,11 +22,11 @@ FLACDEF := -DHAVE_CONFIG_H -DENABLE_64_BIT_WORDS=1 -DOGG_FOUND=0 -DFLAC__HAS_OGG
 ZSTDDEF := -DXXH_NAMESPACE=ZSTD_ -DDEBUGLEVEL=0 -DZSTD_DISABLE_ASM -DZSTD_MULTITHREAD=0
 LZMADEF := -DZ7_PPMD_SUPPORT -DZ7_ST
 
-# wasm_helper.cpp is browser-only (helper workers and identification probes)
+# wasm_helper.cpp and ecm.cpp are browser-only (helper workers, identification probes, ECM input)
 ifeq ($(T),wasm)
 CPP_SRC := $(UTIL_SRC) $(OSD_SRC) $(TOOL_SRC)
 else
-CPP_SRC := $(UTIL_SRC) $(OSD_SRC) $(filter-out wasm_helper.cpp,$(TOOL_SRC))
+CPP_SRC := $(UTIL_SRC) $(OSD_SRC) $(filter-out wasm_helper.cpp ecm.cpp,$(TOOL_SRC))
 endif
 obj = $(O)/$(subst /,_,$(subst ../,,$(subst $(M)/,,$(basename $(1))))).o
 

@@ -251,17 +251,18 @@ Presets:
 
 ### Milestone 4: more inputs (ongoing, by demand)
 
-**Status: CloneCD (single-session) and CSO/ZSO done.**
+**Status: CloneCD (single-session), CSO/ZSO and ECM done.**
 - CloneCD: the page turns a `.ccd` into a cue sheet for its `.img` (`ccdToCue`). The `.sub` is noted and left out; subchannel ingest stays tier X. Multi-session, scrambled and track-list-less (CloneCD 2) files are refused with the reason.
 - CSO v1 and v2 and ZSO (maxcso's formats, for PSP and PS2): the job worker hands chdman the ISO inside, decompressing blocks as they are read (`CisoStore`), so the CHD is the one chdman makes from that ISO. Identification reads the ISO the same way, and its checksum is the ISO's. A damaged block stops the job with its number.
 - Found on the way: 0.289's `createraw`/`createhd`/`createdvd` ignore input read errors and write a CHD they can't open. The engine now stops with an error (`tests/ui/engine.spec.js`).
+- ECM (`.bin.ecm`, the ecm tools' format; common in PS1 collections, and emulators don't read it): an ECM image stands for the file it packs, the track a cue sheet, GDI or CloneCD `.ccd` names, or a lone `.bin`. The job worker rebuilds the image as chdman reads it (`EcmStore`, `wasm/ecm.cpp`), so the CHD is the one chdman makes from the unpacked image. A word-parallel ECC is 3.4 times faster than chdman's own (both checked equal on random sectors). The image's EDC, at the end of the file, is checked when the image is read in order, so a damaged file stops the job instead of making a CHD of the wrong data. Identification reads the image through a worker, and the checksum that confirms the release is the image's. The fixture encoder writes the same bytes as the ecm tools' `bin2ecm` (checked with a local build of it, not part of the repository).
 
 Priority order (C §9):
 1. CloneCD `.ccd/.img/.sub`, which also enables subchannel ingest for LibCrypt and CD+G;
 2. DiscJuggler `.cdi` for Dreamcast homebrew and MIL-CD;
-3. ECM;
+3. ECM (done);
 4. FLAC, WAV or AIFF audio referenced from cues;
-5. CSO/ZSO → DVD;
+5. CSO/ZSO → DVD (done);
 6. MDS/MDF;
 7. fuller NRG support.
 

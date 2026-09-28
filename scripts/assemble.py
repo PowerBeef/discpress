@@ -33,6 +33,7 @@ base_b64, base_size = pack(os.path.join(B, 'chdman-nosimd.wasm'))
 # plus the new files.
 patch = rd(os.path.join(ROOT, 'engine', 'mame-0.289.diff'))
 for path, name, label in [(os.path.join(W, 'wasm_helper.cpp'), 'wasm_helper.cpp', 'new file'),
+                          (os.path.join(W, 'ecm.cpp'), 'ecm.cpp', 'new file'),
                           (os.path.join(W, 'par_lib.js'), 'par_lib.js', 'new file, Emscripten JS library'),
                           (os.path.join(ROOT, 'engine', 'libm', 'flac_libm.c'), 'engine/libm/flac_libm.c', 'new file, from Arm optimized-routines')]:
     patch += '\n--- /dev/null\n+++ %s (%s)\n' % (name, label)

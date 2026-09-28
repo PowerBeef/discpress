@@ -27,6 +27,15 @@ test('a compressed ISO is matched by the checksum of the ISO inside it', async (
   await expect(card.locator('.ident-how')).toHaveText('✓ Exact match in the Redump database (checksum verified)');
 });
 
+test('an ECM image is matched by the checksum of the image inside it', async ({ app }) => {
+  await app.open({ testdb: true });
+  await app.add(['xa.cue', 'xa.bin.ecm']); // XA sectors, Form 1 and Form 2 (make_fixtures.py: ps1-ecm)
+  const card = app.job('xa');
+  await app.settled(card);
+  await expect(card.locator('.ident-name')).toHaveText('Checksum Verified ECM Game (USA)');
+  await expect(card.locator('.ident-how')).toHaveText('✓ Exact match in the Redump database (checksum verified)');
+});
+
 test('the page-side checksum fallback finds the same match', async ({ app }) => {
   await app.open({ testdb: true, debug: { stage: 1 } }); // stage also routes the checksum through the page
   await app.add(fx.add);

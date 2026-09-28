@@ -240,6 +240,124 @@ CisoStore.prototype.read = function (dst, pos, len) {
   return done;
 };
 
+// An ECM image (the ecm tools' Error Code Modeler format, described in wasm/ecm.cpp), read as the
+// CD image it packs. A scan of its chunk headers maps the image's bytes to the file's, with a
+// checkpoint about every ECM_WINDOW bytes of the image (on a sector boundary, or inside a chunk
+// of bytes stored as they are); the windows between checkpoints are rebuilt by the module
+// (wasm_ecm_decode: sync, headers, EDC, ECC) as they are read. An image read in order to its end
+// must have the EDC the file ends with, as ecm2bin checks: otherwise it is damaged.
+var ECM_STORED = [1, 2051, 2052, 2328], ECM_SIZE = [1, 2352, 2336, 2336], ECM_WINDOW = 1 << 20;
+function EcmStore(base, label) {
+  var head = new Uint8Array(4);
+  if (base.read(head, 0, 4) !== 4 || head[0] !== 69 || head[1] !== 67 || head[2] !== 77 || head[3] !== 0) throw new Error('not an ECM image');
+  this.base = base;
+  this.label = label || 'the image';
+  this.readonly = true;
+  this.M = null;
+  this.reported = false;
+  // checkpoints: the image's offset, the file's, and the chunk's type and units left there (0: a header)
+  var cpOut = [], cpIn = [], cpType = [], cpLeft = [], next = 0;
+  var size = base.sizeV, pos = 4, out = 0, buf = new Uint8Array(1 << 20), bufAt = 0, bufLen = 0;
+  var fail = function (why) { return new Error(why + ' (at byte ' + pos + ' of ' + size + ')'); };
+  var byteAt = function (p) {
+    if (p >= bufAt + bufLen || p < bufAt) {
+      if (p >= size) throw fail('it ends before the image it holds does');
+      bufAt = p;
+      try { bufLen = base.read(buf, p, Math.min(buf.length, size - p)); } catch (e) { bufLen = 0; }
+      if (bufLen <= 0) throw fail('it could not be read');
+    }
+    return buf[p - bufAt];
+  };
+  var mark = function (o, i, type, left) { cpOut.push(o); cpIn.push(i); cpType.push(type); cpLeft.push(left); next = o + ECM_WINDOW; };
+  for (;;) {
+    if (out >= next) mark(out, pos, 0, 0);
+    var at = pos, c = byteAt(pos++), type = c & 3, n = (c >> 2) & 31, bits = 5;
+    while (c & 128) {
+      if (bits > 26) throw fail('a chunk header is invalid');
+      c = byteAt(pos++);
+      n += (c & 127) * Math.pow(2, bits);
+      bits += 7;
+    }
+    if (n > 0xFFFFFFFF) throw fail('a chunk header is invalid');
+    if (n === 0xFFFFFFFF) break; // the end; the EDC follows
+    var count = n + 1, isz = ECM_STORED[type], osz = ECM_SIZE[type];
+    if (pos + count * isz > size) throw fail('it ends before the image it holds does');
+    // checkpoints inside a long chunk
+    for (var u = Math.ceil((next - out) / osz); u < count; u = Math.ceil((next - out) / osz)) mark(out + u * osz, pos + u * isz, type, count - u);
+    pos += count * isz;
+    out += count * osz;
+  }
+  if (cpOut[cpOut.length - 1] !== out) mark(out, at, 0, 0);
+  if (pos + 4 > size) throw fail('it ends before its checksum');
+  this.edcWant = (byteAt(pos) | (byteAt(pos + 1) << 8) | (byteAt(pos + 2) << 16) | (byteAt(pos + 3) << 24)) >>> 0;
+  this.cp = { out: cpOut, inp: cpIn, type: cpType, left: cpLeft };
+  this.sizeV = out;
+  this.maxIn = 0;
+  this.maxOut = 0;
+  for (var w = 0; w + 1 < cpOut.length; w++) {
+    this.maxIn = Math.max(this.maxIn, cpIn[w + 1] - cpIn[w]);
+    this.maxOut = Math.max(this.maxOut, cpOut[w + 1] - cpOut[w]);
+  }
+  this.windows = []; // the two most recent: {w, data}
+  this.last = 0;
+  this.edc = 0;      // of the image read in order so far, up to edcAt
+  this.edcAt = 0;
+}
+EcmStore.prototype.damaged = function (o, why) {
+  if (!this.reported) {
+    this.reported = true;
+    postMessage({ type: 'notice', level: 'error', message: '"' + this.label + '" is damaged: ' + (why || 'the image it holds could not be rebuilt at byte ' + o + '.') });
+  }
+  return { errno: ERR.EIO };
+};
+EcmStore.prototype.setModule = function (M) {
+  this.M = M;
+  this.src = M._malloc(Math.max(1, this.maxIn));
+  this.dst = M._malloc(Math.max(1, this.maxOut));
+};
+// the window holding image offset p
+EcmStore.prototype.find = function (p) {
+  var o = this.cp.out, w = this.last;
+  if (o[w] <= p && p < o[w + 1]) return w;
+  if (o[w + 1] <= p && p < o[w + 2]) return (this.last = w + 1);
+  var lo = 0, hi = o.length - 2;
+  while (lo < hi) {
+    var mid = (lo + hi + 1) >> 1;
+    if (o[mid] <= p) lo = mid; else hi = mid - 1;
+  }
+  return (this.last = lo);
+};
+EcmStore.prototype.window = function (w) {
+  for (var i = 0; i < this.windows.length; i++) if (this.windows[i].w === w) return this.windows[i].data;
+  var M = this.M, cp = this.cp, inLen = cp.inp[w + 1] - cp.inp[w], outLen = cp.out[w + 1] - cp.out[w];
+  if (!M) throw this.damaged(cp.out[w]);
+  if (this.base.read(M.HEAPU8.subarray(this.src, this.src + inLen), cp.inp[w], inLen) !== inLen) throw this.damaged(cp.out[w]);
+  if (M._wasm_ecm_decode(this.src, inLen, this.dst, outLen, cp.type[w], cp.left[w]) !== inLen) throw this.damaged(cp.out[w]);
+  if (cp.out[w] === this.edcAt) {
+    this.edc = M._wasm_ecm_edc(this.edc, this.dst, outLen) >>> 0;
+    this.edcAt += outLen;
+    if (this.edcAt === this.sizeV && this.edc !== this.edcWant) throw this.damaged(0, 'the image rebuilt from it doesn’t match the checksum it ends with.');
+  }
+  var data = M.HEAPU8.slice(this.dst, this.dst + outLen);
+  this.windows = [{ w: w, data: data }].concat(this.windows.slice(0, 1));
+  return data;
+};
+EcmStore.prototype.read = function (dst, pos, len) {
+  if (pos >= this.sizeV) return 0;
+  len = Math.min(len, this.sizeV - pos);
+  var M = this.M, heap = M && dst.buffer === M.HEAPU8.buffer, addr = dst.byteOffset, done = 0, parts = [];
+  while (done < len) {
+    var p = pos + done, w = this.find(p), data = this.window(w), off = p - this.cp.out[w];
+    var n = Math.min(len - done, data.length - off);
+    if (n <= 0) break;
+    parts.push({ data: data, off: off, n: n, at: done });
+    done += n;
+  }
+  if (heap && dst.byteLength === 0) dst = M.HEAPU8.subarray(addr, addr + len);
+  parts.forEach(function (q) { dst.set(q.data.subarray(q.off, q.off + q.n), q.at); });
+  return done;
+};
+
 // LZ4 block format: decodes src[from, to) into out at o, up to `want` bytes; returns the count,
 // or -1 if the data is damaged. Like maxcso, it stops there: a block can be followed by padding,
 // and an image's last block can decode to more, the zeros that fill it to the block size.
@@ -1042,13 +1160,14 @@ async function runJob(msg) {
         return;
       }
     }
-    if (inputs[ii].ciso) {
+    // a CSO/ZSO compressed ISO, or an ECM image: chdman reads what they hold
+    if (inputs[ii].ciso || inputs[ii].ecm) {
       var label = inputs[ii].blob.name || inputs[ii].name;
-      try { bs = new CisoStore(bs, 0, label); }
+      try { bs = inputs[ii].ciso ? new CisoStore(bs, 0, label) : new EcmStore(bs, label); }
       catch (e) {
         await dropStages();
         await backing.finalize(false);
-        postMessage({ type: 'done', code: -1, error: '"' + label + '" could not be read as a compressed ISO: ' + (e && e.message || e), outputs: [] });
+        postMessage({ type: 'done', code: -1, error: '"' + label + '" could not be read as ' + (inputs[ii].ciso ? 'a compressed ISO' : 'an ECM image') + ': ' + (e && e.message || e), outputs: [] });
         return;
       }
     }
@@ -1108,11 +1227,12 @@ async function runJob(msg) {
 /* ---------------- game identification helpers ---------------- */
 
 // CHD sector reader: answers {type:'read', id, track, lba} with 2048 bytes of user data
-// (msg.ciso: a CSO/ZSO compressed ISO instead, read like a DVD CHD)
+// (msg.ciso: a CSO/ZSO compressed ISO instead, read like a DVD CHD; msg.ecm: ECM images)
 async function runReader(msg) {
   await loadModule(msg);
   var M = await instantiate({});
   if (msg.ciso) return runCisoReader(M, msg);
+  if (msg.ecm) return runEcmReader(M, msg);
   var FS = M.FS, CHDFS = makeFS(FS);
   FS.mkdir('/in');
   FS.mount(CHDFS, { files: [{ name: msg.name, store: new BlobStore(msg.blob) }].concat((msg.parent ? [{ name: 'parent.chd', store: new BlobStore(msg.parent) }] : [])) }, '/in');
@@ -1146,6 +1266,28 @@ function runCisoReader(M, msg) {
     try {
       var b = new Uint8Array(2048);
       if (iso.read(b, m.lba * 2048, 2048) === 2048) data = b;
+    } catch (err) { /* unreadable: null */ }
+    postMessage({ type: 'sector', id: m.id, data: data });
+  };
+}
+
+// the CD images in a job's ECM files (msg.ecm): reports their sizes (null: not an ECM image, or
+// damaged), then answers {type:'read', id, file, pos, len} with the image's bytes
+function runEcmReader(M, msg) {
+  var images = msg.ecm.map(function (blob) {
+    try {
+      var s = new EcmStore(new BlobStore(blob), blob.name);
+      s.setModule(M);
+      return s;
+    } catch (e) { return null; }
+  });
+  postMessage({ type: 'reader-ready', kind: 3, tracks: [], logical: 0, sizes: images.map(function (s) { return s ? s.sizeV : null; }) });
+  self.onmessage = function (e) {
+    var m = e.data, data = null;
+    if (m.type !== 'read') return;
+    try {
+      var s = images[m.file], n = Math.max(0, Math.min(m.len, s.sizeV - m.pos)), b = new Uint8Array(n);
+      if (s.read(b, m.pos, n) === n) data = b;
     } catch (err) { /* unreadable: null */ }
     postMessage({ type: 'sector', id: m.id, data: data });
   };
@@ -1190,10 +1332,11 @@ async function runCrc(msg) {
       if (typeof M._crc32 === 'function') buf = M._malloc(step); else M = null;
     } catch (e) { M = null; }
   }
-  // msg.ciso: the checksum of the ISO inside a CSO/ZSO image, which needs the module's inflate
-  if (msg.ciso) {
+  // msg.ciso: the checksum of the ISO inside a CSO/ZSO image, which needs the module's inflate;
+  // msg.ecm: of the CD image inside an ECM file (and that image's EDC is checked)
+  if (msg.ciso || msg.ecm) {
     if (!M) throw new Error('cannot decompress');
-    iso = new CisoStore(new BlobStore(blob));
+    iso = msg.ciso ? new CisoStore(new BlobStore(blob)) : new EcmStore(new BlobStore(blob), blob.name);
     iso.setModule(M);
     if (msg.end == null) end = iso.sizeV;
   }
