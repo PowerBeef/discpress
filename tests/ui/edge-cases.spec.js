@@ -80,6 +80,37 @@ for (const [name, text, why] of [
   });
 }
 
+// a CloneCD .ccd becomes a cue sheet for its .img (convert.spec: ps1-clonecd); it waits for the .img,
+// and what a cue sheet can't describe is refused
+test('a CloneCD image waits for its .img', async ({ app }) => {
+  await app.open();
+  await app.add(['mgs ccd.ccd', 'mgs ccd.sub']);
+  const card = app.job('mgs ccd');
+  await app.waitState(card, 'blocked');
+  await expect(card.locator('.note.warn')).toContainText('Missing 1 file listed in mgs ccd.ccd:');
+  await expect(card.locator('.note.warn li')).toHaveText(['mgs ccd.img']);
+  await app.add(['mgs ccd.img']);
+  await app.settled(card);
+  await expect(card.locator('.sub')).toContainText('CloneCD image');
+  await expect(card.locator('code.cmd')).toContainText('chdman createcd -i "mgs ccd.cue"');
+});
+
+for (const [name, text, why] of [
+  ['two sessions', '[CloneCD]\r\nVersion=3\r\n[Disc]\r\nSessions=2\r\n[TRACK 1]\r\nMODE=1\r\nINDEX 1=0\r\n', 'only single-session images can be converted'],
+  ['no track list', '[CloneCD]\r\nVersion=2\r\n[Disc]\r\nSessions=1\r\n', 'lists no tracks'],
+  ['not clonecd', '[Settings]\r\nfoo=1\r\n', 'not a CloneCD control file'],
+]) {
+  test(`a CloneCD image that can't be converted is refused: ${name}`, async ({ app }) => {
+    fs.writeFileSync(path.join(FIXTURES, name + '.ccd'), text);
+    await app.open();
+    await app.add([name + '.ccd']);
+    const card = app.job(name);
+    await app.waitState(card, 'error');
+    await expect(card.locator('.note.err')).toContainText(why);
+    await expect(card.locator('.job-foot')).toContainText('Can\u2019t convert');
+  });
+}
+
 // chdman reads a cue's bytes as they are; the app hands it a UTF-8 copy with LF line ends when needed
 for (const [how, key, bin, bytes] of [
   ['in UTF-16', 'utf16', 'twine.bin', s => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(s, 'utf16le')])],

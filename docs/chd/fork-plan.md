@@ -199,7 +199,7 @@ This affects users today, so it ships as its own small release before any fork w
   - Benchmark CD (332 MB), extracting with 4 threads: 2.5× faster (7.2 s → 2.8 s).
   - Benchmark DVD (1 GB): 1.4× faster (13.4 s → 9.3 s). Its 4 KB hunks leave most of the time to the job worker, which reads, checks and writes 1 GB.
   - With 1 thread: 5–12% faster, from the larger reads.
-  - Still open for 2.8: identification's checksum over CHD tracks, the parent walk, and `copy`.
+  - Still open for 2.8: the parent walk (creating with `-op`) and `copy`. Identification of a CHD only reads a few sectors, so it doesn't need it.
 - **2.1 hashing.** SHA-1 is unrolled and reads whole big-endian words; CRC-16 is slice-by-8. Both give the same results, 5× faster in wasm (SHA-1 650 MB/s, CRC-16 1,450 MB/s). So the whole-image SHA-1 no longer limits the job worker, and Web Crypto isn't needed.
 - In the page, 2.1 makes the benchmark CD and DVD convert 5–10% faster. Together with milestone 1's coroutines and 2.4, conversions are about 25% faster than in 1.2.1.
 - **2.4 early abort.** Each hunk tries the previous hunk's winner first, and every other codec stops once it can't beat the best result. The output is byte-identical: 294 fixture, stress-image and codec-list combinations match unmodified 0.289, and `tests/ui/engine.spec.js` keeps checking it.
@@ -248,6 +248,11 @@ Presets:
 4. **Session geometry.** Store the lead-out/lead-in gap as non-checksummed metadata, and fix the `CHSE` metadata-order fragility (C §3.3). Report both upstream.
 
 ### Milestone 4: more inputs (ongoing, by demand)
+
+**Status: CloneCD done, for single-session images.**
+- The page turns a `.ccd` into a cue sheet for its `.img` (`ccdToCue`).
+- The `.sub` is noted and left out; subchannel ingest stays tier X.
+- Multi-session, scrambled and track-list-less (CloneCD 2) files are refused with the reason.
 
 Priority order (C §9):
 1. CloneCD `.ccd/.img/.sub`, which also enables subchannel ingest for LibCrypt and CD+G;

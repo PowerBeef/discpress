@@ -655,7 +655,7 @@ body { overflow-x: clip; }
     <div class="card">
   <h2>How to use</h2>
   <ol style="margin:6px 0 0;padding-left:20px">
-    <li>On the <b>Convert</b> tab, choose or drop your disc files. Pick the <code>.cue</code> (or <code>.gdi</code>) <i>together with</i> all of its <code>.bin</code>/track files.</li>
+    <li>On the <b>Convert</b> tab, choose or drop your disc files. Pick the <code>.cue</code> (or <code>.gdi</code>, or CloneCD <code>.ccd</code>) <i>together with</i> all of its <code>.bin</code>/track files (for CloneCD, the <code>.img</code>).</li>
     <li>Each game appears as a card. The right chdman command is chosen automatically; open <b>Options</b> to change compression, hunk size or the output name.</li>
     <li>Press <b>Create CHD</b> on a card, or <b>Start all</b> at the bottom. Jobs run one after another.</li>
     <li>When a job finishes, press <b>Download</b> (on iPhone and iPad the button is called <b>Save to Files</b> and opens the share sheet, which also works inside apps that cannot download). On desktop Chrome/Edge you can <b>Save all to folder</b>.</li>
@@ -5190,6 +5190,40 @@ function tocFrames(a, first) {
   if (num(len)) { var after = a[i++] || ''; return tocMsf(num(after) ? after : len); }
   return first ? offset : 0;
 }
+// A CloneCD control file (.ccd, INI style) as a cue sheet for its image: the .img holds raw 2,352-byte
+// sectors from LBA 0, and each [TRACK n] gives MODE (0 audio, 1 or 2 data) and INDEX n=LBA.
+// Returns {text, changed, problem} like fixDescriptor. The .sub (subchannel) has no place in the CHD.
+function ccdToCue(text, img) {
+  var sec = {}, cur = null;
+  text.split(/\r\n|\r|\n/).forEach(function (ln) {
+    var m = /^\s*\[([^\]]+)\]\s*$/.exec(ln);
+    if (m) { cur = sec[m[1].trim().toUpperCase().replace(/\s+/g, ' ')] = {}; return; }
+    m = /^\s*([^=;]+?)\s*=\s*(.*?)\s*$/.exec(ln);
+    if (m && cur) cur[m[1].toUpperCase().replace(/\s+/g, ' ')] = m[2];
+  });
+  var fail = function (why) { return { text: '', changed: true, problem: why }; };
+  if (!sec.CLONECD) return fail('This .ccd file is not a CloneCD control file.');
+  var disc = sec.DISC || {};
+  if (+disc.SESSIONS > 1) return fail('This CloneCD image has ' + (+disc.SESSIONS) + ' sessions; only single-session images can be converted.');
+  if (+disc.DATATRACKSSCRAMBLED) return fail('This CloneCD image has scrambled data tracks.');
+  var msf = function (f) { var p = function (n) { return (n < 10 ? '0' : '') + n; }; return p(Math.floor(f / 4500)) + ':' + p(Math.floor(f / 75) % 60) + ':' + p(f % 75); };
+  var types = ['AUDIO', 'MODE1/2352', 'MODE2/2352'], lines = ['FILE "' + img + '" BINARY'], n = 0, last = -1;
+  for (var t = 1; t <= 99; t++) {
+    var tr = sec['TRACK ' + t];
+    if (!tr) continue;
+    var type = /^\d+$/.test(tr.MODE || '') ? types[+tr.MODE] : null, i1 = tr['INDEX 1'], i0 = tr['INDEX 0'];
+    if (!type) return fail('Track ' + t + ' has a mode (' + (tr.MODE || 'none') + ') CloneCD images don\u2019t use.');
+    if (!/^\d+$/.test(i1 || '') || (i0 != null && !/^\d+$/.test(i0)) || (i0 != null && +i0 > +i1) || +(i0 != null ? i0 : i1) < last)
+      return fail('Track ' + t + ' has unreadable or out-of-order index positions.');
+    last = +i1;
+    // numbered from 1 in order, as chdman reads a cue's track numbers as positions
+    lines.push('  TRACK ' + (++n < 10 ? '0' : '') + n + ' ' + type);
+    if (i0 != null && +i0 < +i1) lines.push('    INDEX 00 ' + msf(+i0));
+    lines.push('    INDEX 01 ' + msf(+i1));
+  }
+  if (!n) return fail('This .ccd file lists no tracks (CloneCD 3 and later list them as [TRACK n]).');
+  return { text: lines.join('\n') + '\n', changed: true, problem: '' };
+}
 // returns {text, changed, problem}: the text chdman should read, and why it can't be converted.
 // Lines may end in CR alone (classic Mac OS), which chdman reads as a single line.
 function fixDescriptor(kind, text) {
@@ -5833,7 +5867,7 @@ function newJob(props) {
 function jobInputBytes(job) { return job.files.reduce(function (s, f) { return s + f.file.size; }, 0); }
 
 /* ---------- grouping new files into jobs ---------- */
-var IGNORE = /^(txt|nfo|sbi|sub|ccd|m3u|dat|md5|sfv|sha1|jpg|jpeg|png|gif|webp|pdf|url|ini|cfg|xml|json|html|htm|db|ds_store|zip|7z|rar)$/;
+var IGNORE = /^(txt|nfo|sbi|sub|m3u|dat|md5|sfv|sha1|jpg|jpeg|png|gif|webp|pdf|url|ini|cfg|xml|json|html|htm|db|ds_store|zip|7z|rar)$/;
 
 async function addEntries(entries) {
   var fresh = [];
@@ -5861,9 +5895,9 @@ async function addEntries(entries) {
     if (!job.missing.length) finalizeDescriptorJob(job);
   });
 
-  // 2) descriptor files (.cue/.gdi/.toc) claim their tracks
+  // 2) descriptor files (.cue/.gdi/.toc, and CloneCD .ccd) claim their tracks
   var pool = looseFiles.concat(fresh);
-  var descs = fresh.filter(function (e) { return /^(cue|gdi|toc)$/.test(ext(e.path)); });
+  var descs = fresh.filter(function (e) { return /^(cue|gdi|toc|ccd)$/.test(ext(e.path)); });
   for (var i = 0; i < descs.length; i++) {
     var d = descs[i];
     claimed.add(d);
@@ -5945,9 +5979,21 @@ async function descriptorJob(d, pool, claimed) {
   try { dec = decodeText(new Uint8Array(await d.file.slice(0, 1 << 20).arrayBuffer())); } catch (e) { /* unreadable */ }
   // not a text file, e.g. a drive's raw table of contents that some dumping tools save as .toc: not a job
   if (dec && (d.file.size > 1 << 20 || dec.text.indexOf('\0') >= 0)) return null;
-  var fix = dec ? fixDescriptor(kind, dec.text) : { text: '', changed: false, problem: 'This file could not be read.' };
+  var fix = !dec ? { text: '', changed: false, problem: 'This file could not be read.' } : kind === 'ccd' ? ccdToCue(dec.text, stem(d.path) + '.img') : fixDescriptor(kind, dec.text);
+  var ccd = kind === 'ccd';
+  if (ccd) kind = 'cue'; // CloneCD: chdman gets a cue sheet for the .img instead
   var text = fix.text, refs = parseRefs(kind, text);
-  var job = newJob({ kind: 'create', src: kind, title: stem(d.path), disc: kind === 'gdi' ? 'gdrom' : 'cd', descFile: d.file, descName: base(d.path), descText: text, descDirty: !!dec && (dec.recoded || fix.changed), files: [] });
+  var job = newJob({ kind: 'create', src: kind, title: stem(d.path), disc: kind === 'gdi' ? 'gdrom' : 'cd', descFile: d.file, descName: ccd ? stem(d.path) + '.cue' : base(d.path), descText: text, descDirty: !!dec && (dec.recoded || fix.changed), files: [] });
+  if (ccd) {
+    job.fromCcd = true;
+    var sub = pool.find(function (e) { return !claimed.has(e) && e !== d && base(e.path).toLowerCase() === (stem(d.path) + '.sub').toLowerCase(); });
+    if (sub) {
+      claimed.add(sub);
+      var si = looseFiles.indexOf(sub);
+      if (si >= 0) looseFiles.splice(si, 1);
+      if (!fix.problem) job.warnings.push('The .sub file (subchannel data) is not kept: CHDs store the discs\u2019 data and audio. For PlayStation games with LibCrypt protection, keep an .sbi file next to the CHD.');
+    }
+  }
   if (fix.problem) {
     job.invalid = true;
     job.state = 'error';
@@ -6249,7 +6295,8 @@ function subtitle(job) {
     return parts.join(' · ');
   }
   var what;
-  if (job.descFile) what = job.src.toUpperCase() + ' + ' + plural(job.files.length, 'track file');
+  if (job.fromCcd) what = 'CloneCD image (.ccd + .img)';
+  else if (job.descFile) what = job.src.toUpperCase() + ' + ' + plural(job.files.length, 'track file');
   else if (job.autoCue && job.src !== 'iso') what = '.' + ext(job.files[0].name) + ' image (no cue)';
   else what = '.' + ext(job.files[0].name) + ' image';
   var total = n + (job.descFile ? job.descFile.size : 0);
@@ -6349,7 +6396,7 @@ function renderNotes(job) {
   var idn = identNote(job);
   if (idn) box.append(idn);
   if (job.missing.length) {
-    box.append(el('div', { class: 'note warn' }, el('b', null, 'Missing ' + plural(job.missing.length, 'file') + ' listed in ' + job.descName + ':'),
+    box.append(el('div', { class: 'note warn' }, el('b', null, 'Missing ' + plural(job.missing.length, 'file') + ' listed in ' + (job.fromCcd ? stem(job.descName) + '.ccd' : job.descName) + ':'),
       el('ul', null, job.missing.map(function (m) { return el('li', null, base(m)); })),
       el('div', { style: 'margin-top:6px' }, el('button', { class: 'btn sm', onclick: function () { pickFiles('fileInput', function (l) { addEntries(filesFromList(l)); }); } }, 'Add missing files'))));
   }

@@ -74,6 +74,33 @@ fixture('ps1-multitrack', {
    job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-00594',
    ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'])
 
+# the same disc as a CloneCD image: one .img with both tracks, a .ccd listing them and a .sub
+# (subchannel, not kept); the page turns the .ccd into a cue sheet, `ref` is that cue for native chdman
+def ccd_image():
+    t1, t2 = g.raw_sectors(mgs_iso(), 2), g.audio(225, 5, silence=150)
+    f1 = len(t1) // g.RAW
+    return t1 + t2, f1, f1 + 150
+
+def ccd_text():
+    img, i0, i1 = ccd_image()
+    return ('[CloneCD]\r\nVersion=3\r\n[Disc]\r\nTocEntries=5\r\nSessions=1\r\nDataTracksScrambled=0\r\nCDTextLength=0\r\n'
+            '[Session 1]\r\nPreGapMode=2\r\nPreGapSubC=0\r\n'
+            '[TRACK 1]\r\nMODE=2\r\nINDEX 1=0\r\n[TRACK 2]\r\nMODE=0\r\nINDEX 0=%d\r\nINDEX 1=%d\r\n' % (i0, i1)).encode()
+
+def ccd_ref():
+    img, i0, i1 = ccd_image()
+    return ('FILE "mgs ccd.img" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n'
+            '    INDEX 00 %s\n    INDEX 01 %s\n' % (g.msf(i0), g.msf(i1))).encode()
+
+fixture('ps1-clonecd', {
+    'mgs ccd.ccd': ccd_text,
+    'mgs ccd.img': lambda: ccd_image()[0],
+    'mgs ccd.sub': lambda: bytes(96 * (len(ccd_image()[0]) // g.RAW)),
+    'mgs ccd-ref.cue': ccd_ref,
+}, add=['mgs ccd.ccd', 'mgs ccd.img', 'mgs ccd.sub'], ref='mgs ccd-ref.cue', job='create', disc='cd', command='createcd', sys='ps1',
+   serial='SLUS-00594', ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'],
+   warning='subchannel data')
+
 fixture('ps1-single', {
     'twine.cue': lambda: cue([('twine.bin', 'MODE2/2352', 0)]),
     'twine.bin': lambda: g.raw_sectors(ps1_iso('SLUS_012.72', 'TWINE', 1, 12), 2),

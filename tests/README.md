@@ -49,7 +49,7 @@ parallel test workers (default 2), `CHDMAN` a native chdman binary, `REGEN_FIXTU
 
 `fixtures/make_fixtures.py` generates synthetic discs into `.cache/fixtures/` (deterministic,
 about a second): ISO 9660 file systems, raw CD sectors with valid EDC/ECC (Mode 1 and Mode 2),
-CD audio, and console boot headers for PlayStation, PS2, PSP, Saturn, Sega CD and Dreamcast (GDI).
+CD audio, a CloneCD image, and console boot headers for PlayStation, PS2, PSP, Saturn, Sega CD and Dreamcast (GDI).
 They carry serial numbers of real games, so identification can be tested against the built-in
 Redump database, but contain no game data. `manifest.json` lists each fixture with the job and
 identification the app should produce. `--bench` adds large, realistic images for benchmarks.
@@ -75,7 +75,7 @@ game database when it is requested as `/discpress.html?testdb=1` (`app.open({ te
 | `gdrom` | Dreamcast GD-ROM layout from a `.gdi` and a Redump cue: no pregaps, track 3 at LBA 45000 |
 | `engine` | the engine's own command line against unmodified chdman 0.289: the 0.289 defects it fixes, and identical CHDs when codec trials stop early |
 | `advanced` | the Advanced tab: form, text commands, validation, listtemplates |
-| `edge-cases` | missing tracks, lone tracks, duplicates, unsupported files, truncated images, DVD/CD switch, cancel, remove |
+| `edge-cases` | missing tracks, lone tracks, duplicates, unsupported files, descriptors and CloneCD images chdman can't convert, truncated images, DVD/CD switch, cancel, remove |
 | `fallbacks` | no SIMD, no OPFS, memory-only, input staging and page streaming (iOS web views), single core |
 | `mobile` | phone layout, thread defaults, the fixed-header scrolling used inside iOS app web views |
 | `layout` | 7 screen sizes × light/dark × 5 screens: no horizontal overflow; screenshots in `.cache/screens/` |
