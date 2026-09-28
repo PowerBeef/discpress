@@ -70,6 +70,12 @@ body { font-family: var(--display); color: var(--text); -webkit-font-smoothing: 
 #download .ico svg { width: 40px; height: 40px; }
 #download .t1 { font-size: 40px; font-weight: 900; letter-spacing: -.02em; line-height: 1.05; }
 #download .t2 { font-size: 15px; margin-top: 6px; opacity: .8; }
+/* online button, shown next to the download button */
+#open .btn { display: inline-flex; align-items: center; gap: 22px; padding: 22px 36px 22px 24px; background: var(--cyan); border: 4px solid var(--ink); border-radius: 24px; box-shadow: 8px 8px 0 var(--shadow-c); color: #1c1733; }
+#open .ico { width: 68px; height: 68px; border-radius: 18px; background: #1c1733; color: #fff7e6; display: grid; place-items: center; }
+#open .ico svg { width: 40px; height: 40px; }
+#open .t1 { font-size: 40px; font-weight: 900; letter-spacing: -.02em; line-height: 1.05; }
+#open .t2 { font-size: 15px; margin-top: 6px; opacity: .8; }
 
 /* steps */
 #steps .row { display: flex; align-items: stretch; gap: 0; }
@@ -147,6 +153,7 @@ body { font-family: var(--display); color: var(--text); -webkit-font-smoothing: 
   <symbol id="logo" viewBox="0 0 48 48"><rect class="tile" x="2" y="2" width="44" height="44" rx="12" fill="#1c1733"/><clipPath id="lgc"><circle cx="24" cy="24" r="15"/></clipPath><circle cx="24" cy="24" r="15" fill="#fff7e6"/><g clip-path="url(#lgc)"><rect x="6" y="26" width="36" height="3.3" fill="#ff5c93"/><rect x="6" y="29.3" width="36" height="3.3" fill="#ffb23f"/><rect x="6" y="32.6" width="36" height="3.3" fill="#ffe14d"/><rect x="6" y="35.9" width="36" height="4" fill="#13a9ba"/></g><circle cx="24" cy="24" r="4.6" fill="#1c1733"/><circle cx="24" cy="24" r="1.8" fill="#fff7e6"/></symbol>
   <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M4 17v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M3.5 12h17M12 3.5c2.4 2.3 3.6 5.1 3.6 8.5s-1.2 6.2-3.6 8.5c-2.4-2.3-3.6-5.1-3.6-8.5s1.2-6.2 3.6-8.5z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/></symbol>
   <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/></symbol>
   <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5" fill="none" stroke="currentColor" stroke-width="2.2"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
@@ -177,6 +184,12 @@ body { font-family: var(--display); color: var(--text); -webkit-font-smoothing: 
 <div class="scene" id="download"><div class="btn">
   <div class="ico"><svg><use href="#i-download"/></svg></div>
   <div><div class="t1">Download Discpress</div><div class="t2 mono">One HTML file · Works offline</div></div>
+</div></div>
+
+<!-- ONLINE BUTTON -->
+<div class="scene" id="open"><div class="btn">
+  <div class="ico"><svg><use href="#i-globe"/></svg></div>
+  <div><div class="t1">Use it online</div><div class="t2 mono">Best on iPhone and iPad · Works offline</div></div>
 </div></div>
 
 <!-- STEPS -->

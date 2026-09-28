@@ -11,7 +11,7 @@ from playwright.sync_api import sync_playwright
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, '..', '..', 'docs', 'brand')
 URL = 'file://' + os.path.join(HERE, 'brand.html')
-JOBS = [(s, t) for s in ('hero', 'download', 'steps', 'features', 'systems', 'showcase') for t in ('light', 'dark')]
+JOBS = [(s, t) for s in ('hero', 'download', 'open', 'steps', 'features', 'systems', 'showcase') for t in ('light', 'dark')]
 JOBS += [('divider', 'light'), ('mark', 'light')]
 
 os.makedirs(OUT, exist_ok=True)
