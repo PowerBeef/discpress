@@ -96,7 +96,10 @@ The plan as it was:
 ### Phase 2: making big jobs survive on iOS (engine and page): done, except as noted
 
 **Status.**
-1. **Threads:** done. Automatic mode uses at most 2 threads on iPhones and 4 on iPads (`iosThreadCap` in `app/ui.js`).
+1. **Threads:** the speed test decides, as on other devices, trying at most 4 threads on iPhones (`iosThreadCap` in `app/ui.js`) and 8 on iPads.
+   - **1.3.1** capped iPhones at 2 threads and iPads at 4, following the research, before measuring on a device.
+   - **1.3.2** reverted this. Threads were not what closed Sitecase: the share sheet was. An iPhone 17 Pro converted the 1.6 GB PSP game in 1 min 42 s without the cap. A thread costs about 16 MB of memory, and the speed test runs on the device, so it already picks fewer threads where more don't help.
+   - A stored speed test that stopped at the old cap is run again.
 2. **Heaps:** not needed. Measured in the page (bench CD and 1 GB DVD, every preset): a helper's heap never grows past its initial 16 MB, and the job worker's peaks at 23–40 MB. Growth copies are small and rare.
 3. **Wake lock:** already there. It is taken when a job starts and again whenever the page becomes visible. The Help page now says what iOS does when the phone is locked.
 4. **Recovery:** done (`Recovery` in `app/ui.js`, `tests/ui/recovery.spec.js`). A record in `localStorage` lists the running job and the finished results not saved yet. At the next start, `Store.cleanupStale` keeps those results' folder, and the page lists them under "From your last visit" (Save or Delete), with the job that didn't finish.

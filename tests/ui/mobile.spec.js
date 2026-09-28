@@ -17,10 +17,30 @@ test('the phone layout fits the screen before and after converting', async ({ ap
   expect(['Download', 'Save to Files']).toContain(label.trim());
 });
 
-test('before measuring, phones start from fewer threads (iPhones from 2)', async ({ app, page }, testInfo) => {
+test('before measuring, phones start from fewer threads', async ({ app, page }) => {
   await app.open({ cores: 8, tuned: false });
-  // iPhones: one process for page and workers, stopped at about 1.5 GB, and 3 fast wasm memories (docs/ios)
-  await expect(page.locator('#chipThreads')).toHaveText(/iphone/.test(testInfo.project.name) ? /Auto · 2 threads/i : /Auto · 4 threads/i);
+  await expect(page.locator('#chipThreads')).toHaveText(/Auto · 4 threads/i);
+});
+
+test('on iPhone, the speed test tries up to 4 threads, and one that stopped at 1.3.1\u2019s limit of 2 runs again', async ({ app, page }, testInfo) => {
+  test.skip(!/iphone/.test(testInfo.project.name), 'iOS only');
+  const tuning = () => page.evaluate(() => JSON.parse(localStorage.getItem('chdman-web-tuning') || 'null'));
+  // a result measured under a lower limit is dropped, so automatic mode starts from 4 again
+  await app.open({ cores: 4, tuning: { threads: 2, cap: 2 } });
+  await expect(page.locator('#chipThreads')).toHaveText(/Auto · 4 threads/i);
+  await page.click('#settingsBtn');
+  await page.click('#retune');
+  await expect.poll(async () => (await tuning())?.cap, { timeout: 60_000 }).toBe(4);
+  const t = await tuning();
+  test.info().annotations.push({ type: 'speed test', description: JSON.stringify(t.steps) });
+  expect(t.steps.every(([n]) => n <= 4)).toBe(true);
+  // one that chose fewer threads than its limit allowed, or that is older than the limit, is kept
+  for (const [fields, chip] of [[{ threads: 3, cap: undefined }, /Auto · 3 threads/i], [{ threads: 1, cap: 2 }, /Auto · 1 thread$/i]]) {
+    await page.evaluate(f => localStorage.setItem('chdman-web-tuning',
+      JSON.stringify({ ...JSON.parse(localStorage.getItem('chdman-web-tuning')), ...f })), fields);
+    await page.reload();
+    await expect(page.locator('#chipThreads')).toHaveText(chip);
+  }
 });
 
 test('inside an iOS app web view the header stays fixed and the content scrolls', async ({ browser, browserName }, testInfo) => {

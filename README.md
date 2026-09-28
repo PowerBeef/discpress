@@ -226,7 +226,7 @@ source ~/emsdk/emsdk_env.sh
 
 - **File access.** A custom Emscripten file system reads your files directly (no copy into memory) and writes results to the browser's private storage (OPFS), to a folder, or to memory.
 - **Multi-core compression.** Helper workers compress hunks in parallel. chdman's commands are C++20 coroutines that pause while the helpers work; extracting and verifying use the helpers the same way to decompress ahead of the reads.
-- **iPhone and iPad.** When a worker can't read the picked files (inside some file-viewer apps), the page streams them to the worker in chunks instead. Threads are capped (2 on iPhone, 4 on iPad) to stay within iOS's memory limits, and a small record in the page's storage lets results survive a reload. [`docs/ios/`](docs/ios/README.md) explains iOS's limits and how Discpress works around them.
+- **iPhone and iPad.** When a worker can't read the picked files (inside some file-viewer apps), the page streams them to the worker in chunks instead. A small record in the page's storage lets results survive a reload. [`docs/ios/`](docs/ios/README.md) explains iOS's limits and how Discpress works around them.
 - **Game identification.** It reads boot headers (IP.BIN, SYSTEM.CNF, PARAM.SFO, IPL.TXT and others) through ISO 9660, including inside existing CHDs, then matches the serial number, or the size and CRC-32, against the database.
 
 </details>

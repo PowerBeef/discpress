@@ -80,7 +80,8 @@ var cores = Math.max(1, navigator.hardwareConcurrency || 4);
 var iosWebView = isIOS && !/Safari\//.test(navigator.userAgent) && navigator.standalone !== true && !(window.matchMedia && matchMedia('(display-mode: standalone)').matches);
 // the hosted copy, for Safari on iPhone and iPad (web/README.md)
 var HOSTED_URL = 'https://powerbeef.github.io/discpress/';
-var iosThreadCap = isIOS ? (/iPad/.test(navigator.userAgent) || navigator.platform === 'MacIntel' ? 4 : 2) : 0;
+// iPhones report 4 cores whatever they have (docs/ios): the speed test tries at most that many there
+var iosThreadCap = isIOS && !(/iPad/.test(navigator.userAgent) || navigator.platform === 'MacIntel') ? 4 : 0;
 var maxThreads = Math.min(cores, 16);
 // threads: 'auto' (measured per device, see Tuning) or a fixed number of compression threads
 var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false };
@@ -371,13 +372,14 @@ var Engine = {
    ============================================================ */
 var Tuning = {
   result: null, running: null,
-  // up to 8 on phones and tablets (iPhone 2, iPad 4), 16 elsewhere, whatever the browser reports
+  // up to 8 on phones and tablets (4 on iPhones), 16 elsewhere, whatever the browser reports
   cap: iosThreadCap || (isMobile ? 8 : 16),
   key: function () { return cores + '|' + navigator.userAgent; },
   load: function () {
     try {
       var t = JSON.parse(localStorage.getItem('chdman-web-tuning') || 'null');
-      this.result = t && t.key === this.key() && t.threads >= 1 ? t : null;
+      // a result that stopped at a lower limit than today's (1.3.1 tried 2 threads on iPhones) is measured again
+      this.result = t && t.key === this.key() && t.threads >= 1 && !(t.cap < this.cap && t.threads >= t.cap) ? t : null;
     } catch (e) { this.result = null; }
   },
   measure: function (onStep) {
@@ -451,7 +453,7 @@ var Tuning = {
     } finally {
       pool.forEach(function (h) { h.w.terminate(); });
     }
-    return { key: this.key(), threads: bestN, rate: +best.toFixed(2), steps: steps, cores: cores, date: Date.now() };
+    return { key: this.key(), threads: bestN, rate: +best.toFixed(2), steps: steps, cores: cores, cap: Tuning.cap, date: Date.now() };
   }
 };
 Tuning.load();
