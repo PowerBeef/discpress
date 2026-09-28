@@ -26,6 +26,7 @@ const port = +(process.argv[2] || process.env.PORT || 4173);
 http.createServer((req, res) => {
   const [url, query = ''] = req.url.split('?');
   if (url === '/healthz') { res.end('ok'); return; }
+  if (url === '/blank.html') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end('<!doctype html><title>blank</title>'); return; }
   if (url === '/' || url === '/discpress.html') {
     // read on every request so a rebuilt page is picked up without restarting
     let html = fs.readFileSync(pageUnderTest(), 'utf8');
