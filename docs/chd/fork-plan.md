@@ -187,7 +187,9 @@ This affects users today, so it ships as its own small release before any fork w
 
 ### Milestone 2: performance (1–2 weeks)
 
-**Status: 2.4 done, and part of 2.2** (see `engine/README.md`; measured in measurements §2).
+**Status: 2.1 and 2.4 done, and part of 2.2** (see `engine/README.md`; measured in measurements §2).
+- **2.1 hashing.** SHA-1 is unrolled and reads whole big-endian words; CRC-16 is slice-by-8. Both give the same results, 5× faster in wasm (SHA-1 650 MB/s, CRC-16 1,450 MB/s). So the whole-image SHA-1 no longer limits the job worker, and Web Crypto isn't needed.
+- In the page, 2.1 makes the benchmark CD and DVD convert 5–10% faster. Together with milestone 1's coroutines and 2.4, conversions are about 25% faster than in 1.2.1.
 - **2.4 early abort.** Each hunk tries the previous hunk's winner first, and every other codec stops once it can't beat the best result. The output is byte-identical: 294 fixture, stress-image and codec-list combinations match unmodified 0.289, and `tests/ui/engine.spec.js` keeps checking it.
 - Measured CPU savings: 1.06× on CD data, 1.47× on CD audio, 1.10× on DVD. That is below the estimate, because deflate and single-frame FLAC can't stop partway through a hunk.
 - In the page, the benchmark CD and DVD convert 5–8% faster with 1 or 4 threads.

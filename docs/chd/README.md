@@ -130,7 +130,7 @@ Separately, the generic FLAC codec encodes each hunk two or three times.
 
 There are serial bottlenecks too:
 
-- MAME's SHA-1 runs at about 80 MB/s in wasm (about 150 MB/s native), for the whole-image hash on one thread;
+- MAME's SHA-1 runs at about 80 MB/s in wasm (about 150 MB/s native), for the whole-image hash on one thread (the engine's runs at 650 MB/s since milestone 2.1);
 - `-np N` gives N−1 workers, capped at 16;
 - `-np 1` busy-waits;
 - verify and extract are single-threaded.

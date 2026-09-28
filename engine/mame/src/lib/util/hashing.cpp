@@ -10,6 +10,7 @@
 
 #include "hashing.h"
 
+#include "multibyte.h"
 #include "strformat.h"
 
 #include "eminline.h"
@@ -44,64 +45,34 @@ constexpr int char_to_hex(char c)
 }
 
 
-inline uint32_t sha1_b(uint32_t *data, unsigned i) noexcept
+// Discpress: the 80 rounds unrolled with named variables (upstream indexed an array by i % 5)
+#define SHA1_W(i) (w[(i) & 15U] = rotl_32(w[((i) + 13U) & 15U] ^ w[((i) + 8U) & 15U] ^ w[((i) + 2U) & 15U] ^ w[(i) & 15U], 1))
+#define SHA1_R0(a, b, c, d, e, i) e += ((b & (c ^ d)) ^ d) + w[i] + 0x5a827999U + rotl_32(a, 5); b = rotl_32(b, 30);
+#define SHA1_R1(a, b, c, d, e, i) e += ((b & (c ^ d)) ^ d) + SHA1_W(i) + 0x5a827999U + rotl_32(a, 5); b = rotl_32(b, 30);
+#define SHA1_R2(a, b, c, d, e, i) e += (b ^ c ^ d) + SHA1_W(i) + 0x6ed9eba1U + rotl_32(a, 5); b = rotl_32(b, 30);
+#define SHA1_R3(a, b, c, d, e, i) e += (((b | c) & d) | (b & c)) + SHA1_W(i) + 0x8f1bbcdcU + rotl_32(a, 5); b = rotl_32(b, 30);
+#define SHA1_R4(a, b, c, d, e, i) e += (b ^ c ^ d) + SHA1_W(i) + 0xca62c1d6U + rotl_32(a, 5); b = rotl_32(b, 30);
+#define SHA1_5(R, i) R(a, b, c, d, e, i) R(e, a, b, c, d, i + 1) R(d, e, a, b, c, i + 2) R(c, d, e, a, b, i + 3) R(b, c, d, e, a, i + 4)
+
+// w: the block as 16 big-endian words; used as the message schedule, so it is overwritten
+inline void sha1_process(std::array<uint32_t, 5> &st, uint32_t *w) noexcept
 {
-	uint32_t r = data[(i + 13) & 15U];
-	r ^= data[(i + 8) & 15U];
-	r ^= data[(i + 2) & 15U];
-	r ^= data[i & 15U];
-	r = rotl_32(r, 1);
-	data[i & 15U] = r;
-	return r;
+	uint32_t a = st[4], b = st[3], c = st[2], d = st[1], e = st[0];
+	SHA1_5(SHA1_R0, 0U) SHA1_5(SHA1_R0, 5U) SHA1_5(SHA1_R0, 10U)
+	SHA1_R0(a, b, c, d, e, 15U) SHA1_R1(e, a, b, c, d, 16U) SHA1_R1(d, e, a, b, c, 17U) SHA1_R1(c, d, e, a, b, 18U) SHA1_R1(b, c, d, e, a, 19U)
+	SHA1_5(SHA1_R2, 20U) SHA1_5(SHA1_R2, 25U) SHA1_5(SHA1_R2, 30U) SHA1_5(SHA1_R2, 35U)
+	SHA1_5(SHA1_R3, 40U) SHA1_5(SHA1_R3, 45U) SHA1_5(SHA1_R3, 50U) SHA1_5(SHA1_R3, 55U)
+	SHA1_5(SHA1_R4, 60U) SHA1_5(SHA1_R4, 65U) SHA1_5(SHA1_R4, 70U) SHA1_5(SHA1_R4, 75U)
+	st[4] += a; st[3] += b; st[2] += c; st[1] += d; st[0] += e;
 }
 
-inline void sha1_r0(const uint32_t *data, std::array<uint32_t, 5> &d, unsigned i) noexcept
-{
-	d[i % 5] = d[i % 5] + ((d[(i + 3) % 5] & (d[(i + 2) % 5] ^ d[(i + 1) % 5])) ^ d[(i + 1) % 5]) + data[i] + 0x5a827999U + rotl_32(d[(i + 4) % 5], 5);
-	d[(i + 3) % 5] = rotl_32(d[(i + 3) % 5], 30);
-}
-
-inline void sha1_r1(uint32_t *data, std::array<uint32_t, 5> &d, unsigned i) noexcept
-{
-	d[i % 5] = d[i % 5] + ((d[(i + 3) % 5] & (d[(i + 2) % 5] ^ d[(i + 1) % 5])) ^ d[(i + 1) % 5])+ sha1_b(data, i) + 0x5a827999U + rotl_32(d[(i + 4) % 5], 5);
-	d[(i + 3) % 5] = rotl_32(d[(i + 3) % 5], 30);
-}
-
-inline void sha1_r2(uint32_t *data, std::array<uint32_t, 5> &d, unsigned i) noexcept
-{
-	d[i % 5] = d[i % 5] + (d[(i + 3) % 5] ^ d[(i + 2) % 5] ^ d[(i + 1) % 5]) + sha1_b(data, i) + 0x6ed9eba1U + rotl_32(d[(i + 4) % 5], 5);
-	d[(i + 3) % 5] = rotl_32(d[(i + 3) % 5], 30);
-}
-
-inline void sha1_r3(uint32_t *data, std::array<uint32_t, 5> &d, unsigned i) noexcept
-{
-	d[i % 5] = d[i % 5] + (((d[(i + 3) % 5] | d[(i + 2) % 5]) & d[(i + 1) % 5]) | (d[(i + 3) % 5] & d[(i + 2) % 5])) + sha1_b(data, i) + 0x8f1bbcdcU + rotl_32(d[(i + 4) % 5], 5);
-	d[(i + 3) % 5] = rotl_32(d[(i + 3) % 5], 30);
-}
-
-inline void sha1_r4(uint32_t *data, std::array<uint32_t, 5> &d, unsigned i) noexcept
-{
-	d[i % 5] = d[i % 5] + (d[(i + 3) % 5] ^ d[(i + 2) % 5] ^ d[(i + 1) % 5]) + sha1_b(data, i) + 0xca62c1d6U + rotl_32(d[(i + 4) % 5], 5);
-	d[(i + 3) % 5] = rotl_32(d[(i + 3) % 5], 30);
-}
-
-inline void sha1_process(std::array<uint32_t, 5> &st, uint32_t *data) noexcept
-{
-	std::array<uint32_t, 5> d = st;
-	unsigned i = 0U;
-	while (i < 16U)
-		sha1_r0(data, d, i++);
-	while (i < 20U)
-		sha1_r1(data, d, i++);
-	while (i < 40U)
-		sha1_r2(data, d, i++);
-	while (i < 60U)
-		sha1_r3(data, d, i++);
-	while (i < 80U)
-		sha1_r4(data, d, i++);
-	for (i = 0U; i < 5U; i++)
-		st[i] += d[i];
-}
+#undef SHA1_5
+#undef SHA1_R4
+#undef SHA1_R3
+#undef SHA1_R2
+#undef SHA1_R1
+#undef SHA1_R0
+#undef SHA1_W
 
 } // anonymous namespace
 
@@ -193,27 +164,30 @@ void sha1_creator::append(const void *data, uint32_t length) noexcept
 #else
 	constexpr unsigned swizzle = 0U;
 #endif
+	auto const *const src = reinterpret_cast<const uint8_t *>(data);
 	uint32_t residual = (uint32_t(m_cnt) >> 3) & 63U;
 	m_cnt += uint64_t(length) << 3;
 	uint32_t offset = 0U;
-	if (length >= (64U - residual))
+	if (residual)
 	{
-		if (residual)
-		{
-			for (offset = 0U; (offset + residual) < 64U; offset++)
-				reinterpret_cast<uint8_t *>(m_buf)[(offset + residual) ^ swizzle] = reinterpret_cast<const uint8_t *>(data)[offset];
-			sha1_process(m_st, m_buf);
-		}
-		while ((length - offset) >= 64U)
-		{
-			for (residual = 0U; residual < 64U; residual++, offset++)
-				reinterpret_cast<uint8_t *>(m_buf)[residual ^ swizzle] = reinterpret_cast<const uint8_t *>(data)[offset];
-			sha1_process(m_st, m_buf);
-		}
-		residual = 0U;
+		// complete the partial block first
+		for ( ; (offset < length) && (residual < 64U); residual++, offset++)
+			reinterpret_cast<uint8_t *>(m_buf)[residual ^ swizzle] = src[offset];
+		if (residual < 64U)
+			return;
+		sha1_process(m_st, m_buf);
 	}
-	for ( ; offset < length; residual++, offset++)
-		reinterpret_cast<uint8_t *>(m_buf)[residual ^ swizzle] = reinterpret_cast<const uint8_t *>(data)[offset];
+
+	// Discpress: whole blocks are read straight from the input as big-endian words
+	for ( ; (length - offset) >= 64U; offset += 64U)
+	{
+		uint32_t w[16];
+		for (unsigned i = 0U; i < 16U; i++)
+			w[i] = get_u32be(&src[offset + (i << 2)]);
+		sha1_process(m_st, w);
+	}
+	for (residual = 0U; offset < length; residual++, offset++)
+		reinterpret_cast<uint8_t *>(m_buf)[residual ^ swizzle] = src[offset];
 }
 
 
@@ -395,50 +369,45 @@ std::string crc16_t::as_string() const
  * @param   length  The length.
  */
 
+namespace {
+
+// Discpress: slice-by-8 tables for CRC-16/CCITT; t[k][x] is the CRC of byte x followed by k zero
+// bytes, so eight bytes are folded in at once (t[0] is upstream's byte-at-a-time table)
+struct crc16_tables
+{
+	uint16_t t[8][256];
+
+	constexpr crc16_tables() : t()
+	{
+		for (unsigned x = 0; x < 256; x++)
+		{
+			uint16_t crc = uint16_t(x << 8);
+			for (int bit = 0; bit < 8; bit++)
+				crc = (crc & 0x8000) ? uint16_t((crc << 1) ^ 0x1021) : uint16_t(crc << 1);
+			t[0][x] = crc;
+		}
+		for (unsigned k = 1; k < 8; k++)
+			for (unsigned x = 0; x < 256; x++)
+				t[k][x] = uint16_t((t[k - 1][x] << 8) ^ t[0][t[k - 1][x] >> 8]);
+	}
+};
+
+constexpr crc16_tables s_crc16;
+
+} // anonymous namespace
+
 void crc16_creator::append(const void *data, uint32_t length) noexcept
 {
-	static const uint16_t s_table[256] =
-	{
-		0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50a5, 0x60c6, 0x70e7,
-		0x8108, 0x9129, 0xa14a, 0xb16b, 0xc18c, 0xd1ad, 0xe1ce, 0xf1ef,
-		0x1231, 0x0210, 0x3273, 0x2252, 0x52b5, 0x4294, 0x72f7, 0x62d6,
-		0x9339, 0x8318, 0xb37b, 0xa35a, 0xd3bd, 0xc39c, 0xf3ff, 0xe3de,
-		0x2462, 0x3443, 0x0420, 0x1401, 0x64e6, 0x74c7, 0x44a4, 0x5485,
-		0xa56a, 0xb54b, 0x8528, 0x9509, 0xe5ee, 0xf5cf, 0xc5ac, 0xd58d,
-		0x3653, 0x2672, 0x1611, 0x0630, 0x76d7, 0x66f6, 0x5695, 0x46b4,
-		0xb75b, 0xa77a, 0x9719, 0x8738, 0xf7df, 0xe7fe, 0xd79d, 0xc7bc,
-		0x48c4, 0x58e5, 0x6886, 0x78a7, 0x0840, 0x1861, 0x2802, 0x3823,
-		0xc9cc, 0xd9ed, 0xe98e, 0xf9af, 0x8948, 0x9969, 0xa90a, 0xb92b,
-		0x5af5, 0x4ad4, 0x7ab7, 0x6a96, 0x1a71, 0x0a50, 0x3a33, 0x2a12,
-		0xdbfd, 0xcbdc, 0xfbbf, 0xeb9e, 0x9b79, 0x8b58, 0xbb3b, 0xab1a,
-		0x6ca6, 0x7c87, 0x4ce4, 0x5cc5, 0x2c22, 0x3c03, 0x0c60, 0x1c41,
-		0xedae, 0xfd8f, 0xcdec, 0xddcd, 0xad2a, 0xbd0b, 0x8d68, 0x9d49,
-		0x7e97, 0x6eb6, 0x5ed5, 0x4ef4, 0x3e13, 0x2e32, 0x1e51, 0x0e70,
-		0xff9f, 0xefbe, 0xdfdd, 0xcffc, 0xbf1b, 0xaf3a, 0x9f59, 0x8f78,
-		0x9188, 0x81a9, 0xb1ca, 0xa1eb, 0xd10c, 0xc12d, 0xf14e, 0xe16f,
-		0x1080, 0x00a1, 0x30c2, 0x20e3, 0x5004, 0x4025, 0x7046, 0x6067,
-		0x83b9, 0x9398, 0xa3fb, 0xb3da, 0xc33d, 0xd31c, 0xe37f, 0xf35e,
-		0x02b1, 0x1290, 0x22f3, 0x32d2, 0x4235, 0x5214, 0x6277, 0x7256,
-		0xb5ea, 0xa5cb, 0x95a8, 0x8589, 0xf56e, 0xe54f, 0xd52c, 0xc50d,
-		0x34e2, 0x24c3, 0x14a0, 0x0481, 0x7466, 0x6447, 0x5424, 0x4405,
-		0xa7db, 0xb7fa, 0x8799, 0x97b8, 0xe75f, 0xf77e, 0xc71d, 0xd73c,
-		0x26d3, 0x36f2, 0x0691, 0x16b0, 0x6657, 0x7676, 0x4615, 0x5634,
-		0xd94c, 0xc96d, 0xf90e, 0xe92f, 0x99c8, 0x89e9, 0xb98a, 0xa9ab,
-		0x5844, 0x4865, 0x7806, 0x6827, 0x18c0, 0x08e1, 0x3882, 0x28a3,
-		0xcb7d, 0xdb5c, 0xeb3f, 0xfb1e, 0x8bf9, 0x9bd8, 0xabbb, 0xbb9a,
-		0x4a75, 0x5a54, 0x6a37, 0x7a16, 0x0af1, 0x1ad0, 0x2ab3, 0x3a92,
-		0xfd2e, 0xed0f, 0xdd6c, 0xcd4d, 0xbdaa, 0xad8b, 0x9de8, 0x8dc9,
-		0x7c26, 0x6c07, 0x5c64, 0x4c45, 0x3ca2, 0x2c83, 0x1ce0, 0x0cc1,
-		0xef1f, 0xff3e, 0xcf5d, 0xdf7c, 0xaf9b, 0xbfba, 0x8fd9, 0x9ff8,
-		0x6e17, 0x7e36, 0x4e55, 0x5e74, 0x2e93, 0x3eb2, 0x0ed1, 0x1ef0
-	};
-
 	const auto *src = reinterpret_cast<const uint8_t *>(data);
+	auto const &t = s_crc16.t;
 
 	// fetch the current value into a local and rip through the source data
 	uint16_t crc = m_accum.m_raw;
+	for ( ; length >= 8; length -= 8, src += 8)
+		crc = t[7][(crc >> 8) ^ src[0]] ^ t[6][(crc & 0xff) ^ src[1]] ^ t[5][src[2]] ^ t[4][src[3]] ^
+				t[3][src[4]] ^ t[2][src[5]] ^ t[1][src[6]] ^ t[0][src[7]];
 	while (length-- != 0)
-		crc = (crc << 8) ^ s_table[(crc >> 8) ^ *src++];
+		crc = (crc << 8) ^ t[0][(crc >> 8) ^ *src++];
 	m_accum.m_raw = crc;
 }
 
