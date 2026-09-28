@@ -246,6 +246,176 @@
  
    *destLen -= (SizeT)outStream.rem;
    if (outStream.overflow)
+--- a/src/lib/util/cdrom.cpp
++++ b/src/lib/util/cdrom.cpp
+@@ -28,6 +28,8 @@
+ #include <cstdlib>
+ #include <cstring>
+ #include <tuple>
++#include <utility>
++#include <vector>
+ 
+ 
+ /***************************************************************************
+@@ -1908,6 +1910,12 @@
+ //          printf("Start track %d  End track: %d\n", start, end);
+ 
+ 			outtoc.numtrks = (end-start) + 1;
++			if (end < start || outtoc.numtrks > MAX_TRACKS || end > MAX_TRACKS) // Discpress: 0.289 wrote past its track table
++			{
++				fclose(infile);
++				osd_printf_error("ERROR: NRG image has tracks %d to %d, only 1 to %d are possible\n", start, end, MAX_TRACKS);
++				return chd_file::error::INVALID_DATA;
++			}
+ 
+ 			uint32_t offset = 0;
+ 			for (int track = start; track <= end; track++)
+@@ -2149,7 +2157,7 @@
+ 
+ 	const int numtracks = atoi(token);
+ 
+-	if (numtracks > 0 && numtracks - 1 > std::size(outinfo.track))
++	if (numtracks > int(std::size(outinfo.track))) // Discpress: 0.289 let 100 tracks through, then aborted
+ 	{
+ 		osd_printf_error("GDI expects too many tracks. Expected %d tracks but only up to %zu tracks allowed\n", numtracks, std::size(outinfo.track) + 1);
+ 		return chd_file::error::INVALID_DATA;
+@@ -2178,7 +2186,7 @@
+ 		paramcnt++;
+ 		const int trknum = atoi(token) - 1;
+ 
+-		if (trknum < 0 || trknum > std::size(outinfo.track) || trknum + 1 > numtracks)
++		if (trknum < 0 || trknum >= int(std::size(outinfo.track)) || trknum + 1 > numtracks)
+ 		{
+ 			osd_printf_error("Track %d is out of expected range of 1 to %d\n", trknum + 1, numtracks);
+ 			return chd_file::error::INVALID_DATA;
+@@ -2345,6 +2353,12 @@
+ 	enum gdi_area current_area = SINGLE_DENSITY;
+ 	bool is_multibin = false;
+ 	int leadin = -1;
++	// Discpress: per track, whether its FILE is MOTOROLA (big-endian audio), and where the samples of its
++	// .WAV file are (offset, length; 0 for other files), for .WAV files that hold several tracks
++	bool curmotorola = false;
++	uint32_t curwavoffs = 0, curwavlen = 0;
++	std::vector<bool> motorola(MAX_TRACKS + 1);
++	std::vector<std::pair<uint32_t, uint32_t> > wavdata(MAX_TRACKS + 1);
+ 
+ 	FILE *infile = fopen(path.c_str(), "rt");
+ 	if (!infile)
+@@ -2472,13 +2486,18 @@
+ 			/* get the file type */
+ 			TOKENIZE
+ 
++			curmotorola = false;
++			curwavoffs = curwavlen = 0;
+ 			if (!strcmp(token, "BINARY"))
+ 			{
+-				outinfo.track[trknum+1].swap = false;
++				if (trknum + 1 < int(MAX_TRACKS))
++					outinfo.track[trknum+1].swap = false;
+ 			}
+ 			else if (!strcmp(token, "MOTOROLA"))
+ 			{
+-				outinfo.track[trknum+1].swap = true;
++				if (trknum + 1 < int(MAX_TRACKS))
++					outinfo.track[trknum+1].swap = true;
++				curmotorola = true;
+ 			}
+ 			else if (!strcmp(token, "WAVE"))
+ 			{
+@@ -2489,6 +2508,8 @@
+ 					osd_printf_error("ERROR: couldn't read [%s] or not a valid .WAV\n", lastfname);
+ 					return chd_file::error::INVALID_DATA;
+ 				}
++				curwavoffs = wavoffs;
++				curwavlen = wavlen;
+ 			}
+ 			else
+ 			{
+@@ -2502,6 +2523,12 @@
+ 			/* get the track number */
+ 			TOKENIZE
+ 			trknum = strtoul(token, nullptr, 10) - 1;
++			if (trknum < 0 || trknum >= int(MAX_TRACKS)) // Discpress: TRACK 00 or 100 wrote outside the track table
++			{
++				fclose(infile);
++				osd_printf_error("ERROR: track number %s is not between 1 and %d\n", token, MAX_TRACKS);
++				return chd_file::error::INVALID_DATA;
++			}
+ 
+ 			/* next token on the line is the track type */
+ 			TOKENIZE
+@@ -2541,6 +2568,8 @@
+ 				outinfo.track[trknum].offset = wavoffs;
+ 				wavoffs = wavlen = 0;
+ 			}
++			motorola[trknum] = curmotorola;
++			wavdata[trknum] = std::make_pair(curwavoffs, curwavlen);
+ 
+ 			outinfo.track[trknum].fname.assign(lastfname); /* default filename to the last one */
+ 
+@@ -2667,9 +2696,29 @@
+ 		}
+ 
+ 		/* this is true for cue/bin and cue/iso, and we need it for cue/wav since .WAV is little-endian */
++		/* Discpress: but not for MOTOROLA files, whose audio is big-endian already (0.289 swapped it) */
+ 		if (outtoc.tracks[trknum].trktype == CD_TRACK_AUDIO)
+ 		{
+-			outinfo.track[trknum].swap = true;
++			outinfo.track[trknum].swap = !motorola[trknum];
++		}
++
++		const bool sameasprev = trknum > 0 && outinfo.track[trknum].fname.compare(outinfo.track[trknum-1].fname) == 0;
++		const bool sameasnext = trknum + 1 < outtoc.numtrks && outinfo.track[trknum].fname.compare(outinfo.track[trknum+1].fname) == 0;
++
++		/* Discpress: a .WAV file with several tracks is split at their INDEX points, like a .bin (0.289 gave
++		   the first track all of its samples and read the others from past its end) */
++		if (wavdata[trknum].second != 0 && (sameasprev || sameasnext))
++		{
++			const uint32_t framesize = outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize;
++			if (sameasprev)
++				outinfo.track[trknum].offset = outinfo.track[trknum-1].offset + outtoc.tracks[trknum-1].frames * (outtoc.tracks[trknum-1].datasize + outtoc.tracks[trknum-1].subsize);
++			else
++				outinfo.track[trknum].offset = wavdata[trknum].first + outinfo.track[trknum].idx[0] * framesize;
++			if (sameasnext)
++				outtoc.tracks[trknum].frames = outinfo.track[trknum+1].idx[0] - outinfo.track[trknum].idx[0];
++			else
++				outtoc.tracks[trknum].frames = (wavdata[trknum].first + wavdata[trknum].second - outinfo.track[trknum].offset) / framesize;
++			continue;
+ 		}
+ 
+ 		/* don't do this for .WAV tracks, we already have their length and offset filled out */
+@@ -2700,11 +2749,17 @@
+ 				return chd_file::error::INVALID_DATA;
+ 			}
+ 
+-			if (trknum > 0)
++			if (sameasprev)
+ 			{
+ 				const uint32_t previous_track_raw_size = outtoc.tracks[trknum-1].frames * (outtoc.tracks[trknum-1].datasize + outtoc.tracks[trknum-1].subsize);
+ 				outinfo.track[trknum].offset = outinfo.track[trknum-1].offset + previous_track_raw_size;
+ 			}
++			else if (trknum > 0)
++			{
++				/* Discpress: the first of several tracks in a file that follows another file starts at its own
++				   INDEX point in it (0.289 went on from the previous file's offsets) */
++				outinfo.track[trknum].offset = outinfo.track[trknum].idx[0] * (outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize);
++			}
+ 		}
+ 		else if (outtoc.tracks[trknum].frames == 0)
+ 		{
+@@ -3091,6 +3146,12 @@
+ 		else if (!strcmp(token, "TRACK"))
+ 		{
+ 			trknum++;
++			if (trknum >= int(MAX_TRACKS)) // Discpress: 0.289 wrote past its track table
++			{
++				fclose(infile);
++				osd_printf_error("ERROR: more than %d tracks\n", MAX_TRACKS);
++				return chd_file::error::INVALID_DATA;
++			}
+ 
+ 			/* next token on the line is the track type */
+ 			TOKENIZE
 --- a/src/lib/util/chd.cpp
 +++ b/src/lib/util/chd.cpp
 @@ -28,6 +28,20 @@
@@ -1727,7 +1897,27 @@
  {
  	// process input file
  	cdrom_file::track_input_info track_info;
-@@ -2227,7 +2412,7 @@
+@@ -2174,6 +2359,9 @@
+ 		std::error_condition err = cdrom_file::parse_toc(*input_file_str->second, toc, track_info);
+ 		if (err)
+ 			report_error(1, "Error parsing input file (%s: %s)\n", *input_file_str->second, err.message());
++		// Discpress: with no tracks, 0.289 went on and never finished
++		if (toc.numtrks == 0)
++			report_error(1, "Error parsing input file (%s): no tracks found\n", *input_file_str->second);
+ 	}
+ 
+ 	// process output CHD
+@@ -2203,6 +2391,9 @@
+ 		origtotalsectors += trackinfo.frames;
+ 		totalsectors += trackinfo.frames + trackinfo.extraframes;
+ 	}
++	// Discpress: tracks without data (such as a cdrdao TOC without track lengths) left 0.289 compressing forever
++	if (totalsectors == 0)
++		report_error(1, "Error parsing input file (%s): the tracks hold no data\n", *input_file_str->second);
+ 
+ 	// print some info
+ 	util::stream_format(std::cout, "Output CHD:   %s\n", *output_chd_str);
+@@ -2227,7 +2418,7 @@
  			report_error(1, "Error adding CD metadata: %s", err.message());
  
  		// compress it generically
@@ -1736,7 +1926,7 @@
  	}
  	catch (...)
  	{
-@@ -2243,7 +2428,7 @@
+@@ -2243,7 +2434,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -1745,7 +1935,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2295,7 +2480,7 @@
+@@ -2295,7 +2486,7 @@
  			report_error(1, "Error adding DVD metadata: %s", err.message());
  
  		// compress it generically
@@ -1754,7 +1944,7 @@
  	}
  	catch (...)
  	{
-@@ -2311,7 +2496,7 @@
+@@ -2311,7 +2502,7 @@
  //  input AVI file and metadata
  //-------------------------------------------------
  
@@ -1763,7 +1953,7 @@
  {
  	// process input file
  	avi_file::ptr input_file;
-@@ -2399,7 +2584,7 @@
+@@ -2399,7 +2590,7 @@
  			report_error(1, "Error adding AV metadata: %s\n", err.message());
  
  		// create the compressor and then run it generically
@@ -1772,7 +1962,7 @@
  
  		// write the final LD metadata
  		if (info.height == 524/2 || info.height == 624/2)
-@@ -2456,7 +2641,7 @@
+@@ -2456,7 +2647,7 @@
  //  another CHD
  //-------------------------------------------------
  
@@ -1781,7 +1971,7 @@
  {
  	// parse out input files
  	chd_file input_parent_chd;
-@@ -2547,7 +2732,7 @@
+@@ -2547,7 +2738,7 @@
  		}
  
  		// compress it generically
@@ -1790,7 +1980,7 @@
  	}
  	catch (...)
  	{
-@@ -2563,7 +2748,7 @@
+@@ -2563,7 +2754,7 @@
  //  CHD image
  //-------------------------------------------------
  
@@ -1799,7 +1989,7 @@
  {
  	// parse out input files
  	chd_file input_parent_chd;
-@@ -2604,6 +2789,7 @@
+@@ -2604,6 +2795,7 @@
  
  			// determine how much to read
  			uint32_t bytes_to_read = (std::min<uint64_t>)(buffer.size(), input_end - offset);
@@ -1807,7 +1997,7 @@
  			std::error_condition err = input_chd.read_bytes(offset, &buffer[0], bytes_to_read);
  			if (err)
  				report_error(1, "Error reading CHD file (%s): %s", *params.find(OPTION_INPUT)->second, err.message());
-@@ -2639,14 +2825,16 @@
+@@ -2639,14 +2831,16 @@
  //  CHD image
  //-------------------------------------------------
  
@@ -1826,7 +2016,7 @@
  	cdrom_file *cdrom = new cdrom_file(&input_chd);
  	const cdrom_file::toc &toc = cdrom->get_toc();
  
-@@ -2671,8 +2859,13 @@
+@@ -2671,8 +2865,13 @@
  	if (chop != std::string::npos)
  		default_name.erase(chop, default_name.size());
  
@@ -1841,7 +2031,7 @@
  	if (!is_splitbin && cdrom->is_gdrom() && mode == MODE_CUEBIN)
  	{
  		// GD-ROM cue/bin is in Redump format which should always be split by tracks
-@@ -2730,6 +2923,7 @@
+@@ -2730,6 +2929,7 @@
  		std::error_condition filerr = util::core_file::open(*output_file_str->second, OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_NO_BOM, output_toc_file);
  		if (filerr)
  			report_error(1, "Unable to open file (%s): %s", *output_file_str->second, filerr.message());
@@ -1849,7 +2039,7 @@
  
  		uint64_t total_bytes = 0;
  		for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
-@@ -2810,7 +3004,7 @@
+@@ -2810,7 +3010,7 @@
  		// GDI must start with the # of tracks
  		if (mode == MODE_GDI)
  		{
@@ -1858,7 +2048,7 @@
  		}
  		else if (mode == MODE_NORMAL)
  		{
-@@ -2842,11 +3036,11 @@
+@@ -2842,11 +3042,11 @@
  			}
  
  			if (mode2)
@@ -1873,7 +2063,7 @@
  		}
  
  		if (cdrom->is_gdrom() && mode == MODE_CUEBIN)
-@@ -2920,6 +3114,7 @@
+@@ -2920,6 +3120,7 @@
  		uint64_t outputoffs = 0;
  		uint32_t discoffs = 0;
  		std::vector<uint8_t> buffer;
@@ -1881,7 +2071,7 @@
  
  		for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
  		{
-@@ -2945,14 +3140,14 @@
+@@ -2945,14 +3146,14 @@
  			if (cdrom->is_gdrom() && mode == MODE_CUEBIN)
  			{
  				if (tracknum == 0)
@@ -1899,7 +2089,7 @@
  
  			// If this is bin/cue output and the CHD contains subdata, warn the user and don't include
  			// the subdata size in the buffer calculation.
-@@ -2987,6 +3182,15 @@
+@@ -2987,6 +3188,15 @@
  					frameofs = frame - trackinfo.splitframes;
  				}
  
@@ -1915,7 +2105,7 @@
  				// read the data
  				cdrom->read_data(cdrom->get_track_start_phys(trk) + frameofs, &buffer[bufferoffs], toc.tracks[trk].trktype, true);
  
-@@ -3387,7 +3591,8 @@
+@@ -3387,7 +3597,8 @@
  	{
  		// delete the output file
  		output_file.reset();
@@ -1925,7 +2115,7 @@
  		throw;
  	}
  }
-@@ -3425,14 +3630,39 @@
+@@ -3425,14 +3636,39 @@
  //  main - entry point
  //-------------------------------------------------
  
@@ -1969,7 +2159,7 @@
  
  	// handle help specially
  	if (args.size() < 2)
-@@ -3459,7 +3689,7 @@
+@@ -3459,7 +3695,7 @@
  				return print_help(args[0], desc);
  
  			// otherwise, verify the parameters
@@ -1978,7 +2168,7 @@
  			while (argnum < args.size())
  			{
  				// should be an option name
-@@ -3519,30 +3749,86 @@
+@@ -3519,30 +3755,86 @@
  					return print_help(args[0], desc, "Required parameters missing");
  			}
  

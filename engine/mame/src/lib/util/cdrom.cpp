@@ -28,6 +28,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <tuple>
+#include <utility>
+#include <vector>
 
 
 /***************************************************************************
@@ -1908,6 +1910,12 @@ std::error_condition cdrom_file::parse_nero(std::string_view tocfname, toc &outt
 //          printf("Start track %d  End track: %d\n", start, end);
 
 			outtoc.numtrks = (end-start) + 1;
+			if (end < start || outtoc.numtrks > MAX_TRACKS || end > MAX_TRACKS) // Discpress: 0.289 wrote past its track table
+			{
+				fclose(infile);
+				osd_printf_error("ERROR: NRG image has tracks %d to %d, only 1 to %d are possible\n", start, end, MAX_TRACKS);
+				return chd_file::error::INVALID_DATA;
+			}
 
 			uint32_t offset = 0;
 			for (int track = start; track <= end; track++)
@@ -2149,7 +2157,7 @@ std::error_condition cdrom_file::parse_gdi(std::string_view tocfname, toc &outto
 
 	const int numtracks = atoi(token);
 
-	if (numtracks > 0 && numtracks - 1 > std::size(outinfo.track))
+	if (numtracks > int(std::size(outinfo.track))) // Discpress: 0.289 let 100 tracks through, then aborted
 	{
 		osd_printf_error("GDI expects too many tracks. Expected %d tracks but only up to %zu tracks allowed\n", numtracks, std::size(outinfo.track) + 1);
 		return chd_file::error::INVALID_DATA;
@@ -2178,7 +2186,7 @@ std::error_condition cdrom_file::parse_gdi(std::string_view tocfname, toc &outto
 		paramcnt++;
 		const int trknum = atoi(token) - 1;
 
-		if (trknum < 0 || trknum > std::size(outinfo.track) || trknum + 1 > numtracks)
+		if (trknum < 0 || trknum >= int(std::size(outinfo.track)) || trknum + 1 > numtracks)
 		{
 			osd_printf_error("Track %d is out of expected range of 1 to %d\n", trknum + 1, numtracks);
 			return chd_file::error::INVALID_DATA;
@@ -2345,6 +2353,12 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 	enum gdi_area current_area = SINGLE_DENSITY;
 	bool is_multibin = false;
 	int leadin = -1;
+	// Discpress: per track, whether its FILE is MOTOROLA (big-endian audio), and where the samples of its
+	// .WAV file are (offset, length; 0 for other files), for .WAV files that hold several tracks
+	bool curmotorola = false;
+	uint32_t curwavoffs = 0, curwavlen = 0;
+	std::vector<bool> motorola(MAX_TRACKS + 1);
+	std::vector<std::pair<uint32_t, uint32_t> > wavdata(MAX_TRACKS + 1);
 
 	FILE *infile = fopen(path.c_str(), "rt");
 	if (!infile)
@@ -2472,13 +2486,18 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 			/* get the file type */
 			TOKENIZE
 
+			curmotorola = false;
+			curwavoffs = curwavlen = 0;
 			if (!strcmp(token, "BINARY"))
 			{
-				outinfo.track[trknum+1].swap = false;
+				if (trknum + 1 < int(MAX_TRACKS))
+					outinfo.track[trknum+1].swap = false;
 			}
 			else if (!strcmp(token, "MOTOROLA"))
 			{
-				outinfo.track[trknum+1].swap = true;
+				if (trknum + 1 < int(MAX_TRACKS))
+					outinfo.track[trknum+1].swap = true;
+				curmotorola = true;
 			}
 			else if (!strcmp(token, "WAVE"))
 			{
@@ -2489,6 +2508,8 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 					osd_printf_error("ERROR: couldn't read [%s] or not a valid .WAV\n", lastfname);
 					return chd_file::error::INVALID_DATA;
 				}
+				curwavoffs = wavoffs;
+				curwavlen = wavlen;
 			}
 			else
 			{
@@ -2502,6 +2523,12 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 			/* get the track number */
 			TOKENIZE
 			trknum = strtoul(token, nullptr, 10) - 1;
+			if (trknum < 0 || trknum >= int(MAX_TRACKS)) // Discpress: TRACK 00 or 100 wrote outside the track table
+			{
+				fclose(infile);
+				osd_printf_error("ERROR: track number %s is not between 1 and %d\n", token, MAX_TRACKS);
+				return chd_file::error::INVALID_DATA;
+			}
 
 			/* next token on the line is the track type */
 			TOKENIZE
@@ -2541,6 +2568,8 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 				outinfo.track[trknum].offset = wavoffs;
 				wavoffs = wavlen = 0;
 			}
+			motorola[trknum] = curmotorola;
+			wavdata[trknum] = std::make_pair(curwavoffs, curwavlen);
 
 			outinfo.track[trknum].fname.assign(lastfname); /* default filename to the last one */
 
@@ -2667,9 +2696,29 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 		}
 
 		/* this is true for cue/bin and cue/iso, and we need it for cue/wav since .WAV is little-endian */
+		/* Discpress: but not for MOTOROLA files, whose audio is big-endian already (0.289 swapped it) */
 		if (outtoc.tracks[trknum].trktype == CD_TRACK_AUDIO)
 		{
-			outinfo.track[trknum].swap = true;
+			outinfo.track[trknum].swap = !motorola[trknum];
+		}
+
+		const bool sameasprev = trknum > 0 && outinfo.track[trknum].fname.compare(outinfo.track[trknum-1].fname) == 0;
+		const bool sameasnext = trknum + 1 < outtoc.numtrks && outinfo.track[trknum].fname.compare(outinfo.track[trknum+1].fname) == 0;
+
+		/* Discpress: a .WAV file with several tracks is split at their INDEX points, like a .bin (0.289 gave
+		   the first track all of its samples and read the others from past its end) */
+		if (wavdata[trknum].second != 0 && (sameasprev || sameasnext))
+		{
+			const uint32_t framesize = outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize;
+			if (sameasprev)
+				outinfo.track[trknum].offset = outinfo.track[trknum-1].offset + outtoc.tracks[trknum-1].frames * (outtoc.tracks[trknum-1].datasize + outtoc.tracks[trknum-1].subsize);
+			else
+				outinfo.track[trknum].offset = wavdata[trknum].first + outinfo.track[trknum].idx[0] * framesize;
+			if (sameasnext)
+				outtoc.tracks[trknum].frames = outinfo.track[trknum+1].idx[0] - outinfo.track[trknum].idx[0];
+			else
+				outtoc.tracks[trknum].frames = (wavdata[trknum].first + wavdata[trknum].second - outinfo.track[trknum].offset) / framesize;
+			continue;
 		}
 
 		/* don't do this for .WAV tracks, we already have their length and offset filled out */
@@ -2700,10 +2749,16 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 				return chd_file::error::INVALID_DATA;
 			}
 
-			if (trknum > 0)
+			if (sameasprev)
 			{
 				const uint32_t previous_track_raw_size = outtoc.tracks[trknum-1].frames * (outtoc.tracks[trknum-1].datasize + outtoc.tracks[trknum-1].subsize);
 				outinfo.track[trknum].offset = outinfo.track[trknum-1].offset + previous_track_raw_size;
+			}
+			else if (trknum > 0)
+			{
+				/* Discpress: the first of several tracks in a file that follows another file starts at its own
+				   INDEX point in it (0.289 went on from the previous file's offsets) */
+				outinfo.track[trknum].offset = outinfo.track[trknum].idx[0] * (outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize);
 			}
 		}
 		else if (outtoc.tracks[trknum].frames == 0)
@@ -3091,6 +3146,12 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 		else if (!strcmp(token, "TRACK"))
 		{
 			trknum++;
+			if (trknum >= int(MAX_TRACKS)) // Discpress: 0.289 wrote past its track table
+			{
+				fclose(infile);
+				osd_printf_error("ERROR: more than %d tracks\n", MAX_TRACKS);
+				return chd_file::error::INVALID_DATA;
+			}
 
 			/* next token on the line is the track type */
 			TOKENIZE

@@ -2359,6 +2359,9 @@ static chdman_task do_create_cd(parameters_map &params)
 		std::error_condition err = cdrom_file::parse_toc(*input_file_str->second, toc, track_info);
 		if (err)
 			report_error(1, "Error parsing input file (%s: %s)\n", *input_file_str->second, err.message());
+		// Discpress: with no tracks, 0.289 went on and never finished
+		if (toc.numtrks == 0)
+			report_error(1, "Error parsing input file (%s): no tracks found\n", *input_file_str->second);
 	}
 
 	// process output CHD
@@ -2388,6 +2391,9 @@ static chdman_task do_create_cd(parameters_map &params)
 		origtotalsectors += trackinfo.frames;
 		totalsectors += trackinfo.frames + trackinfo.extraframes;
 	}
+	// Discpress: tracks without data (such as a cdrdao TOC without track lengths) left 0.289 compressing forever
+	if (totalsectors == 0)
+		report_error(1, "Error parsing input file (%s): the tracks hold no data\n", *input_file_str->second);
 
 	// print some info
 	util::stream_format(std::cout, "Output CHD:   %s\n", *output_chd_str);

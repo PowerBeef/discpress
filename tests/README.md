@@ -49,7 +49,7 @@ parallel test workers (default 2), `CHDMAN` a native chdman binary, `REGEN_FIXTU
 
 `fixtures/make_fixtures.py` generates synthetic discs into `.cache/fixtures/` (deterministic,
 about a second): ISO 9660 file systems, raw CD sectors with valid EDC/ECC (Mode 1 and Mode 2),
-CD audio, a CloneCD image, compressed ISOs (CSO v1 and v2, ZSO; the generator has its own LZ4 encoder), and console boot headers for PlayStation, PS2, PSP, Saturn, Sega CD and Dreamcast (GDI).
+CD audio, a CloneCD image, compressed ISOs (CSO v1 and v2, ZSO; the generator has its own LZ4 encoder), cue sheets chdman 0.289 misreads (each with a plain twin), and console boot headers for PlayStation, PS2, PSP, Saturn, Sega CD and Dreamcast (GDI).
 They carry serial numbers of real games, so identification can be tested against the built-in
 Redump database, but contain no game data. `manifest.json` lists each fixture with the job and
 identification the app should produce. `--bench` adds large, realistic images for benchmarks.

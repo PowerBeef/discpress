@@ -94,6 +94,49 @@ test('an input that cannot be read is an error, not a broken CHD', () => {
   }
 });
 
+// descriptors with no tracks or no data, or track numbers outside 1-99: 0.289 spins forever, aborts or segfaults
+test('no tracks, no data or too many tracks is an error', () => {
+  const bin = tmp('t.bin');
+  fs.writeFileSync(bin, Buffer.alloc(100 * 4 * 2352));
+  const cue = n => Array.from({ length: n }, (_, i) =>
+    `${i ? '' : 'FILE "t.bin" BINARY\n'}  TRACK ${String(i + 1).padStart(2, '0')} ${i ? 'AUDIO' : 'MODE1/2352'}\n    INDEX 01 ${String(Math.floor(i * 4 / 75 / 60)).padStart(2, '0')}:${String(Math.floor(i * 4 / 75) % 60).padStart(2, '0')}:${String(i * 4 % 75).padStart(2, '0')}\n`).join('');
+  const gdi = n => `${n}\n` + Array.from({ length: n }, (_, i) => `${i + 1} ${i * 4} ${i ? 0 : 4} 2352 t.bin 0\n`).join('');
+  for (const [name, text, upstream, message] of [
+    ['none.cue', 'REM nothing here\n', null, 'no tracks found'], // upstream: never finishes
+    ['t00.cue', 'FILE "t.bin" BINARY\n  TRACK 00 MODE1/2352\n    INDEX 01 00:00:00\n', null, 'track number 00 is not between 1 and 99'],
+    ['nolength.toc', 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "t.bin"\n', null, 'the tracks hold no data'], // upstream: -nan% forever
+    ['t100.cue', cue(100), 'crash', 'track number 100 is not between 1 and 99'],
+    ['t100.gdi', gdi(100), 'crash', 'GDI expects too many tracks'],
+  ]) {
+    const input = tmp(name);
+    fs.writeFileSync(input, text);
+    if (upstream) expect(run(UPSTREAM, ['createcd', '-i', input, '-o', tmp('u.chd'), '-f']).signal, `upstream ${name}`).toBeTruthy(); // SIGSEGV or SIGABRT
+    const r = run(ENGINE, ['createcd', '-i', input, '-o', tmp('e.chd'), '-f']);
+    expect({ code: r.code, signal: r.signal }, name).toEqual({ code: 1, signal: null });
+    expect(r.err, name).toContain(message);
+  }
+  // 99 tracks are fine, and upstream's
+  const ok = tmp('t99.cue');
+  fs.writeFileSync(ok, cue(99));
+  expect(run(ENGINE, ['createcd', '-i', ok, '-o', tmp('e99.chd'), '-f']).code).toBe(0);
+  expect(run(UPSTREAM, ['createcd', '-i', ok, '-o', tmp('u99.chd'), '-f']).code).toBe(0);
+  expect(fs.readFileSync(tmp('e99.chd')).equals(fs.readFileSync(tmp('u99.chd')))).toBe(true);
+});
+
+// cue sheets 0.289 reads wrong, silently: MOTOROLA (big-endian) audio swapped anyway, a file with several
+// tracks after another file read at the wrong offsets, two tracks in one .wav read as one. Each fixture
+// has a plain twin (one file per track, little-endian audio) that 0.289 reads right.
+test('cue sheets 0.289 misreads make the same CHD as their plain twin', () => {
+  for (const [cue, twin] of [['moto.cue', 'moto-ref.cue'], ['shared.cue', 'shared-ref.cue'], ['wavs.cue', 'wavs-ref.cue']]) {
+    const mine = tmp(`${cue}.chd`), theirs = tmp(`${cue}-up.chd`), plain = tmp(`${twin}.chd`);
+    expect(run(ENGINE, ['createcd', '-i', cue, '-o', mine, '-f']).code, cue).toBe(0);
+    expect(run(UPSTREAM, ['createcd', '-i', twin, '-o', plain, '-f']).code, twin).toBe(0);
+    expect(run(UPSTREAM, ['createcd', '-i', cue, '-o', theirs, '-f']).code, `upstream ${cue}`).toBe(0);
+    expect(fs.readFileSync(mine).equals(fs.readFileSync(plain)), `${cue} = ${twin}`).toBe(true);
+    expect(fs.readFileSync(theirs).equals(fs.readFileSync(plain)), `upstream ${cue}`).toBe(false); // the bug
+  }
+});
+
 // Not a fix but an addition: extractcd --redump writes Redump's layout, which upstream can't
 test('extractcd --redump writes Redump\'s layout: CRLF, and a .bin per track unless there is only one', () => {
   for (const [input, tracks] of [['mgs disc1.cue', 2], ['twine.cue', 1]]) {

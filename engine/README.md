@@ -27,6 +27,8 @@ The paths mirror MAME's, so every file can be compared with its original. **[`ma
   - An output is never written over an input: `copy -i x -o x -f` used to truncate `x` and then delete it.
   - `extractcd` of a CHD that isn't a CD, and a unit or sector size of 0, are errors (exit 1). Upstream aborts on `throw nullptr` or divides by zero.
   - A failed or short read of the input of `createraw`, `createhd` or `createdvd` is an error (exit 1). Upstream ignores it, compresses whatever its buffer holds and exits 0, so the CHD silently holds the wrong data; for an unreadable input it can't even open the result.
+  - Cue sheets it read wrong, silently: audio in a `MOTOROLA` (big-endian) file was byte-swapped anyway; a file with several tracks after another file was read at offsets carried over from the first file; a `.wav` with several tracks gave the first track all of it. Each now gives the CHD of the same disc laid out plainly, one file per track. 5,676 real Redump cue sheets give upstream's CHDs byte for byte.
+  - A descriptor with no tracks, tracks without data (a cdrdao TOC without lengths) or track numbers outside 1–99 is an error (exit 1). Upstream spins forever, aborts or segfaults.
   - `dumpmeta` without `-o` prints its banner on stderr, so stdout carries only the metadata.
   - Any other unexpected exception is an error instead of a crash.
   - `tests/ui/engine.spec.js` compares each of these with upstream.

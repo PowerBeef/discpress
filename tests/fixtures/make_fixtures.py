@@ -275,6 +275,72 @@ fixture('music-cd', {
     'piano.bin': lambda: g.music(10, 1),
 }, add=['piano.cue', 'piano.bin'], job='create', disc='cd', command='createcd', sys=None, ident='none', name='piano')
 
+# ---------------------------------------------------------------- cue sheets chdman 0.289 misreads
+# Each disc has a plain twin (`ref`: one file per track, little-endian audio) that 0.289 reads right.
+# The engine must make the same CHD from both (engine.spec.js); the page too (convert.spec.js).
+cue_data = lambda seed: g.raw_sectors(g.pad_sectors(g.iso9660({'README.TXT': b'cue sheet test', 'DATA.BIN': g.filler(400 << 10, seed)}, 'CUETEST')), 1)
+cue_t2 = lambda: g.audio(203, 121, silence=150)   # 353 frames: a 2 s pregap, then the track
+cue_t3 = lambda: g.audio(225, 122, silence=75)    # 300 frames: a 1 s pregap
+cue_t4 = lambda: g.raw_sectors(bytes(150 * 2048) + g.pad_sectors(g.iso9660({'EXTRA.DAT': g.filler(200 << 10, 123)}, 'EXTRA')), 1)
+be16 = lambda pcm: bytes(b for i in range(0, len(pcm), 2) for b in (pcm[i + 1], pcm[i]))
+def wav(pcm):
+    return (b'RIFF' + (36 + len(pcm)).to_bytes(4, 'little') + b'WAVEfmt ' + (16).to_bytes(4, 'little') +
+            bytes([1, 0, 2, 0]) + (44100).to_bytes(4, 'little') + (176400).to_bytes(4, 'little') + bytes([4, 0, 16, 0]) +
+            b'data' + len(pcm).to_bytes(4, 'little') + pcm)
+def cue_text(files):
+    """files: [(name, type, [(track, mode, [(index, frames)])])] -> cue sheet bytes (CRLF)"""
+    out = []
+    for fn, ty, tracks in files:
+        out.append('FILE "%s" %s' % (fn, ty))
+        for no, mode, idx in tracks:
+            out.append('  TRACK %02d %s' % (no, mode))
+            out += ['    INDEX %02d %s' % (i, g.msf(f)) for i, f in idx]
+    return ('\r\n'.join(out) + '\r\n').encode()
+t2n, t3n = 353, 300
+twin = lambda stem, t2ext, t3ext, t2ty, t3ty: cue_text([
+    ('%s (Track 1).bin' % stem, 'BINARY', [(1, 'MODE1/2352', [(1, 0)])]),
+    ('%s (Track 2).%s' % (stem, t2ext), t2ty, [(2, 'AUDIO', [(0, 0), (1, 150)])]),
+    ('%s (Track 3).%s' % (stem, t3ext), t3ty, [(3, 'AUDIO', [(0, 0), (1, 75)])]),
+    ('%s (Track 4).bin' % stem, 'BINARY', [(4, 'MODE1/2352', [(0, 0), (1, 150)])])])
+
+# MOTOROLA: big-endian audio, which 0.289 byte-swaps anyway
+fixture('cue-motorola', {
+    'moto.cue': lambda: cue_text([
+        ('moto (Track 1).bin', 'BINARY', [(1, 'MODE1/2352', [(1, 0)])]),
+        ('moto (Track 2).be', 'MOTOROLA', [(2, 'AUDIO', [(0, 0), (1, 150)])]),
+        ('moto (Track 3).be', 'MOTOROLA', [(3, 'AUDIO', [(0, 0), (1, 75)])]),
+        ('moto (Track 4).bin', 'BINARY', [(4, 'MODE1/2352', [(0, 0), (1, 150)])])]),
+    'moto (Track 1).bin': lambda: cue_data(120), 'moto (Track 2).be': lambda: be16(cue_t2()),
+    'moto (Track 3).be': lambda: be16(cue_t3()), 'moto (Track 4).bin': cue_t4,
+    'moto (Track 2).bin': cue_t2, 'moto (Track 3).bin': cue_t3,
+    'moto-ref.cue': lambda: twin('moto', 'bin', 'bin', 'BINARY', 'BINARY'),
+}, add=['moto.cue', 'moto (Track 1).bin', 'moto (Track 2).be', 'moto (Track 3).be', 'moto (Track 4).bin'], ref='moto-ref.cue',
+   job='create', disc='cd', command='createcd', sys=None, ident='none', name='moto')
+
+# a file with several tracks after another file: 0.289 went on from the first file's offsets
+fixture('cue-shared-file', {
+    'shared.cue': lambda: cue_text([
+        ('shared (Track 1).bin', 'BINARY', [(1, 'MODE1/2352', [(1, 0)])]),
+        ('shared rest.bin', 'BINARY', [(2, 'AUDIO', [(0, 0), (1, 150)]), (3, 'AUDIO', [(0, t2n), (1, t2n + 75)]),
+                                       (4, 'MODE1/2352', [(0, t2n + t3n), (1, t2n + t3n + 150)])])]),
+    'shared (Track 1).bin': lambda: cue_data(124), 'shared rest.bin': lambda: cue_t2() + cue_t3() + cue_t4(),
+    'shared (Track 2).bin': cue_t2, 'shared (Track 3).bin': cue_t3, 'shared (Track 4).bin': cue_t4,
+    'shared-ref.cue': lambda: twin('shared', 'bin', 'bin', 'BINARY', 'BINARY'),
+}, add=['shared.cue', 'shared (Track 1).bin', 'shared rest.bin'], ref='shared-ref.cue',
+   job='create', disc='cd', command='createcd', sys=None, ident='none', name='shared')
+
+# two tracks in one .wav: 0.289 gave the first track all of it
+fixture('cue-wave-tracks', {
+    'wavs.cue': lambda: cue_text([
+        ('wavs (Track 1).bin', 'BINARY', [(1, 'MODE1/2352', [(1, 0)])]),
+        ('wavs audio.wav', 'WAVE', [(2, 'AUDIO', [(0, 0), (1, 150)]), (3, 'AUDIO', [(0, t2n), (1, t2n + 75)])]),
+        ('wavs (Track 4).bin', 'BINARY', [(4, 'MODE1/2352', [(0, 0), (1, 150)])])]),
+    'wavs (Track 1).bin': lambda: cue_data(125), 'wavs audio.wav': lambda: wav(cue_t2() + cue_t3()), 'wavs (Track 4).bin': cue_t4,
+    'wavs (Track 2).wav': lambda: wav(cue_t2()), 'wavs (Track 3).wav': lambda: wav(cue_t3()),
+    'wavs-ref.cue': lambda: twin('wavs', 'wav', 'wav', 'WAVE', 'WAVE'),
+}, add=['wavs.cue', 'wavs (Track 1).bin', 'wavs audio.wav', 'wavs (Track 4).bin'], ref='wavs-ref.cue',
+   job='create', disc='cd', command='createcd', sys=None, ident='none', name='wavs')
+
 # ---------------------------------------------------------------- benchmark images
 if args.bench:
     cd_audio_frames = int(args.cd_mb * 0.3 * (1 << 20)) // 2352 // 3
