@@ -41,6 +41,7 @@
 #include "private/fixed.h"
 #include "private/macros.h"
 #include "FLAC/assert.h"
+#include "flac_libm.h" /* Discpress: the same log in every build (engine/libm) */
 
 #ifdef local_abs
 #undef local_abs
@@ -281,11 +282,11 @@ uint32_t FLAC__fixed_compute_best_predictor(const FLAC__int32 data[], uint32_t d
 	FLAC__ASSERT(data_len > 0 || total_error_3 == 0);
 	FLAC__ASSERT(data_len > 0 || total_error_4 == 0);
 #ifndef FLAC__INTEGER_ONLY_LIBRARY
-	residual_bits_per_sample[0] = (float)((total_error_0 > 0) ? log(M_LN2 * (double)total_error_0 / (double)data_len) / M_LN2 : 0.0);
-	residual_bits_per_sample[1] = (float)((total_error_1 > 0) ? log(M_LN2 * (double)total_error_1 / (double)data_len) / M_LN2 : 0.0);
-	residual_bits_per_sample[2] = (float)((total_error_2 > 0) ? log(M_LN2 * (double)total_error_2 / (double)data_len) / M_LN2 : 0.0);
-	residual_bits_per_sample[3] = (float)((total_error_3 > 0) ? log(M_LN2 * (double)total_error_3 / (double)data_len) / M_LN2 : 0.0);
-	residual_bits_per_sample[4] = (float)((total_error_4 > 0) ? log(M_LN2 * (double)total_error_4 / (double)data_len) / M_LN2 : 0.0);
+	residual_bits_per_sample[0] = (float)((total_error_0 > 0) ? discpress_log(M_LN2 * (double)total_error_0 / (double)data_len) / M_LN2 : 0.0);
+	residual_bits_per_sample[1] = (float)((total_error_1 > 0) ? discpress_log(M_LN2 * (double)total_error_1 / (double)data_len) / M_LN2 : 0.0);
+	residual_bits_per_sample[2] = (float)((total_error_2 > 0) ? discpress_log(M_LN2 * (double)total_error_2 / (double)data_len) / M_LN2 : 0.0);
+	residual_bits_per_sample[3] = (float)((total_error_3 > 0) ? discpress_log(M_LN2 * (double)total_error_3 / (double)data_len) / M_LN2 : 0.0);
+	residual_bits_per_sample[4] = (float)((total_error_4 > 0) ? discpress_log(M_LN2 * (double)total_error_4 / (double)data_len) / M_LN2 : 0.0);
 #else
 	residual_bits_per_sample[0] = (total_error_0 > 0) ? local__compute_rbps_integerized(total_error_0, data_len) : 0;
 	residual_bits_per_sample[1] = (total_error_1 > 0) ? local__compute_rbps_integerized(total_error_1, data_len) : 0;
@@ -336,11 +337,11 @@ uint32_t FLAC__fixed_compute_best_predictor_wide(const FLAC__int32 data[], uint3
 	FLAC__ASSERT(data_len > 0 || total_error_3 == 0);
 	FLAC__ASSERT(data_len > 0 || total_error_4 == 0);
 #ifndef FLAC__INTEGER_ONLY_LIBRARY
-	residual_bits_per_sample[0] = (float)((total_error_0 > 0) ? log(M_LN2 * (double)total_error_0 / (double)data_len) / M_LN2 : 0.0);
-	residual_bits_per_sample[1] = (float)((total_error_1 > 0) ? log(M_LN2 * (double)total_error_1 / (double)data_len) / M_LN2 : 0.0);
-	residual_bits_per_sample[2] = (float)((total_error_2 > 0) ? log(M_LN2 * (double)total_error_2 / (double)data_len) / M_LN2 : 0.0);
-	residual_bits_per_sample[3] = (float)((total_error_3 > 0) ? log(M_LN2 * (double)total_error_3 / (double)data_len) / M_LN2 : 0.0);
-	residual_bits_per_sample[4] = (float)((total_error_4 > 0) ? log(M_LN2 * (double)total_error_4 / (double)data_len) / M_LN2 : 0.0);
+	residual_bits_per_sample[0] = (float)((total_error_0 > 0) ? discpress_log(M_LN2 * (double)total_error_0 / (double)data_len) / M_LN2 : 0.0);
+	residual_bits_per_sample[1] = (float)((total_error_1 > 0) ? discpress_log(M_LN2 * (double)total_error_1 / (double)data_len) / M_LN2 : 0.0);
+	residual_bits_per_sample[2] = (float)((total_error_2 > 0) ? discpress_log(M_LN2 * (double)total_error_2 / (double)data_len) / M_LN2 : 0.0);
+	residual_bits_per_sample[3] = (float)((total_error_3 > 0) ? discpress_log(M_LN2 * (double)total_error_3 / (double)data_len) / M_LN2 : 0.0);
+	residual_bits_per_sample[4] = (float)((total_error_4 > 0) ? discpress_log(M_LN2 * (double)total_error_4 / (double)data_len) / M_LN2 : 0.0);
 #else
 	residual_bits_per_sample[0] = (total_error_0 > 0) ? local__compute_rbps_wide_integerized(total_error_0, data_len) : 0;
 	residual_bits_per_sample[1] = (total_error_1 > 0) ? local__compute_rbps_wide_integerized(total_error_1, data_len) : 0;
@@ -357,7 +358,7 @@ uint32_t FLAC__fixed_compute_best_predictor_wide(const FLAC__int32 data[], uint3
 if(order_##macro_order##_is_valid && total_error_##macro_order < smallest_error) { \
 	order = macro_order;				\
 	smallest_error = total_error_##macro_order ;	\
-	residual_bits_per_sample[ macro_order ] = (float)((total_error_0 > 0) ? log(M_LN2 * (double)total_error_0 / (double)data_len) / M_LN2 : 0.0); \
+	residual_bits_per_sample[ macro_order ] = (float)((total_error_0 > 0) ? discpress_log(M_LN2 * (double)total_error_0 / (double)data_len) / M_LN2 : 0.0); \
 }							\
 else							\
 	residual_bits_per_sample[ macro_order ] = 34.0f;

@@ -30,11 +30,13 @@ simd_b64, simd_size = pack(os.path.join(B, 'chdman.wasm'))
 base_b64, base_size = pack(os.path.join(B, 'chdman-nosimd.wasm'))
 
 # Shown in Help > About: every change the engine makes to MAME 0.289 (scripts/engine-diff.sh),
-# plus the two new files.
+# plus the new files.
 patch = rd(os.path.join(ROOT, 'engine', 'mame-0.289.diff'))
-for name, label in [('wasm_helper.cpp', 'new file'), ('par_lib.js', 'new file, Emscripten JS library')]:
+for path, name, label in [(os.path.join(W, 'wasm_helper.cpp'), 'wasm_helper.cpp', 'new file'),
+                          (os.path.join(W, 'par_lib.js'), 'par_lib.js', 'new file, Emscripten JS library'),
+                          (os.path.join(ROOT, 'engine', 'libm', 'flac_libm.c'), 'engine/libm/flac_libm.c', 'new file, from Arm optimized-routines')]:
     patch += '\n--- /dev/null\n+++ %s (%s)\n' % (name, label)
-    patch += ''.join('+' + l + '\n' for l in rd(os.path.join(W, name)).splitlines())
+    patch += ''.join('+' + l + '\n' for l in rd(path).splitlines())
 
 db_raw = rd(DB, 'rb')
 db_json = gzip.decompress(db_raw)

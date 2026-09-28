@@ -46,15 +46,24 @@
   <p>The layout adapts to your screen, text size, notch, rotation and keyboard. In a normal browser the whole page scrolls; inside apps that preview files (and when installed on the home screen) the header stays fixed and only the content scrolls. If scrolling ever feels wrong, change it in Settings → Scrolling; Settings → Screen info shows what your device reports. </p>
   <p>Keep this page open and in the foreground while it works; the screen is kept awake automatically. If the browser suspends the tab, the job may stop and need to be restarted.</p>
   <h3>Compatibility of the results</h3>
-  <p>The CHDs are standard CHD v5 files made by chdman from the official MAME 0.289 release, with the same checksums as desktop chdman 0.289 (for data, the very same bytes as the official build), so they work in MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast and other emulators. The <i>Zstandard</i> option needs a recent emulator build.</p>
+  <p>The CHDs are standard CHD v5 files made by chdman from the official MAME 0.289 release, with the same checksums as desktop chdman 0.289 and the very same bytes as chdman 0.289 on Linux, so they work in MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast and other emulators. The <i>Zstandard</i> option needs a recent emulator build.</p>
   <h3>Everything else</h3>
   <p>The <b>Advanced</b> tab exposes every chdman command and option: <code>copy</code>, <code>createraw</code>, parent CHDs, hard disk templates, <code>addmeta</code>, <code>delmeta</code>, <code>dumpmeta</code>, <code>listtemplates</code> and more.</p>
 </div>
 
 <div class="card">
   <h2>About and licenses</h2>
-  <p>Discpress contains chdman from <a href="https://github.com/mamedev/mame" target="_blank" rel="noopener">MAME</a> 0.289 (the official release, tag <code>mame0289</code>), compiled to WebAssembly with Emscripten. Its source, with only the parts of MAME that chdman uses, is kept in the Discpress repository (<code>engine/</code>). The changes: a file-system bridge for reading your files and writing results, multi-threaded compression through helper workers, and some unused code removed. The full list of source changes is below.</p>
-  <p>chdman and the parts of MAME it uses are licensed under the BSD 3-Clause license (copyright Aaron Giles, R. Belmont, Vas Crabb and the MAMEdev team). MAME as a whole is GPL-2.0-or-later. Bundled libraries: zlib (zlib license, © Jean-loup Gailly and Mark Adler), LZMA SDK (public domain, Igor Pavlov), FLAC (BSD 3-Clause, © Josh Coalson, Xiph.Org Foundation), Zstandard (BSD, © Meta Platforms, Inc. and affiliates), MD5 (public domain, Colin Plumb). Discpress is not affiliated with the MAME team.</p>
+  <p>Discpress contains chdman from <a href="https://github.com/mamedev/mame" target="_blank" rel="noopener">MAME</a> 0.289 (the official release, tag <code>mame0289</code>), compiled to WebAssembly with Emscripten. Its source, with only the parts of MAME that chdman uses, is kept in the Discpress repository (<code>engine/</code>). The changes:</p>
+  <ul>
+    <li>a file-system bridge for reading your files and writing results;</li>
+    <li>helper workers that compress, and decompress for extracting and verifying, on several cores;</li>
+    <li>faster codec trials and hashing that give the same bytes;</li>
+    <li>fixes for chdman 0.289's crashes and silent failures on bad input;</li>
+    <li>the same floating-point math for the FLAC encoder in every build, so CD audio comes out byte for byte as with chdman on Linux;</li>
+    <li>unused code removed.</li>
+  </ul>
+  <p>The full list of source changes is below.</p>
+  <p>chdman and the parts of MAME it uses are licensed under the BSD 3-Clause license (copyright Aaron Giles, R. Belmont, Vas Crabb and the MAMEdev team). MAME as a whole is GPL-2.0-or-later. Bundled libraries: zlib (zlib license, © Jean-loup Gailly and Mark Adler), LZMA SDK (public domain, Igor Pavlov), FLAC (BSD 3-Clause, © Josh Coalson, Xiph.Org Foundation), Zstandard (BSD, © Meta Platforms, Inc. and affiliates), MD5 (public domain, Colin Plumb), the FLAC encoder's <code>cosf</code> and <code>log</code> from Arm's optimized-routines (MIT, © Arm Limited). Discpress is not affiliated with the MAME team.</p>
   <details class="log"><summary>BSD 3-Clause license text</summary>
 <div class="lic">Copyright (c) the respective copyright holders listed above.
 
@@ -68,7 +77,16 @@ Redistribution and use in source and binary forms, with or without modification,
 
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.</div>
   </details>
-  <details class="log"><summary>Source changes made to MAME 0.289</summary>
+  <details class="log"><summary>MIT license text (Arm optimized-routines)</summary>
+<div class="lic">Copyright (c) 1999-2022, Arm Limited.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.</div>
+  </details>
+  <details class="log"><summary>Source changes made to MAME 0.289, and the new files</summary>
 <div class="lic">/*PATCH*/</div>
   </details>
 </div>

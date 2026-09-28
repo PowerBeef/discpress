@@ -225,6 +225,13 @@ fixture('codec-mix-cd', {
 }, add=['codec mix cd.cue', 'codec mix cd (Track 1).bin', 'codec mix cd (Track 2).bin'], job='create', disc='cd',
    command='createcd', sys=None, ident='none', name='codec mix cd')
 
+# music-like CD audio: libFLAC's windows and estimates use cosf and log, so the page's CHDs match
+# native chdman's only with the same math (engine/libm); synthetic tones never showed the difference
+fixture('music-cd', {
+    'piano.cue': lambda: cue([('piano.bin', 'AUDIO', 0)]),
+    'piano.bin': lambda: g.music(10, 1),
+}, add=['piano.cue', 'piano.bin'], job='create', disc='cd', command='createcd', sys=None, ident='none', name='piano')
+
 # ---------------------------------------------------------------- benchmark images
 if args.bench:
     cd_audio_frames = int(args.cd_mb * 0.3 * (1 << 20)) // 2352 // 3

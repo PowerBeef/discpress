@@ -19,6 +19,7 @@ The paths mirror MAME's, so every file can be compared with its original. **[`ma
   - zlib, zstd and Huffman write into buffers only as large as a winning result. LZMA stops once its output passes that size (a check added to the SDK's encoder loop). FLAC stops after a block whose output passes it.
   - The generic `flac` codec keeps its big-endian encoding in its own buffer instead of encoding it a third time when it wins.
   - FLAC skips the MD5 of the audio when encoding to memory; the MD5 never reaches the CHD.
+- **libFLAC's math (`window.c`, `lpc.c`, `fixed.c`):** `cosf` and `log` come from [`engine/libm`](libm/README.md), copies of glibc's algorithms, so CD audio encodes to the same bytes in the page as with chdman on Linux.
 - **Faster hashing with the same results (`hashing.cpp`):** SHA-1 reads whole blocks as big-endian words and runs its 80 rounds unrolled. CRC-16 folds in eight bytes at a time (slice-by-8). In wasm, SHA-1 went from 120 to 650 MB/s and CRC-16 from 300 to 1,450 MB/s.
 - **Fixes to 0.289's failure handling (`chdman.cpp`); output for valid input is unchanged:**
   - `verify` exits 1 when the data doesn't match the header's SHA-1, unless `--fix` corrects it. Upstream exits 0, so scripts and the page reported success.
@@ -39,6 +40,7 @@ The paths mirror MAME's, so every file can be compared with its original. **[`ma
 | `3rdparty/lzma/C` (`LzmaEnc`, `LzmaDec`, `LzFind`, `CpuArch`) | LZMA SDK 23.01, as bundled by MAME | public domain ([`lzma-sdk.txt`](mame/3rdparty/lzma/DOC/lzma-sdk.txt)) |
 | `3rdparty/flac` (libFLAC, 14 files) | FLAC 1.4.3, as bundled by MAME | BSD-3-Clause, Xiph.Org ([`COPYING.Xiph`](mame/3rdparty/flac/COPYING.Xiph)) |
 | `3rdparty/zstd/lib` | Zstandard 1.5.5, as bundled by MAME | BSD-3-Clause, chosen from its BSD/GPLv2 dual license ([`LICENSE`](mame/3rdparty/zstd/LICENSE)) |
+| `../libm` (outside `mame/`) | `cosf` and `log` from Arm optimized-routines, for libFLAC | MIT ([`LICENSE`](libm/LICENSE)) |
 
 MAME as a whole is GPL-2.0-or-later, but every MAME file here carries a BSD-3-Clause header (`md5.h`: public domain), so the whole engine is under permissive licenses. The MAME copyright holders are named in each file's header.
 

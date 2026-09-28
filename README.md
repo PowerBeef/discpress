@@ -61,7 +61,7 @@ The standard tool for making CHDs is **chdman**, a command-line program from the
 <summary><b>Everything it can do</b></summary>
 <br>
 
-- **Real chdman output.** chdman from the official MAME 0.289 release, compiled to WebAssembly, makes standard CHD v5 files with the same checksums as desktop chdman 0.289 (for data, the very same bytes as the official build).
+- **Real chdman output.** chdman from the official MAME 0.289 release, compiled to WebAssembly, makes standard CHD v5 files, byte for byte the same as desktop chdman 0.289 makes on Linux, and with the same checksums as any chdman 0.289.
 - **The right command, picked for you:** `createcd`, `createdvd`, `createhd`, `createld`, `extractcd`, `extractdvd`, `extracthd`, `verify` and `info`. The **Advanced** tab gives you every chdman command and option, including `copy`, parent CHDs, `addmeta` and hard disk templates.
 - **Game recognition.** Discpress reads the disc's own boot files to find the console and serial number, then looks the game up in a built-in copy of the [Redump](http://redump.org) database (about 42,000 discs). When the size and CRC-32 match, the dump is marked as verified. When several releases share a serial number, you choose which one.
 - **Official names.** For example `Metal Gear Solid (USA) (Disc 1).chd`. You can also type your own name, turn renaming off, or use **Rename** to fix the name of a CHD you already have.
@@ -125,7 +125,7 @@ No. Discpress is a single file that runs entirely on your device. It makes no ne
 <details>
 <summary><b>Are the CHDs as good as the ones from desktop chdman?</b></summary>
 <br>
-Yes. Discpress runs chdman from the official MAME 0.289 release, so the files are standard CHD v5 with the same checksums as desktop chdman 0.289's. For data they are the same byte for byte as an official chdman 0.289 build's. With CD audio a few compressed bytes can differ, because the FLAC encoder's floating-point math isn't identical in every build; the audio itself is the same. Its source is in <a href="engine/README.md"><code>engine/</code></a>, and the only changes are small additions so it can run in a browser: a bridge for reading and writing files, and multi-core compression. You can read every change in <a href="engine/mame-0.289.diff"><code>engine/mame-0.289.diff</code></a>.
+Yes. Discpress runs chdman from the official MAME 0.289 release, so the files are standard CHD v5 with the same checksums as desktop chdman 0.289's, and byte for byte the same as chdman 0.289 makes on Linux, CD audio included. (chdman builds for Windows or macOS round the FLAC encoder's floating-point math differently, so their CD-audio bytes can differ from each other's and from Discpress's, never the audio itself.) Its source is in <a href="engine/README.md"><code>engine/</code></a>. The changes let it run in a browser and on several cores, make it faster without changing a byte, and fix chdman 0.289's crashes on bad input. You can read every change in <a href="engine/mame-0.289.diff"><code>engine/mame-0.289.diff</code></a>.
 </details>
 
 <details>

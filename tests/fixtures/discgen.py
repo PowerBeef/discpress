@@ -152,6 +152,39 @@ def codec_audio(frames, seed=1):
     return bytes(out[: frames * RAW])
 
 
+def music(seconds, seed=1):
+    """Piano-like CD audio: notes with decaying, slightly inharmonic overtones at random onsets, a
+    little room reverb, stereo, 16-bit with dither. Unlike the sine tones above, it exposes libFLAC's
+    dependence on cosf and log: with the libm the wasm build used to have, 10 seconds of it already
+    gave different bytes from native chdman."""
+    rng = np.random.default_rng(seed)
+    sr = 44100
+    n = int(seconds * sr)
+    out = np.zeros((n, 2))
+    t = np.arange(int(3.0 * sr)) / sr
+    scale = 440.0 * 2 ** (np.array([-21, -19, -17, -16, -14, -12, -10, -9, -7, -5, -4, -2, 0, 2, 3, 5, 7, 8, 10, 12, 15, 17, 19]) / 12)
+    pos = 0
+    while pos < n:
+        f = rng.choice(scale) * (1 + rng.normal(0, 0.001))
+        amp = rng.uniform(0.05, 0.3)
+        tone = np.zeros_like(t)
+        for h in range(1, 9):
+            tone += (amp / h ** 1.3) * np.sin(2 * np.pi * f * h * t * (1 + 0.0004 * h * h) + rng.uniform(0, 6.28)) * np.exp(-t * (1.2 + 0.9 * h))
+        tone *= np.minimum(1, t / 0.004)
+        pan = rng.uniform(0.2, 0.8)
+        end = min(n, pos + len(t))
+        out[pos:end, 0] += tone[: end - pos] * (1 - pan)
+        out[pos:end, 1] += tone[: end - pos] * pan
+        pos += int(rng.uniform(0.05, 0.4) * sr)
+    ir = rng.normal(0, 1, int(0.08 * sr)) * np.exp(-np.arange(int(0.08 * sr)) / (0.02 * sr)) * 0.02
+    for c in range(2):
+        out[:, c] += np.convolve(out[:, c], ir)[:n]
+    out /= max(1e-9, np.abs(out).max()) / 0.8
+    x = out * 32767 + rng.uniform(-0.5, 0.5, out.shape) + rng.uniform(-0.5, 0.5, out.shape)
+    pcm = np.clip(np.round(x), -32768, 32767).astype('<i2').tobytes()
+    return pcm[: len(pcm) // RAW * RAW]
+
+
 def codec_mix(size, grain, seed=1):
     """Data whose best codec changes every `grain` bytes: zeros, random and low-entropy bytes, text,
     filler, and 16-bit audio in both byte orders, clean and noisy."""

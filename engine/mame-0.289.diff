@@ -1,3 +1,206 @@
+--- a/3rdparty/flac/src/libFLAC/fixed.c
++++ b/3rdparty/flac/src/libFLAC/fixed.c
+@@ -41,6 +41,7 @@
+ #include "private/fixed.h"
+ #include "private/macros.h"
+ #include "FLAC/assert.h"
++#include "flac_libm.h" /* Discpress: the same log in every build (engine/libm) */
+ 
+ #ifdef local_abs
+ #undef local_abs
+@@ -281,11 +282,11 @@
+ 	FLAC__ASSERT(data_len > 0 || total_error_3 == 0);
+ 	FLAC__ASSERT(data_len > 0 || total_error_4 == 0);
+ #ifndef FLAC__INTEGER_ONLY_LIBRARY
+-	residual_bits_per_sample[0] = (float)((total_error_0 > 0) ? log(M_LN2 * (double)total_error_0 / (double)data_len) / M_LN2 : 0.0);
+-	residual_bits_per_sample[1] = (float)((total_error_1 > 0) ? log(M_LN2 * (double)total_error_1 / (double)data_len) / M_LN2 : 0.0);
+-	residual_bits_per_sample[2] = (float)((total_error_2 > 0) ? log(M_LN2 * (double)total_error_2 / (double)data_len) / M_LN2 : 0.0);
+-	residual_bits_per_sample[3] = (float)((total_error_3 > 0) ? log(M_LN2 * (double)total_error_3 / (double)data_len) / M_LN2 : 0.0);
+-	residual_bits_per_sample[4] = (float)((total_error_4 > 0) ? log(M_LN2 * (double)total_error_4 / (double)data_len) / M_LN2 : 0.0);
++	residual_bits_per_sample[0] = (float)((total_error_0 > 0) ? discpress_log(M_LN2 * (double)total_error_0 / (double)data_len) / M_LN2 : 0.0);
++	residual_bits_per_sample[1] = (float)((total_error_1 > 0) ? discpress_log(M_LN2 * (double)total_error_1 / (double)data_len) / M_LN2 : 0.0);
++	residual_bits_per_sample[2] = (float)((total_error_2 > 0) ? discpress_log(M_LN2 * (double)total_error_2 / (double)data_len) / M_LN2 : 0.0);
++	residual_bits_per_sample[3] = (float)((total_error_3 > 0) ? discpress_log(M_LN2 * (double)total_error_3 / (double)data_len) / M_LN2 : 0.0);
++	residual_bits_per_sample[4] = (float)((total_error_4 > 0) ? discpress_log(M_LN2 * (double)total_error_4 / (double)data_len) / M_LN2 : 0.0);
+ #else
+ 	residual_bits_per_sample[0] = (total_error_0 > 0) ? local__compute_rbps_integerized(total_error_0, data_len) : 0;
+ 	residual_bits_per_sample[1] = (total_error_1 > 0) ? local__compute_rbps_integerized(total_error_1, data_len) : 0;
+@@ -336,11 +337,11 @@
+ 	FLAC__ASSERT(data_len > 0 || total_error_3 == 0);
+ 	FLAC__ASSERT(data_len > 0 || total_error_4 == 0);
+ #ifndef FLAC__INTEGER_ONLY_LIBRARY
+-	residual_bits_per_sample[0] = (float)((total_error_0 > 0) ? log(M_LN2 * (double)total_error_0 / (double)data_len) / M_LN2 : 0.0);
+-	residual_bits_per_sample[1] = (float)((total_error_1 > 0) ? log(M_LN2 * (double)total_error_1 / (double)data_len) / M_LN2 : 0.0);
+-	residual_bits_per_sample[2] = (float)((total_error_2 > 0) ? log(M_LN2 * (double)total_error_2 / (double)data_len) / M_LN2 : 0.0);
+-	residual_bits_per_sample[3] = (float)((total_error_3 > 0) ? log(M_LN2 * (double)total_error_3 / (double)data_len) / M_LN2 : 0.0);
+-	residual_bits_per_sample[4] = (float)((total_error_4 > 0) ? log(M_LN2 * (double)total_error_4 / (double)data_len) / M_LN2 : 0.0);
++	residual_bits_per_sample[0] = (float)((total_error_0 > 0) ? discpress_log(M_LN2 * (double)total_error_0 / (double)data_len) / M_LN2 : 0.0);
++	residual_bits_per_sample[1] = (float)((total_error_1 > 0) ? discpress_log(M_LN2 * (double)total_error_1 / (double)data_len) / M_LN2 : 0.0);
++	residual_bits_per_sample[2] = (float)((total_error_2 > 0) ? discpress_log(M_LN2 * (double)total_error_2 / (double)data_len) / M_LN2 : 0.0);
++	residual_bits_per_sample[3] = (float)((total_error_3 > 0) ? discpress_log(M_LN2 * (double)total_error_3 / (double)data_len) / M_LN2 : 0.0);
++	residual_bits_per_sample[4] = (float)((total_error_4 > 0) ? discpress_log(M_LN2 * (double)total_error_4 / (double)data_len) / M_LN2 : 0.0);
+ #else
+ 	residual_bits_per_sample[0] = (total_error_0 > 0) ? local__compute_rbps_wide_integerized(total_error_0, data_len) : 0;
+ 	residual_bits_per_sample[1] = (total_error_1 > 0) ? local__compute_rbps_wide_integerized(total_error_1, data_len) : 0;
+@@ -357,7 +358,7 @@
+ if(order_##macro_order##_is_valid && total_error_##macro_order < smallest_error) { \
+ 	order = macro_order;				\
+ 	smallest_error = total_error_##macro_order ;	\
+-	residual_bits_per_sample[ macro_order ] = (float)((total_error_0 > 0) ? log(M_LN2 * (double)total_error_0 / (double)data_len) / M_LN2 : 0.0); \
++	residual_bits_per_sample[ macro_order ] = (float)((total_error_0 > 0) ? discpress_log(M_LN2 * (double)total_error_0 / (double)data_len) / M_LN2 : 0.0); \
+ }							\
+ else							\
+ 	residual_bits_per_sample[ macro_order ] = 34.0f;
+--- a/3rdparty/flac/src/libFLAC/lpc.c
++++ b/3rdparty/flac/src/libFLAC/lpc.c
+@@ -43,6 +43,7 @@
+ #include "private/bitmath.h"
+ #include "private/lpc.h"
+ #include "private/macros.h"
++#include "flac_libm.h" /* Discpress: the same log in every build (engine/libm) */
+ 
+ #if !defined(NDEBUG) || defined FLAC__OVERFLOW_DETECT || defined FLAC__OVERFLOW_DETECT_VERBOSE
+ #include <stdio.h>
+@@ -1588,7 +1589,7 @@
+ double FLAC__lpc_compute_expected_bits_per_residual_sample_with_error_scale(double lpc_error, double error_scale)
+ {
+ 	if(lpc_error > 0.0) {
+-		double bps = (double)0.5 * log(error_scale * lpc_error) / M_LN2;
++		double bps = (double)0.5 * discpress_log(error_scale * lpc_error) / M_LN2;
+ 		if(bps >= 0.0)
+ 			return bps;
+ 		else
+--- a/3rdparty/flac/src/libFLAC/window.c
++++ b/3rdparty/flac/src/libFLAC/window.c
+@@ -39,6 +39,7 @@
+ #include "FLAC/assert.h"
+ #include "FLAC/format.h"
+ #include "private/window.h"
++#include "flac_libm.h" /* Discpress: the same cosf in every build (engine/libm) */
+ 
+ #ifndef FLAC__INTEGER_ONLY_LIBRARY
+ 
+@@ -72,7 +73,7 @@
+ 	FLAC__int32 n;
+ 
+ 	for (n = 0; n < L; n++)
+-		window[n] = (FLAC__real)(0.62f - 0.48f * fabsf((float)n/(float)N-0.5f) - 0.38f * cosf(2.0f * M_PI * ((float)n/(float)N)));
++		window[n] = (FLAC__real)(0.62f - 0.48f * fabsf((float)n/(float)N-0.5f) - 0.38f * discpress_cosf(2.0f * M_PI * ((float)n/(float)N)));
+ }
+ 
+ void FLAC__window_blackman(FLAC__real *window, const FLAC__int32 L)
+@@ -81,7 +82,7 @@
+ 	FLAC__int32 n;
+ 
+ 	for (n = 0; n < L; n++)
+-		window[n] = (FLAC__real)(0.42f - 0.5f * cosf(2.0f * M_PI * n / N) + 0.08f * cosf(4.0f * M_PI * n / N));
++		window[n] = (FLAC__real)(0.42f - 0.5f * discpress_cosf(2.0f * M_PI * n / N) + 0.08f * discpress_cosf(4.0f * M_PI * n / N));
+ }
+ 
+ /* 4-term -92dB side-lobe */
+@@ -91,7 +92,7 @@
+ 	FLAC__int32 n;
+ 
+ 	for (n = 0; n <= N; n++)
+-		window[n] = (FLAC__real)(0.35875f - 0.48829f * cosf(2.0f * M_PI * n / N) + 0.14128f * cosf(4.0f * M_PI * n / N) - 0.01168f * cosf(6.0f * M_PI * n / N));
++		window[n] = (FLAC__real)(0.35875f - 0.48829f * discpress_cosf(2.0f * M_PI * n / N) + 0.14128f * discpress_cosf(4.0f * M_PI * n / N) - 0.01168f * discpress_cosf(6.0f * M_PI * n / N));
+ }
+ 
+ void FLAC__window_connes(FLAC__real *window, const FLAC__int32 L)
+@@ -113,7 +114,7 @@
+ 	FLAC__int32 n;
+ 
+ 	for (n = 0; n < L; n++)
+-		window[n] = (FLAC__real)(0.21557895f - 0.41663158f * cosf(2.0f * M_PI * n / N) + 0.277263158f * cosf(4.0f * M_PI * n / N) - 0.083578947f * cosf(6.0f * M_PI * n / N) + 0.006947368f * cosf(8.0f * M_PI * n / N));
++		window[n] = (FLAC__real)(0.21557895f - 0.41663158f * discpress_cosf(2.0f * M_PI * n / N) + 0.277263158f * discpress_cosf(4.0f * M_PI * n / N) - 0.083578947f * discpress_cosf(6.0f * M_PI * n / N) + 0.006947368f * discpress_cosf(8.0f * M_PI * n / N));
+ }
+ 
+ void FLAC__window_gauss(FLAC__real *window, const FLAC__int32 L, const FLAC__real stddev)
+@@ -140,7 +141,7 @@
+ 	FLAC__int32 n;
+ 
+ 	for (n = 0; n < L; n++)
+-		window[n] = (FLAC__real)(0.54f - 0.46f * cosf(2.0f * M_PI * n / N));
++		window[n] = (FLAC__real)(0.54f - 0.46f * discpress_cosf(2.0f * M_PI * n / N));
+ }
+ 
+ void FLAC__window_hann(FLAC__real *window, const FLAC__int32 L)
+@@ -149,7 +150,7 @@
+ 	FLAC__int32 n;
+ 
+ 	for (n = 0; n < L; n++)
+-		window[n] = (FLAC__real)(0.5f - 0.5f * cosf(2.0f * M_PI * n / N));
++		window[n] = (FLAC__real)(0.5f - 0.5f * discpress_cosf(2.0f * M_PI * n / N));
+ }
+ 
+ void FLAC__window_kaiser_bessel(FLAC__real *window, const FLAC__int32 L)
+@@ -158,7 +159,7 @@
+ 	FLAC__int32 n;
+ 
+ 	for (n = 0; n < L; n++)
+-		window[n] = (FLAC__real)(0.402f - 0.498f * cosf(2.0f * M_PI * n / N) + 0.098f * cosf(4.0f * M_PI * n / N) - 0.001f * cosf(6.0f * M_PI * n / N));
++		window[n] = (FLAC__real)(0.402f - 0.498f * discpress_cosf(2.0f * M_PI * n / N) + 0.098f * discpress_cosf(4.0f * M_PI * n / N) - 0.001f * discpress_cosf(6.0f * M_PI * n / N));
+ }
+ 
+ void FLAC__window_nuttall(FLAC__real *window, const FLAC__int32 L)
+@@ -167,7 +168,7 @@
+ 	FLAC__int32 n;
+ 
+ 	for (n = 0; n < L; n++)
+-		window[n] = (FLAC__real)(0.3635819f - 0.4891775f*cosf(2.0f*M_PI*n/N) + 0.1365995f*cosf(4.0f*M_PI*n/N) - 0.0106411f*cosf(6.0f*M_PI*n/N));
++		window[n] = (FLAC__real)(0.3635819f - 0.4891775f*discpress_cosf(2.0f*M_PI*n/N) + 0.1365995f*discpress_cosf(4.0f*M_PI*n/N) - 0.0106411f*discpress_cosf(6.0f*M_PI*n/N));
+ }
+ 
+ void FLAC__window_rectangle(FLAC__real *window, const FLAC__int32 L)
+@@ -214,8 +215,8 @@
+ 		/* ...replace ends with hann */
+ 		if (Np > 0) {
+ 			for (n = 0; n <= Np; n++) {
+-				window[n] = (FLAC__real)(0.5f - 0.5f * cosf(M_PI * n / Np));
+-				window[L-Np-1+n] = (FLAC__real)(0.5f - 0.5f * cosf(M_PI * (n+Np) / Np));
++				window[n] = (FLAC__real)(0.5f - 0.5f * discpress_cosf(M_PI * n / Np));
++				window[L-Np-1+n] = (FLAC__real)(0.5f - 0.5f * discpress_cosf(M_PI * (n+Np) / Np));
+ 			}
+ 		}
+ 	}
+@@ -243,11 +244,11 @@
+ 		for (n = 0; n < start_n && n < L; n++)
+ 			window[n] = 0.0f;
+ 		for (i = 1; n < (start_n+Np) && n < L; n++, i++)
+-			window[n] = (FLAC__real)(0.5f - 0.5f * cosf(M_PI * i / Np));
++			window[n] = (FLAC__real)(0.5f - 0.5f * discpress_cosf(M_PI * i / Np));
+ 		for (; n < (end_n-Np) && n < L; n++)
+ 			window[n] = 1.0f;
+ 		for (i = Np; n < end_n && n < L; n++, i--)
+-			window[n] = (FLAC__real)(0.5f - 0.5f * cosf(M_PI * i / Np));
++			window[n] = (FLAC__real)(0.5f - 0.5f * discpress_cosf(M_PI * i / Np));
+ 		for (; n < L; n++)
+ 			window[n] = 0.0f;
+ 	}
+@@ -273,19 +274,19 @@
+ 		Ne = (FLAC__int32)(p / 2.0f * (L - end_n));
+ 
+ 		for (n = 0, i = 1; n < Ns && n < L; n++, i++)
+-			window[n] = (FLAC__real)(0.5f - 0.5f * cosf(M_PI * i / Ns));
++			window[n] = (FLAC__real)(0.5f - 0.5f * discpress_cosf(M_PI * i / Ns));
+ 		for (; n < start_n-Ns && n < L; n++)
+ 			window[n] = 1.0f;
+ 		for (i = Ns; n < start_n && n < L; n++, i--)
+-			window[n] = (FLAC__real)(0.5f - 0.5f * cosf(M_PI * i / Ns));
++			window[n] = (FLAC__real)(0.5f - 0.5f * discpress_cosf(M_PI * i / Ns));
+ 		for (; n < end_n && n < L; n++)
+ 			window[n] = 0.0f;
+ 		for (i = 1; n < end_n+Ne && n < L; n++, i++)
+-			window[n] = (FLAC__real)(0.5f - 0.5f * cosf(M_PI * i / Ne));
++			window[n] = (FLAC__real)(0.5f - 0.5f * discpress_cosf(M_PI * i / Ne));
+ 		for (; n < L - (Ne) && n < L; n++)
+ 			window[n] = 1.0f;
+ 		for (i = Ne; n < L; n++, i--)
+-			window[n] = (FLAC__real)(0.5f - 0.5f * cosf(M_PI * i / Ne));
++			window[n] = (FLAC__real)(0.5f - 0.5f * discpress_cosf(M_PI * i / Ne));
+ 	}
+ }
+ 
 --- a/3rdparty/lzma/C/LzmaEnc.c
 +++ b/3rdparty/lzma/C/LzmaEnc.c
 @@ -411,6 +411,7 @@

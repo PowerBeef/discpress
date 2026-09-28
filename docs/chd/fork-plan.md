@@ -187,7 +187,14 @@ This affects users today, so it ships as its own small release before any fork w
 
 ### Milestone 2: performance (1–2 weeks)
 
-**Status: 2.1, 2.4 and 2.8 done (2.8 for extract and verify), and part of 2.2** (see `engine/README.md`; measured in measurements §2).
+**Status: 2.1, 2.3, 2.4 and 2.8 done (2.8 for extract and verify), and part of 2.2** (see `engine/README.md`; measured in measurements §2).
+- **2.3 deterministic libm.** libFLAC calls `engine/libm`'s `cosf` and `log`, Arm's optimized-routines code that glibc is built from. The `log` has explicit `fma()` where GCC fuses glibc's multiply-adds for FMA CPUs.
+  - Checked against glibc: `cosf` on all 1.97 billion window arguments, `log` on 200 million inputs. Both are identical natively and in wasm.
+  - The page's CD-audio CHDs of 114 MB of real music now match unmodified chdman 0.289 byte for byte (before: different).
+  - The `music-cd` fixture fails without it.
+  - The autocorrelation was already the C one (`FLAC__NO_ASM`, as MAME's x86 GCC builds).
+  - Cost: wasm has no FMA instruction, so the seven `fma()` of each `log` run in exact software (143 ns against musl's 5 ns). Creating the benchmark CD takes about 4% longer with 1 thread and 1% with 4.
+  - Still different: chdman on non-FMA x86, Apple's libm and MSVC's CRT round differently, and ARM64 builds sum the autocorrelation with NEON.
 - **2.8 parallel decompression.** In the page, helper workers decompress the hunks `verify` and the extract commands are about to read, a window at a time. The windows' stored data is read in one go, since each small read costs far more in the browser than its bytes do.
   - Benchmark CD (332 MB), extracting with 4 threads: 2.5× faster (7.2 s → 2.8 s).
   - Benchmark DVD (1 GB): 1.4× faster (13.4 s → 9.3 s). Its 4 KB hunks leave most of the time to the job worker, which reads, checks and writes 1 GB.
