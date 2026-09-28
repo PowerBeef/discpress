@@ -72,6 +72,15 @@ function toast(msg, kind, ms) {
 var isMobile = (window.matchMedia && matchMedia('(pointer: coarse)').matches) || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 var cores = Math.max(1, navigator.hardwareConcurrency || 4);
+// iPhone and iPad (docs/ios/limits.md): the page and all its workers share one process that iOS stops
+// at about 1.5 GB on iPhones, and iOS 18+ gives fast wasm memory to only 3 instances per process, so
+// automatic mode uses at most the job worker plus 2 helpers on iPhones (2 performance cores; every
+// iPhone reports 4) and plus 4 on iPads
+// an iPhone/iPad app's web view (not Safari, not a home-screen web app): usually no downloads (docs/ios)
+var iosWebView = isIOS && !/Safari\//.test(navigator.userAgent) && navigator.standalone !== true && !(window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+// the hosted copy, for Safari on iPhone and iPad (web/README.md)
+var HOSTED_URL = 'https://powerbeef.github.io/discpress/';
+var iosThreadCap = isIOS ? (/iPad/.test(navigator.userAgent) || navigator.platform === 'MacIntel' ? 4 : 2) : 0;
 var maxThreads = Math.min(cores, 16);
 // threads: 'auto' (measured per device, see Tuning) or a fixed number of compression threads
 var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false };
@@ -254,7 +263,7 @@ var Engine = {
     return this.loading;
   },
   _load: async function () {
-    if (typeof WebAssembly !== 'object') throw new Error('This browser does not support WebAssembly.');
+    if (typeof WebAssembly !== 'object') throw new Error(isIOS ? 'WebAssembly is turned off, which Lockdown Mode does. Discpress needs it: turn Lockdown Mode off for this app or website (Settings → Privacy & Security → Lockdown Mode → Configure Web Browsing).' : 'This browser does not support WebAssembly.');
     if (!WebAssembly.validate(EH_TEST)) throw new Error('This browser is too old: it lacks WebAssembly exception handling (needs Chrome 95+, Firefox 100+, Safari 15.2+).');
     if (typeof Worker !== 'function') throw new Error('This browser does not support Web Workers.');
     this.simd = WebAssembly.validate(SIMD_TEST);
@@ -362,8 +371,8 @@ var Engine = {
    ============================================================ */
 var Tuning = {
   result: null, running: null,
-  // up to 8 on phones and tablets, 16 elsewhere, whatever the browser reports
-  cap: isMobile ? 8 : 16,
+  // up to 8 on phones and tablets (iPhone 2, iPad 4), 16 elsewhere, whatever the browser reports
+  cap: iosThreadCap || (isMobile ? 8 : 16),
   key: function () { return cores + '|' + navigator.userAgent; },
   load: function () {
     try {
@@ -449,7 +458,7 @@ Tuning.load();
 // compression threads to use now
 function threadCount() {
   if (settings.threads !== 'auto') return settings.threads;
-  return Tuning.result ? Tuning.result.threads : Math.min(maxThreads, isMobile ? 4 : 8);
+  return Tuning.result ? Math.min(Tuning.result.threads, Tuning.cap) : Math.min(maxThreads, isMobile ? 4 : 8, Tuning.cap);
 }
 // helper workers for verify and extract, which decompress the hunks chdman is about to read. The job
 // worker stays busy reading, checking and writing (most of the work for DVDs), so it keeps a core.
@@ -497,6 +506,7 @@ var Store = {
     } catch (e) { held = null; }
     var names = [];
     try { for await (var entry of work.keys()) names.push(entry); } catch (e) { return; }
+    var records = Recovery.read();
     for (var i = 0; i < names.length; i++) {
       var n = names[i];
       if (n === this.session) continue;
@@ -506,27 +516,117 @@ var Store = {
         var t = parseInt(n.slice(1, 9), 36);
         stale = !t || Date.now() - t > 6 * 3600e3;
       }
-      if (stale) { try { await work.removeEntry(n, { recursive: true }); } catch (e) { /* in use */ } }
+      if (!stale) continue;
+      // a closed or reloaded visit: keep its finished results that weren't saved (Recovery)
+      if (Recovery.adopt(n, records[n])) continue;
+      try { await work.removeEntry(n, { recursive: true }); } catch (e) { /* in use */ }
     }
+    Recovery.settle(records, names);
   },
-  dirPath: function (jobId) { return ['chdman-work', this.session, jobId]; },
-  file: async function (jobId, slot) {
+  dirPath: function (jobId, session) { return ['chdman-work', session || this.session, jobId]; },
+  // session: an earlier visit's (Recovery), else this one's
+  file: async function (jobId, slot, session) {
     var d = await navigator.storage.getDirectory();
-    var p = this.dirPath(jobId);
+    var p = this.dirPath(jobId, session);
     for (var i = 0; i < p.length; i++) d = await d.getDirectoryHandle(p[i]);
     return (await d.getFileHandle(slot)).getFile();
   },
-  removeJob: async function (jobId) {
+  removeJob: async function (jobId, session) {
+    Recovery.forget(jobId, session);
     if (!this.available) return;
     try {
       var d = await navigator.storage.getDirectory();
       d = await d.getDirectoryHandle('chdman-work');
-      d = await d.getDirectoryHandle(this.session);
+      d = await d.getDirectoryHandle(session || this.session);
       await d.removeEntry(jobId, { recursive: true });
+      if (session) { // an earlier visit's folder goes once it's empty
+        var left = false;
+        for await (var k of d.keys()) { left = true; void k; break; }
+        if (!left) await (await (await navigator.storage.getDirectory()).getDirectoryHandle('chdman-work')).removeEntry(session, { recursive: true });
+      }
     } catch (e) { /* ignore */ }
   },
   estimate: async function () {
     try { return await navigator.storage.estimate(); } catch (e) { return null; }
+  }
+};
+
+/* ============================================================
+   results that outlive a reload
+   iOS reloads a page that it stopped to free memory or after it sat in the background
+   (docs/ios/limits.md), and an unsaved CHD went with the old visit's storage. So each visit
+   keeps a small record in localStorage (the job running now, and finished results in private
+   storage not saved yet); at the next start, Store.cleanupStale keeps those results, and the
+   page lists them, with the job that didn't finish.
+   ============================================================ */
+var Recovery = {
+  KEY: 'chdman-web-sessions',
+  earlier: [], // [{ session, jobId, title, outputs: [{ name, size, slot, kind, session }] }]
+  stopped: [], // titles of jobs that were running when their visit ended
+  read: function () {
+    try { var v = JSON.parse(localStorage.getItem(this.KEY) || '{}'); return v && typeof v === 'object' ? v : {}; } catch (e) { return {}; }
+  },
+  write: function (all) {
+    try {
+      if (Object.keys(all).length) localStorage.setItem(this.KEY, JSON.stringify(all));
+      else localStorage.removeItem(this.KEY);
+    } catch (e) { /* ignore */ }
+  },
+  update: function (fn, session) {
+    if (!Store.available) return;
+    var all = this.read(), key = session || Store.session;
+    var rec = all[key] || { results: {} };
+    rec.results = rec.results || {};
+    fn(rec);
+    if (!rec.running && !Object.keys(rec.results).length) delete all[key];
+    else all[key] = rec;
+    this.write(all);
+  },
+  running: function (job) {
+    this.update(function (rec) { rec.running = job ? job.title : null; });
+  },
+  finished: function (job) {
+    var outs = job.outputs.filter(function (o) { return o.kind === 'opfs' && !o.downloaded; });
+    this.update(function (rec) {
+      if (outs.length) rec.results[job.id] = { title: job.title, outputs: outs.map(function (o) { return { name: o.name, size: o.size, slot: o.slot }; }) };
+      else delete rec.results[job.id];
+    });
+  },
+  saved: function (job, out) {
+    var id = job.id;
+    this.update(function (rec) {
+      var r = rec.results[id];
+      if (!r) return;
+      r.outputs = r.outputs.filter(function (o) { return o.slot !== out.slot; });
+      if (!r.outputs.length) delete rec.results[id];
+    }, out.session);
+  },
+  forget: function (jobId, session) {
+    this.update(function (rec) { delete rec.results[jobId]; }, session);
+  },
+  // at start, for a visit that has ended: true if it left unsaved results (its folder is then kept)
+  adopt: function (session, rec) {
+    if (!rec) return false;
+    if (this.earlier.some(function (e) { return e.session === session; })) return true; // listed already
+    if (rec.running) this.stopped.push(rec.running);
+    var ids = Object.keys(rec.results || {});
+    for (var i = 0; i < ids.length; i++) {
+      var r = rec.results[ids[i]];
+      this.earlier.push({ session: session, jobId: ids[i], title: r.title, outputs: r.outputs.map(function (o) { return { name: o.name, size: o.size, slot: o.slot, kind: 'opfs', session: session }; }) });
+    }
+    return ids.length > 0;
+  },
+  // records of ended visits: drop the "running" marks now reported, and records whose storage is gone
+  settle: function (records, names) {
+    var keep = {};
+    Object.keys(records).forEach(function (k) {
+      if (k === Store.session || names.indexOf(k) < 0) return;
+      var rec = records[k];
+      if (rec.results && Object.keys(rec.results).length) keep[k] = { results: rec.results };
+    });
+    var all = this.read(); // this visit's record may have been written meanwhile
+    if (all[Store.session]) keep[Store.session] = all[Store.session];
+    this.write(keep);
   }
 };
 
@@ -785,14 +885,17 @@ function applyIdent(job, starting) {
   if (settings.rename && id.name && !job.outEdited && !locked) job.opts.out = id.name;
   if (job.kind !== 'create' || locked) return;
   // pick the right CHD flavour for the system
-  if (job.src === 'iso' || job.src === 'cso' || (job.src === 'bin' && job.choices)) {
+  if ((job.src === 'iso' || job.src === 'cso' || (job.src === 'bin' && job.choices)) && !job.discEdited) {
+    // the system settles the type (unless the user picked one) (the "Create as" choice then moves into Options)
+    var bySystem = true;
     if (id.sys === 'psp') { job.disc = 'dvd'; if (!job.hunkEdited) job.opts.hunk = '2048'; }
     else if (id.sys === 'ps2') {
       var cdGame = id.entry ? id.entry.ext === 'bin' : (job.isoSize || job.files[0].file.size) < 800 * 1048576;
       job.disc = cdGame ? 'cd' : 'dvd';
-    } else if (id.sys === 'gc' || id.sys === 'wii') { /* leave as is */ }
-    else if (id.sys !== 'pc') job.disc = 'cd';
-    if (job.choices && job.choices.indexOf(job.disc) < 0) job.disc = job.choices[0];
+    } else if (id.sys === 'gc' || id.sys === 'wii' || id.sys === 'pc') bySystem = false;
+    else job.disc = 'cd';
+    if (job.choices && job.choices.indexOf(job.disc) < 0) { job.disc = job.choices[0]; bySystem = false; }
+    job.discBySystem = bySystem;
     job.action = KIND[job.disc].cmd;
   }
 }
@@ -807,6 +910,7 @@ function renameOutputs(job) {
   var to = outBase(job);
   if (from === to) return;
   job.outputs.forEach(function (o) { if (o.name.indexOf(from + '.') === 0) o.name = to + o.name.slice(from.length); });
+  if (job.state === 'done') Recovery.finished(job);
 }
 function identNote(job) {
   if (job.identState === 'pending' || job.identState === 'running') {
@@ -1417,22 +1521,29 @@ function renderControls(job) {
   var soft = function () { ui.cmd.textContent = safeCmd(job); };
 
   if (job.kind === 'create') {
-    if (job.choices && job.choices.length > 1) {
-      box.append(el('div', { class: 'row' }, el('span', { class: 'small muted', style: 'font-weight:600' }, 'Create as'),
-        seg(job.choices.map(function (k) { return [k, KIND[k].label + ' CHD']; }), job.disc, function (v) {
-          if (job.state === 'done' || job.state === 'error' || job.state === 'canceled') {
-            var pending = job.outputs.some(function (x) { return !x.downloaded && x.kind !== 'disk'; });
-            if (pending && !confirm('Discard the results of the previous run? Download them first if you need them.')) return;
-            job.disc = v; job.action = KIND[v].cmd; o.preset = 'default'; o.hunk = '';
-            resetJob(job);
-            return;
-          }
-          job.disc = v; job.action = KIND[v].cmd; o.preset = 'default'; o.hunk = ''; refresh();
-        }, busy)));
+    var pickDisc = function (v) {
+      if (job.state === 'done' || job.state === 'error' || job.state === 'canceled') {
+        var pending = job.outputs.some(function (x) { return !x.downloaded && x.kind !== 'disk'; });
+        if (pending && !confirm('Discard the results of the previous run? Download them first if you need them.')) return;
+        job.disc = v; job.action = KIND[v].cmd; o.preset = 'default'; o.hunk = ''; job.discEdited = true;
+        resetJob(job);
+        return;
+      }
+      job.disc = v; job.action = KIND[v].cmd; o.preset = 'default'; o.hunk = ''; job.discEdited = true; refresh();
+    };
+    var discChoices = job.choices && job.choices.length > 1 ? job.choices.map(function (k) { return [k, KIND[k].label + ' CHD']; }) : null;
+    // an identified game's system settles the type: the choice is in Options instead of up front
+    if (discChoices && !job.discBySystem) {
+      box.append(el('div', { class: 'row' }, el('span', { class: 'small muted', style: 'font-weight:600' }, 'Create as'), seg(discChoices, job.disc, pickDisc, busy)));
     }
     var disc = job.disc;
     var presets = PRESETS[disc === 'cd' || disc === 'gdrom' ? 'cd' : disc === 'ld' ? 'ld' : 'other'];
     var fields = el('div', { class: 'fields' });
+    if (discChoices && job.discBySystem) {
+      fields.append(selectField('Create as', discChoices, job.disc, pickDisc,
+        (job.ident.sys === 'ps2' ? 'This ' + sysName('ps2') + ' game is on a ' + KIND[job.disc].label + ', so it becomes a ' + KIND[job.disc].label + ' CHD.'
+          : sysName(job.ident.sys) + ' games become ' + KIND[job.disc].label + ' CHDs.') + ' Change this only if you know you need the other type.', busy));
+    }
     var cur = presets.find(function (p) { return p[0] === o.preset; }) || presets[0];
     fields.append(selectField('Compression', presets.map(function (p) { return [p[0], p[1]]; }), o.preset, function (v) { o.preset = v; refresh(); }, cur[3], busy));
     var hunks = HUNKS[disc] || [['', 'Automatic']];
@@ -1533,7 +1644,7 @@ function renderResult(job) {
     box.append(outs);
     if (job.outputs.length > 1 && job.outputs[0].kind !== 'disk') {
       var row = el('div', { class: 'row end' });
-      row.append(el('button', { class: 'btn sm', onclick: function () { downloadMany([job]); } }, icon(useShareSheet ? 'i-share' : 'i-download'), (useShareSheet ? 'Save all ' : 'Download all ') + job.outputs.length + (useShareSheet ? ' to Files' : '')));
+      row.append(saveButton(job.outputs, function () { downloadMany([job]); }, true));
       if (window.showDirectoryPicker) row.append(el('button', { class: 'btn sm', onclick: function () { saveToFolder([job]); } }, icon('i-folder'), 'Save to folder'));
       box.append(row);
     }
@@ -1545,8 +1656,10 @@ function outputRow(job, out) {
     return el('div', { class: 'out' }, el('div', { class: 'nm' }, out.name, el('small', null, fmtBytes(out.size) + ' · saved in ' + (job.folderName || 'your folder'))), el('span', { class: 'small', style: 'color:var(--ok);display:inline-flex;align-items:center;gap:4px;padding-right:6px' }, icon('i-check'), 'Saved'));
   }
   var btns = el('div', { class: 'row' });
-  btns.append(el('button', { class: 'btn sm primary', onclick: function () { saveOutput(job, out); } }, icon(useShareSheet ? 'i-share' : 'i-download'), saveLabel));
-  return el('div', { class: 'out' }, el('div', { class: 'nm' }, out.name, el('small', null, fmtBytes(out.size) + (out.downloaded ? ' · downloaded' : ''))), btns);
+  btns.append(saveButton([out], function () { saveOutput(job, out); }));
+  var tooBig = useShareSheet && !viaShare([out]);
+  var note = out.downloaded ? ' · downloaded' : !tooBig ? '' : iosWebView ? ' · too large for the share sheet; if this app can\u2019t download it, use Discpress in Safari: ' + HOSTED_URL.replace(/^https:\/\/|\/$/g, '') : ' · too large for the share sheet, so it downloads';
+  return el('div', { class: 'out' }, el('div', { class: 'nm' }, out.name, el('small', null, fmtBytes(out.size) + note)), btns);
 }
 
 function renderFoot(job) {
@@ -1743,6 +1856,7 @@ async function runJobNow(job) {
     return;
   }
   appendLog(job, '$ ' + spec.cmdline);
+  if (spec.outMode === 'opfs') Recovery.running(job);
   if (spec.outMode === 'opfs' && spec.expected) {
     var est = await Store.estimate();
     if (est && est.quota && est.quota - est.usage < spec.expected * 1.05) {
@@ -1786,6 +1900,7 @@ async function runJobNow(job) {
   job.progressPct = function () { return lastPct; };
   try {
     var res = await job.run.promise;
+    Recovery.running(null);
     job.elapsed = performance.now() - t0;
     if (res.error) appendLog(job, res.error);
     if (res.code === 0) {
@@ -1798,6 +1913,7 @@ async function runJobNow(job) {
       });
       if (job.kind === 'chd' && job.action === 'info') job.lastInfo = parseInfo(job.log);
       if (job.identState === 'done') renameOutputs(job); // the checksum finished while converting
+      Recovery.finished(job);
     } else {
       job.state = 'error';
       if (res.readFail) { job.errorText = readFailHint(res.error); Store.removeJob(job.id); refreshJob(job, true); return; }
@@ -1809,6 +1925,7 @@ async function runJobNow(job) {
       Store.removeJob(job.id);
     }
   } catch (e) {
+    Recovery.running(null);
     if (e.canceled && job.stalled) { job.state = 'error'; job.errorText = STALLED; }
     else if (e.canceled) { job.state = 'canceled'; }
     else { job.state = 'error'; job.errorText = readFailHint(e.message); appendLog(job, e.message); }
@@ -1884,12 +2001,77 @@ function notifyDone() {
   } catch (e) { /* ignore */ }
 }
 
+// the hosted copy (https, web/README.md): an installable web app that works offline. The file stays the same
+// bytes as the release, so it adds the manifest, the PNG touch icon and the service worker itself.
+function initHosted() {
+  if (!(location.protocol === 'https:' || DEBUG.hosted) || !('serviceWorker' in navigator)) return;
+  document.head.append(el('link', { rel: 'manifest', href: 'manifest.webmanifest' }));
+  var icon = document.querySelector('link[rel="apple-touch-icon"]');
+  if (icon) icon.setAttribute('href', 'apple-touch-icon.png');
+  navigator.serviceWorker.register('sw.js').catch(function () { /* not the hosted copy */ });
+}
+// in an iPhone/iPad app's web view: big results can't leave it, so point to Safari
+function initIosTip() {
+  var tip = $('#iosTip');
+  if (!tip || !iosWebView) return;
+  try { if (localStorage.getItem('chdman-web-ios-tip')) return; } catch (e) { /* show it */ }
+  tip.hidden = false;
+  $('#copyHosted').addEventListener('click', async function () {
+    try { await navigator.clipboard.writeText(HOSTED_URL); toast('Link copied. Paste it in Safari.'); }
+    catch (e) { toast('Copy it from here: ' + HOSTED_URL, null, 8000); }
+  });
+  $('#iosTipOk').addEventListener('click', function () {
+    tip.hidden = true;
+    try { localStorage.setItem('chdman-web-ios-tip', '1'); } catch (e) { /* ignore */ }
+  });
+}
+
+// results of an earlier visit that weren't saved, and the job that didn't finish (Recovery)
+function renderEarlier() {
+  var box = $('#earlier');
+  if (!box) return;
+  box.replaceChildren();
+  var items = Recovery.earlier, stopped = Recovery.stopped;
+  box.hidden = !items.length && !stopped.length;
+  if (box.hidden) return;
+  var card = el('div', { class: 'card earlier' });
+  if (stopped.length) {
+    var why = isIOS ? ' iOS does this to free memory, or when the screen was locked or another app was used for a while.' : '';
+    card.append(el('div', { class: 'note warn' }, el('b', null, (stopped.length > 1 ? 'Conversions that didn\u2019t finish: ' : 'A conversion didn\u2019t finish: ') + stopped.map(function (t) { return '\u201c' + t + '\u201d'; }).join(', ') + '. '),
+      'The page was closed or reloaded while it ran.' + why + ' Add its files again to start over.',
+      el('button', { class: 'btn sm', style: 'margin-left:8px', onclick: function () { Recovery.stopped = []; renderEarlier(); } }, 'OK')));
+  }
+  if (items.length) {
+    card.append(el('h2', null, 'From your last visit'));
+    card.append(el('p', { class: 'small muted', style: 'margin:0 0 8px' }, 'These results were finished but not saved when the page was closed or reloaded. Save them, or delete them to free space.'));
+    items.forEach(function (it) {
+      var job = { id: it.jobId, outputs: it.outputs };
+      it.outputs.forEach(function (out) {
+        var btns = el('div', { class: 'row' });
+        btns.append(saveButton([out], function () { saveOutput(job, out); }));
+        btns.append(el('button', { class: 'btn sm', onclick: async function () {
+          Recovery.earlier = Recovery.earlier.filter(function (e) { return e !== it; });
+          await Store.removeJob(it.jobId, it.session);
+          renderEarlier();
+          refreshStorageInfo();
+        } }, 'Delete'));
+        card.append(el('div', { class: 'out' }, el('div', { class: 'nm' }, out.name, el('small', null, fmtBytes(out.size) + ' \u00b7 ' + it.title)), btns));
+      });
+    });
+  }
+  box.append(card);
+}
+
 /* ============================================================
    outputs: download / share / save to folder
    ============================================================ */
+function markSaved(job, out) {
+  out.downloaded = true;
+  if (out.kind === 'opfs') Recovery.saved(job, out);
+}
 async function outputFile(job, out) {
   if (out.kind === 'blob') return new File([out.blob], out.name, { type: 'application/octet-stream' });
-  var f = await Store.file(job.id, out.slot);
+  var f = await Store.file(job.id, out.slot, out.session);
   return new File([f], out.name, { type: 'application/octet-stream' });
 }
 async function downloadOutput(job, out) {
@@ -1901,7 +2083,7 @@ async function downloadOutput(job, out) {
     a.click();
     a.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 10 * 60 * 1000);
-    if (!isIOS) out.downloaded = true;
+    if (!isIOS) markSaved(job, out);
     refreshJob(job);
   } catch (e) {
     toast('Could not open the result: ' + e.message, 'err');
@@ -1910,32 +2092,47 @@ async function downloadOutput(job, out) {
 // one save action per platform: iPhone/iPad use the share sheet ("Save to Files"),
 // which also works inside apps that cannot download; everything else downloads
 var useShareSheet = isIOS && !!navigator.canShare;
-var saveLabel = useShareSheet ? 'Save to Files' : 'Download';
+// but not for large files: WebKit's share sheet reads each file whole into memory and hands it to the
+// app showing the page, and iOS closes that app when memory runs out (a 1 GB PSP CHD did, in Sitecase).
+// Those are downloaded instead, which Safari streams from disk to Downloads in Files.
+var SHARE_MAX = DEBUG.shareMax || 512 * 1048576;
+function viaShare(outs) {
+  return useShareSheet && outs.reduce(function (n, o) { return n + (o.size || 0); }, 0) <= SHARE_MAX;
+}
+function saveButton(outs, onclick, many) {
+  var share = viaShare(outs);
+  return el('button', { class: 'btn sm' + (many ? '' : ' primary'), onclick: onclick }, icon(share ? 'i-share' : 'i-download'),
+    many ? (share ? 'Save all ' + outs.length + ' to Files' : 'Download all ' + outs.length) : (share ? 'Save to Files' : 'Download'));
+}
 async function saveOutput(job, out) {
-  if (!useShareSheet) return downloadOutput(job, out);
+  if (!viaShare([out])) return downloadOutput(job, out);
   var f;
   try { f = await outputFile(job, out); }
   catch (e) { toast('Could not open the result: ' + e.message, 'err'); return; }
   if (!navigator.canShare({ files: [f] })) return downloadOutput(job, out);
   try {
     await navigator.share({ files: [f] });
-    out.downloaded = true;
+    markSaved(job, out);
     refreshJob(job);
   } catch (e) {
-    if (e && e.name !== 'AbortError') toast('Saving failed: ' + e.message, 'err');
+    // closed by the user; WebKit reports a file it could not read as an AbortError too, with its own message
+    if (e && e.name === 'AbortError' && !/error while reading/i.test(e.message || '')) return;
+    // the share sheet can fail on very large files: download it instead (Safari saves it to Downloads in Files)
+    toast('The share sheet could not take this file (' + (e && e.message || e) + '). Downloading it instead.', 'err');
+    return downloadOutput(job, out);
   }
 }
 async function downloadMany(list) {
   var outs = [];
   list.forEach(function (job) { job.outputs.forEach(function (o) { if (o.kind !== 'disk') outs.push([job, o]); }); });
-  if (useShareSheet && outs.length) {
+  if (outs.length && viaShare(outs.map(function (x) { return x[1]; }))) {
     // one share sheet for all files
     try {
       var files = [];
       for (var j = 0; j < outs.length; j++) files.push(await outputFile(outs[j][0], outs[j][1]));
       if (navigator.canShare({ files: files })) {
         await navigator.share({ files: files });
-        outs.forEach(function (x) { x[1].downloaded = true; });
+        outs.forEach(function (x) { markSaved(x[0], x[1]); });
         list.forEach(function (job) { refreshJob(job); });
         return;
       }
@@ -1966,7 +2163,7 @@ async function saveToFolder(list) {
         var fh = await dir.getFileHandle(out.name, { create: true });
         var w = await fh.createWritable();
         await f.stream().pipeTo(w);
-        out.downloaded = true;
+        markSaved(job, out);
         n++;
       } catch (e) {
         toast('Could not save ' + out.name + ': ' + e.message, 'err');
@@ -2005,7 +2202,9 @@ function updateDock() {
   var withOut = jobs.filter(function (j) { return j.state === 'done' && j.outputs.length; });
   var nOut = withOut.reduce(function (s, j) { return s + j.outputs.filter(function (o) { return o.kind !== 'disk'; }).length; }, 0);
   $('#dlAll').hidden = nOut < 2;
-  $('#dlAll').lastChild.textContent = useShareSheet ? 'Save all to Files' : 'Download all';
+  var allOut = [];
+  withOut.forEach(function (j) { j.outputs.forEach(function (o) { if (o.kind !== 'disk') allOut.push(o); }); });
+  $('#dlAll').lastChild.textContent = viaShare(allOut) ? 'Save all to Files' : 'Download all';
   $('#saveAll').hidden = !window.showDirectoryPicker || nOut < 2;
   $('#clearDone').hidden = !jobs.some(function (j) { return j.state === 'done' || j.state === 'canceled' || j.state === 'error'; });
 }
@@ -2255,7 +2454,7 @@ async function cliRun() {
     cjob.outputs.forEach(function (o) {
       if (o.kind === 'disk') { outs.append(outputRow({ folderName: outDir && outDir.name }, o)); return; }
       outs.append(el('div', { class: 'out' }, el('div', { class: 'nm' }, o.name, el('small', null, fmtBytes(o.size))),
-        el('div', { class: 'row' }, el('button', { class: 'btn sm primary', onclick: function () { saveOutput({ id: cjob.id, outputs: cjob.outputs }, o); } }, icon(useShareSheet ? 'i-share' : 'i-download'), saveLabel))));
+        el('div', { class: 'row' }, saveButton([o], function () { saveOutput({ id: cjob.id, outputs: cjob.outputs }, o); }))));
     });
   } catch (e) {
     con.textContent += '\n' + (e.canceled ? (stalled ? '[stopped] ' + STALLED : '[canceled]') : 'Error: ' + e.message) + '\n';
@@ -2643,6 +2842,10 @@ function init() {
     if (busy) { toast('Wait for the running job to finish first.', 'err'); return; }
     if (!confirm('Delete all finished results from browser storage? Download anything you need first.')) return;
     for (var i = 0; i < jobs.length; i++) if (jobs[i].state === 'done') { await Store.removeJob(jobs[i].id); jobs[i].outputs = []; jobs[i].state = 'ready'; refreshJob(jobs[i], true); }
+    var earlier = Recovery.earlier;
+    Recovery.earlier = [];
+    for (var j = 0; j < earlier.length; j++) await Store.removeJob(earlier[j].jobId, earlier[j].session);
+    renderEarlier();
     try {
       var root = await navigator.storage.getDirectory();
       var work = await root.getDirectoryHandle('chdman-work', { create: true });
@@ -2663,7 +2866,9 @@ function init() {
   updateDock();
   updateChips();
 
-  Store.init().then(function () { updateChips(); });
+  Store.init().then(function () { updateChips(); renderEarlier(); });
+  initHosted();
+  initIosTip();
   Engine.ready().then(function () {
     setChip('chipEngine', 'Engine ready' + (Engine.simd ? '' : ' (compatibility mode)'), 'ok');
   }, function (e) {

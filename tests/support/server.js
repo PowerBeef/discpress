@@ -8,7 +8,9 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { FIXTURES, pageUnderTest } from './paths.js';
+import { FIXTURES, ROOT, pageUnderTest } from './paths.js';
+
+const WEB = path.join(ROOT, 'web');
 
 function withTestDb(html) {
   const extra = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'testdb.json'), 'utf8'));
@@ -37,6 +39,14 @@ http.createServer((req, res) => {
     }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
     res.end(html);
+    return;
+  }
+  // the hosted copy's other files (web/: service worker, manifest, icons), for tests of the hosted mode
+  const web = /^\/(sw\.js|manifest\.webmanifest|[\w-]+\.png)$/.exec(url);
+  if (web && fs.existsSync(path.join(WEB, web[1]))) {
+    const type = { js: 'text/javascript', webmanifest: 'application/manifest+json', png: 'image/png' }[web[1].split('.').pop()];
+    res.writeHead(200, { 'content-type': type, 'cache-control': 'no-store' });
+    res.end(fs.readFileSync(path.join(WEB, web[1])));
     return;
   }
   res.writeHead(404);

@@ -2,6 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- Nothing leaves the device: the page may not connect anywhere (connect-src 'none'), in the release file and
+     the hosted copy alike. Everything else it needs is inline, blob: (workers) or data: (icons); 'self' covers the
+     hosted copy's service worker, manifest and icons, and the eval sources compiling WebAssembly on older Safari. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; child-src 'self' blob:; style-src 'unsafe-inline'; img-src 'self' data: blob:; font-src data:; manifest-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="text-scale" content="scale">
 <script>
@@ -91,6 +95,8 @@
       <p class="drop-foot"><svg><use href="#i-lock"/></svg>Runs entirely on your device. Nothing is uploaded.</p>
     </div>
     <div class="note warn" id="memTip" hidden>This page cannot use the browser's private storage here (for example when it is opened as a local file), so results are kept in memory. That is fine for CDs; for large DVD images <button class="btn sm" id="memTipBtn" style="margin-left:4px">write results directly into a folder</button></div>
+    <div class="note warn" id="iosTip" hidden><b>Big games: use Safari.</b> Apps like this one usually can't download files, and the share sheet can't take files over 512 MB, so most DVD, PSP and PS2 results can't be saved here. Open Discpress in Safari at <a id="hostedLink" href="https://powerbeef.github.io/discpress/" target="_blank" rel="noopener">powerbeef.github.io/discpress</a>: results of any size download to Files there, and it works offline once added to the Home Screen. <button class="btn sm" id="copyHosted">Copy link</button> <button class="btn sm" id="iosTipOk">OK</button></div>
+    <div id="earlier" hidden></div>
     <div class="jobs" id="jobs"></div>
   </section>
 

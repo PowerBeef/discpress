@@ -177,6 +177,21 @@ test('an ISO can be switched between DVD and CD', async ({ app }) => {
   await app.run(card);
 });
 
+test('an identified PSP game is a DVD CHD, and the other type is only in Options', async ({ app }) => {
+  await app.open();
+  await app.add(fixture('psp-umd').add);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await expect(card.locator('.note.ident')).toContainText('ULUS-10080');
+  await expect(card.locator('.seg button', { hasText: 'CD CHD' })).toHaveCount(0);
+  await expect(card.locator('code.cmd')).toContainText('chdman createdvd');
+  await expect(card.locator('code.cmd')).toContainText('-hs 2048');
+  await card.locator('details.opts summary').click();
+  const field = card.locator('label.field', { hasText: 'Create as' });
+  await expect(field.locator('select')).toHaveValue('dvd');
+  await expect(field).toContainText('Sony PlayStation Portable games become DVD CHDs.');
+});
+
 // compressed ISOs (convert.spec: psp-cso, psp-cso2, psp-zso and ps2-cso)
 test('a compressed ISO can be converted as a CD', async ({ app }) => {
   await app.open();
@@ -185,7 +200,9 @@ test('a compressed ISO can be converted as a CD', async ({ app }) => {
   await app.settled(card);
   await expect(card.locator('.sub')).toContainText('ZSO compressed ISO');
   await expect(card.locator('code.cmd')).toContainText('chdman createdvd -i umd.iso');
-  await card.locator('.seg button', { hasText: 'CD CHD' }).click();
+  // identified as a PSP game, so the choice is in Options
+  await card.locator('details.opts summary').click();
+  await card.locator('label.field', { hasText: 'Create as' }).locator('select').selectOption({ label: 'CD CHD' });
   await expect(card.locator('code.cmd')).toContainText('chdman createcd -i umd.iso');
   await app.run(card);
   const [out] = await app.downloads(card);

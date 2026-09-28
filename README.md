@@ -14,6 +14,12 @@
       <img src="docs/brand/download-light.png" width="380" alt="Download Discpress: one HTML file, works offline">
     </picture>
   </a>
+  <a href="https://powerbeef.github.io/discpress/">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/brand/open-dark.png">
+      <img src="docs/brand/open-light.png" width="392" alt="Use Discpress online: best on iPhone and iPad, works offline">
+    </picture>
+  </a>
 </p>
 
 <p align="center">
@@ -67,8 +73,8 @@ The standard tool for making CHDs is **chdman**, a command-line program from the
 - **Official names.** For example `Metal Gear Solid (USA) (Disc 1).chd`. You can also type your own name, turn renaming off, or use **Rename** to fix the name of a CHD you already have.
 - **Fast.** Compression is spread over all your CPU cores, with WebAssembly SIMD when your browser supports it.
 - **Big files.** Results are written to the browser's private disk storage, so multi-gigabyte DVD images work. On desktop Chrome and Edge, results can go straight into a folder you choose.
-- **Made for phones.** It adapts to any screen, notch, rotation and text size, in light or dark mode. On iPhone and iPad, **Save to Files** uses the share sheet.
-- **Private and offline.** It's one self-contained HTML file with nothing to load from the internet.
+- **Made for phones.** It adapts to any screen, notch, rotation and text size, in light or dark mode. On iPhone and iPad, **Save to Files** uses the share sheet; results over 512 MB are downloaded instead, since the share sheet loads the whole file into memory. If iOS reloads the page before you save, finished results are still there, under **From your last visit**.
+- **Private and offline.** It's one self-contained HTML file with nothing to load from the internet. The online copy is that same file: once opened, it works offline too, and you can add it to your Home Screen.
 
 </details>
 
@@ -105,10 +111,11 @@ The standard tool for making CHDs is **chdman**, a command-line program from the
 ## Get started
 
 1. **[Download `discpress.html`](https://github.com/PowerBeef/discpress/releases/latest/download/discpress.html).** It's the whole app in one file.
+   On **iPhone and iPad**, open **[powerbeef.github.io/discpress](https://powerbeef.github.io/discpress/)** in Safari instead: the same file, published with each release. Safari can't open a local HTML file, and apps that can, such as Sitecase, can't save results over about 512 MB (most DVD, PSP and PS2 games). In Safari, results of any size download to Files → Downloads. Tap Share → **Add to Home Screen** to keep it as an app that works offline.
 2. **Open it.**
    - **Computer:** double-click it, and it opens in your browser.
    - **Android:** open it with Chrome or another browser.
-   - **iPhone and iPad:** save it to the Files app, then open it with an app that can run web pages, such as Sitecase.
+   - **iPhone and iPad:** the link above, in Safari.
 3. **Add your games.** Pick every file of a game together (the `.cue` *and* its `.bin` files), or drag them onto the page.
 4. **Press Start all**, then **Save** or **Download** each CHD when it's ready. Keep the page open while it works.
 
@@ -119,7 +126,7 @@ The standard tool for making CHDs is **chdman**, a command-line program from the
 <details>
 <summary><b>Are my games uploaded anywhere?</b></summary>
 <br>
-No. Discpress is a single file that runs entirely on your device. It makes no network requests and works in airplane mode.
+No. Discpress is a single file that runs entirely on your device. It makes no network requests and works in airplane mode: its Content-Security-Policy (`connect-src 'none'`) forbids the page any connection, in the downloaded file and in the copy on [powerbeef.github.io/discpress](https://powerbeef.github.io/discpress/) alike. That copy is the release file byte for byte; each release lists its SHA-256 (`discpress.html.sha256`), and the site has the same file, so you can compare them.
 </details>
 
 <details>
@@ -139,6 +146,8 @@ Yes. Discpress runs chdman from the official MAME 0.289 release, so the files ar
 | Firefox 111+ | Full |
 
 Older browsers keep results in memory instead of on disk, which limits how big a disc can be.
+
+On iPhone and iPad, use the [online copy](https://powerbeef.github.io/discpress/) in Safari. Apps that open HTML files, such as Sitecase, run it too, but they can't save results over about 512 MB (most DVD, PSP and PS2 games): the page tells you when that's the case. Lockdown Mode turns off WebAssembly, which Discpress needs.
 </details>
 
 <details>
@@ -189,7 +198,7 @@ source ~/emsdk/emsdk_env.sh
 - `tests/` has end-to-end UI tests (Playwright) that check every conversion against native chdman, plus conversion benchmarks. See [`tests/README.md`](tests/README.md).
 - To refresh the game database with the latest Redump data, run `./scripts/update-db.sh`, then `python3 scripts/assemble.py`.
 - The README graphics are rendered from `scripts/brand/brand.html` with `python3 scripts/brand/render.py` (needs Playwright).
-- Pushing a tag like `v1.0.0`, or running **Actions → Release → Run workflow**, publishes a GitHub release with `discpress.html` attached (see `.github/workflows/release.yml`). Release notes come from `.github/release-notes/<tag>.md` when that file exists.
+- Pushing a tag like `v1.0.0`, or running **Actions → Release → Run workflow**, publishes a GitHub release with `discpress.html` and its SHA-256 attached, and deploys the same file to GitHub Pages as the online copy (see `.github/workflows/release.yml` and [`web/README.md`](web/README.md)). Release notes come from `.github/release-notes/<tag>.md` when that file exists.
 
 </details>
 
@@ -200,11 +209,14 @@ source ~/emsdk/emsdk_env.sh
 | Path | What it is |
 |---|---|
 | `app/` | The web app: page, styles, UI, game identification, and the Web Worker that runs chdman |
-| `wasm/` | WebAssembly build: Makefile, link flags, the MAME patch, the parallel-compression helper, and a small SDL stub |
+| `engine/` | Discpress's chdman: MAME 0.289's chdman and the sources it links, with every change listed in `mame-0.289.diff`, plus libdeflate and the math FLAC needs |
+| `wasm/` | WebAssembly build: Makefile, link flags, the parallel-compression helper, ECM decoding, and a small SDL stub |
 | `db/` | Game database (`db.json.gz`) and the script that builds it from libretro-database |
-| `scripts/` | Fetch MAME, update the database, assemble the single HTML file, and render the brand graphics |
+| `web/` | What the online copy adds to `discpress.html`: offline service worker, web app manifest and icons |
+| `scripts/` | Fetch MAME, build native chdman, update the database, assemble the single HTML file, and render the brand graphics |
 | `dist/` | The ready-to-use `discpress.html` |
-| `docs/` | README graphics and screenshots |
+| `tests/` | End-to-end UI tests and benchmarks (Playwright) with synthetic disc images |
+| `docs/` | README graphics, research on the CHD format and chdman (`docs/chd/`), and on iPhone and iPad (`docs/ios/`) |
 
 </details>
 
@@ -213,8 +225,8 @@ source ~/emsdk/emsdk_env.sh
 <br>
 
 - **File access.** A custom Emscripten file system reads your files directly (no copy into memory) and writes results to the browser's private storage (OPFS), to a folder, or to memory.
-- **Multi-core compression.** Helper workers compress hunks in parallel. chdman's main loop gets a small hook and yields with Asyncify while the helpers work.
-- **iOS web views.** When a worker can't read the picked files (inside some file-viewer apps), the page streams them to the worker in chunks instead.
+- **Multi-core compression.** Helper workers compress hunks in parallel. chdman's commands are C++20 coroutines that pause while the helpers work; extracting and verifying use the helpers the same way to decompress ahead of the reads.
+- **iPhone and iPad.** When a worker can't read the picked files (inside some file-viewer apps), the page streams them to the worker in chunks instead. Threads are capped (2 on iPhone, 4 on iPad) to stay within iOS's memory limits, and a small record in the page's storage lets results survive a reload. [`docs/ios/`](docs/ios/README.md) explains iOS's limits and how Discpress works around them.
 - **Game identification.** It reads boot headers (IP.BIN, SYSTEM.CNF, PARAM.SFO, IPL.TXT and others) through ISO 9660, including inside existing CHDs, then matches the serial number, or the size and CRC-32, against the database.
 
 </details>
