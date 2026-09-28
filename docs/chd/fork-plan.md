@@ -231,7 +231,7 @@ Presets:
 
 ### Milestone 3: fidelity and verification (2–3 weeks)
 
-**Status: Redump's layout on extraction done** (`extractcd --redump`, the page's default for CDs). Real Redump cue sheets, 500 per system with synthetic bins, come back byte for byte through createcd and `extractcd --redump`: PS2 99.8%, PS1 98.4%, Naomi 100%, Dreamcast 94% (the rest are multi-session MIL-CDs), CDTV 92%, 53% of all 5,676. The others need the metadata below (CATALOG, FLAGS, INDEX ≥ 2, `CDI/2352`). The built-in database (libretro-database) has one ROM per game, so verifying every track needs Redump's own DATs.
+**Status: Redump's layout on extraction done** (`extractcd --redump`, the page's default for CDs). Real Redump cue sheets, 500 per system with synthetic bins, come back byte for byte through createcd and `extractcd --redump`: PS2 99.8%, PS1 98.4%, Naomi 100%, Dreamcast 94% (the rest are multi-session MIL-CDs), CDTV 92%, 53% of all 5,676. The others need the metadata below (CATALOG, FLAGS, INDEX ≥ 2, `CDI/2352`). The built-in database (libretro-database) has one ROM per game, so verifying every track needs Redump's own DATs. With it, **Verify** now also compares a CHD with Redump: the page extracts with Redump's layout into checksums only (the worker's `crc` output) and looks the files up by size and CRC-32, which checks the ISO, the only `.bin` or the main data track, and confirms the exact release.
 
 1. **Redump-exact extraction.**
    - Store CATALOG, ISRC, FLAGS, INDEX ≥ 2, the original track-type string and the original cue text as **non-checksummed metadata**, appended after the CD tags. The CHD SHA-1 is unchanged and every reader ignores them (C §2, §7).

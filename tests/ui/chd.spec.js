@@ -170,6 +170,32 @@ for (const threads of [1, 4]) {
   });
 }
 
+// After verifying, the CHD is compared with Redump: extracted with Redump's layout into checksums
+// only, and the file the database lists (the ISO, the only .bin, or the main data track) looked up.
+// Synthetic discs match only the test rows (tests/support/server.js); real rows show a mismatch.
+for (const [what, name, command, input, extra, testdb, text] of [
+  ['a CD that is the Redump dump', 'verified', 'createcd', 'verified.cue', [], true,
+    ['\u2713 The Redump dump.', 'The disc has the size and CRC-32 that Redump lists for Checksum Verified Game (USA).']],
+  ['a PSP DVD that is the Redump dump', 'umd', 'createdvd', 'umd.iso', ['-hs', '2048'], true,
+    ['\u2713 The Redump dump.', 'Redump lists for Checksum Verified PSP Game (USA).']],
+  ['a CD that is not', 'twine', 'createcd', 'twine.cue', [], false,
+    ['Not the Redump dump.', 'The disc has another size than what Redump lists for 007 - The World Is Not Enough (USA).']],
+  ['a multi-track CD that is not', 'mgs', 'createcd', 'mgs disc1.cue', [], false,
+    ['Not the Redump dump.', 'Track 1 has another size than what Redump lists for Metal Gear Solid (USA) (Disc 1)']],
+]) {
+  test(`verify compares the CHD with Redump: ${what}`, async ({ app }) => {
+    await app.open({ testdb });
+    await app.add([chdInput(name, command, input, extra)]);
+    const card = app.job(name);
+    await app.settled(card);
+    await card.locator('.seg button', { hasText: 'Verify' }).click();
+    await app.run(card);
+    await expect(card.locator('.result')).toContainText('Verified.');
+    for (const t of text) await expect(card.locator('.result')).toContainText(t);
+    if (text[0].startsWith('\u2713')) await expect(card.locator('.ident-how')).toHaveText('\u2713 Exact match in the Redump database (checksum verified)');
+  });
+}
+
 test('verify fails when the data does not match the checksum in the header', async ({ app }) => {
   // chdman 0.289 only prints the mismatch and exits 0, so the page reported "Verified."
   const good = chdInput('agent', 'createdvd', 'agent.iso');

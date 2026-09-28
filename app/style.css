@@ -315,6 +315,7 @@ details.opts[open] > .fields { margin-top: 10px; }
 .ptext b { color: var(--text); font-weight: 800; }
 
 /* results */
+.result { display: grid; gap: 8px; }
 .outs { display: grid; gap: 8px; }
 .out { display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 14px; border: 2px solid var(--ink); border-radius: 12px; background: var(--surface-2); }
 .out .nm { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 700; font-size: 0.9062rem; }

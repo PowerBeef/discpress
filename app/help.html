@@ -31,7 +31,7 @@
   <h2>Game identification and renaming</h2>
   <p>Every disc you add is examined to find its console (PlayStation 1/2/PSP, Saturn, Sega CD, Dreamcast, PC Engine CD, PC-FX, Neo Geo CD, 3DO, CD-i, Amiga CD32/CDTV, NAOMI and more) and its serial number, read from the disc's own boot files and headers.</p>
   <p>The game is then looked up in a built-in copy of the <a href="https://redump.org" target="_blank" rel="noopener">Redump</a> database (about 42,000 discs, via <a href="https://github.com/libretro/libretro-database" target="_blank" rel="noopener">libretro-database</a>, /*DBVER*/). When a track's size and CRC-32 checksum match, the dump is an exact, verified copy; otherwise the serial number is used. Results are named after the official title, for example <code>Metal Gear Solid (USA) (Disc 1) (Rev 1).chd</code>. You can turn this off in Settings or type your own name in Options.</p>
-  <p>For existing <code>.chd</code> files, choose <b>Rename</b> to save a copy with the official name.</p>
+  <p>For existing <code>.chd</code> files, choose <b>Rename</b> to save a copy with the official name. <b>Verify</b> checks the CHD's own checksums, then compares it with Redump without extracting it: the file the built-in database lists for the disc (its ISO, its only <code>.bin</code>, or its main data track) must have Redump's size and CRC-32.</p>
 </div>
 
 <div class="card">

@@ -436,6 +436,29 @@ StreamStore.prototype.finish = function (keep) {
   postMessage({ type: 's-close', id: this.id, size: total });
 };
 
+// An output that is only checksummed (outMode 'crc', to compare with Redump): the CRC-32 of the file
+// as written. extractcd and extractdvd write each file front to back; a write elsewhere makes the
+// checksum unknown.
+function CrcStore(backing) {
+  this.backing = backing;
+  this.sizeV = 0;
+  this.crc = 0;
+  this.inOrder = true;
+}
+CrcStore.prototype.write = function (src, pos) {
+  var M = this.backing.M, n = src.length;
+  if (pos !== this.sizeV) this.inOrder = false;
+  else if (M && src.buffer === M.HEAPU8.buffer) this.crc = M._crc32(this.crc, src.byteOffset, n) >>> 0; // zlib's, on chdman's buffer
+  else this.crc = (crcUpdate(this.crc ^ -1, src) ^ -1) >>> 0;
+  this.sizeV = Math.max(this.sizeV, pos + n);
+  return n;
+};
+CrcStore.prototype.read = function () { throw { errno: ERR.EIO }; };
+CrcStore.prototype.truncate = function (n) {
+  if (n !== this.sizeV) this.inOrder = false;
+  this.sizeV = n;
+};
+
 /* ---------------- Emscripten filesystem driver ---------------- */
 
 function makeFS(FS) {
@@ -571,13 +594,15 @@ async function makeBacking(msg) {
       postMessage({ type: 'notice', level: 'info', storage: 'mem', message: 'Disk storage unavailable (' + (err && err.name || err) + '); keeping results in memory.' });
     }
   }
-  var streaming = msg.outMode === 'stream';
-  return {
-    mode: streaming ? 'stream' : dir ? 'opfs' : 'mem',
+  var streaming = msg.outMode === 'stream', crcOnly = msg.outMode === 'crc';
+  var backing = {
+    mode: crcOnly ? 'crc' : streaming ? 'stream' : dir ? 'opfs' : 'mem',
+    M: null, // the module, once instantiated (CrcStore uses its crc32)
     create: function (name, writableCopy) {
       var slot = slots.find(function (s) { return !s.used; });
       var store;
-      if (streaming && !writableCopy) store = new StreamStore(name);
+      if (crcOnly && !writableCopy) store = new CrcStore(backing);
+      else if (streaming && !writableCopy) store = new StreamStore(name);
       else if (slot) { slot.used = true; store = new OpfsStore(slot); slot.store = store; }
       else store = new MemStore();
       store.name = name;
@@ -597,6 +622,10 @@ async function makeBacking(msg) {
     finalize: async function (keep) {
       var outputs = [];
       registry.forEach(function (st) {
+        if (st instanceof CrcStore) {
+          if (keep && !st.deleted) outputs.push({ name: st.name, size: st.sizeV, kind: 'crc', crc: st.inOrder ? ('00000000' + st.crc.toString(16).toUpperCase()).slice(-8) : null });
+          return;
+        }
         if (st instanceof StreamStore) {
           st.finish(keep);
           if (keep && !st.deleted) outputs.push({ name: st.name, size: st.sizeV, kind: 'disk', id: st.id });
@@ -621,6 +650,7 @@ async function makeBacking(msg) {
       return outputs;
     }
   };
+  return backing;
 }
 
 /* ---------------- input staging ----------------
@@ -1040,6 +1070,7 @@ async function runJob(msg) {
   });
 
   inStores.forEach(function (st) { if (st.store.setModule) st.store.setModule(M); });
+  backing.M = M;
   var FS = M.FS, CHDFS = makeFS(FS);
   FS.mkdir('/in');
   FS.mount(CHDFS, { files: inStores }, '/in');

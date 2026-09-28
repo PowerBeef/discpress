@@ -350,6 +350,7 @@ details.opts[open] > .fields { margin-top: 10px; }
 .ptext b { color: var(--text); font-weight: 800; }
 
 /* results */
+.result { display: grid; gap: 8px; }
 .outs { display: grid; gap: 8px; }
 .out { display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 14px; border: 2px solid var(--ink); border-radius: 12px; background: var(--surface-2); }
 .out .nm { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 700; font-size: 0.9062rem; }
@@ -685,7 +686,7 @@ body { overflow-x: clip; }
   <h2>Game identification and renaming</h2>
   <p>Every disc you add is examined to find its console (PlayStation 1/2/PSP, Saturn, Sega CD, Dreamcast, PC Engine CD, PC-FX, Neo Geo CD, 3DO, CD-i, Amiga CD32/CDTV, NAOMI and more) and its serial number, read from the disc's own boot files and headers.</p>
   <p>The game is then looked up in a built-in copy of the <a href="https://redump.org" target="_blank" rel="noopener">Redump</a> database (about 42,000 discs, via <a href="https://github.com/libretro/libretro-database" target="_blank" rel="noopener">libretro-database</a>, version 2026.08.01). When a track's size and CRC-32 checksum match, the dump is an exact, verified copy; otherwise the serial number is used. Results are named after the official title, for example <code>Metal Gear Solid (USA) (Disc 1) (Rev 1).chd</code>. You can turn this off in Settings or type your own name in Options.</p>
-  <p>For existing <code>.chd</code> files, choose <b>Rename</b> to save a copy with the official name.</p>
+  <p>For existing <code>.chd</code> files, choose <b>Rename</b> to save a copy with the official name. <b>Verify</b> checks the CHD's own checksums, then compares it with Redump without extracting it: the file the built-in database lists for the disc (its ISO, its only <code>.bin</code>, or its main data track) must have Redump's size and CRC-32.</p>
 </div>
 
 <div class="card">
@@ -4208,6 +4209,29 @@ StreamStore.prototype.finish = function (keep) {
   postMessage({ type: 's-close', id: this.id, size: total });
 };
 
+// An output that is only checksummed (outMode 'crc', to compare with Redump): the CRC-32 of the file
+// as written. extractcd and extractdvd write each file front to back; a write elsewhere makes the
+// checksum unknown.
+function CrcStore(backing) {
+  this.backing = backing;
+  this.sizeV = 0;
+  this.crc = 0;
+  this.inOrder = true;
+}
+CrcStore.prototype.write = function (src, pos) {
+  var M = this.backing.M, n = src.length;
+  if (pos !== this.sizeV) this.inOrder = false;
+  else if (M && src.buffer === M.HEAPU8.buffer) this.crc = M._crc32(this.crc, src.byteOffset, n) >>> 0; // zlib's, on chdman's buffer
+  else this.crc = (crcUpdate(this.crc ^ -1, src) ^ -1) >>> 0;
+  this.sizeV = Math.max(this.sizeV, pos + n);
+  return n;
+};
+CrcStore.prototype.read = function () { throw { errno: ERR.EIO }; };
+CrcStore.prototype.truncate = function (n) {
+  if (n !== this.sizeV) this.inOrder = false;
+  this.sizeV = n;
+};
+
 /* ---------------- Emscripten filesystem driver ---------------- */
 
 function makeFS(FS) {
@@ -4343,13 +4367,15 @@ async function makeBacking(msg) {
       postMessage({ type: 'notice', level: 'info', storage: 'mem', message: 'Disk storage unavailable (' + (err && err.name || err) + '); keeping results in memory.' });
     }
   }
-  var streaming = msg.outMode === 'stream';
-  return {
-    mode: streaming ? 'stream' : dir ? 'opfs' : 'mem',
+  var streaming = msg.outMode === 'stream', crcOnly = msg.outMode === 'crc';
+  var backing = {
+    mode: crcOnly ? 'crc' : streaming ? 'stream' : dir ? 'opfs' : 'mem',
+    M: null, // the module, once instantiated (CrcStore uses its crc32)
     create: function (name, writableCopy) {
       var slot = slots.find(function (s) { return !s.used; });
       var store;
-      if (streaming && !writableCopy) store = new StreamStore(name);
+      if (crcOnly && !writableCopy) store = new CrcStore(backing);
+      else if (streaming && !writableCopy) store = new StreamStore(name);
       else if (slot) { slot.used = true; store = new OpfsStore(slot); slot.store = store; }
       else store = new MemStore();
       store.name = name;
@@ -4369,6 +4395,10 @@ async function makeBacking(msg) {
     finalize: async function (keep) {
       var outputs = [];
       registry.forEach(function (st) {
+        if (st instanceof CrcStore) {
+          if (keep && !st.deleted) outputs.push({ name: st.name, size: st.sizeV, kind: 'crc', crc: st.inOrder ? ('00000000' + st.crc.toString(16).toUpperCase()).slice(-8) : null });
+          return;
+        }
         if (st instanceof StreamStore) {
           st.finish(keep);
           if (keep && !st.deleted) outputs.push({ name: st.name, size: st.sizeV, kind: 'disk', id: st.id });
@@ -4393,6 +4423,7 @@ async function makeBacking(msg) {
       return outputs;
     }
   };
+  return backing;
 }
 
 /* ---------------- input staging ----------------
@@ -4812,6 +4843,7 @@ async function runJob(msg) {
   });
 
   inStores.forEach(function (st) { if (st.store.setModule) st.store.setModule(M); });
+  backing.M = M;
   var FS = M.FS, CHDFS = makeFS(FS);
   FS.mkdir('/in');
   FS.mount(CHDFS, { files: inStores }, '/in');
@@ -6567,6 +6599,18 @@ function outBase(job) {
   var s = (job.opts.out || job.title || 'output').replace(/[\/\\:*?"<>|]+/g, '_').trim();
   return s || 'output';
 }
+// a CHD job's inputs for chdman, with its parent CHD if it has one
+function chdInputs(job) {
+  var name = job.files[0].name, r = { name: name, inputs: [{ name: name, blob: job.files[0].file }], parentArgs: [], parentDisp: [] };
+  if (job.parentJob) {
+    var pn = job.parentJob.files[0].name;
+    if (pn === name) pn = 'parent-' + pn;
+    r.inputs.push({ name: pn, blob: job.parentJob.files[0].file });
+    r.parentArgs = ['-ip', '/in/' + pn];
+    r.parentDisp = ['-ip', job.parentJob.files[0].name];
+  }
+  return r;
+}
 function buildJob(job) {
   var args = [], inputs = [], writable = [], slots = 3, helpers = 0, expected = 0, display = [];
   var o = job.opts, ob = outBase(job);
@@ -6606,16 +6650,9 @@ function buildJob(job) {
     helpers = nt > 1 && c !== 'none' ? nt : 0;
     expected = jobInputBytes(job);
   } else {
-    var info = job.info || {}, name = job.files[0].name;
-    inputs.push({ name: name, blob: job.files[0].file });
-    var parentArgs = [], parentDisp = [];
-    if (job.parentJob) {
-      var pn = job.parentJob.files[0].name;
-      if (pn === name) pn = 'parent-' + pn;
-      inputs.push({ name: pn, blob: job.parentJob.files[0].file });
-      parentArgs = ['-ip', '/in/' + pn];
-      parentDisp = ['-ip', job.parentJob.files[0].name];
-    }
+    var info = job.info || {}, ci = chdInputs(job), name = ci.name;
+    inputs = ci.inputs;
+    var parentArgs = ci.parentArgs, parentDisp = ci.parentDisp;
     if (job.action === 'rename') {
       return { args: [], inputs: [], writable: [], slots: 0, helpers: 0, outMode: 'mem', expected: 0, cmdline: '(no processing: the CHD is saved again as "' + outBase(job) + '.chd")', rename: true };
     }
@@ -6863,6 +6900,9 @@ function renderResult(job) {
   box.hidden = false;
   if (job.kind === 'chd' && job.action === 'verify') {
     box.append(el('div', { class: 'note ok' }, el('b', null, 'Verified. '), 'The data matches the SHA-1 checksums stored in the CHD.'));
+    var rd = job.redump, what = rd && (rd.track ? 'Track ' + rd.track : 'The disc');
+    if (rd && rd.match) box.append(el('div', { class: 'note ok' }, el('b', null, '\u2713 The Redump dump. '), what + ' has the size and CRC-32 that Redump lists for ' + rd.entry.name + (rd.track ? ', the track the built-in database has' : '') + '.'));
+    else if (rd) box.append(el('div', { class: 'note warn' }, el('b', null, 'Not the Redump dump. '), what + (rd.otherSize ? ' has another size than' : ' differs from') + ' what Redump lists for ' + rd.entry.name + '. It may be another release or a modified copy.'));
   } else if (job.kind === 'chd' && job.action === 'info' && job.lastInfo) {
     var kv = el('dl', { class: 'kv' });
     var skip = { 'Input file': 1 };
@@ -7054,6 +7094,7 @@ async function runJobNow(job) {
   job.stalled = false;
   job.log = [];
   job.outputs = [];
+  job.redump = null;
   refreshJob(job, false);
   setProgress(job, null, 'Starting…');
   try { await Engine.ready(); }
@@ -7141,6 +7182,7 @@ async function runJobNow(job) {
     job.elapsed = performance.now() - t0;
     if (res.error) appendLog(job, res.error);
     if (res.code === 0) {
+      if (job.kind === 'chd' && job.action === 'verify') await redumpCheck(job);
       job.state = 'done';
       job.folderName = spec.outMode === 'stream' && outDir ? outDir.name : '';
       job.outputs = (res.outputs || []).filter(function (o) { return o.name; }).sort(function (a, b) {
@@ -7166,6 +7208,54 @@ async function runJobNow(job) {
     Store.removeJob(job.id);
   }
   refreshJob(job, true);
+}
+
+/* ---------- comparing a CHD with Redump ---------- */
+// After a successful verify: extract with Redump's layout into checksums only (the worker's 'crc'
+// output, no files), and look the files up in the database by size and CRC-32. The database lists
+// one file per disc: the ISO, the only .bin, or the main data track's.
+async function redumpCheck(job) {
+  job.redump = null;
+  var type = job.info && job.info.type;
+  if (!/^(cd|gdrom|dvd)$/.test(type)) return;
+  var ci = chdInputs(job), cd = type !== 'dvd', res;
+  var args = [cd ? 'extractcd' : 'extractdvd', '-i', '/in/' + ci.name, '-o', '/out/check' + (cd ? '.cue' : '.iso')].concat(cd ? ['--redump'] : [], ci.parentArgs);
+  setProgress(job, null, 'Comparing with Redump…');
+  try {
+    await GameDB.ready();
+    job.run = Engine.run({
+      jobId: job.id, args: args, inputs: ci.inputs, slots: 0, helpers: readHelpers(), outMode: 'crc',
+      onLine: function () {},
+      onProgress: function (t) {
+        var m = /([\d.]+)% complete/.exec(t);
+        if (m) setProgress(job, parseFloat(m[1]), 'Comparing with Redump ' + parseFloat(m[1]).toFixed(1) + '%');
+      }
+    });
+    res = await job.run.promise;
+  } catch (e) {
+    if (e.canceled) throw e;
+    appendLog(job, 'Could not compare with Redump: ' + e.message);
+    return;
+  }
+  if (res.code !== 0) { appendLog(job, 'Could not compare with Redump (chdman exited with code ' + res.code + ').'); return; }
+  var files = (res.outputs || []).filter(function (o) { return o.crc && !/\.cue$/i.test(o.name); });
+  var whole = files.length === 1, id = job.ident || {};
+  var trackOf = function (n) { var m = /\(Track 0*(\d+)\)\.\w+$/.exec(n); return m ? m[1] : ''; };
+  var hits = [];
+  files.forEach(function (f) { GameDB.size(f.size).forEach(function (e) { if (e.crc === f.crc) hits.push({ e: e, f: f }); }); });
+  if (hits.length) {
+    var serial = normSerial(id.serial), hit = hits.find(function (h) { return serial && normSerial(h.e.serial) === serial; }) || hits[0];
+    var names = hits.map(function (h) { return h.e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
+    job.redump = { match: true, entry: hit.e, track: whole ? '' : trackOf(hit.f.name) };
+    // the checksum settles which release it is
+    var entry = names.length > 1 ? Object.assign({}, hit.e, { alternatives: names }) : hit.e;
+    job.ident = Object.assign({}, id, { sys: hit.e.sys, entry: entry, name: hit.e.name, method: 'hash', serial: id.serial || hit.e.serial });
+    applyIdent(job);
+    return;
+  }
+  // not Redump's: the file Redump lists for the identified release differs
+  var e = id.entry, f = e && (whole ? files[0] : files.find(function (x) { return trackOf(x.name) === String(e.track || 1); }));
+  if (f) job.redump = { match: false, entry: e, track: whole ? '' : trackOf(f.name), otherSize: f.size !== e.size };
 }
 
 async function acquireWake() {

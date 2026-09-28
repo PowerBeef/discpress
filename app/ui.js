@@ -1150,6 +1150,18 @@ function outBase(job) {
   var s = (job.opts.out || job.title || 'output').replace(/[\/\\:*?"<>|]+/g, '_').trim();
   return s || 'output';
 }
+// a CHD job's inputs for chdman, with its parent CHD if it has one
+function chdInputs(job) {
+  var name = job.files[0].name, r = { name: name, inputs: [{ name: name, blob: job.files[0].file }], parentArgs: [], parentDisp: [] };
+  if (job.parentJob) {
+    var pn = job.parentJob.files[0].name;
+    if (pn === name) pn = 'parent-' + pn;
+    r.inputs.push({ name: pn, blob: job.parentJob.files[0].file });
+    r.parentArgs = ['-ip', '/in/' + pn];
+    r.parentDisp = ['-ip', job.parentJob.files[0].name];
+  }
+  return r;
+}
 function buildJob(job) {
   var args = [], inputs = [], writable = [], slots = 3, helpers = 0, expected = 0, display = [];
   var o = job.opts, ob = outBase(job);
@@ -1189,16 +1201,9 @@ function buildJob(job) {
     helpers = nt > 1 && c !== 'none' ? nt : 0;
     expected = jobInputBytes(job);
   } else {
-    var info = job.info || {}, name = job.files[0].name;
-    inputs.push({ name: name, blob: job.files[0].file });
-    var parentArgs = [], parentDisp = [];
-    if (job.parentJob) {
-      var pn = job.parentJob.files[0].name;
-      if (pn === name) pn = 'parent-' + pn;
-      inputs.push({ name: pn, blob: job.parentJob.files[0].file });
-      parentArgs = ['-ip', '/in/' + pn];
-      parentDisp = ['-ip', job.parentJob.files[0].name];
-    }
+    var info = job.info || {}, ci = chdInputs(job), name = ci.name;
+    inputs = ci.inputs;
+    var parentArgs = ci.parentArgs, parentDisp = ci.parentDisp;
     if (job.action === 'rename') {
       return { args: [], inputs: [], writable: [], slots: 0, helpers: 0, outMode: 'mem', expected: 0, cmdline: '(no processing: the CHD is saved again as "' + outBase(job) + '.chd")', rename: true };
     }
@@ -1446,6 +1451,9 @@ function renderResult(job) {
   box.hidden = false;
   if (job.kind === 'chd' && job.action === 'verify') {
     box.append(el('div', { class: 'note ok' }, el('b', null, 'Verified. '), 'The data matches the SHA-1 checksums stored in the CHD.'));
+    var rd = job.redump, what = rd && (rd.track ? 'Track ' + rd.track : 'The disc');
+    if (rd && rd.match) box.append(el('div', { class: 'note ok' }, el('b', null, '\u2713 The Redump dump. '), what + ' has the size and CRC-32 that Redump lists for ' + rd.entry.name + (rd.track ? ', the track the built-in database has' : '') + '.'));
+    else if (rd) box.append(el('div', { class: 'note warn' }, el('b', null, 'Not the Redump dump. '), what + (rd.otherSize ? ' has another size than' : ' differs from') + ' what Redump lists for ' + rd.entry.name + '. It may be another release or a modified copy.'));
   } else if (job.kind === 'chd' && job.action === 'info' && job.lastInfo) {
     var kv = el('dl', { class: 'kv' });
     var skip = { 'Input file': 1 };
@@ -1637,6 +1645,7 @@ async function runJobNow(job) {
   job.stalled = false;
   job.log = [];
   job.outputs = [];
+  job.redump = null;
   refreshJob(job, false);
   setProgress(job, null, 'Starting…');
   try { await Engine.ready(); }
@@ -1724,6 +1733,7 @@ async function runJobNow(job) {
     job.elapsed = performance.now() - t0;
     if (res.error) appendLog(job, res.error);
     if (res.code === 0) {
+      if (job.kind === 'chd' && job.action === 'verify') await redumpCheck(job);
       job.state = 'done';
       job.folderName = spec.outMode === 'stream' && outDir ? outDir.name : '';
       job.outputs = (res.outputs || []).filter(function (o) { return o.name; }).sort(function (a, b) {
@@ -1749,6 +1759,54 @@ async function runJobNow(job) {
     Store.removeJob(job.id);
   }
   refreshJob(job, true);
+}
+
+/* ---------- comparing a CHD with Redump ---------- */
+// After a successful verify: extract with Redump's layout into checksums only (the worker's 'crc'
+// output, no files), and look the files up in the database by size and CRC-32. The database lists
+// one file per disc: the ISO, the only .bin, or the main data track's.
+async function redumpCheck(job) {
+  job.redump = null;
+  var type = job.info && job.info.type;
+  if (!/^(cd|gdrom|dvd)$/.test(type)) return;
+  var ci = chdInputs(job), cd = type !== 'dvd', res;
+  var args = [cd ? 'extractcd' : 'extractdvd', '-i', '/in/' + ci.name, '-o', '/out/check' + (cd ? '.cue' : '.iso')].concat(cd ? ['--redump'] : [], ci.parentArgs);
+  setProgress(job, null, 'Comparing with Redump…');
+  try {
+    await GameDB.ready();
+    job.run = Engine.run({
+      jobId: job.id, args: args, inputs: ci.inputs, slots: 0, helpers: readHelpers(), outMode: 'crc',
+      onLine: function () {},
+      onProgress: function (t) {
+        var m = /([\d.]+)% complete/.exec(t);
+        if (m) setProgress(job, parseFloat(m[1]), 'Comparing with Redump ' + parseFloat(m[1]).toFixed(1) + '%');
+      }
+    });
+    res = await job.run.promise;
+  } catch (e) {
+    if (e.canceled) throw e;
+    appendLog(job, 'Could not compare with Redump: ' + e.message);
+    return;
+  }
+  if (res.code !== 0) { appendLog(job, 'Could not compare with Redump (chdman exited with code ' + res.code + ').'); return; }
+  var files = (res.outputs || []).filter(function (o) { return o.crc && !/\.cue$/i.test(o.name); });
+  var whole = files.length === 1, id = job.ident || {};
+  var trackOf = function (n) { var m = /\(Track 0*(\d+)\)\.\w+$/.exec(n); return m ? m[1] : ''; };
+  var hits = [];
+  files.forEach(function (f) { GameDB.size(f.size).forEach(function (e) { if (e.crc === f.crc) hits.push({ e: e, f: f }); }); });
+  if (hits.length) {
+    var serial = normSerial(id.serial), hit = hits.find(function (h) { return serial && normSerial(h.e.serial) === serial; }) || hits[0];
+    var names = hits.map(function (h) { return h.e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
+    job.redump = { match: true, entry: hit.e, track: whole ? '' : trackOf(hit.f.name) };
+    // the checksum settles which release it is
+    var entry = names.length > 1 ? Object.assign({}, hit.e, { alternatives: names }) : hit.e;
+    job.ident = Object.assign({}, id, { sys: hit.e.sys, entry: entry, name: hit.e.name, method: 'hash', serial: id.serial || hit.e.serial });
+    applyIdent(job);
+    return;
+  }
+  // not Redump's: the file Redump lists for the identified release differs
+  var e = id.entry, f = e && (whole ? files[0] : files.find(function (x) { return trackOf(x.name) === String(e.track || 1); }));
+  if (f) job.redump = { match: false, entry: e, track: whole ? '' : trackOf(f.name), otherSize: f.size !== e.size };
 }
 
 async function acquireWake() {
