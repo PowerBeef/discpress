@@ -100,6 +100,18 @@ test('verify passes on a good CHD and fails on a damaged one', async ({ app }) =
   }
 });
 
+test('verify fails when the data does not match the checksum in the header', async ({ app }) => {
+  // chdman 0.289 only prints the mismatch and exits 0, so the page reported "Verified."
+  const good = chdInput('agent', 'createdvd', 'agent.iso');
+  const b = fs.readFileSync(path.join(FIXTURES, good));
+  b[64] ^= 0xff; // first byte of the raw SHA-1 in the CHD v5 header
+  fs.writeFileSync(path.join(FIXTURES, 'chd', 'badsum.chd'), b);
+  const card = await openChd(app, 'chd/badsum.chd', 'badsum');
+  await card.locator('.seg button', { hasText: 'Verify' }).click();
+  await app.run(card, { expectState: 'error' });
+  await expect(card).toContainText('Verification failed.');
+});
+
 test('info shows the same checksums as desktop chdman', async ({ app }) => {
   const rel = chdInput('agent', 'createdvd', 'agent.iso');
   const card = await openChd(app, rel, 'agent');

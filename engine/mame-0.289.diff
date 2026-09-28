@@ -248,7 +248,13 @@
  bool utf8_is_valid_string(const char *utf8string);
 --- a/src/tools/chdman.cpp
 +++ b/src/tools/chdman.cpp
-@@ -27,8 +27,10 @@
+@@ -22,13 +22,17 @@
+ #include "strformat.h"
+ #include "vbiparse.h"
+ 
++#include <algorithm>
+ #include <array>
+ #include <cassert>
  #include <cctype>
  #include <cstdio>
  #include <cstdlib>
@@ -256,10 +262,11 @@
  #include <cstring>
  #include <ctime>
 +#include <exception>
++#include <filesystem>
  #include <iostream>
  #include <limits>
  #include <memory>
-@@ -41,11 +43,100 @@
+@@ -41,11 +45,100 @@
  #include <utility>
  #include <vector>
  
@@ -360,7 +367,7 @@
  //  CONSTANTS & DEFINES
  //**************************************************************************
  // MINGW has adopted the MSVC formatting for 64-bit ints as of GCC 4.4 and deprecated it as of GCC 9.3
-@@ -141,12 +232,12 @@
+@@ -141,12 +234,12 @@
  
  static void do_info(parameters_map &params);
  static void do_verify(parameters_map &params);
@@ -379,7 +386,7 @@
  static void do_extract_raw(parameters_map &params);
  static void do_extract_cd(parameters_map &params);
  static void do_extract_ld(parameters_map &params);
-@@ -214,10 +305,19 @@
+@@ -214,10 +307,19 @@
  
  // ======================> command_description
  
@@ -400,7 +407,23 @@
  	const char *description;
  	const char *valid_options[16];
  };
-@@ -1498,7 +1598,7 @@
+@@ -1285,6 +1387,15 @@
+ 
+ static void check_existing_output_file(const parameters_map &params, std::string_view filename)
+ {
++	// Discpress: never write over an input (upstream, copy -i x -o x -f destroys x)
++	for (const char *option : { OPTION_INPUT, OPTION_INPUT_PARENT, OPTION_OUTPUT_PARENT })
++	{
++		const auto input = params.find(option);
++		std::error_code ec;
++		if ((input != params.end()) && std::filesystem::equivalent(std::filesystem::path(filename), std::filesystem::path(*input->second), ec))
++			report_error(1, "Error: output file (%s) is also an input file", filename);
++	}
++
+ 	if (params.find(OPTION_OUTPUT_FORCE) == params.end())
+ 	{
+ 		util::core_file::ptr file;
+@@ -1498,7 +1609,7 @@
  //  compress_common - standard compression loop
  //-------------------------------------------------
  
@@ -409,7 +432,7 @@
  {
  	// begin compressing
  	chd.compress_begin();
-@@ -1507,10 +1607,13 @@
+@@ -1507,10 +1618,13 @@
  	double complete, ratio;
  	std::error_condition err;
  	while ((err = chd.compress_continue(complete, ratio)) == chd_file::error::WALKING_PARENT || err == chd_file::error::COMPRESSING)
@@ -423,7 +446,40 @@
  
  	// handle errors
  	if (err)
-@@ -1879,7 +1982,7 @@
+@@ -1830,7 +1944,8 @@
+ 	}
+ 	util::sha1_t computed_sha1 = rawsha1.finish();
+ 
+-	// finish up
++	// finish up (Discpress: a mismatch is a failure unless --fix corrected it; upstream exits 0)
++	bool mismatch = false;
+ 	if (raw_sha1 != computed_sha1)
+ 	{
+ 		util::stream_format(std::cerr, "Error: Raw SHA1 in header = %s\n", raw_sha1.as_string());
+@@ -1844,6 +1959,8 @@
+ 				report_error(1, "Error updating SHA1: %s", err.message());
+ 			util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
+ 		}
++		else
++			mismatch = true;
+ 	}
+ 	else
+ 	{
+@@ -1868,9 +1985,13 @@
+ 						report_error(1, "Error updating SHA1: %s", err.message());
+ 					util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
+ 				}
++				else
++					mismatch = true;
+ 			}
+ 		}
+ 	}
++	if (mismatch)
++		report_error(1, "Verification failed");
+ }
+ 
+ 
+@@ -1879,7 +2000,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -432,7 +488,16 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -1943,7 +2046,7 @@
+@@ -1894,6 +2015,8 @@
+ 	if (unit_size_str != params.end())
+ 	{
+ 		unit_size = parse_number(unit_size_str->second->c_str());
++		if (unit_size == 0)
++			report_error(1, "Invalid unit size: %s", *unit_size_str->second);
+ 		if (output_parent.opened() && (output_parent.unit_bytes() != unit_size))
+ 			report_error(1, "Specified unit size %u bytes does not match output parent CHD unit size %u bytes", unit_size, output_parent.unit_bytes());
+ 	}
+@@ -1943,7 +2066,7 @@
  			chd->clone_all_metadata(output_parent);
  
  		// compress it generically
@@ -441,7 +506,7 @@
  	}
  	catch (...)
  	{
-@@ -1959,7 +2062,7 @@
+@@ -1959,7 +2082,7 @@
  //  disk image from a raw file
  //-------------------------------------------------
  
@@ -450,7 +515,16 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2147,7 +2250,7 @@
+@@ -2008,6 +2131,8 @@
+ 		if (template_str != params.end())
+ 			report_error(1, "Sector size cannot be specified separately when a template is specified");
+ 		sector_size = parse_number(sectorsize_str->second->c_str());
++		if (sector_size == 0)
++			report_error(1, "Invalid sector size: %s", *sectorsize_str->second);
+ 	}
+ 	if (output_parent.opened() && (output_parent.unit_bytes() != sector_size))
+ 		report_error(1, "Sector size %u bytes does not match output parent CHD sector size %u bytes", sector_size, output_parent.unit_bytes());
+@@ -2147,7 +2272,7 @@
  
  		// compress it generically
  		if (input_file)
@@ -459,7 +533,7 @@
  	}
  	catch (...)
  	{
-@@ -2163,7 +2266,7 @@
+@@ -2163,7 +2288,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -468,7 +542,7 @@
  {
  	// process input file
  	cdrom_file::track_input_info track_info;
-@@ -2227,7 +2330,7 @@
+@@ -2227,7 +2352,7 @@
  			report_error(1, "Error adding CD metadata: %s", err.message());
  
  		// compress it generically
@@ -477,7 +551,7 @@
  	}
  	catch (...)
  	{
-@@ -2243,7 +2346,7 @@
+@@ -2243,7 +2368,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -486,7 +560,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2295,7 +2398,7 @@
+@@ -2295,7 +2420,7 @@
  			report_error(1, "Error adding DVD metadata: %s", err.message());
  
  		// compress it generically
@@ -495,7 +569,7 @@
  	}
  	catch (...)
  	{
-@@ -2311,7 +2414,7 @@
+@@ -2311,7 +2436,7 @@
  //  input AVI file and metadata
  //-------------------------------------------------
  
@@ -504,7 +578,7 @@
  {
  	// process input file
  	avi_file::ptr input_file;
-@@ -2399,7 +2502,7 @@
+@@ -2399,7 +2524,7 @@
  			report_error(1, "Error adding AV metadata: %s\n", err.message());
  
  		// create the compressor and then run it generically
@@ -513,7 +587,7 @@
  
  		// write the final LD metadata
  		if (info.height == 524/2 || info.height == 624/2)
-@@ -2456,7 +2559,7 @@
+@@ -2456,7 +2581,7 @@
  //  another CHD
  //-------------------------------------------------
  
@@ -522,7 +596,7 @@
  {
  	// parse out input files
  	chd_file input_parent_chd;
-@@ -2547,7 +2650,7 @@
+@@ -2547,7 +2672,7 @@
  		}
  
  		// compress it generically
@@ -531,7 +605,28 @@
  	}
  	catch (...)
  	{
-@@ -3425,10 +3528,33 @@
+@@ -2646,7 +2771,9 @@
+ 	chd_file input_chd;
+ 	parse_input_chd_parameters(params, input_chd, input_parent_chd);
+ 
+-	// further process input file
++	// further process input file (Discpress: cdrom_file throws nullptr for a CHD that is not a CD)
++	if (input_chd.check_is_cd() && input_chd.check_is_gd())
++		report_error(1, "Input CHD is not a CD-ROM or GD-ROM; extract it with extractdvd, extracthd or extractraw");
+ 	cdrom_file *cdrom = new cdrom_file(&input_chd);
+ 	const cdrom_file::toc &toc = cdrom->get_toc();
+ 
+@@ -3387,7 +3514,8 @@
+ 	{
+ 		// delete the output file
+ 		output_file.reset();
+-		osd_file::remove(*output_file_str->second);
++		if (output_file_str != params.end())
++			osd_file::remove(*output_file_str->second);
+ 		throw;
+ 	}
+ }
+@@ -3425,14 +3553,39 @@
  //  main - entry point
  //-------------------------------------------------
  
@@ -546,7 +641,8 @@
 +	parameters_map parameters;
 +	chdman_task task;
 +};
-+
+ 
+-	// print the header
 +std::unique_ptr<chdman_run> s_run;
 +constexpr int CHDMAN_PAUSED = -1;
 +
@@ -564,10 +660,17 @@
 +static int chdman_parse(int argc, char *argv[])
 +{
 +	const std::vector<std::string> args = osd_get_command_line(argc, argv);
- 
- 	// print the header
++
++	// print the header (Discpress: on stderr when stdout carries data, i.e. dumpmeta without an output file)
  	extern const char build_version[];
-@@ -3459,7 +3585,7 @@
+-	util::stream_format(std::cout, "chdman - MAME Compressed Hunks of Data (CHD) manager %s\n", build_version);
++	const bool data_on_stdout = (args.size() >= 2) && (args[1] == COMMAND_DUMP_METADATA)
++			&& std::none_of(args.begin(), args.end(), [] (const std::string &arg) { return (arg == "-o") || (arg == "--" OPTION_OUTPUT); });
++	util::stream_format(data_on_stdout ? std::cerr : std::cout, "chdman - MAME Compressed Hunks of Data (CHD) manager %s\n", build_version);
+ 
+ 	// handle help specially
+ 	if (args.size() < 2)
+@@ -3459,7 +3612,7 @@
  				return print_help(args[0], desc);
  
  			// otherwise, verify the parameters
@@ -576,7 +679,7 @@
  			while (argnum < args.size())
  			{
  				// should be an option name
-@@ -3519,30 +3645,80 @@
+@@ -3519,30 +3672,86 @@
  					return print_help(args[0], desc, "Required parameters missing");
  			}
  
@@ -648,6 +751,12 @@
 +	catch (std::exception& ex)
 +	{
 +		util::stream_format(std::cerr, "Unhandled exception: %s\n", ex.what());
++		result = 1;
++	}
++	catch (...)
++	{
++		// Discpress: upstream terminates here (e.g. cdrom_file throws nullptr)
++		util::stream_format(std::cerr, "Unhandled exception\n");
 +		result = 1;
 +	}
 +	s_run.reset();

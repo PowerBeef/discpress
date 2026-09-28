@@ -11,6 +11,13 @@ The paths mirror MAME's, so every file can be compared with its original. **[`ma
   - In the browser, the page starts a command with `chdman_begin` and calls `chdman_resume` whenever the compression loop pauses to let helper workers' results arrive. This needs no Asyncify.
   - Natively nothing pauses and `main` runs each command straight through, with the same output, messages and exit codes as upstream.
 - **`unicode.cpp`/`.h`:** the functions that needed utf8proc are removed; nothing in chdman used them.
+- **Fixes to 0.289's failure handling (`chdman.cpp`); output for valid input is unchanged:**
+  - `verify` exits 1 when the data doesn't match the header's SHA-1, unless `--fix` corrects it. Upstream exits 0, so scripts and the page reported success.
+  - An output is never written over an input: `copy -i x -o x -f` used to truncate `x` and then delete it.
+  - `extractcd` of a CHD that isn't a CD, and a unit or sector size of 0, are errors (exit 1). Upstream aborts on `throw nullptr` or divides by zero.
+  - `dumpmeta` without `-o` prints its banner on stderr, so stdout carries only the metadata.
+  - Any other unexpected exception is an error instead of a crash.
+  - `tests/ui/engine.spec.js` compares each of these with upstream.
 
 ## Contents
 

@@ -65,6 +65,29 @@ for (const threads of [1, 4]) {
   });
 }
 
+// chdman 0.289 aborts (throw nullptr) or divides by zero on these; the engine reports an error instead
+for (const [label, input, command, message] of [
+  ['extracting a DVD CHD as a CD', 'dvd', 'chdman extractcd -i agent-dvd.chd -o out.cue', 'is not a CD-ROM or GD-ROM'],
+  ['a unit size of 0', 'agent.iso', 'chdman createraw -i agent.iso -o raw.chd -us 0', 'Invalid unit size'],
+]) {
+  test(`${label} is an error, not a crash`, async ({ app, page }) => {
+    let file = input;
+    if (input === 'dvd') {
+      test.skip(!nativeChdman(), 'needs native chdman to make the CHD');
+      fs.mkdirSync(path.join(FIXTURES, 'chd'), { recursive: true });
+      fs.copyFileSync(reference('createdvd', 'agent.iso'), path.join(FIXTURES, 'chd', 'agent-dvd.chd'));
+      file = 'chd/agent-dvd.chd';
+    }
+    await openCli(app, page);
+    await addCliFiles(app, [file]);
+    await page.click('#cliEditToggle');
+    await page.locator('#cliText').fill(command);
+    const out = await runCli(page);
+    expect(out).toContain('[exit code 1]');
+    expect(out).toContain(message);
+  });
+}
+
 test('commands can be typed as text', async ({ app, page }) => {
   await openCli(app, page);
   await addCliFiles(app, ['agent.iso']);

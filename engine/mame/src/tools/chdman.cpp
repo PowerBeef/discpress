@@ -22,6 +22,7 @@
 #include "strformat.h"
 #include "vbiparse.h"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cctype>
@@ -31,6 +32,7 @@
 #include <cstring>
 #include <ctime>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -1385,6 +1387,15 @@ static std::tuple<uint64_t, uint64_t, uint64_t> parse_input_start_end(
 
 static void check_existing_output_file(const parameters_map &params, std::string_view filename)
 {
+	// Discpress: never write over an input (upstream, copy -i x -o x -f destroys x)
+	for (const char *option : { OPTION_INPUT, OPTION_INPUT_PARENT, OPTION_OUTPUT_PARENT })
+	{
+		const auto input = params.find(option);
+		std::error_code ec;
+		if ((input != params.end()) && std::filesystem::equivalent(std::filesystem::path(filename), std::filesystem::path(*input->second), ec))
+			report_error(1, "Error: output file (%s) is also an input file", filename);
+	}
+
 	if (params.find(OPTION_OUTPUT_FORCE) == params.end())
 	{
 		util::core_file::ptr file;
@@ -1933,7 +1944,8 @@ static void do_verify(parameters_map &params)
 	}
 	util::sha1_t computed_sha1 = rawsha1.finish();
 
-	// finish up
+	// finish up (Discpress: a mismatch is a failure unless --fix corrected it; upstream exits 0)
+	bool mismatch = false;
 	if (raw_sha1 != computed_sha1)
 	{
 		util::stream_format(std::cerr, "Error: Raw SHA1 in header = %s\n", raw_sha1.as_string());
@@ -1947,6 +1959,8 @@ static void do_verify(parameters_map &params)
 				report_error(1, "Error updating SHA1: %s", err.message());
 			util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
 		}
+		else
+			mismatch = true;
 	}
 	else
 	{
@@ -1971,9 +1985,13 @@ static void do_verify(parameters_map &params)
 						report_error(1, "Error updating SHA1: %s", err.message());
 					util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
 				}
+				else
+					mismatch = true;
 			}
 		}
 	}
+	if (mismatch)
+		report_error(1, "Verification failed");
 }
 
 
@@ -1997,6 +2015,8 @@ static chdman_task do_create_raw(parameters_map &params)
 	if (unit_size_str != params.end())
 	{
 		unit_size = parse_number(unit_size_str->second->c_str());
+		if (unit_size == 0)
+			report_error(1, "Invalid unit size: %s", *unit_size_str->second);
 		if (output_parent.opened() && (output_parent.unit_bytes() != unit_size))
 			report_error(1, "Specified unit size %u bytes does not match output parent CHD unit size %u bytes", unit_size, output_parent.unit_bytes());
 	}
@@ -2111,6 +2131,8 @@ static chdman_task do_create_hd(parameters_map &params)
 		if (template_str != params.end())
 			report_error(1, "Sector size cannot be specified separately when a template is specified");
 		sector_size = parse_number(sectorsize_str->second->c_str());
+		if (sector_size == 0)
+			report_error(1, "Invalid sector size: %s", *sectorsize_str->second);
 	}
 	if (output_parent.opened() && (output_parent.unit_bytes() != sector_size))
 		report_error(1, "Sector size %u bytes does not match output parent CHD sector size %u bytes", sector_size, output_parent.unit_bytes());
@@ -2749,7 +2771,9 @@ static void do_extract_cd(parameters_map &params)
 	chd_file input_chd;
 	parse_input_chd_parameters(params, input_chd, input_parent_chd);
 
-	// further process input file
+	// further process input file (Discpress: cdrom_file throws nullptr for a CHD that is not a CD)
+	if (input_chd.check_is_cd() && input_chd.check_is_gd())
+		report_error(1, "Input CHD is not a CD-ROM or GD-ROM; extract it with extractdvd, extracthd or extractraw");
 	cdrom_file *cdrom = new cdrom_file(&input_chd);
 	const cdrom_file::toc &toc = cdrom->get_toc();
 
@@ -3490,7 +3514,8 @@ static void do_dump_metadata(parameters_map &params)
 	{
 		// delete the output file
 		output_file.reset();
-		osd_file::remove(*output_file_str->second);
+		if (output_file_str != params.end())
+			osd_file::remove(*output_file_str->second);
 		throw;
 	}
 }
@@ -3556,9 +3581,11 @@ static int chdman_parse(int argc, char *argv[])
 {
 	const std::vector<std::string> args = osd_get_command_line(argc, argv);
 
-	// print the header
+	// print the header (Discpress: on stderr when stdout carries data, i.e. dumpmeta without an output file)
 	extern const char build_version[];
-	util::stream_format(std::cout, "chdman - MAME Compressed Hunks of Data (CHD) manager %s\n", build_version);
+	const bool data_on_stdout = (args.size() >= 2) && (args[1] == COMMAND_DUMP_METADATA)
+			&& std::none_of(args.begin(), args.end(), [] (const std::string &arg) { return (arg == "-o") || (arg == "--" OPTION_OUTPUT); });
+	util::stream_format(data_on_stdout ? std::cerr : std::cout, "chdman - MAME Compressed Hunks of Data (CHD) manager %s\n", build_version);
 
 	// handle help specially
 	if (args.size() < 2)
@@ -3692,6 +3719,12 @@ static int chdman_continue()
 	catch (std::exception& ex)
 	{
 		util::stream_format(std::cerr, "Unhandled exception: %s\n", ex.what());
+		result = 1;
+	}
+	catch (...)
+	{
+		// Discpress: upstream terminates here (e.g. cdrom_file throws nullptr)
+		util::stream_format(std::cerr, "Unhandled exception\n");
 		result = 1;
 	}
 	s_run.reset();

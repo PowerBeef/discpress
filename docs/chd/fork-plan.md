@@ -161,6 +161,13 @@ This affects users today, so it ships as its own small release before any fork w
 - Natively, output, messages and exit codes match upstream.
 - Still to do in step 2: structured progress events and the push-input API that would retire `FileReaderSync` and the iOS staging protocol.
 
+**Step 3, the defect fixes: done** (see `engine/README.md`).
+- `verify` exits 1 on a mismatch.
+- `copy x→x` no longer destroys the input; no output is ever written over an input.
+- `extractcd` of a non-CD, and `-us 0`/`-ss 0`, are errors, not crashes.
+- `dumpmeta` keeps stdout clean.
+- Still open: the `-np 1` busy-wait and a native thread pool without the 16-thread cap. Both matter for the native CLI only.
+
 1. **Extract `engine/`.** Take the 78-object closure (B §7.1) at the reference tag, re-apply `mame.patch` as ordinary code, and drop `disasmintf`, `nanosvg`, expat and the unused LZMA/7z files. Fix `THIRD_PARTY_NOTICES.md`.
 2. **Library API instead of `callMain`.** `chd_file_compressor` is already a resumable state machine (`compress_begin`/`compress_continue`). Expose:
    - `create_open` → `step` → `finish`;
