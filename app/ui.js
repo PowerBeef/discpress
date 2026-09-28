@@ -785,14 +785,17 @@ function applyIdent(job, starting) {
   if (settings.rename && id.name && !job.outEdited && !locked) job.opts.out = id.name;
   if (job.kind !== 'create' || locked) return;
   // pick the right CHD flavour for the system
-  if (job.src === 'iso' || job.src === 'cso' || (job.src === 'bin' && job.choices)) {
+  if ((job.src === 'iso' || job.src === 'cso' || (job.src === 'bin' && job.choices)) && !job.discEdited) {
+    // the system settles the type (unless the user picked one) (the "Create as" choice then moves into Options)
+    var bySystem = true;
     if (id.sys === 'psp') { job.disc = 'dvd'; if (!job.hunkEdited) job.opts.hunk = '2048'; }
     else if (id.sys === 'ps2') {
       var cdGame = id.entry ? id.entry.ext === 'bin' : (job.isoSize || job.files[0].file.size) < 800 * 1048576;
       job.disc = cdGame ? 'cd' : 'dvd';
-    } else if (id.sys === 'gc' || id.sys === 'wii') { /* leave as is */ }
-    else if (id.sys !== 'pc') job.disc = 'cd';
-    if (job.choices && job.choices.indexOf(job.disc) < 0) job.disc = job.choices[0];
+    } else if (id.sys === 'gc' || id.sys === 'wii' || id.sys === 'pc') bySystem = false;
+    else job.disc = 'cd';
+    if (job.choices && job.choices.indexOf(job.disc) < 0) { job.disc = job.choices[0]; bySystem = false; }
+    job.discBySystem = bySystem;
     job.action = KIND[job.disc].cmd;
   }
 }
@@ -1417,22 +1420,29 @@ function renderControls(job) {
   var soft = function () { ui.cmd.textContent = safeCmd(job); };
 
   if (job.kind === 'create') {
-    if (job.choices && job.choices.length > 1) {
-      box.append(el('div', { class: 'row' }, el('span', { class: 'small muted', style: 'font-weight:600' }, 'Create as'),
-        seg(job.choices.map(function (k) { return [k, KIND[k].label + ' CHD']; }), job.disc, function (v) {
-          if (job.state === 'done' || job.state === 'error' || job.state === 'canceled') {
-            var pending = job.outputs.some(function (x) { return !x.downloaded && x.kind !== 'disk'; });
-            if (pending && !confirm('Discard the results of the previous run? Download them first if you need them.')) return;
-            job.disc = v; job.action = KIND[v].cmd; o.preset = 'default'; o.hunk = '';
-            resetJob(job);
-            return;
-          }
-          job.disc = v; job.action = KIND[v].cmd; o.preset = 'default'; o.hunk = ''; refresh();
-        }, busy)));
+    var pickDisc = function (v) {
+      if (job.state === 'done' || job.state === 'error' || job.state === 'canceled') {
+        var pending = job.outputs.some(function (x) { return !x.downloaded && x.kind !== 'disk'; });
+        if (pending && !confirm('Discard the results of the previous run? Download them first if you need them.')) return;
+        job.disc = v; job.action = KIND[v].cmd; o.preset = 'default'; o.hunk = ''; job.discEdited = true;
+        resetJob(job);
+        return;
+      }
+      job.disc = v; job.action = KIND[v].cmd; o.preset = 'default'; o.hunk = ''; job.discEdited = true; refresh();
+    };
+    var discChoices = job.choices && job.choices.length > 1 ? job.choices.map(function (k) { return [k, KIND[k].label + ' CHD']; }) : null;
+    // an identified game's system settles the type: the choice is in Options instead of up front
+    if (discChoices && !job.discBySystem) {
+      box.append(el('div', { class: 'row' }, el('span', { class: 'small muted', style: 'font-weight:600' }, 'Create as'), seg(discChoices, job.disc, pickDisc, busy)));
     }
     var disc = job.disc;
     var presets = PRESETS[disc === 'cd' || disc === 'gdrom' ? 'cd' : disc === 'ld' ? 'ld' : 'other'];
     var fields = el('div', { class: 'fields' });
+    if (discChoices && job.discBySystem) {
+      fields.append(selectField('Create as', discChoices, job.disc, pickDisc,
+        (job.ident.sys === 'ps2' ? 'This ' + sysName('ps2') + ' game is on a ' + KIND[job.disc].label + ', so it becomes a ' + KIND[job.disc].label + ' CHD.'
+          : sysName(job.ident.sys) + ' games become ' + KIND[job.disc].label + ' CHDs.') + ' Change this only if you know you need the other type.', busy));
+    }
     var cur = presets.find(function (p) { return p[0] === o.preset; }) || presets[0];
     fields.append(selectField('Compression', presets.map(function (p) { return [p[0], p[1]]; }), o.preset, function (v) { o.preset = v; refresh(); }, cur[3], busy));
     var hunks = HUNKS[disc] || [['', 'Automatic']];
@@ -1922,7 +1932,10 @@ async function saveOutput(job, out) {
     out.downloaded = true;
     refreshJob(job);
   } catch (e) {
-    if (e && e.name !== 'AbortError') toast('Saving failed: ' + e.message, 'err');
+    if (e && e.name === 'AbortError') return; // closed by the user
+    // the share sheet can fail on very large files: download it instead (Safari saves it to Downloads in Files)
+    toast('The share sheet could not take this file (' + (e && e.message || e) + '). Downloading it instead.', 'err');
+    return downloadOutput(job, out);
   }
 }
 async function downloadMany(list) {

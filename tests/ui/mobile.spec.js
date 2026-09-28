@@ -43,3 +43,24 @@ test('inside an iOS app web view the header stays fixed and the content scrolls'
   await ctx.close();
   void browserName;
 });
+
+test('on iPhone, a file the share sheet cannot take is downloaded instead', async ({ page }, testInfo) => {
+  test.skip(!/iphone/.test(testInfo.project.name), 'iOS only');
+  // the share sheet is there, but fails as it can for a very large file
+  await page.addInitScript(() => {
+    navigator.canShare = () => true;
+    navigator.share = () => Promise.reject(new DOMException('The share could not be completed.', 'DataError'));
+  });
+  const app = new App(page, testInfo, false);
+  await app.open();
+  await app.add(fixture('ps1-single').add);
+  const card = app.job('twine');
+  await app.settled(card);
+  await app.run(card);
+  const button = card.locator('.result .out button');
+  await expect(button).toHaveText(/Save to Files/);
+  const download = page.waitForEvent('download');
+  await button.click();
+  expect((await download).suggestedFilename()).toMatch(/\.chd$/);
+  await expect(page.locator('.toast.err', { hasText: 'Downloading it instead' })).toBeVisible();
+});
