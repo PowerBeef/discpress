@@ -21,6 +21,7 @@ The paths mirror MAME's, so every file can be compared with its original. **[`ma
   - FLAC skips the MD5 of the audio when encoding to memory; the MD5 never reaches the CHD.
 - **libFLAC's math (`window.c`, `lpc.c`, `fixed.c`):** `cosf` and `log` come from [`engine/libm`](libm/README.md), copies of glibc's algorithms, so CD audio encodes to the same bytes in the page as with chdman on Linux.
 - **Faster hashing with the same results (`hashing.cpp`):** SHA-1 reads whole blocks as big-endian words and runs its 80 rounds unrolled. CRC-16 folds in eight bytes at a time (slice-by-8). In wasm, SHA-1 went from 120 to 650 MB/s and CRC-16 from 300 to 1,450 MB/s.
+- **Redump's layout for extracted CDs (`extractcd --redump`, `-rd`; `chdman.cpp`):** a `.cue` with CRLF line ends on any platform, and one `.bin` per track unless there is only one (then `<name>.bin`). That is how Redump's dumps are laid out, so a disc made from one comes back as the same files; the page extracts CDs this way by default. Without the option, output is upstream's.
 - **Fixes to 0.289's failure handling (`chdman.cpp`); output for valid input is unchanged:**
   - `verify` exits 1 when the data doesn't match the header's SHA-1, unless `--fix` corrects it. Upstream exits 0, so scripts and the page reported success.
   - An output is never written over an input: `copy -i x -o x -f` used to truncate `x` and then delete it.

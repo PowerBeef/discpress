@@ -1448,7 +1448,15 @@
  
  // modes
  constexpr int MODE_NORMAL = 0;
-@@ -140,15 +258,15 @@
+@@ -103,6 +221,7 @@
+ #define OPTION_OUTPUT "output"
+ #define OPTION_OUTPUT_BIN "outputbin"
+ #define OPTION_OUTPUT_SPLITBIN "splitbin"
++#define OPTION_REDUMP "redump"
+ #define OPTION_OUTPUT_FORCE "force"
+ #define OPTION_INPUT_START_BYTE "inputstartbyte"
+ #define OPTION_INPUT_START_HUNK "inputstarthunk"
+@@ -140,15 +259,15 @@
  [[noreturn]] static void report_error(int error, Format &&fmt, Params &&...args);
  
  static void do_info(parameters_map &params);
@@ -1473,7 +1481,7 @@
  static void do_extract_ld(parameters_map &params);
  static void do_add_metadata(parameters_map &params);
  static void do_del_metadata(parameters_map &params);
-@@ -214,10 +332,19 @@
+@@ -214,10 +333,19 @@
  
  // ======================> command_description
  
@@ -1494,7 +1502,7 @@
  	const char *description;
  	const char *valid_options[16];
  };
-@@ -329,9 +456,15 @@
+@@ -329,9 +457,15 @@
  			return 0;
  		if (offset + length > m_maxoffset)
  			length = m_maxoffset - offset;
@@ -1513,7 +1521,23 @@
  		return actual;
  	}
  
-@@ -1285,6 +1418,15 @@
+@@ -676,6 +810,7 @@
+ 	{ OPTION_OUTPUT,                "o",    true, " <filename>: output file name" },
+ 	{ OPTION_OUTPUT_BIN,            "ob",   true, " <filename>: output file name for binary data" },
+ 	{ OPTION_OUTPUT_SPLITBIN,       "sb",   false, ": output one binary file per track" },
++	{ OPTION_REDUMP,                "rd",   false, ": write a .cue as Redump does: CRLF line ends, and one binary file per track unless there is only one" },
+ 	{ OPTION_OUTPUT_FORCE,          "f",    false, ": force overwriting an existing file" },
+ 	{ OPTION_OUTPUT_PARENT,         "op",   true, " <filename>: parent file name for output CHD" },
+ 	{ OPTION_INPUT_START_BYTE,      "isb",  true, " <offset>: starting byte offset within the input" },
+@@ -831,6 +966,7 @@
+ 			REQUIRED OPTION_OUTPUT,
+ 			OPTION_OUTPUT_BIN,
+ 			OPTION_OUTPUT_SPLITBIN,
++			OPTION_REDUMP,
+ 			OPTION_OUTPUT_FORCE,
+ 			REQUIRED OPTION_INPUT,
+ 			OPTION_INPUT_PARENT,
+@@ -1285,6 +1421,15 @@
  
  static void check_existing_output_file(const parameters_map &params, std::string_view filename)
  {
@@ -1529,7 +1553,7 @@
  	if (params.find(OPTION_OUTPUT_FORCE) == params.end())
  	{
  		util::core_file::ptr file;
-@@ -1498,7 +1640,7 @@
+@@ -1498,7 +1643,7 @@
  //  compress_common - standard compression loop
  //-------------------------------------------------
  
@@ -1538,7 +1562,7 @@
  {
  	// begin compressing
  	chd.compress_begin();
-@@ -1507,10 +1649,13 @@
+@@ -1507,10 +1652,13 @@
  	double complete, ratio;
  	std::error_condition err;
  	while ((err = chd.compress_continue(complete, ratio)) == chd_file::error::WALKING_PARENT || err == chd_file::error::COMPRESSING)
@@ -1552,7 +1576,45 @@
  
  	// handle errors
  	if (err)
-@@ -1781,7 +1926,7 @@
+@@ -1522,11 +1670,36 @@
+ 
+ 
+ //-------------------------------------------------
++//  toc_writer - writes a TOC file (Discpress: with
++//  CRLF line ends on any platform for --redump)
++//-------------------------------------------------
++
++struct toc_writer
++{
++	util::core_file &file;
++	bool crlf;
++
++	template <typename Format, typename... Params> void printf(Format &&fmt, Params &&...args)
++	{
++		std::string text = util::string_format(std::forward<Format>(fmt), std::forward<Params>(args)...);
++		if (!crlf)
++		{
++			file.puts(text);
++			return;
++		}
++		for (size_t pos = 0; (pos = text.find('\n', pos)) != std::string::npos; pos += 2)
++			text.insert(pos, 1, '\r');
++		auto const [err, written] = write(file, text.data(), text.size()); // as puts, errors show up when the file is closed
++	}
++};
++
++
++//-------------------------------------------------
+ //  output_track_metadata - output track metadata
+ //  to a CUE file
+ //-------------------------------------------------
+ 
+-void output_track_metadata(int mode, util::core_file &file, int tracknum, const cdrom_file::track_info &info, const std::string &filename, uint32_t frameoffs, uint64_t outputoffs)
++void output_track_metadata(int mode, toc_writer &file, int tracknum, const cdrom_file::track_info &info, const std::string &filename, uint32_t frameoffs, uint64_t outputoffs)
+ {
+ 	if (mode == MODE_GDI)
+ 	{
+@@ -1781,7 +1954,7 @@
  //  do_verify - validate the SHA-1 on a CHD
  //-------------------------------------------------
  
@@ -1561,7 +1623,7 @@
  {
  	bool fix_sha1 = params.find(OPTION_FIX) != params.end();
  	// parse out input files
-@@ -1820,6 +1965,7 @@
+@@ -1820,6 +1993,7 @@
  
  		// determine how much to read
  		uint32_t bytes_to_read = (std::min<uint64_t>)(buffer.size(), input_chd.logical_bytes() - offset);
@@ -1569,7 +1631,7 @@
  		std::error_condition err = input_chd.read_bytes(offset, &buffer[0], bytes_to_read);
  		if (err)
  			report_error(1, "Error reading CHD file (%s): %s", *input_chd_str->second, err.message());
-@@ -1830,7 +1976,8 @@
+@@ -1830,7 +2004,8 @@
  	}
  	util::sha1_t computed_sha1 = rawsha1.finish();
  
@@ -1579,7 +1641,7 @@
  	if (raw_sha1 != computed_sha1)
  	{
  		util::stream_format(std::cerr, "Error: Raw SHA1 in header = %s\n", raw_sha1.as_string());
-@@ -1844,6 +1991,8 @@
+@@ -1844,6 +2019,8 @@
  				report_error(1, "Error updating SHA1: %s", err.message());
  			util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
  		}
@@ -1588,7 +1650,7 @@
  	}
  	else
  	{
-@@ -1868,9 +2017,13 @@
+@@ -1868,9 +2045,13 @@
  						report_error(1, "Error updating SHA1: %s", err.message());
  					util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
  				}
@@ -1602,7 +1664,7 @@
  }
  
  
-@@ -1879,7 +2032,7 @@
+@@ -1879,7 +2060,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -1611,7 +1673,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -1894,6 +2047,8 @@
+@@ -1894,6 +2075,8 @@
  	if (unit_size_str != params.end())
  	{
  		unit_size = parse_number(unit_size_str->second->c_str());
@@ -1620,7 +1682,7 @@
  		if (output_parent.opened() && (output_parent.unit_bytes() != unit_size))
  			report_error(1, "Specified unit size %u bytes does not match output parent CHD unit size %u bytes", unit_size, output_parent.unit_bytes());
  	}
-@@ -1943,7 +2098,7 @@
+@@ -1943,7 +2126,7 @@
  			chd->clone_all_metadata(output_parent);
  
  		// compress it generically
@@ -1629,7 +1691,7 @@
  	}
  	catch (...)
  	{
-@@ -1959,7 +2114,7 @@
+@@ -1959,7 +2142,7 @@
  //  disk image from a raw file
  //-------------------------------------------------
  
@@ -1638,7 +1700,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2008,6 +2163,8 @@
+@@ -2008,6 +2191,8 @@
  		if (template_str != params.end())
  			report_error(1, "Sector size cannot be specified separately when a template is specified");
  		sector_size = parse_number(sectorsize_str->second->c_str());
@@ -1647,7 +1709,7 @@
  	}
  	if (output_parent.opened() && (output_parent.unit_bytes() != sector_size))
  		report_error(1, "Sector size %u bytes does not match output parent CHD sector size %u bytes", sector_size, output_parent.unit_bytes());
-@@ -2147,7 +2304,7 @@
+@@ -2147,7 +2332,7 @@
  
  		// compress it generically
  		if (input_file)
@@ -1656,7 +1718,7 @@
  	}
  	catch (...)
  	{
-@@ -2163,7 +2320,7 @@
+@@ -2163,7 +2348,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -1665,7 +1727,7 @@
  {
  	// process input file
  	cdrom_file::track_input_info track_info;
-@@ -2227,7 +2384,7 @@
+@@ -2227,7 +2412,7 @@
  			report_error(1, "Error adding CD metadata: %s", err.message());
  
  		// compress it generically
@@ -1674,7 +1736,7 @@
  	}
  	catch (...)
  	{
-@@ -2243,7 +2400,7 @@
+@@ -2243,7 +2428,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -1683,7 +1745,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2295,7 +2452,7 @@
+@@ -2295,7 +2480,7 @@
  			report_error(1, "Error adding DVD metadata: %s", err.message());
  
  		// compress it generically
@@ -1692,7 +1754,7 @@
  	}
  	catch (...)
  	{
-@@ -2311,7 +2468,7 @@
+@@ -2311,7 +2496,7 @@
  //  input AVI file and metadata
  //-------------------------------------------------
  
@@ -1701,7 +1763,7 @@
  {
  	// process input file
  	avi_file::ptr input_file;
-@@ -2399,7 +2556,7 @@
+@@ -2399,7 +2584,7 @@
  			report_error(1, "Error adding AV metadata: %s\n", err.message());
  
  		// create the compressor and then run it generically
@@ -1710,7 +1772,7 @@
  
  		// write the final LD metadata
  		if (info.height == 524/2 || info.height == 624/2)
-@@ -2456,7 +2613,7 @@
+@@ -2456,7 +2641,7 @@
  //  another CHD
  //-------------------------------------------------
  
@@ -1719,7 +1781,7 @@
  {
  	// parse out input files
  	chd_file input_parent_chd;
-@@ -2547,7 +2704,7 @@
+@@ -2547,7 +2732,7 @@
  		}
  
  		// compress it generically
@@ -1728,7 +1790,7 @@
  	}
  	catch (...)
  	{
-@@ -2563,7 +2720,7 @@
+@@ -2563,7 +2748,7 @@
  //  CHD image
  //-------------------------------------------------
  
@@ -1737,7 +1799,7 @@
  {
  	// parse out input files
  	chd_file input_parent_chd;
-@@ -2604,6 +2761,7 @@
+@@ -2604,6 +2789,7 @@
  
  			// determine how much to read
  			uint32_t bytes_to_read = (std::min<uint64_t>)(buffer.size(), input_end - offset);
@@ -1745,7 +1807,7 @@
  			std::error_condition err = input_chd.read_bytes(offset, &buffer[0], bytes_to_read);
  			if (err)
  				report_error(1, "Error reading CHD file (%s): %s", *params.find(OPTION_INPUT)->second, err.message());
-@@ -2639,14 +2797,16 @@
+@@ -2639,14 +2825,16 @@
  //  CHD image
  //-------------------------------------------------
  
@@ -1764,7 +1826,54 @@
  	cdrom_file *cdrom = new cdrom_file(&input_chd);
  	const cdrom_file::toc &toc = cdrom->get_toc();
  
-@@ -2920,6 +3080,7 @@
+@@ -2671,8 +2859,13 @@
+ 	if (chop != std::string::npos)
+ 		default_name.erase(chop, default_name.size());
+ 
++	// Discpress: --redump, Redump's layout for a .cue (CRLF; one bin per track, unless there is only one)
++	const bool redump = params.find(OPTION_REDUMP) != params.end();
++	if (redump && mode != MODE_CUEBIN)
++		report_error(1, "--%s needs a .cue output file", OPTION_REDUMP);
++
+ 	// GDIs will always output as split bin
+-	bool is_splitbin = mode == MODE_GDI || params.find(OPTION_OUTPUT_SPLITBIN) != params.end();
++	bool is_splitbin = mode == MODE_GDI || params.find(OPTION_OUTPUT_SPLITBIN) != params.end() || (redump && toc.numtrks > 1);
+ 	if (!is_splitbin && cdrom->is_gdrom() && mode == MODE_CUEBIN)
+ 	{
+ 		// GD-ROM cue/bin is in Redump format which should always be split by tracks
+@@ -2730,6 +2923,7 @@
+ 		std::error_condition filerr = util::core_file::open(*output_file_str->second, OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_NO_BOM, output_toc_file);
+ 		if (filerr)
+ 			report_error(1, "Unable to open file (%s): %s", *output_file_str->second, filerr.message());
++		toc_writer toc_out{ *output_toc_file, redump };
+ 
+ 		uint64_t total_bytes = 0;
+ 		for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
+@@ -2810,7 +3004,7 @@
+ 		// GDI must start with the # of tracks
+ 		if (mode == MODE_GDI)
+ 		{
+-			output_toc_file->printf("%d\n", toc.numtrks);
++			toc_out.printf("%d\n", toc.numtrks);
+ 		}
+ 		else if (mode == MODE_NORMAL)
+ 		{
+@@ -2842,11 +3036,11 @@
+ 			}
+ 
+ 			if (mode2)
+-				output_toc_file->printf("CD_ROM_XA\n\n\n");
++				toc_out.printf("CD_ROM_XA\n\n\n");
+ 			else if (cdda && !mode1)
+-				output_toc_file->printf("CD_DA\n\n\n");
++				toc_out.printf("CD_DA\n\n\n");
+ 			else
+-				output_toc_file->printf("CD_ROM\n\n\n");
++				toc_out.printf("CD_ROM\n\n\n");
+ 		}
+ 
+ 		if (cdrom->is_gdrom() && mode == MODE_CUEBIN)
+@@ -2920,6 +3114,7 @@
  		uint64_t outputoffs = 0;
  		uint32_t discoffs = 0;
  		std::vector<uint8_t> buffer;
@@ -1772,7 +1881,25 @@
  
  		for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
  		{
-@@ -2987,6 +3148,15 @@
+@@ -2945,14 +3140,14 @@
+ 			if (cdrom->is_gdrom() && mode == MODE_CUEBIN)
+ 			{
+ 				if (tracknum == 0)
+-					output_toc_file->printf("REM SINGLE-DENSITY AREA\n");
++					toc_out.printf("REM SINGLE-DENSITY AREA\n");
+ 				else if (toc.tracks[tracknum].physframeofs == 45000)
+-					output_toc_file->printf("REM HIGH-DENSITY AREA\n");
++					toc_out.printf("REM HIGH-DENSITY AREA\n");
+ 			}
+ 
+ 			// output the metadata about the track to the TOC file
+ 			const cdrom_file::track_info &trackinfo = toc.tracks[tracknum];
+-			output_track_metadata(mode, *output_toc_file, tracknum, trackinfo, std::string(core_filename_extract_base(trackbin_name)), discoffs, outputoffs);
++			output_track_metadata(mode, toc_out, tracknum, trackinfo, std::string(core_filename_extract_base(trackbin_name)), discoffs, outputoffs);
+ 
+ 			// If this is bin/cue output and the CHD contains subdata, warn the user and don't include
+ 			// the subdata size in the buffer calculation.
+@@ -2987,6 +3182,15 @@
  					frameofs = frame - trackinfo.splitframes;
  				}
  
@@ -1788,7 +1915,7 @@
  				// read the data
  				cdrom->read_data(cdrom->get_track_start_phys(trk) + frameofs, &buffer[bufferoffs], toc.tracks[trk].trktype, true);
  
-@@ -3387,7 +3557,8 @@
+@@ -3387,7 +3591,8 @@
  	{
  		// delete the output file
  		output_file.reset();
@@ -1798,7 +1925,7 @@
  		throw;
  	}
  }
-@@ -3425,14 +3596,39 @@
+@@ -3425,14 +3630,39 @@
  //  main - entry point
  //-------------------------------------------------
  
@@ -1816,8 +1943,7 @@
 +
 +std::unique_ptr<chdman_run> s_run;
 +constexpr int CHDMAN_PAUSED = -1;
- 
--	// print the header
++
 +chdman_task run_function(void (*function)(parameters_map &), parameters_map &params)
 +{
 +	function(params);
@@ -1826,7 +1952,8 @@
 +
 +} // anonymous namespace
 +
-+
+ 
+-	// print the header
 +// parses the command line and prepares the command: returns CHDMAN_PAUSED when it is ready to
 +// run (chdman_continue), otherwise the exit code
 +static int chdman_parse(int argc, char *argv[])
@@ -1842,7 +1969,7 @@
  
  	// handle help specially
  	if (args.size() < 2)
-@@ -3459,7 +3655,7 @@
+@@ -3459,7 +3689,7 @@
  				return print_help(args[0], desc);
  
  			// otherwise, verify the parameters
@@ -1851,7 +1978,7 @@
  			while (argnum < args.size())
  			{
  				// should be an option name
-@@ -3519,30 +3715,86 @@
+@@ -3519,30 +3749,86 @@
  					return print_help(args[0], desc, "Required parameters missing");
  			}
  

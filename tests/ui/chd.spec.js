@@ -25,6 +25,12 @@ function sameFiles(outs, native) {
   for (const o of outs) expect(sha1File(o.path), o.name).toBe(sha1File(path.join(native.dir, o.name)));
 }
 
+/** The fixture's own files: its cue sheets are written as Redump's (CRLF, Redump's file names). */
+function sameAsFixture(outs, names) {
+  expect(outs.map(o => o.name).sort()).toEqual([...names].sort());
+  for (const o of outs) expect(sha1File(o.path), o.name).toBe(sha1File(path.join(FIXTURES, o.name)));
+}
+
 async function openChd(app, rel, title) {
   await app.open();
   await app.add([rel]);
@@ -55,6 +61,30 @@ for (const [label, fmt, args, ext] of [
     sameFiles(outs, extract('extractcd', path.join(FIXTURES, 'chd/mgs.chd'), 'mgs out' + ext, args));
   });
 }
+
+// Redump's layout (the engine's extractcd --redump, the default for CDs): the files of the original
+// dump come back byte for byte, cue sheet included, with one .bin per track unless there is only one
+for (const [key, title] of [['ps1-multitrack', 'mgs disc1'], ['ps1-single', 'twine'], ['music-cd', 'piano']]) {
+  test(`extracting a CD CHD gives back the Redump dump it was made from: ${key}`, async ({ app }) => {
+    const fx = fixture(key);
+    const card = await openChd(app, chdInput(key, 'createcd', fx.add.find(n => n.endsWith('.cue'))), key);
+    await expect(card.locator('label.field', { hasText: 'Save as' }).locator('select')).toHaveValue('redump');
+    await expect(card.locator('label.field', { hasText: 'Save as' })).toContainText('match Redump');
+    await card.locator('label.field', { hasText: 'Output name' }).locator('input').fill(title);
+    await expect(card.locator('code.cmd')).toContainText(title.includes(' ') ? `-o "${title}.cue" --redump` : `-o ${title}.cue --redump`);
+    await app.run(card);
+    sameAsFixture(await app.downloads(card), fx.add);
+  });
+}
+
+test('a GD-ROM CHD extracts as its Redump dump too', async ({ app }) => {
+  const fx = fixture('dreamcast-cue');
+  const card = await openChd(app, chdInput('aerowings-cue', 'createcd', 'aerowings.cue'), 'aerowings-cue');
+  await card.locator('label.field', { hasText: 'Save as' }).locator('select').selectOption({ label: 'CUE + BIN, as Redump' });
+  await card.locator('label.field', { hasText: 'Output name' }).locator('input').fill('aerowings');
+  await app.run(card);
+  sameAsFixture(await app.downloads(card), fx.add);
+});
 
 test('extract a GD-ROM CHD as GDI', async ({ app }) => {
   const card = await openChd(app, chdInput('aerowings', 'createcd', 'aerowings.gdi'), 'aerowings');
@@ -120,9 +150,9 @@ for (const threads of [1, 4]) {
 
     let card = app.job('codec-mix-cd');
     await app.settled(card);
-    await card.locator('label.field', { hasText: 'Output name' }).locator('input').fill('mix out');
+    await card.locator('label.field', { hasText: 'Output name' }).locator('input').fill('codec mix cd');
     await app.run(card);
-    sameFiles(await app.downloads(card), extract('extractcd', path.join(FIXTURES, cd), 'mix out.cue'));
+    sameAsFixture(await app.downloads(card), fixture('codec-mix-cd').add); // Redump's layout, the default
 
     card = app.job('agent');
     await app.settled(card);

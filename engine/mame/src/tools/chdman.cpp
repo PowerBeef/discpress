@@ -221,6 +221,7 @@ constexpr bool OSD_PRINTF_VERBOSE = false;
 #define OPTION_OUTPUT "output"
 #define OPTION_OUTPUT_BIN "outputbin"
 #define OPTION_OUTPUT_SPLITBIN "splitbin"
+#define OPTION_REDUMP "redump"
 #define OPTION_OUTPUT_FORCE "force"
 #define OPTION_INPUT_START_BYTE "inputstartbyte"
 #define OPTION_INPUT_START_HUNK "inputstarthunk"
@@ -809,6 +810,7 @@ static const option_description s_options[] =
 	{ OPTION_OUTPUT,                "o",    true, " <filename>: output file name" },
 	{ OPTION_OUTPUT_BIN,            "ob",   true, " <filename>: output file name for binary data" },
 	{ OPTION_OUTPUT_SPLITBIN,       "sb",   false, ": output one binary file per track" },
+	{ OPTION_REDUMP,                "rd",   false, ": write a .cue as Redump does: CRLF line ends, and one binary file per track unless there is only one" },
 	{ OPTION_OUTPUT_FORCE,          "f",    false, ": force overwriting an existing file" },
 	{ OPTION_OUTPUT_PARENT,         "op",   true, " <filename>: parent file name for output CHD" },
 	{ OPTION_INPUT_START_BYTE,      "isb",  true, " <offset>: starting byte offset within the input" },
@@ -964,6 +966,7 @@ static const command_description s_commands[] =
 			REQUIRED OPTION_OUTPUT,
 			OPTION_OUTPUT_BIN,
 			OPTION_OUTPUT_SPLITBIN,
+			OPTION_REDUMP,
 			OPTION_OUTPUT_FORCE,
 			REQUIRED OPTION_INPUT,
 			OPTION_INPUT_PARENT,
@@ -1667,11 +1670,36 @@ static chdman_task compress_common(chd_file_compressor &chd)
 
 
 //-------------------------------------------------
+//  toc_writer - writes a TOC file (Discpress: with
+//  CRLF line ends on any platform for --redump)
+//-------------------------------------------------
+
+struct toc_writer
+{
+	util::core_file &file;
+	bool crlf;
+
+	template <typename Format, typename... Params> void printf(Format &&fmt, Params &&...args)
+	{
+		std::string text = util::string_format(std::forward<Format>(fmt), std::forward<Params>(args)...);
+		if (!crlf)
+		{
+			file.puts(text);
+			return;
+		}
+		for (size_t pos = 0; (pos = text.find('\n', pos)) != std::string::npos; pos += 2)
+			text.insert(pos, 1, '\r');
+		auto const [err, written] = write(file, text.data(), text.size()); // as puts, errors show up when the file is closed
+	}
+};
+
+
+//-------------------------------------------------
 //  output_track_metadata - output track metadata
 //  to a CUE file
 //-------------------------------------------------
 
-void output_track_metadata(int mode, util::core_file &file, int tracknum, const cdrom_file::track_info &info, const std::string &filename, uint32_t frameoffs, uint64_t outputoffs)
+void output_track_metadata(int mode, toc_writer &file, int tracknum, const cdrom_file::track_info &info, const std::string &filename, uint32_t frameoffs, uint64_t outputoffs)
 {
 	if (mode == MODE_GDI)
 	{
@@ -2831,8 +2859,13 @@ static chdman_task do_extract_cd(parameters_map &params)
 	if (chop != std::string::npos)
 		default_name.erase(chop, default_name.size());
 
+	// Discpress: --redump, Redump's layout for a .cue (CRLF; one bin per track, unless there is only one)
+	const bool redump = params.find(OPTION_REDUMP) != params.end();
+	if (redump && mode != MODE_CUEBIN)
+		report_error(1, "--%s needs a .cue output file", OPTION_REDUMP);
+
 	// GDIs will always output as split bin
-	bool is_splitbin = mode == MODE_GDI || params.find(OPTION_OUTPUT_SPLITBIN) != params.end();
+	bool is_splitbin = mode == MODE_GDI || params.find(OPTION_OUTPUT_SPLITBIN) != params.end() || (redump && toc.numtrks > 1);
 	if (!is_splitbin && cdrom->is_gdrom() && mode == MODE_CUEBIN)
 	{
 		// GD-ROM cue/bin is in Redump format which should always be split by tracks
@@ -2890,6 +2923,7 @@ static chdman_task do_extract_cd(parameters_map &params)
 		std::error_condition filerr = util::core_file::open(*output_file_str->second, OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_NO_BOM, output_toc_file);
 		if (filerr)
 			report_error(1, "Unable to open file (%s): %s", *output_file_str->second, filerr.message());
+		toc_writer toc_out{ *output_toc_file, redump };
 
 		uint64_t total_bytes = 0;
 		for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
@@ -2970,7 +3004,7 @@ static chdman_task do_extract_cd(parameters_map &params)
 		// GDI must start with the # of tracks
 		if (mode == MODE_GDI)
 		{
-			output_toc_file->printf("%d\n", toc.numtrks);
+			toc_out.printf("%d\n", toc.numtrks);
 		}
 		else if (mode == MODE_NORMAL)
 		{
@@ -3002,11 +3036,11 @@ static chdman_task do_extract_cd(parameters_map &params)
 			}
 
 			if (mode2)
-				output_toc_file->printf("CD_ROM_XA\n\n\n");
+				toc_out.printf("CD_ROM_XA\n\n\n");
 			else if (cdda && !mode1)
-				output_toc_file->printf("CD_DA\n\n\n");
+				toc_out.printf("CD_DA\n\n\n");
 			else
-				output_toc_file->printf("CD_ROM\n\n\n");
+				toc_out.printf("CD_ROM\n\n\n");
 		}
 
 		if (cdrom->is_gdrom() && mode == MODE_CUEBIN)
@@ -3106,14 +3140,14 @@ static chdman_task do_extract_cd(parameters_map &params)
 			if (cdrom->is_gdrom() && mode == MODE_CUEBIN)
 			{
 				if (tracknum == 0)
-					output_toc_file->printf("REM SINGLE-DENSITY AREA\n");
+					toc_out.printf("REM SINGLE-DENSITY AREA\n");
 				else if (toc.tracks[tracknum].physframeofs == 45000)
-					output_toc_file->printf("REM HIGH-DENSITY AREA\n");
+					toc_out.printf("REM HIGH-DENSITY AREA\n");
 			}
 
 			// output the metadata about the track to the TOC file
 			const cdrom_file::track_info &trackinfo = toc.tracks[tracknum];
-			output_track_metadata(mode, *output_toc_file, tracknum, trackinfo, std::string(core_filename_extract_base(trackbin_name)), discoffs, outputoffs);
+			output_track_metadata(mode, toc_out, tracknum, trackinfo, std::string(core_filename_extract_base(trackbin_name)), discoffs, outputoffs);
 
 			// If this is bin/cue output and the CHD contains subdata, warn the user and don't include
 			// the subdata size in the buffer calculation.

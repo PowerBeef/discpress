@@ -94,6 +94,31 @@ test('an input that cannot be read is an error, not a broken CHD', () => {
   }
 });
 
+// Not a fix but an addition: extractcd --redump writes Redump's layout, which upstream can't
+test('extractcd --redump writes Redump\'s layout: CRLF, and a .bin per track unless there is only one', () => {
+  for (const [input, tracks] of [['mgs disc1.cue', 2], ['twine.cue', 1]]) {
+    const chd = makeChd('createcd', input);
+    const dir = tmp(`rd-${tracks}`), up = tmp(`up-${tracks}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(up, { recursive: true });
+    expect(run(ENGINE, ['extractcd', '-i', chd, '-o', path.join(dir, 'x.cue'), '--redump']).code).toBe(0);
+    // upstream: the same files with -sb for several tracks, and LF line ends
+    expect(run(UPSTREAM, ['extractcd', '-i', chd, '-o', path.join(up, 'x.cue'), ...(tracks > 1 ? ['-sb'] : [])]).code).toBe(0);
+    const names = fs.readdirSync(dir).sort();
+    expect(names).toEqual(fs.readdirSync(up).sort());
+    expect(names.length).toBe(tracks + 1);
+    for (const n of names) {
+      const mine = fs.readFileSync(path.join(dir, n)), theirs = fs.readFileSync(path.join(up, n));
+      if (n.endsWith('.cue')) expect(mine.toString()).toBe(theirs.toString().replace(/\n/g, '\r\n'));
+      else expect(mine.equals(theirs), n).toBe(true);
+    }
+  }
+  const r = run(ENGINE, ['extractcd', '-i', makeChd('createcd', 'twine.cue'), '-o', tmp('x.gdi'), '--redump']);
+  expect(r.code).toBe(1);
+  expect(r.err).toContain('--redump needs a .cue output file');
+  // without it, the output is upstream's (tests/ui/chd.spec.js compares every format)
+});
+
 test('dumpmeta to stdout writes only the metadata', () => {
   const chd = makeChd('createcd', 'twine.cue');
   const up = run(UPSTREAM, ['dumpmeta', '-i', chd, '-t', 'CHT2']);

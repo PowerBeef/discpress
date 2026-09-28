@@ -1127,7 +1127,7 @@ function parseInfo(lines) {
   return info;
 }
 function defaultFormat(type) {
-  return { cd: 'cue', gdrom: 'gdi', dvd: 'iso', hd: 'img', ld: 'avi', raw: 'raw' }[type] || 'raw';
+  return { cd: 'redump', gdrom: 'gdi', dvd: 'iso', hd: 'img', ld: 'avi', raw: 'raw' }[type] || 'raw';
 }
 function linkParents() {
   jobs.forEach(function (job) {
@@ -1142,8 +1142,8 @@ function linkParents() {
 
 /* ---------- building the chdman command for a job ---------- */
 var FORMATS = {
-  cd: [['cue', 'CUE + BIN (one .bin)'], ['cue-split', 'CUE + BIN (one .bin per track)'], ['gdi', 'GDI + tracks'], ['toc', 'TOC + BIN (cdrdao)']],
-  gdrom: [['gdi', 'GDI + tracks'], ['cue-split', 'CUE + BIN (Redump style, one .bin per track)']],
+  cd: [['redump', 'CUE + BIN, as Redump'], ['cue', 'CUE + BIN (one .bin)'], ['cue-split', 'CUE + BIN (one .bin per track)'], ['gdi', 'GDI + tracks'], ['toc', 'TOC + BIN (cdrdao)']],
+  gdrom: [['gdi', 'GDI + tracks'], ['redump', 'CUE + BIN, as Redump']],
   dvd: [['iso', 'ISO image']], hd: [['img', 'Raw disk image (.img)']], ld: [['avi', 'AVI video']], raw: [['raw', 'Raw data (.raw)']]
 };
 function outBase(job) {
@@ -1218,6 +1218,7 @@ function buildJob(job) {
         cmdx = 'extractcd';
         oname = ob + (fmt === 'gdi' ? '.gdi' : fmt === 'toc' ? '.toc' : '.cue');
         if (fmt === 'cue-split') extra = ['-sb'];
+        else if (fmt === 'redump') extra = ['--redump']; // the engine's: Redump's CRLF cue sheet, a .bin per track
         slots = (info.tracks || 99) + 3;
       } else {
         cmdx = { dvd: 'extractdvd', hd: 'extracthd', ld: 'extractld', raw: 'extractraw' }[info.type] || 'extractraw';
@@ -1402,7 +1403,9 @@ function renderControls(job) {
     }, busy)));
     var f2 = el('div', { class: 'fields' });
     if (job.action === 'extract') {
-      f2.append(selectField('Save as', FORMATS[info.type] || FORMATS.raw, o.format || defaultFormat(info.type), function (v) { o.format = v; soft(); }, null, busy));
+      var fmt = o.format || defaultFormat(info.type);
+      f2.append(selectField('Save as', FORMATS[info.type] || FORMATS.raw, fmt, function (v) { o.format = v; refresh(); },
+        fmt === 'redump' ? 'The files of a Redump dump: its cue sheet, and one .bin per track, so they match Redump\u2019s checksums.' : null, busy));
       f2.append(textField('Output name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { disabled: busy }));
     } else if (job.action === 'rename') {
       f2.append(textField('New name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { hint: 'Saved as ' + outBase(job) + '.chd (the CHD itself is not changed)', disabled: busy }));
@@ -1899,6 +1902,7 @@ function updateDock() {
 var OPT = {
   input: ['i', 'Input file', 'file'], inputparent: ['ip', 'Input parent CHD', 'file'], output: ['o', 'Output file name', 'out'],
   outputbin: ['ob', 'Output .bin name', 'out'], outputparent: ['op', 'Output parent CHD', 'file'], splitbin: ['sb', 'One .bin file per track', 'bool'],
+  redump: ['rd', 'As Redump: CRLF cue sheet, a .bin per track (Discpress)', 'bool'],
   verbose: ['v', 'Verbose output', 'bool'], fix: ['f', 'Fix the SHA-1 if it is incorrect', 'bool'],
   inputstartbyte: ['isb', 'Input start byte', 'num'], inputstarthunk: ['ish', 'Input start hunk', 'num'], inputbytes: ['ib', 'Input length (bytes)', 'num'],
   inputhunks: ['ih', 'Input length (hunks)', 'num'], inputstartframe: ['isf', 'Input start frame', 'num'], inputframes: ['if', 'Input length (frames)', 'num'],
@@ -1915,7 +1919,7 @@ var CMDS = [
   ['createhd', 'Create a hard disk CHD from a raw image (or a blank one)', ['input', '*output', 'compression', 'hunksize', 'template', 'chs', 'size', 'sectorsize', 'ident', 'outputparent'].concat(SLICE), 'Create'],
   ['createraw', 'Create a raw CHD from any file', ['*input', '*output', '*hunksize', '*unitsize', 'compression', 'outputparent'].concat(SLICE), 'Create'],
   ['createld', 'Create a LaserDisc CHD from an .avi', ['*input', '*output', 'compression', 'hunksize', 'inputstartframe', 'inputframes', 'outputparent'], 'Create'],
-  ['extractcd', 'Extract a CD CHD to .cue/.bin, .gdi or .toc', ['*input', '*output', 'outputbin', 'splitbin', 'inputparent'], 'Extract'],
+  ['extractcd', 'Extract a CD CHD to .cue/.bin, .gdi or .toc', ['*input', '*output', 'outputbin', 'splitbin', 'redump', 'inputparent'], 'Extract'],
   ['extractdvd', 'Extract a DVD CHD to an .iso', ['*input', '*output', 'inputparent'].concat(SLICE), 'Extract'],
   ['extracthd', 'Extract a hard disk CHD to a raw image', ['*input', '*output', 'inputparent'].concat(SLICE), 'Extract'],
   ['extractraw', 'Extract raw data from a CHD', ['*input', '*output', 'inputparent'].concat(SLICE), 'Extract'],

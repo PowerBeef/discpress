@@ -91,7 +91,7 @@ The standard tool for making CHDs is **chdman**, a command-line program from the
 | PSP | `.iso`, or compressed `.cso`/`.zso` | DVD CHD |
 | Arcade and computer hard disks | `.img`, `.hdd` | Hard disk CHD |
 | LaserDisc arcade games | `.avi` | LaserDisc CHD |
-| Any of the above | `.chd` | Back to `.cue`/`.bin`, `.gdi` or `.iso` |
+| Any of the above | `.chd` | Back to `.cue`/`.bin` (by default the Redump dump's own files), `.gdi` or `.iso` |
 
 ## See it in action
 

@@ -6,7 +6,7 @@
     <li>Press <b>Create CHD</b> on a card, or <b>Start all</b> at the bottom. Jobs run one after another.</li>
     <li>When a job finishes, press <b>Download</b> (on iPhone and iPad the button is called <b>Save to Files</b> and opens the share sheet, which also works inside apps that cannot download). On desktop Chrome/Edge you can <b>Save all to folder</b>.</li>
   </ol>
-  <p class="small muted">Add <code>.chd</code> files to extract them back to <code>.cue/.bin</code>, <code>.gdi</code>, <code>.iso</code> or a raw image, to verify their checksums, or to see their details.</p>
+  <p class="small muted">Add <code>.chd</code> files to extract them back to <code>.cue/.bin</code>, <code>.gdi</code>, <code>.iso</code> or a raw image, to verify their checksums, or to see their details. A CD comes back as a Redump dump by default: the same cue sheet and one <code>.bin</code> per track, so the files match Redump's checksums.</p>
 </div>
 
 <div class="card">
@@ -58,6 +58,7 @@
     <li>a file-system bridge for reading your files and writing results;</li>
     <li>helper workers that compress, and decompress for extracting and verifying, on several cores;</li>
     <li>faster codec trials and hashing that give the same bytes;</li>
+    <li>Redump's layout for extracted CDs (<code>extractcd --redump</code>);</li>
     <li>fixes for chdman 0.289's crashes and silent failures on bad input;</li>
     <li>the same floating-point math for the FLAC encoder in every build, so CD audio comes out byte for byte as with chdman on Linux;</li>
     <li>unused code removed.</li>
