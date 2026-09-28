@@ -206,7 +206,8 @@ This affects users today, so it ships as its own small release before any fork w
 - Measured CPU savings: 1.06× on CD data, 1.47× on CD audio, 1.10× on DVD. That is below the estimate, because deflate and single-frame FLAC can't stop partway through a hunk.
 - In the page, the benchmark CD and DVD convert 5–8% faster with 1 or 4 threads.
 - **2.2, done so far:** FLAC skips its MD5 in memory, and generic `flac` never encodes a hunk a third time.
-- **2.2, still open:** ECC verify once per CD hunk, and in-flight dedupe.
+- **2.2, ECC (done):** `ecc_verify` and `ecc_generate` compute P and Q eight vectors at a time in 64-bit words, 3.4 times faster, with the same results (`engine/README.md`). Native `createcd` of the benchmark CD takes 2% less CPU and `extractcd` 12% less. Verifying once per CD hunk instead of once per codec would now save about 1% more, so it isn't done.
+- **2.2, still open:** in-flight dedupe.
 - **Build fix found on the way:** `wasm/Makefile` now tracks header dependencies. A stale object had disagreed with a changed class layout.
 
 Numbers are single-core CPU unless noted (measurements §1–2, G §11–12).
@@ -255,7 +256,7 @@ Presets:
 - CloneCD: the page turns a `.ccd` into a cue sheet for its `.img` (`ccdToCue`). The `.sub` is noted and left out; subchannel ingest stays tier X. Multi-session, scrambled and track-list-less (CloneCD 2) files are refused with the reason.
 - CSO v1 and v2 and ZSO (maxcso's formats, for PSP and PS2): the job worker hands chdman the ISO inside, decompressing blocks as they are read (`CisoStore`), so the CHD is the one chdman makes from that ISO. Identification reads the ISO the same way, and its checksum is the ISO's. A damaged block stops the job with its number.
 - Found on the way: 0.289's `createraw`/`createhd`/`createdvd` ignore input read errors and write a CHD they can't open. The engine now stops with an error (`tests/ui/engine.spec.js`).
-- ECM (`.bin.ecm`, the ecm tools' format; common in PS1 collections, and emulators don't read it): an ECM image stands for the file it packs, the track a cue sheet, GDI or CloneCD `.ccd` names, or a lone `.bin`. The job worker rebuilds the image as chdman reads it (`EcmStore`, `wasm/ecm.cpp`), so the CHD is the one chdman makes from the unpacked image. A word-parallel ECC is 3.4 times faster than chdman's own (both checked equal on random sectors). The image's EDC, at the end of the file, is checked when the image is read in order, so a damaged file stops the job instead of making a CHD of the wrong data. Identification reads the image through a worker, and the checksum that confirms the release is the image's. The fixture encoder writes the same bytes as the ecm tools' `bin2ecm` (checked with a local build of it, not part of the repository).
+- ECM (`.bin.ecm`, the ecm tools' format; common in PS1 collections, and emulators don't read it): an ECM image stands for the file it packs, the track a cue sheet, GDI or CloneCD `.ccd` names, or a lone `.bin`. The job worker rebuilds the image as chdman reads it (`EcmStore`, `wasm/ecm.cpp`), so the CHD is the one chdman makes from the unpacked image. It rebuilds ECC with the engine's `ecc_generate`, which works a word at a time since 2.2. The image's EDC, at the end of the file, is checked when the image is read in order, so a damaged file stops the job instead of making a CHD of the wrong data. Identification reads the image through a worker, and the checksum that confirms the release is the image's. The fixture encoder writes the same bytes as the ecm tools' `bin2ecm` (checked with a local build of it, not part of the repository).
 
 Priority order (C §9):
 1. CloneCD `.ccd/.img/.sub`, which also enables subchannel ingest for LibCrypt and CD+G;

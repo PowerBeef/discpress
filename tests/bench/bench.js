@@ -201,8 +201,16 @@ for (const fx of fixtures) {
             } else {
               const refDir = fs.mkdtempSync(path.join(work, 'x-'));
               const ext = { cd: '.cue', gdrom: '.gdi', dvd: '.iso', hd: '.img' }[fx.disc];
-              nativeRun([`extract${fx.disc === 'gdrom' ? 'cd' : fx.disc}`, '-i', chdInput, '-o', path.join(refDir, 'bench-out' + ext)]);
-              verified = last.outs.every(o => fs.existsSync(path.join(refDir, o.name)) && sha1(o.path) === sha1(path.join(refDir, o.name)));
+              // the page extracts CDs as Redump lays them out: its cue sheet with CRLF line ends, and one .bin per
+              // track unless there is only one. chdman 0.289 gives the same bins (split with -sb) and an LF cue sheet.
+              const main = last.outs.find(o => o.name.endsWith(ext));
+              const bins = last.outs.filter(o => o.name.endsWith('.bin')).length;
+              const args = [`extract${fx.disc === 'gdrom' ? 'cd' : fx.disc}`, '-i', chdInput, '-o', path.join(refDir, main ? main.name : 'bench-out' + ext)];
+              if (fx.disc === 'cd' && bins > 1) args.push('-sb');
+              nativeRun(args);
+              const text = f => fs.readFileSync(f, 'latin1').replace(/\r\n/g, '\n');
+              verified = last.outs.every(o => fs.existsSync(path.join(refDir, o.name)) &&
+                (fx.disc === 'cd' && o.name.endsWith('.cue') ? text(o.path) === text(path.join(refDir, o.name)) : sha1(o.path) === sha1(path.join(refDir, o.name))));
             }
             if (verified === false) die(`output of ${fx.key} ${op} ${preset} differs from native chdman`);
           }
