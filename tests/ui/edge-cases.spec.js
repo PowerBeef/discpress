@@ -177,6 +177,52 @@ test('an ISO can be switched between DVD and CD', async ({ app }) => {
   await app.run(card);
 });
 
+// compressed ISOs (convert.spec: psp-cso, psp-cso2, psp-zso and ps2-cso)
+test('a compressed ISO can be converted as a CD', async ({ app }) => {
+  await app.open();
+  await app.add(['umd.zso']);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await expect(card.locator('.sub')).toContainText('ZSO compressed ISO');
+  await expect(card.locator('code.cmd')).toContainText('chdman createdvd -i umd.iso');
+  await card.locator('.seg button', { hasText: 'CD CHD' }).click();
+  await expect(card.locator('code.cmd')).toContainText('chdman createcd -i umd.iso');
+  await app.run(card);
+  const [out] = await app.downloads(card);
+  if (nativeChdman()) {
+    const ref = reference('createcd', 'umd.iso');
+    if (sameVersion()) expect(sha1File(out.path)).toBe(sha1File(ref));
+    else expect(info(out.path).dataSha1).toBe(info(ref).dataSha1);
+  }
+});
+
+test('a file named .cso that is not a compressed ISO is refused', async ({ app }) => {
+  fs.writeFileSync(path.join(FIXTURES, 'not really.cso'), 'CISO but not really');
+  await app.open();
+  await app.add(['not really.cso']);
+  const card = app.job('not really');
+  await app.waitState(card, 'error');
+  await expect(card.locator('.note.err')).toContainText('not a CSO or ZSO compressed ISO');
+  await expect(card.locator('.job-foot')).toContainText('Can\u2019t convert');
+});
+
+test('a damaged compressed ISO stops with an error that names the block', async ({ app }) => {
+  const src = Buffer.from(fs.readFileSync(path.join(FIXTURES, 'umd.cso')));
+  const shift = src[21], entry = i => src.readUInt32LE(24 + 4 * i);
+  // the first deflate block past the file system: garble its start
+  let b = 600;
+  while (entry(b) >>> 31) b++;
+  src.fill(0xff, (entry(b) & 0x7fffffff) << shift, ((entry(b) & 0x7fffffff) << shift) + 16);
+  fs.writeFileSync(path.join(FIXTURES, 'damaged umd.cso'), src);
+  await app.open();
+  await app.add(['damaged umd.cso']);
+  const card = app.job('damaged umd');
+  await app.settled(card);
+  await expect(card.locator('.ident-how')).toHaveText('Matched by serial number'); // the file system is intact
+  await app.run(card, { expectState: 'error' });
+  await expect(card.locator('.note.err')).toContainText(`"damaged umd.cso" is damaged or incomplete: block ${b} of 666 could not be read.`);
+});
+
 test('a running job can be cancelled and run again', async ({ app, page }) => {
   await app.open({ settings: { threads: 1 } });
   await app.add(fixture('ps2-dvd').add);

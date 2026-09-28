@@ -1494,7 +1494,26 @@
  	const char *description;
  	const char *valid_options[16];
  };
-@@ -1285,6 +1412,15 @@
+@@ -329,9 +456,15 @@
+ 			return 0;
+ 		if (offset + length > m_maxoffset)
+ 			length = m_maxoffset - offset;
+-		if (m_file.seek(offset, SEEK_SET)) // FIXME: better error reporting?
+-			return 0;
+-		auto const [err, actual] = read(m_file, dest, length); // FIXME: check for error return
++		// a failed or short read is an error (0.289 ignored it and compressed whatever the buffer held)
++		std::error_condition err = m_file.seek(offset, SEEK_SET);
++		std::size_t actual = 0;
++		if (!err)
++			std::tie(err, actual) = read(m_file, dest, length);
++		if (!err && (actual != length))
++			err = std::errc::io_error;
++		if (err)
++			throw err;
+ 		return actual;
+ 	}
+ 
+@@ -1285,6 +1418,15 @@
  
  static void check_existing_output_file(const parameters_map &params, std::string_view filename)
  {
@@ -1510,7 +1529,7 @@
  	if (params.find(OPTION_OUTPUT_FORCE) == params.end())
  	{
  		util::core_file::ptr file;
-@@ -1498,7 +1634,7 @@
+@@ -1498,7 +1640,7 @@
  //  compress_common - standard compression loop
  //-------------------------------------------------
  
@@ -1519,7 +1538,7 @@
  {
  	// begin compressing
  	chd.compress_begin();
-@@ -1507,10 +1643,13 @@
+@@ -1507,10 +1649,13 @@
  	double complete, ratio;
  	std::error_condition err;
  	while ((err = chd.compress_continue(complete, ratio)) == chd_file::error::WALKING_PARENT || err == chd_file::error::COMPRESSING)
@@ -1533,7 +1552,7 @@
  
  	// handle errors
  	if (err)
-@@ -1781,7 +1920,7 @@
+@@ -1781,7 +1926,7 @@
  //  do_verify - validate the SHA-1 on a CHD
  //-------------------------------------------------
  
@@ -1542,7 +1561,7 @@
  {
  	bool fix_sha1 = params.find(OPTION_FIX) != params.end();
  	// parse out input files
-@@ -1820,6 +1959,7 @@
+@@ -1820,6 +1965,7 @@
  
  		// determine how much to read
  		uint32_t bytes_to_read = (std::min<uint64_t>)(buffer.size(), input_chd.logical_bytes() - offset);
@@ -1550,7 +1569,7 @@
  		std::error_condition err = input_chd.read_bytes(offset, &buffer[0], bytes_to_read);
  		if (err)
  			report_error(1, "Error reading CHD file (%s): %s", *input_chd_str->second, err.message());
-@@ -1830,7 +1970,8 @@
+@@ -1830,7 +1976,8 @@
  	}
  	util::sha1_t computed_sha1 = rawsha1.finish();
  
@@ -1560,7 +1579,7 @@
  	if (raw_sha1 != computed_sha1)
  	{
  		util::stream_format(std::cerr, "Error: Raw SHA1 in header = %s\n", raw_sha1.as_string());
-@@ -1844,6 +1985,8 @@
+@@ -1844,6 +1991,8 @@
  				report_error(1, "Error updating SHA1: %s", err.message());
  			util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
  		}
@@ -1569,7 +1588,7 @@
  	}
  	else
  	{
-@@ -1868,9 +2011,13 @@
+@@ -1868,9 +2017,13 @@
  						report_error(1, "Error updating SHA1: %s", err.message());
  					util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
  				}
@@ -1583,7 +1602,7 @@
  }
  
  
-@@ -1879,7 +2026,7 @@
+@@ -1879,7 +2032,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -1592,7 +1611,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -1894,6 +2041,8 @@
+@@ -1894,6 +2047,8 @@
  	if (unit_size_str != params.end())
  	{
  		unit_size = parse_number(unit_size_str->second->c_str());
@@ -1601,7 +1620,7 @@
  		if (output_parent.opened() && (output_parent.unit_bytes() != unit_size))
  			report_error(1, "Specified unit size %u bytes does not match output parent CHD unit size %u bytes", unit_size, output_parent.unit_bytes());
  	}
-@@ -1943,7 +2092,7 @@
+@@ -1943,7 +2098,7 @@
  			chd->clone_all_metadata(output_parent);
  
  		// compress it generically
@@ -1610,7 +1629,7 @@
  	}
  	catch (...)
  	{
-@@ -1959,7 +2108,7 @@
+@@ -1959,7 +2114,7 @@
  //  disk image from a raw file
  //-------------------------------------------------
  
@@ -1619,7 +1638,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2008,6 +2157,8 @@
+@@ -2008,6 +2163,8 @@
  		if (template_str != params.end())
  			report_error(1, "Sector size cannot be specified separately when a template is specified");
  		sector_size = parse_number(sectorsize_str->second->c_str());
@@ -1628,7 +1647,7 @@
  	}
  	if (output_parent.opened() && (output_parent.unit_bytes() != sector_size))
  		report_error(1, "Sector size %u bytes does not match output parent CHD sector size %u bytes", sector_size, output_parent.unit_bytes());
-@@ -2147,7 +2298,7 @@
+@@ -2147,7 +2304,7 @@
  
  		// compress it generically
  		if (input_file)
@@ -1637,7 +1656,7 @@
  	}
  	catch (...)
  	{
-@@ -2163,7 +2314,7 @@
+@@ -2163,7 +2320,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -1646,7 +1665,7 @@
  {
  	// process input file
  	cdrom_file::track_input_info track_info;
-@@ -2227,7 +2378,7 @@
+@@ -2227,7 +2384,7 @@
  			report_error(1, "Error adding CD metadata: %s", err.message());
  
  		// compress it generically
@@ -1655,7 +1674,7 @@
  	}
  	catch (...)
  	{
-@@ -2243,7 +2394,7 @@
+@@ -2243,7 +2400,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -1664,7 +1683,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2295,7 +2446,7 @@
+@@ -2295,7 +2452,7 @@
  			report_error(1, "Error adding DVD metadata: %s", err.message());
  
  		// compress it generically
@@ -1673,7 +1692,7 @@
  	}
  	catch (...)
  	{
-@@ -2311,7 +2462,7 @@
+@@ -2311,7 +2468,7 @@
  //  input AVI file and metadata
  //-------------------------------------------------
  
@@ -1682,7 +1701,7 @@
  {
  	// process input file
  	avi_file::ptr input_file;
-@@ -2399,7 +2550,7 @@
+@@ -2399,7 +2556,7 @@
  			report_error(1, "Error adding AV metadata: %s\n", err.message());
  
  		// create the compressor and then run it generically
@@ -1691,7 +1710,7 @@
  
  		// write the final LD metadata
  		if (info.height == 524/2 || info.height == 624/2)
-@@ -2456,7 +2607,7 @@
+@@ -2456,7 +2613,7 @@
  //  another CHD
  //-------------------------------------------------
  
@@ -1700,7 +1719,7 @@
  {
  	// parse out input files
  	chd_file input_parent_chd;
-@@ -2547,7 +2698,7 @@
+@@ -2547,7 +2704,7 @@
  		}
  
  		// compress it generically
@@ -1709,7 +1728,7 @@
  	}
  	catch (...)
  	{
-@@ -2563,7 +2714,7 @@
+@@ -2563,7 +2720,7 @@
  //  CHD image
  //-------------------------------------------------
  
@@ -1718,7 +1737,7 @@
  {
  	// parse out input files
  	chd_file input_parent_chd;
-@@ -2604,6 +2755,7 @@
+@@ -2604,6 +2761,7 @@
  
  			// determine how much to read
  			uint32_t bytes_to_read = (std::min<uint64_t>)(buffer.size(), input_end - offset);
@@ -1726,7 +1745,7 @@
  			std::error_condition err = input_chd.read_bytes(offset, &buffer[0], bytes_to_read);
  			if (err)
  				report_error(1, "Error reading CHD file (%s): %s", *params.find(OPTION_INPUT)->second, err.message());
-@@ -2639,14 +2791,16 @@
+@@ -2639,14 +2797,16 @@
  //  CHD image
  //-------------------------------------------------
  
@@ -1745,7 +1764,7 @@
  	cdrom_file *cdrom = new cdrom_file(&input_chd);
  	const cdrom_file::toc &toc = cdrom->get_toc();
  
-@@ -2920,6 +3074,7 @@
+@@ -2920,6 +3080,7 @@
  		uint64_t outputoffs = 0;
  		uint32_t discoffs = 0;
  		std::vector<uint8_t> buffer;
@@ -1753,7 +1772,7 @@
  
  		for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
  		{
-@@ -2987,6 +3142,15 @@
+@@ -2987,6 +3148,15 @@
  					frameofs = frame - trackinfo.splitframes;
  				}
  
@@ -1769,7 +1788,7 @@
  				// read the data
  				cdrom->read_data(cdrom->get_track_start_phys(trk) + frameofs, &buffer[bufferoffs], toc.tracks[trk].trktype, true);
  
-@@ -3387,7 +3551,8 @@
+@@ -3387,7 +3557,8 @@
  	{
  		// delete the output file
  		output_file.reset();
@@ -1779,7 +1798,7 @@
  		throw;
  	}
  }
-@@ -3425,14 +3590,39 @@
+@@ -3425,14 +3596,39 @@
  //  main - entry point
  //-------------------------------------------------
  
@@ -1797,7 +1816,8 @@
 +
 +std::unique_ptr<chdman_run> s_run;
 +constexpr int CHDMAN_PAUSED = -1;
-+
+ 
+-	// print the header
 +chdman_task run_function(void (*function)(parameters_map &), parameters_map &params)
 +{
 +	function(params);
@@ -1805,8 +1825,7 @@
 +}
 +
 +} // anonymous namespace
- 
--	// print the header
++
 +
 +// parses the command line and prepares the command: returns CHDMAN_PAUSED when it is ready to
 +// run (chdman_continue), otherwise the exit code
@@ -1823,7 +1842,7 @@
  
  	// handle help specially
  	if (args.size() < 2)
-@@ -3459,7 +3649,7 @@
+@@ -3459,7 +3655,7 @@
  				return print_help(args[0], desc);
  
  			// otherwise, verify the parameters
@@ -1832,7 +1851,7 @@
  			while (argnum < args.size())
  			{
  				// should be an option name
-@@ -3519,30 +3709,86 @@
+@@ -3519,30 +3715,86 @@
  					return print_help(args[0], desc, "Required parameters missing");
  			}
  

@@ -147,6 +147,39 @@ extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_decompress(uint32_t codec, uint3
 
 
 // ---------------------------------------------------------------------------
+// Raw deflate, for CSO images (compressed ISOs) that the job worker presents to
+// chdman as the ISO itself: returns the bytes written to dst, or -1.
+// ---------------------------------------------------------------------------
+#include <zlib.h>
+
+namespace {
+z_stream i_stream;
+bool i_ready = false;
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE int wasm_inflate_raw(const uint8_t *src, uint32_t srclen, uint8_t *dst, uint32_t dstlen)
+{
+	if (!i_ready)
+	{
+		std::memset(&i_stream, 0, sizeof(i_stream));
+		if (inflateInit2(&i_stream, -MAX_WBITS) != Z_OK)
+			return -1;
+		i_ready = true;
+	}
+	else if (inflateReset(&i_stream) != Z_OK)
+		return -1;
+	i_stream.next_in = const_cast<Bytef *>(src);
+	i_stream.avail_in = srclen;
+	i_stream.next_out = dst;
+	i_stream.avail_out = dstlen;
+	int const err = inflate(&i_stream, Z_FINISH);
+	if ((err != Z_STREAM_END) && !((err == Z_BUF_ERROR || err == Z_OK) && (i_stream.avail_out == 0)))
+		return -1;
+	return int(dstlen - i_stream.avail_out);
+}
+
+
+// ---------------------------------------------------------------------------
 // Probe API: read sectors from an existing CHD so the page can identify the
 // game (system, serial, title) without extracting it.
 // ---------------------------------------------------------------------------

@@ -3,7 +3,8 @@
 // Chromium and compares them with native chdman on the same machine.
 //
 //   node bench/bench.js [options]
-//     --fixtures bench-cd,bench-dvd   fixture keys (see fixtures/make_fixtures.py; --quick uses small ones)
+//     --fixtures bench-cd,bench-dvd   fixture keys (see fixtures/make_fixtures.py; --quick uses small ones;
+//                                     bench-dvd-cso is bench-dvd as a CSO)
 //     --quick                         small test fixtures instead of the large benchmark images
 //     --ops create,extract            what to time: making CHDs and/or extracting them again
 //     --threads 1,2,4                 compression thread counts (default: 1, 2, 4 ... up to the CPU count)
@@ -61,6 +62,8 @@ execFileSync('python3', [path.join(TESTS, 'fixtures', 'make_fixtures.py'), '--ou
 const manifest = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'manifest.json'), 'utf8'));
 const fixtures = cfg.fixtures.map(k => manifest.find(f => f.key === k) || die(`unknown fixture ${k}`));
 const mainInput = fx => fx.add.find(n => /\.(cue|gdi)$/i.test(n)) || fx.add[0];
+// what native chdman is given: `ref` when the page makes chdman's input itself (the ISO inside a .cso)
+const nativeInput = fx => fx.ref || mainInput(fx);
 const inputBytes = fx => fx.add.reduce((s, n) => s + fs.statSync(path.join(FIXTURES, n)).size, 0);
 const codecs = (fx, preset) => CODECS[fx.disc === 'cd' || fx.disc === 'gdrom' ? 'cd' : 'other'][preset];
 
@@ -81,7 +84,7 @@ function nativeRef(fx, preset) {
   const key = `${fx.key}-${preset}`;
   if (!nativeRefs[key]) {
     const out = path.join(work, `${key}.chd`);
-    nativeRun([fx.command, '-i', mainInput(fx), '-o', out, '-f', ...codecs(fx, preset)]);
+    nativeRun([fx.command, '-i', nativeInput(fx), '-o', out, '-f', ...codecs(fx, preset)]);
     nativeRefs[key] = out;
   }
   return nativeRefs[key];
@@ -221,7 +224,7 @@ for (const fx of fixtures) {
         for (const threads of threadsList) {
           const times = [];
           for (let r = 0; r < cfg.repeat; r++) {
-            if (op === 'create') times.push(nativeRun([fx.command, '-i', mainInput(fx), '-o', path.join(work, 'n.chd'), '-f', '-np', String(threads), ...codecs(fx, preset)]));
+            if (op === 'create') times.push(nativeRun([fx.command, '-i', nativeInput(fx), '-o', path.join(work, 'n.chd'), '-f', '-np', String(threads), ...codecs(fx, preset)]));
             else { const d = fs.mkdtempSync(path.join(work, 'n-')); const ext = { cd: '.cue', gdrom: '.gdi', dvd: '.iso', hd: '.img' }[fx.disc]; times.push(nativeRun([`extract${fx.disc === 'gdrom' ? 'cd' : fx.disc}`, '-i', chdInput, '-o', path.join(d, 'o' + ext)])); fs.rmSync(d, { recursive: true }); }
           }
           const secs = median(times);

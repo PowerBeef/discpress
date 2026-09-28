@@ -338,3 +338,71 @@ def sfo(entries):
 
 def msf(frames):
     return '%02d:%02d:%02d' % (frames // 4500, (frames // 75) % 60, frames % 75)
+
+
+# ---------------------------------------------------------------- compressed ISOs (CSO, ZSO)
+
+def lz4_block(data):
+    """LZ4 block format (a simple greedy compressor; slow, for small fixtures)."""
+    n, out, table, anchor, i = len(data), bytearray(), {}, 0, 0
+
+    def more(v):  # a length past the token's 15
+        while v >= 255:
+            out.append(255)
+            v -= 255
+        out.append(v)
+
+    while i + 12 <= n:  # the last match starts 12 bytes or more before the end
+        key = data[i:i + 4]
+        cand = table.get(key)
+        table[key] = i
+        if cand is None or i - cand > 65535:
+            i += 1
+            continue
+        m = 4
+        while i + m < n - 5 and data[cand + m] == data[i + m]:  # the last 5 bytes are literals
+            m += 1
+        lit = i - anchor
+        out.append(min(lit, 15) << 4 | min(m - 4, 15))
+        if lit >= 15:
+            more(lit - 15)
+        out += data[anchor:i] + (i - cand).to_bytes(2, 'little')
+        if m - 4 >= 15:
+            more(m - 4 - 15)
+        i = anchor = i + m
+    lit = n - anchor
+    out.append(min(lit, 15) << 4)
+    if lit >= 15:
+        more(lit - 15)
+    return bytes(out + data[anchor:])
+
+
+def ciso(iso, version=1, block=SECTOR, shift=0, zso=False):
+    """A compressed ISO laid out as maxcso writes one (its README_CSO.md and README_ZSO.md):
+    CSO v1 (deflate), CSO v2 (deflate and LZ4, alternating so that both appear) or ZSO (LZ4).
+    The last block is filled to the block size with zeros before it is compressed. Blocks that
+    don't shrink are stored as they are. Blocks start on 2**shift-byte boundaries, padded with 0xAA."""
+    import zlib
+    count, align = -(-len(iso) // block), 1 << shift
+    head = (b'ZISO' if zso else b'CISO') + (24).to_bytes(4, 'little') + len(iso).to_bytes(8, 'little') + \
+        block.to_bytes(4, 'little') + bytes([2 if version == 2 else 1, shift, 0, 0])
+    pos = 24 + 4 * (count + 1)
+    body, index = bytearray(b'\xaa' * (-pos % align)), []
+    pos += len(body)
+    for b in range(count):
+        raw = iso[b * block:(b + 1) * block].ljust(block, b'\0')
+        c = zlib.compressobj(9, zlib.DEFLATED, -15)
+        packed, lz4 = c.compress(raw) + c.flush(), zso or (version == 2 and b % 2 == 1)
+        if lz4:
+            packed = lz4_block(raw)
+        stored = len(packed) + (-len(packed) % align)
+        if (stored >= block) if version == 2 else (len(packed) >= block):
+            index.append(pos >> shift | (0 if version == 2 else 0x80000000))
+            packed = raw
+        else:
+            index.append(pos >> shift | (0x80000000 if version == 2 and lz4 else 0))
+        packed += b'\xaa' * (-len(packed) % align)
+        body += packed
+        pos += len(packed)
+    index.append(pos >> shift)
+    return head + b''.join(e.to_bytes(4, 'little') for e in index) + bytes(body)

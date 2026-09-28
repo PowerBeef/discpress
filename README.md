@@ -87,8 +87,8 @@ The standard tool for making CHDs is **chdman**, a command-line program from the
 |---|---|---|
 | PlayStation, Saturn, Sega CD, PC Engine CD, Neo Geo CD, 3DO, CD-i, Amiga CD32, PC-FX | `.cue` + `.bin`, or CloneCD `.ccd` + `.img` (+ `.sub`) | CD CHD |
 | Dreamcast | `.gdi` + tracks, or Redump `.cue` + `.bin` | CD CHD (GD-ROM detected) |
-| PlayStation 2 | DVD games: `.iso` · CD games: `.cue` + `.bin` | DVD or CD CHD |
-| PSP | `.iso` | DVD CHD |
+| PlayStation 2 | DVD games: `.iso`, or compressed `.cso`/`.zso` · CD games: `.cue` + `.bin` | DVD or CD CHD |
+| PSP | `.iso`, or compressed `.cso`/`.zso` | DVD CHD |
 | Arcade and computer hard disks | `.img`, `.hdd` | Hard disk CHD |
 | LaserDisc arcade games | `.avi` | LaserDisc CHD |
 | Any of the above | `.chd` | Back to `.cue`/`.bin`, `.gdi` or `.iso` |

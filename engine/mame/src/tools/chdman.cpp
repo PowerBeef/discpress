@@ -456,9 +456,15 @@ public:
 			return 0;
 		if (offset + length > m_maxoffset)
 			length = m_maxoffset - offset;
-		if (m_file.seek(offset, SEEK_SET)) // FIXME: better error reporting?
-			return 0;
-		auto const [err, actual] = read(m_file, dest, length); // FIXME: check for error return
+		// a failed or short read is an error (0.289 ignored it and compressed whatever the buffer held)
+		std::error_condition err = m_file.seek(offset, SEEK_SET);
+		std::size_t actual = 0;
+		if (!err)
+			std::tie(err, actual) = read(m_file, dest, length);
+		if (!err && (actual != length))
+			err = std::errc::io_error;
+		if (err)
+			throw err;
 		return actual;
 	}
 

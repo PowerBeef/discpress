@@ -80,8 +80,10 @@ export function reference(command, input, extra = []) {
   fs.mkdirSync(dir, { recursive: true });
   const out = path.join(dir, `${key}.chd`);
   if (!fs.existsSync(out)) {
-    chdman([command, '-i', input, '-o', out + '.tmp', '-f', ...extra]);
-    fs.renameSync(out + '.tmp', out);
+    // test workers that need the same reference at once each write their own, then rename it
+    const part = `${out}.${process.pid}.tmp`;
+    chdman([command, '-i', input, '-o', part, '-f', ...extra]);
+    fs.renameSync(part, out);
   }
   return out;
 }

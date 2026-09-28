@@ -78,6 +78,22 @@ test('bad input is an error, not a crash', () => {
   }
 });
 
+test('an input that cannot be read is an error, not a broken CHD', () => {
+  const dir = tmp('a directory'); // opens, but reading it fails
+  fs.mkdirSync(dir, { recursive: true });
+  for (const args of [['createraw', '-hs', '4096', '-us', '512'], ['createhd'], ['createdvd']]) {
+    const out = tmp(`${args[0]}.chd`);
+    // 0.289: exit 0, and a CHD that it can't open
+    expect(run(UPSTREAM, [args[0], '-i', dir, '-o', out, '-f', ...args.slice(1)]).code, `upstream ${args[0]}`).toBe(0);
+    expect(run(UPSTREAM, ['info', '-i', out]).code, `upstream ${args[0]} output`).toBe(1);
+    fs.rmSync(out);
+    const r = run(ENGINE, [args[0], '-i', dir, '-o', out, '-f', ...args.slice(1)]);
+    expect({ code: r.code, signal: r.signal }, args[0]).toEqual({ code: 1, signal: null });
+    expect(r.err).toContain('Error during compression: Is a directory');
+    expect(fs.existsSync(out), `${args[0]} output`).toBe(false);
+  }
+});
+
 test('dumpmeta to stdout writes only the metadata', () => {
   const chd = makeChd('createcd', 'twine.cue');
   const up = run(UPSTREAM, ['dumpmeta', '-i', chd, '-t', 'CHT2']);

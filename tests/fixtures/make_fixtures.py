@@ -149,10 +149,11 @@ fixture('ps1-verified', {
    testdb=True, ident='hash', name='Checksum Verified Game (USA)', provisional='007 - The World Is Not Enough (USA)')
 
 # ---------------------------------------------------------------- PlayStation 2 / PSP (DVD)
+agent_iso = lambda: g.pad_sectors(g.iso9660({
+    'SYSTEM.CNF': b'BOOT2 = cdrom0:\\SLUS_202.65;1\r\nVER = 1.00\r\nVMODE = NTSC\r\n',
+    'SLUS_202.65': exe('SLUS_202.65'), 'DATA.BIN': g.filler(24 << 20, 21)}, 'AUF', 'PLAYSTATION'))
 fixture('ps2-dvd', {
-    'agent.iso': lambda: g.pad_sectors(g.iso9660({
-        'SYSTEM.CNF': b'BOOT2 = cdrom0:\\SLUS_202.65;1\r\nVER = 1.00\r\nVMODE = NTSC\r\n',
-        'SLUS_202.65': exe('SLUS_202.65'), 'DATA.BIN': g.filler(24 << 20, 21)}, 'AUF', 'PLAYSTATION')),
+    'agent.iso': agent_iso,
 }, add=['agent.iso'], job='create', disc='dvd', command='createdvd', sys='ps2', serial='SLUS-20265',
    ident='serial', name='007 - Agent Under Fire (USA)')
 
@@ -163,6 +164,21 @@ fixture('psp-umd', {
         'PSP_GAME/SYSDIR/EBOOT.BIN': g.filler(2 << 20, 31), 'PSP_GAME/USRDIR/DATA.BIN': g.filler(12 << 20, 32)}, 'PSP_GAME', 'PSP GAME')),
 }, add=['frwl.iso'], job='create', disc='dvd', command='createdvd', sys='psp', serial='ULUS-10080',
    ident='serial', name='007 - From Russia with Love (USA)')
+
+# compressed ISOs: a small PSP disc in maxcso's three formats, and the PS2 disc above as a CSO. The
+# page gives chdman the ISO inside, so the CHD must be the one desktop chdman makes from that ISO (`ref`).
+umd_iso = lambda: g.pad_sectors(g.iso9660({
+    'UMD_DATA.BIN': b'ULUS-10080|0000000000000001|0001|G',
+    'PSP_GAME/PARAM.SFO': g.sfo({'CATEGORY': 'UG', 'DISC_ID': 'ULUS10080', 'DISC_VERSION': '1.00', 'TITLE': 'FROM RUSSIA WITH LOVE'}),
+    'PSP_GAME/SYSDIR/EBOOT.BIN': g.filler(256 << 10, 35), 'PSP_GAME/USRDIR/DATA.BIN': g.filler(1 << 20, 36)}, 'PSP_GAME', 'PSP GAME'))
+umd = dict(ref='umd.iso', job='create', disc='dvd', command='createdvd', sys='psp', serial='ULUS-10080',
+           ident='serial', name='007 - From Russia with Love (USA)')
+fixture('psp-cso', {'umd.iso': umd_iso, 'umd.cso': lambda: g.ciso(umd_iso())}, add=['umd.cso'], **umd)
+# CSO v2 with 16 KiB blocks (the ISO's last one is not full), deflate and LZ4, blocks on 4-byte boundaries
+fixture('psp-cso2', {'umd v2.cso': lambda: g.ciso(umd_iso(), 2, 16384, 2)}, add=['umd v2.cso'], **umd)
+fixture('psp-zso', {'umd.zso': lambda: g.ciso(umd_iso(), zso=True)}, add=['umd.zso'], **umd)
+fixture('ps2-cso', {'agent.cso': lambda: g.ciso(agent_iso())}, add=['agent.cso'], ref='agent.iso', job='create', disc='dvd',
+        command='createdvd', sys='ps2', serial='SLUS-20265', ident='serial', name='007 - Agent Under Fire (USA)')
 
 # ---------------------------------------------------------------- Sega
 def ipbin(magic, serial_off, serial, title_off, title, extra=None):
@@ -274,11 +290,19 @@ if args.bench:
             'SYSTEM.CNF': b'BOOT2 = cdrom0:\\SLUS_202.65;1\r\nVER = 1.00\r\n', 'SLUS_202.65': exe('SLUS_202.65'),
             'DATA.BIN': g.filler((args.dvd_mb << 20) - (1 << 20), 95)}, 'BENCH', 'PLAYSTATION')),
     }, add=['bench-dvd.iso'], job='create', disc='dvd', command='createdvd', sys='ps2', bench=True)
+    # the same image as a CSO: what decompressing it while converting costs
+    fixture('bench-dvd-cso', {
+        'bench-dvd.cso': lambda: g.ciso(open(os.path.join(OUT, 'bench-dvd.iso'), 'rb').read()),
+    }, add=['bench-dvd.cso'], ref='bench-dvd.iso', job='create', disc='dvd', command='createdvd', sys='ps2', bench=True)
 
 # extra database rows for the page served with ?testdb=1 (see tests/support/server.js)
+def row(name, serial, data, ext):
+    return '\t'.join([name, serial, str(len(data)), '%08X' % zlib.crc32(data), '', ext])
 vb = open(os.path.join(OUT, 'verified.bin'), 'rb').read()
+ui = open(os.path.join(OUT, 'umd.iso'), 'rb').read()  # the ISO inside the umd.* compressed ISOs
 with open(os.path.join(OUT, 'testdb.json'), 'w') as f:
-    json.dump({'ps1': ['\t'.join(['Checksum Verified Game (USA)', 'SLUS-99999', str(len(vb)), '%08X' % zlib.crc32(vb), '', 'bin'])]}, f)
+    json.dump({'ps1': [row('Checksum Verified Game (USA)', 'SLUS-99999', vb, 'bin')],
+               'psp': [row('Checksum Verified PSP Game (USA)', 'ULUS-99999', ui, 'iso')]}, f)
 
 with open(os.path.join(OUT, 'manifest.json'), 'w') as f:
     json.dump(manifest, f, indent=1)

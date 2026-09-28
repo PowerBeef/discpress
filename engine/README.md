@@ -25,6 +25,7 @@ The paths mirror MAME's, so every file can be compared with its original. **[`ma
   - `verify` exits 1 when the data doesn't match the header's SHA-1, unless `--fix` corrects it. Upstream exits 0, so scripts and the page reported success.
   - An output is never written over an input: `copy -i x -o x -f` used to truncate `x` and then delete it.
   - `extractcd` of a CHD that isn't a CD, and a unit or sector size of 0, are errors (exit 1). Upstream aborts on `throw nullptr` or divides by zero.
+  - A failed or short read of the input of `createraw`, `createhd` or `createdvd` is an error (exit 1). Upstream ignores it, compresses whatever its buffer holds and exits 0, so the CHD silently holds the wrong data; for an unreadable input it can't even open the result.
   - `dumpmeta` without `-o` prints its banner on stderr, so stdout carries only the metadata.
   - Any other unexpected exception is an error instead of a crash.
   - `tests/ui/engine.spec.js` compares each of these with upstream.

@@ -692,6 +692,17 @@ function fixDescriptor(kind, text) {
   var out = lines.join('\n');
   return { text: out, changed: out !== text.split(/\r?\n/).join('\n'), problem: problem };
 }
+// a CSO (v1 or v2) or ZSO compressed ISO's header: {size} of the ISO inside (0 if the file can't be
+// read here: converting it then says why), or null if it is not one
+async function sniffCiso(file) {
+  var b;
+  try { b = new Uint8Array(await file.slice(0, 24).arrayBuffer()); } catch (e) { return { size: 0 }; }
+  if (b.length < 24) return null;
+  var magic = String.fromCharCode(b[0], b[1], b[2], b[3]), dv = new DataView(b.buffer);
+  var size = dv.getUint32(8, true) + dv.getUint32(12, true) * 4294967296, bs = dv.getUint32(16, true);
+  if ((magic !== 'CISO' && magic !== 'ZISO') || !bs || bs % 2048 || bs > 1 << 24 || !size) return null;
+  return { size: size };
+}
 async function sniffSync(file) {
   try {
     var b = new Uint8Array(await file.slice(0, 16).arrayBuffer());
@@ -758,10 +769,10 @@ function applyIdent(job, starting) {
   if (settings.rename && id.name && !job.outEdited && !locked) job.opts.out = id.name;
   if (job.kind !== 'create' || locked) return;
   // pick the right CHD flavour for the system
-  if (job.src === 'iso' || (job.src === 'bin' && job.choices)) {
+  if (job.src === 'iso' || job.src === 'cso' || (job.src === 'bin' && job.choices)) {
     if (id.sys === 'psp') { job.disc = 'dvd'; if (!job.hunkEdited) job.opts.hunk = '2048'; }
     else if (id.sys === 'ps2') {
-      var cdGame = id.entry ? id.entry.ext === 'bin' : job.files[0].file.size < 800 * 1048576;
+      var cdGame = id.entry ? id.entry.ext === 'bin' : (job.isoSize || job.files[0].file.size) < 800 * 1048576;
       job.disc = cdGame ? 'cd' : 'dvd';
     } else if (id.sys === 'gc' || id.sys === 'wii') { /* leave as is */ }
     else if (id.sys !== 'pc') job.disc = 'cd';
@@ -919,6 +930,15 @@ async function addEntries(entries) {
       // track by file size alone (Mode 2 for any raw image, 2,048-byte sectors when the size allows)
       job2 = newJob({ kind: 'create', src: 'iso', title: t, files: [{ file: file, name: name }], disc: sync ? 'cd' : (x === 'iso' ? 'dvd' : 'cd'), choices: ['dvd', 'cd'], syncMode: sync, autoCue: sync ? (sync === 2 ? 'MODE2/2352' : 'MODE1/2352') : '' });
       if (sync) job2.warnings.push('This .' + x + ' file contains raw 2,352-byte CD sectors, so it will be converted as a CD.');
+    } else if (x === 'cso' || x === 'zso') {
+      // a compressed ISO (maxcso's CSO or ZSO, for PSP and PS2): chdman is given the ISO inside it
+      var ciso = await sniffCiso(file);
+      job2 = newJob({ kind: 'create', src: 'cso', title: t, files: [{ file: file, name: name }], disc: 'dvd', choices: ['dvd', 'cd'], isoSize: ciso ? ciso.size : 0 });
+      if (!ciso) {
+        job2.invalid = true;
+        job2.state = 'error';
+        job2.errorText = 'This is not a CSO or ZSO compressed ISO that Discpress can read.';
+      }
     } else if (x === 'nrg') {
       job2 = newJob({ kind: 'create', src: 'nrg', title: t, files: [{ file: file, name: name }], disc: 'cd' });
     } else if (x === 'avi') {
@@ -1144,6 +1164,10 @@ function buildJob(job) {
       inName = job.descName;
       inputs.push({ name: job.descName, blob: job.descBlob || job.descFile });
       job.files.forEach(function (f) { inputs.push({ name: f.name, blob: f.file }); });
+    } else if (job.src === 'cso') {
+      // the job worker decompresses the image as chdman reads it
+      inName = stem(job.files[0].name) + '.iso';
+      inputs.push({ name: inName, blob: job.files[0].file, ciso: true });
     } else if (job.autoCue && disc === 'cd') {
       inName = stem(job.files[0].name) + '.cue';
       var cue = 'FILE "' + job.files[0].name + '" BINARY\n  TRACK 01 ' + job.autoCue + '\n    INDEX 01 00:00:00\n';
@@ -1293,6 +1317,7 @@ function subtitle(job) {
     if (i.version && i.version !== '5') parts.push('CHD v' + i.version);
     return parts.join(' · ');
   }
+  if (job.src === 'cso') return (ext(job.files[0].name) === 'zso' ? 'ZSO' : 'CSO') + ' compressed ISO · ' + fmtBytes(n) + (job.isoSize ? ' → ' + fmtBytes(job.isoSize) + ' unpacked' : '');
   var what;
   if (job.fromCcd) what = 'CloneCD image (.ccd + .img)';
   else if (job.descFile) what = job.src.toUpperCase() + ' + ' + plural(job.files.length, 'track file');
@@ -1357,7 +1382,7 @@ function renderControls(job) {
     if (job.ui.optsOpen) det.open = true;
     det.addEventListener('toggle', function () { job.ui.optsOpen = det.open; });
     box.append(det);
-    if (job.disc === 'dvd' && job.src === 'iso' && !(job.ident && job.ident.sys && job.ident.sys !== 'pc')) {
+    if (job.disc === 'dvd' && (job.src === 'iso' || job.src === 'cso') && !(job.ident && job.ident.sys && job.ident.sys !== 'pc')) {
       box.append(el('p', { class: 'small muted', style: 'margin:0' }, 'Use DVD for PS2 DVD games and PSP. Choose CD for CD-based games stored as .iso.'));
     }
   } else {
@@ -1657,7 +1682,7 @@ async function runJobNow(job) {
       toast('Browser storage may be too small for this job (' + fmtBytes(est.quota - est.usage) + ' free).', 'err');
     }
   }
-  var t0 = performance.now(), phaseStart = t0, lastPhase = '', lastPct = 0;
+  var t0 = performance.now(), phaseStart = t0, lastPhase = '', lastPct = 0, workerError = '';
   job.run = Engine.run({
     jobId: job.id, dirPath: Store.dirPath(job.id), args: spec.args, inputs: spec.inputs, writable: spec.writable,
     slots: spec.slots, helpers: spec.helpers, outMode: spec.outMode, outDir: outDir,
@@ -1683,7 +1708,7 @@ async function runJobNow(job) {
     },
     onNotice: function (m) {
       if (m.level !== 'debug') appendLog(job, m.message);
-      if (m.level === 'error') toast(m.message, 'err');
+      if (m.level === 'error') { toast(m.message, 'err'); workerError = workerError || m.message; }
     },
     onStorage: function (mode) {
       job.storage = mode;
@@ -1709,6 +1734,8 @@ async function runJobNow(job) {
       if (res.readFail) { job.errorText = readFailHint(res.error); Store.removeJob(job.id); refreshJob(job, true); return; }
       var errs = job.log.filter(function (l) { return /error|failed|invalid|unsupported|missing|not /i.test(l) && !/^\$ /.test(l); });
       job.errorText = (errs.slice(-3).join('\n') || res.error || 'chdman exited with code ' + res.code) + (job.action === 'verify' ? '' : '');
+      // the worker's own report (a damaged compressed ISO, an unreadable input, full storage) explains chdman's error best
+      if (workerError && job.errorText.indexOf(workerError) < 0) job.errorText = workerError + '\n' + job.errorText;
       if (job.kind === 'chd' && job.action === 'verify') job.errorText = 'Verification failed. ' + job.errorText;
       Store.removeJob(job.id);
     }

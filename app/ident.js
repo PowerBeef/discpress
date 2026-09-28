@@ -98,8 +98,8 @@ function fileReader(file, start, sectorSize) {
   };
 }
 
-// opens a CHD in a worker and reads sectors from it
-function chdReader(file) {
+// opens a CHD in a worker and reads sectors from it (ciso: a CSO/ZSO compressed ISO, read like a DVD CHD)
+function chdReader(file, ciso) {
   return Engine.ready().then(function () {
     return new Promise(function (resolve, reject) {
       var w = new Worker(Engine.url), seq = 0, waiting = {};
@@ -121,7 +121,7 @@ function chdReader(file) {
         } else if (m.type === 'fatal') { clearTimeout(timer); w.terminate(); reject(new Error(m.message)); }
       };
       w.onerror = function (e) { clearTimeout(timer); w.terminate(); reject(new Error(e.message || 'worker error')); };
-      Engine.post(w, { type: 'reader', name: 'x.chd', blob: file });
+      Engine.post(w, { type: 'reader', name: 'x.chd', blob: file, ciso: !!ciso });
     });
   });
 }
@@ -144,13 +144,14 @@ async function crcHere(blob, start, end, onProgress) {
   crc = (crc ^ -1) >>> 0;
   return ('00000000' + crc.toString(16).toUpperCase()).slice(-8);
 }
-function crcOf(blob, start, end, onProgress) {
-  var w = DEBUG.stage ? Promise.reject(new Error('debug')) : crcWorker(blob, start, end, onProgress);
-  var p = w.catch(function () { return crcHere(blob, start, end, onProgress); });
+// ciso: the checksum of the ISO inside a CSO/ZSO image, which only a worker can decompress
+function crcOf(blob, start, end, onProgress, ciso) {
+  var w = DEBUG.stage && !ciso ? Promise.reject(new Error('debug')) : crcWorker(blob, start, end, onProgress, ciso);
+  var p = ciso ? w : w.catch(function () { return crcHere(blob, start, end, onProgress); });
   // DEBUG.crcDelay (ms): a slow checksum, for testing that conversions don't wait for it
   return DEBUG.crcDelay ? p.then(function (c) { return sleep(DEBUG.crcDelay).then(function () { return c; }); }) : p;
 }
-function crcWorker(blob, start, end, onProgress) {
+function crcWorker(blob, start, end, onProgress, ciso) {
   return Engine.ready().then(function () {
     return new Promise(function (resolve, reject) {
       var w = new Worker(Engine.url);
@@ -161,7 +162,7 @@ function crcWorker(blob, start, end, onProgress) {
         else if (m.type === 'fatal') { w.terminate(); reject(new Error(m.message)); }
       };
       w.onerror = function (e) { w.terminate(); reject(new Error(e.message || 'worker error')); };
-      Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end }); // with the compiled module, for zlib's crc32
+      Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end, ciso: !!ciso }); // with the compiled module, for zlib's crc32
     });
   });
 }
@@ -317,6 +318,9 @@ function probePlan(job) {
       if (t[2] === '4') readers.push(fileReader(f, 0, +t[3] || 2352));
     });
     readers.reverse(); // the high-density data track carries the IP.BIN header
+  } else if (job.src === 'cso') {
+    // a compressed ISO: identifyJob reads it through a worker; the checksum is the ISO's
+    hashes.push({ file: job.files[0].file, track: 0, size: job.isoSize, ciso: true });
   } else if (job.files.length === 1) {
     var f1 = job.files[0].file, x = ext(job.files[0].name);
     hashes.push({ file: f1, track: 0 });
@@ -356,26 +360,34 @@ async function identifyJob(job, onStatus, onProvisional) {
       }
     } else {
       var plan = probePlan(job);
+      if (job.src === 'cso') {
+        chd = await chdReader(job.files[0].file, true);
+        plan.readers.push({ read: function (lba) { return chd.read(0, lba); } });
+      }
       for (var i = 0; i < plan.readers.length && (!det || det.weak); i++) {
         var d = await detectTrack(plan.readers[i]);
         if (d && (!det || !d.weak)) det = d;
       }
+      if (chd) { chd.close(); chd = null; }
       // exact match: size + CRC-32 of a data file against the Redump database
       var toHash = [];
       plan.hashes.forEach(function (hsh) {
-        sizes.push(hsh.file.size);
-        var bySize = GameDB.size(hsh.file.size);
+        var size = hsh.size != null ? hsh.size : hsh.file.size;
+        sizes.push(size);
+        var bySize = GameDB.size(size);
         if (det && !det.weak) {
           var same = bySize.filter(function (e) { return e.sys === det.sys; });
           if (same.length) bySize = same;
         }
-        if (bySize.length) toHash.push({ file: hsh.file, bySize: bySize });
+        if (bySize.length) toHash.push({ file: hsh.file, size: size, ciso: hsh.ciso, bySize: bySize });
       });
       if (toHash.length && onProvisional) onProvisional(result(null, true));
       for (var k = 0; k < toHash.length && !exact; k++) {
         var th = toHash[k];
         onStatus && onStatus('Checking against the game database…', 0);
-        var crc = await crcOf(th.file, 0, th.file.size, function (p) { onStatus && onStatus('Checking against the game database…', p); });
+        var crc = null;
+        try { crc = await crcOf(th.file, 0, th.size, function (p) { onStatus && onStatus('Checking against the game database…', p); }, th.ciso); }
+        catch (e) { if (!th.ciso) throw e; } // a damaged compressed ISO: no exact match (converting it reports the damage)
         var hits = th.bySize.filter(function (e) { return e.crc === crc; });
         if (hits.length) exact = hits;
       }

@@ -249,10 +249,10 @@ Presets:
 
 ### Milestone 4: more inputs (ongoing, by demand)
 
-**Status: CloneCD done, for single-session images.**
-- The page turns a `.ccd` into a cue sheet for its `.img` (`ccdToCue`).
-- The `.sub` is noted and left out; subchannel ingest stays tier X.
-- Multi-session, scrambled and track-list-less (CloneCD 2) files are refused with the reason.
+**Status: CloneCD (single-session) and CSO/ZSO done.**
+- CloneCD: the page turns a `.ccd` into a cue sheet for its `.img` (`ccdToCue`). The `.sub` is noted and left out; subchannel ingest stays tier X. Multi-session, scrambled and track-list-less (CloneCD 2) files are refused with the reason.
+- CSO v1 and v2 and ZSO (maxcso's formats, for PSP and PS2): the job worker hands chdman the ISO inside, decompressing blocks as they are read (`CisoStore`), so the CHD is the one chdman makes from that ISO. Identification reads the ISO the same way, and its checksum is the ISO's. A damaged block stops the job with its number.
+- Found on the way: 0.289's `createraw`/`createhd`/`createdvd` ignore input read errors and write a CHD they can't open. The engine now stops with an error (`tests/ui/engine.spec.js`).
 
 Priority order (C §9):
 1. CloneCD `.ccd/.img/.sub`, which also enables subchannel ingest for LibCrypt and CD+G;

@@ -144,6 +144,129 @@ MemStore.prototype.toBlob = function () {
   return new Blob(parts, { type: 'application/octet-stream' });
 };
 
+// A CSO (CISO, versions 1 and 2) or ZSO (ZISO) compressed ISO, read as the ISO itself: blocks are
+// decompressed as they are read, a chunk of them at a time (chunkBytes, 4 MiB by default; formats:
+// maxcso's README_CSO/ZSO). Deflate blocks go through the module's zlib (setModule); LZ4 blocks are
+// decoded here. `label` names the file in the message about a damaged block.
+function CisoStore(base, chunkBytes, label) {
+  var h = new Uint8Array(24), dv;
+  if (base.read(h, 0, 24) !== 24) throw new Error('not a CSO/ZSO image');
+  dv = new DataView(h.buffer);
+  var magic = String.fromCharCode(h[0], h[1], h[2], h[3]);
+  if (magic !== 'CISO' && magic !== 'ZISO') throw new Error('not a CSO/ZSO image');
+  this.base = base;
+  this.zso = magic === 'ZISO';
+  this.v2 = !this.zso && h[20] === 2;
+  this.sizeV = dv.getUint32(8, true) + dv.getUint32(12, true) * 4294967296;
+  this.bs = dv.getUint32(16, true);
+  this.shift = Math.pow(2, h[21]);
+  if (!this.bs || this.bs > (1 << 24) || this.bs % 2048) throw new Error('unusual CSO block size ' + this.bs);
+  this.nblocks = Math.ceil(this.sizeV / this.bs);
+  var raw = new Uint8Array((this.nblocks + 1) * 4);
+  if (base.read(raw, 24, raw.length) !== raw.length) throw new Error('truncated CSO index');
+  this.index = new Uint32Array(raw.buffer);
+  this.readonly = true;
+  this.chunkBlocks = Math.max(1, Math.floor((chunkBytes || 4 << 20) / this.bs));
+  this.chunks = [];   // the two most recent chunks: {first, data}
+  this.M = null;
+  this.label = label || 'the image';
+  this.reported = false;
+}
+CisoStore.prototype.damaged = function (b) {
+  if (!this.reported) {
+    this.reported = true;
+    postMessage({ type: 'notice', level: 'error', message: '"' + this.label + '" is damaged or incomplete: block ' + b + ' of ' + this.nblocks + ' could not be read.' });
+  }
+  return { errno: ERR.EIO };
+};
+CisoStore.prototype.setModule = function (M) {
+  this.M = M;
+  this.srcCap = this.bs + 64;
+  this.src = M._malloc(this.srcCap);
+  this.dst = M._malloc(this.bs);
+};
+// the block's stored bytes start and length, and how they are stored: 0 raw, 1 deflate, 2 LZ4
+CisoStore.prototype.block = function (b) {
+  var e = this.index[b], next = this.index[b + 1];
+  var start = (e & 0x7fffffff) * this.shift, len = (next & 0x7fffffff) * this.shift - start;
+  var high = e >>> 31, how;
+  if (this.zso) how = high ? 0 : 2;
+  else if (this.v2) how = len >= this.bs ? 0 : high ? 2 : 1;
+  else how = high ? 0 : 1;
+  return { start: start, len: len, how: how };
+};
+CisoStore.prototype.chunk = function (c) {
+  for (var i = 0; i < this.chunks.length; i++) if (this.chunks[i].first === c) return this.chunks[i].data;
+  var first = c * this.chunkBlocks, last = Math.min(this.nblocks, first + this.chunkBlocks);
+  var b0 = this.block(first), end = (this.index[last] & 0x7fffffff) * this.shift;
+  // blocks are at most a little larger than block_size (padding; deflate's worst case), unless damaged
+  if (!(end >= b0.start && end - b0.start <= (last - first) * (2 * this.bs + this.shift) + 4096)) throw this.damaged(first);
+  var stored = new Uint8Array(end - b0.start), got = this.base.read(stored, b0.start, stored.length);
+  var bs = this.bs, out = new Uint8Array((last - first) * bs), M = this.M;
+  for (var b = first; b < last; b++) {
+    var blk = this.block(b), at = blk.start - b0.start, want = Math.min(bs, this.sizeV - b * bs), o = (b - first) * bs;
+    if (!(blk.len >= 0 && at + blk.len <= got)) throw this.damaged(b);
+    if (blk.how === 0) {
+      if (blk.len < want) throw this.damaged(b);
+      out.set(stored.subarray(at, at + want), o);
+    } else if (blk.how === 2) {
+      if (lz4Block(stored, at, at + blk.len, out, o, want) !== want) throw this.damaged(b);
+    } else {
+      if (!M) throw this.damaged(b);
+      if (blk.len > this.srcCap) { M._free(this.src); this.srcCap = blk.len; this.src = M._malloc(blk.len); }
+      M.HEAPU8.set(stored.subarray(at, at + blk.len), this.src);
+      if (M._wasm_inflate_raw(this.src, blk.len, this.dst, want) !== want) throw this.damaged(b);
+      out.set(M.HEAPU8.subarray(this.dst, this.dst + want), o);
+    }
+  }
+  this.chunks = [{ first: c, data: out }].concat(this.chunks.slice(0, 1));
+  return out;
+};
+CisoStore.prototype.read = function (dst, pos, len) {
+  if (pos >= this.sizeV) return 0;
+  len = Math.min(len, this.sizeV - pos);
+  var M = this.M, heap = M && dst.buffer === M.HEAPU8.buffer, addr = dst.byteOffset, done = 0, span = this.chunkBlocks * this.bs;
+  var parts = [];
+  while (done < len) {
+    var p = pos + done, c = Math.floor(p / span), data = this.chunk(c), off = p - c * span;
+    var n = Math.min(len - done, data.length - off);
+    if (n <= 0) break;
+    parts.push({ data: data, off: off, n: n, at: done });
+    done += n;
+  }
+  // chdman's buffer is in the module's memory, which may have grown (and moved) meanwhile
+  if (heap && dst.byteLength === 0) dst = M.HEAPU8.subarray(addr, addr + len);
+  parts.forEach(function (q) { dst.set(q.data.subarray(q.off, q.off + q.n), q.at); });
+  return done;
+};
+
+// LZ4 block format: decodes src[from, to) into out at o, up to `want` bytes; returns the count,
+// or -1 if the data is damaged. Like maxcso, it stops there: a block can be followed by padding,
+// and an image's last block can decode to more, the zeros that fill it to the block size.
+function lz4Block(src, from, to, out, o, want) {
+  var i = from, start = o, end = o + want;
+  while (i < to && o < end) {
+    var token = src[i++], n = token >>> 4;
+    if (n === 15) { var b; do { b = src[i++]; n += b; } while (b === 255 && i < to); }
+    if (i + n > to) return -1;
+    var lit = Math.min(n, end - o);
+    out.set(src.subarray(i, i + lit), o);
+    i += n; o += lit;
+    if (i >= to || o >= end) break; // the last sequence has only literals
+    if (i + 2 > to) return -1;
+    var off = src[i] | (src[i + 1] << 8);
+    i += 2;
+    var m = (token & 15) + 4;
+    if ((token & 15) === 15) { var c; do { c = src[i++]; m += c; } while (c === 255 && i < to); }
+    if (!off || off > o - start) return -1;
+    m = Math.min(m, end - o);
+    if (off >= m) out.copyWithin(o, o - off, o - off + m);
+    else for (var k = 0; k < m; k++) out[o + k] = out[o + k - off]; // overlapping: repeats the last bytes
+    o += m;
+  }
+  return o - start;
+}
+
 // Every access-handle write has a fixed cost (up to ~0.7 ms measured in Chromium), and chdman
 // writes each compressed hunk separately (4 KiB for DVDs), so small writes are gathered in
 // write-back buffers: hundreds of times fewer writes, and the job worker no longer starves the
@@ -889,6 +1012,16 @@ async function runJob(msg) {
         return;
       }
     }
+    if (inputs[ii].ciso) {
+      var label = inputs[ii].blob.name || inputs[ii].name;
+      try { bs = new CisoStore(bs, 0, label); }
+      catch (e) {
+        await dropStages();
+        await backing.finalize(false);
+        postMessage({ type: 'done', code: -1, error: '"' + label + '" could not be read as a compressed ISO: ' + (e && e.message || e), outputs: [] });
+        return;
+      }
+    }
     inStores.push({ name: inputs[ii].name, store: bs });
   }
   async function dropStages() {
@@ -906,6 +1039,7 @@ async function runJob(msg) {
     onAbort: function (what) { aborted = 'chdman stopped unexpectedly: ' + what; }
   });
 
+  inStores.forEach(function (st) { if (st.store.setModule) st.store.setModule(M); });
   var FS = M.FS, CHDFS = makeFS(FS);
   FS.mkdir('/in');
   FS.mount(CHDFS, { files: inStores }, '/in');
@@ -943,9 +1077,11 @@ async function runJob(msg) {
 /* ---------------- game identification helpers ---------------- */
 
 // CHD sector reader: answers {type:'read', id, track, lba} with 2048 bytes of user data
+// (msg.ciso: a CSO/ZSO compressed ISO instead, read like a DVD CHD)
 async function runReader(msg) {
   await loadModule(msg);
   var M = await instantiate({});
+  if (msg.ciso) return runCisoReader(M, msg);
   var FS = M.FS, CHDFS = makeFS(FS);
   FS.mkdir('/in');
   FS.mount(CHDFS, { files: [{ name: msg.name, store: new BlobStore(msg.blob) }].concat((msg.parent ? [{ name: 'parent.chd', store: new BlobStore(msg.parent) }] : [])) }, '/in');
@@ -966,6 +1102,21 @@ async function runReader(msg) {
     if (m.type !== 'read') return;
     var r = M._wasm_probe_read(m.track | 0, m.lba >>> 0, buf);
     postMessage({ type: 'sector', id: m.id, data: r === 0 ? M.HEAPU8.slice(buf, buf + 2048) : null });
+  };
+}
+
+function runCisoReader(M, msg) {
+  var iso = new CisoStore(new BlobStore(msg.blob), 2048);
+  iso.setModule(M);
+  postMessage({ type: 'reader-ready', kind: 2, tracks: [], logical: iso.sizeV });
+  self.onmessage = function (e) {
+    var m = e.data, data = null;
+    if (m.type !== 'read') return;
+    try {
+      var b = new Uint8Array(2048);
+      if (iso.read(b, m.lba * 2048, 2048) === 2048) data = b;
+    } catch (err) { /* unreadable: null */ }
+    postMessage({ type: 'sector', id: m.id, data: data });
   };
 }
 
@@ -1000,7 +1151,7 @@ async function runCrc(msg) {
   var blob = msg.blob, start = msg.start || 0, end = msg.end != null ? msg.end : blob.size;
   var step = 8 << 20, r = getReader(), last = 0;
   // zlib's crc32 in WebAssembly is several times faster than the JavaScript loop below it
-  var M = null, buf = 0;
+  var M = null, buf = 0, iso = null;
   if (msg.wasmModule || msg.wasmBytes) {
     try {
       await loadModule(msg);
@@ -1008,11 +1159,24 @@ async function runCrc(msg) {
       if (typeof M._crc32 === 'function') buf = M._malloc(step); else M = null;
     } catch (e) { M = null; }
   }
+  // msg.ciso: the checksum of the ISO inside a CSO/ZSO image, which needs the module's inflate
+  if (msg.ciso) {
+    if (!M) throw new Error('cannot decompress');
+    iso = new CisoStore(new BlobStore(blob));
+    iso.setModule(M);
+    if (msg.end == null) end = iso.sizeV;
+  }
   var crc = M ? 0 : -1;
   for (var pos = start; pos < end; pos += step) {
-    var chunk = new Uint8Array(r.readAsArrayBuffer(blob.slice(pos, Math.min(end, pos + step))));
-    if (M) { M.HEAPU8.set(chunk, buf); crc = M._crc32(crc, buf, chunk.length) >>> 0; }
-    else crc = crcUpdate(crc, chunk);
+    var n = Math.min(end, pos + step) - pos;
+    if (iso) {
+      if (iso.read(M.HEAPU8.subarray(buf, buf + n), pos, n) !== n) throw new Error('truncated image');
+      crc = M._crc32(crc, buf, n) >>> 0;
+    } else {
+      var chunk = new Uint8Array(r.readAsArrayBuffer(blob.slice(pos, pos + n)));
+      if (M) { M.HEAPU8.set(chunk, buf); crc = M._crc32(crc, buf, chunk.length) >>> 0; }
+      else crc = crcUpdate(crc, chunk);
+    }
     var now = Date.now();
     if (now - last > 250) { last = now; postMessage({ type: 'crc-progress', done: pos - start, total: end - start }); }
   }

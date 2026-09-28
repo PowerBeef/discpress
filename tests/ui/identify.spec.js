@@ -18,6 +18,15 @@ test('a dump whose checksum matches the database is named after that exact relea
   expect(out.name).toBe(`${fx.name}.chd`);
 });
 
+test('a compressed ISO is matched by the checksum of the ISO inside it', async ({ app }) => {
+  await app.open({ testdb: true });
+  await app.add(['umd v2.cso']); // deflate, LZ4 and stored blocks (make_fixtures.py: psp-cso2)
+  const card = app.job('umd v2');
+  await app.settled(card);
+  await expect(card.locator('.ident-name')).toHaveText('Checksum Verified PSP Game (USA)');
+  await expect(card.locator('.ident-how')).toHaveText('✓ Exact match in the Redump database (checksum verified)');
+});
+
 test('the page-side checksum fallback finds the same match', async ({ app }) => {
   await app.open({ testdb: true, debug: { stage: 1 } }); // stage also routes the checksum through the page
   await app.add(fx.add);
