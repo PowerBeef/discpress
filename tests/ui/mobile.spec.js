@@ -17,9 +17,10 @@ test('the phone layout fits the screen before and after converting', async ({ ap
   expect(['Download', 'Save to Files']).toContain(label.trim());
 });
 
-test('before measuring, phones start from fewer threads', async ({ app, page }) => {
+test('before measuring, phones start from fewer threads (iPhones from 2)', async ({ app, page }, testInfo) => {
   await app.open({ cores: 8, tuned: false });
-  await expect(page.locator('#chipThreads')).toHaveText(/Auto · 4 threads/i);
+  // iPhones: one process for page and workers, stopped at about 1.5 GB, and 3 fast wasm memories (docs/ios)
+  await expect(page.locator('#chipThreads')).toHaveText(/iphone/.test(testInfo.project.name) ? /Auto · 2 threads/i : /Auto · 4 threads/i);
 });
 
 test('inside an iOS app web view the header stays fixed and the content scrolls', async ({ browser, browserName }, testInfo) => {
@@ -86,4 +87,29 @@ test('on iPhone, a result too large for the share sheet is downloaded without it
   await out.locator('button').click();
   expect((await download).suggestedFilename()).toMatch(/\.chd$/);
   expect(await page.evaluate(() => window.__shared)).toBe(0);
+});
+
+test('inside an iOS app web view, a notice points big games to Discpress in Safari', async ({ browser }, testInfo) => {
+  test.skip(!/iphone/.test(testInfo.project.name), 'iOS only');
+  const base = testInfo.project.use;
+  const ctx = await browser.newContext({ ...base, userAgent: base.userAgent.replace(/ Safari\/[\d.]+/, '') });
+  const page = await ctx.newPage();
+  const app = new App(page, testInfo, false);
+  await app.open();
+  const tip = page.locator('#iosTip');
+  await expect(tip).toBeVisible();
+  await expect(tip.locator('#hostedLink')).toHaveAttribute('href', 'https://powerbeef.github.io/discpress/');
+  await tip.locator('#iosTipOk').click();
+  await expect(tip).toBeHidden();
+  await page.reload();
+  await expect(page.locator('#chipEngine')).toContainText(/ready/i, { timeout: 60_000 });
+  await expect(page.locator('#iosTip')).toBeHidden(); // dismissed once, for good
+  expect(app.unexpectedErrors()).toEqual([]);
+  await ctx.close();
+});
+
+test('in Safari itself, there is no such notice', async ({ app, page }, testInfo) => {
+  test.skip(!/iphone/.test(testInfo.project.name), 'iOS only');
+  await app.open();
+  await expect(page.locator('#iosTip')).toBeHidden();
 });

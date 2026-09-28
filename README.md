@@ -105,10 +105,11 @@ The standard tool for making CHDs is **chdman**, a command-line program from the
 ## Get started
 
 1. **[Download `discpress.html`](https://github.com/PowerBeef/discpress/releases/latest/download/discpress.html).** It's the whole app in one file.
+   On **iPhone and iPad**, open **[powerbeef.github.io/discpress](https://powerbeef.github.io/discpress/)** in Safari instead: the same file, published with each release. Safari can't open a local HTML file, and apps that can, such as Sitecase, can't save results over about 512 MB (most DVD, PSP and PS2 games). In Safari, results of any size download to Files → Downloads. Tap Share → **Add to Home Screen** to keep it as an app that works offline.
 2. **Open it.**
    - **Computer:** double-click it, and it opens in your browser.
    - **Android:** open it with Chrome or another browser.
-   - **iPhone and iPad:** save it to the Files app, then open it with an app that can run web pages, such as Sitecase.
+   - **iPhone and iPad:** the link above, in Safari.
 3. **Add your games.** Pick every file of a game together (the `.cue` *and* its `.bin` files), or drag them onto the page.
 4. **Press Start all**, then **Save** or **Download** each CHD when it's ready. Keep the page open while it works.
 
@@ -119,7 +120,7 @@ The standard tool for making CHDs is **chdman**, a command-line program from the
 <details>
 <summary><b>Are my games uploaded anywhere?</b></summary>
 <br>
-No. Discpress is a single file that runs entirely on your device. It makes no network requests and works in airplane mode.
+No. Discpress is a single file that runs entirely on your device. It makes no network requests and works in airplane mode: its Content-Security-Policy (`connect-src 'none'`) forbids the page any connection, in the downloaded file and in the copy on [powerbeef.github.io/discpress](https://powerbeef.github.io/discpress/) alike. That copy is the release file byte for byte; each release lists its SHA-256 (`discpress.html.sha256`), and the site has the same file, so you can compare them.
 </details>
 
 <details>

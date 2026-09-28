@@ -68,7 +68,18 @@ A page can't tell in advance whether downloads work; the best hint is an iOS use
 - An identified PSP game is a DVD CHD, and the other type moves into Options.
 - On iPhone and iPad, results over 512 MB skip the share sheet and download instead: that works in Safari, but not in Sitecase.
 
-### Phase 1: an https copy for Safari (the main fix; needs your go-ahead)
+### Phase 1: an https copy for Safari (the main fix): done, deploys with the next release
+
+**Status.**
+- `release.yml` has a `pages` job that publishes the release file as `index.html` at https://powerbeef.github.io/discpress/, next to `web/` (`sw.js`, `manifest.webmanifest`, icons) and `discpress.html.sha256`, which the release also carries.
+- The page adds the manifest, the PNG touch icon and the service worker only when served over https, so the file stays the same everywhere.
+- The Content-Security-Policy with `connect-src 'none'` is in `app/index.html`.
+- In an iPhone/iPad app's web view, a notice (`#iosTip`) points big games to the hosted copy.
+- README and Help send iPhone users to Safari.
+- Tests: `tests/ui/hosted.spec.js`, `tests/ui/mobile.spec.js`.
+- **One-time setup left:** Settings → Pages → Source: GitHub Actions.
+
+The plan as it was:
 
 1. **Publish the release file** byte for byte on GitHub Pages as `index.html`. Deploy it from a second job in `.github/workflows/release.yml` (a separate workflow triggered by the release would never run: [hosting.md](hosting.md) §2.1). Then:
    - enable Pages with source "GitHub Actions";
@@ -82,7 +93,17 @@ A page can't tell in advance whether downloads work; the best hint is an iOS use
    - the Help page and README get new iPhone instructions: "open it in Safari, or add it to your Home Screen".
 5. **Test on a device** (checklist below), including downloads from a home-screen web app.
 
-### Phase 2: making big jobs survive on iOS (engine and page)
+### Phase 2: making big jobs survive on iOS (engine and page): done, except as noted
+
+**Status.**
+1. **Threads:** done. Automatic mode uses at most 2 threads on iPhones and 4 on iPads (`iosThreadCap` in `app/ui.js`).
+2. **Heaps:** not needed. Measured in the page (bench CD and 1 GB DVD, every preset): a helper's heap never grows past its initial 16 MB, and the job worker's peaks at 23–40 MB. Growth copies are small and rare.
+3. **Wake lock:** already there. It is taken when a job starts and again whenever the page becomes visible. The Help page now says what iOS does when the phone is locked.
+4. **Recovery:** done (`Recovery` in `app/ui.js`, `tests/ui/recovery.spec.js`). A record in `localStorage` lists the running job and the finished results not saved yet. At the next start, `Store.cleanupStale` keeps those results' folder, and the page lists them under "From your last visit" (Save or Delete), with the job that didn't finish.
+5. **Staging inputs in viewer apps:** not done. The 1.6 GB job read its input for its whole run in Sitecase, and a copy would double the time and disk space of every job. The existing fallback remains: the page streams an input the worker can't read.
+6. **Messages:** done. Lockdown Mode gets its own message, and a share-sheet read failure is no longer taken for the user closing the sheet.
+
+The plan as it was:
 
 1. **Threads.** Cap iOS WebKit at the job worker plus 2 helpers on iPhones (3 fast wasm memories, 2 performance cores); on iPads, go by the reported cores. Measure first: time and peak memory for a DVD at 1, 2 and 3 threads on a device.
 2. **Heaps.** Give each worker a heap that doesn't grow: measure the peak per role and codec list, then start at that size. Growing a bounds-checked heap copies it.
@@ -119,9 +140,9 @@ On an iPhone (4 GB and 6+ GB if possible) and an iPad, iOS 18 and 26:
 - [ ] Sitecase: a small result (under 512 MB) through the share sheet still works.
 - [ ] iCab Mobile: open the file, convert, download 1 GB, find it in Files.
 
-## Decisions needed
+## Decisions
 
-1. **Publish Discpress on GitHub Pages?** It's free and HTTPS is automatic. With a custom domain, Discpress would get its own origin. Without one, it's `powerbeef.github.io/discpress/`.
-2. **Go ahead with Phase 2?**
-3. **Who contacts the Sitecase developer:** you, or should I draft the message?
-4. **A wrapper app later?** ($99 a year, and App Store review.)
+1. **GitHub Pages:** yes, at `powerbeef.github.io/discpress/` (no custom domain for now).
+2. **Phase 2:** yes.
+3. **Who contacts the Sitecase developer:** open.
+4. **A wrapper app later?** Open ($99 a year, and App Store review).

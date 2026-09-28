@@ -7,6 +7,9 @@ name: Release
 #   - publish a release on GitHub
 # If .github/release-notes/<tag>.md exists, it becomes the release notes
 # (replacing what's there on every run); otherwise GitHub generates them.
+# The same file, byte for byte, is then published on GitHub Pages as the hosted copy for
+# iPhone and iPad (web/README.md); both carry discpress.html.sha256 so they can be compared.
+# The deploy needs Pages turned on once: Settings > Pages > Source: GitHub Actions.
 on:
   push:
     tags: ['v*']
@@ -46,3 +49,31 @@ jobs:
             gh release create "$TAG" --target "$GITHUB_SHA" --title "Discpress $TAG" --generate-notes
           fi
           gh release upload "$TAG" dist/discpress.html --clobber
+          (cd dist && sha256sum discpress.html > ../discpress.html.sha256)
+          gh release upload "$TAG" discpress.html.sha256 --clobber
+
+  pages:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble the site
+        run: |
+          mkdir _site
+          cp dist/discpress.html _site/index.html
+          cp web/sw.js web/manifest.webmanifest web/*.png _site/
+          (cd dist && sha256sum discpress.html) > _site/discpress.html.sha256
+          touch _site/.nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4

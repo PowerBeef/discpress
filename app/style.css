@@ -219,7 +219,7 @@ h2, h3 { font-family: var(--display); letter-spacing: -.01em; }
   #tab-convert.has-jobs .drop.compact .row { justify-content: center; flex-direction: column; }
   #tab-convert.has-jobs .drop.compact .systems { display: flex; margin-top: 16px; }
   #tab-convert.has-jobs .drop.compact .drop-foot { display: block; }
-  #tab-convert.has-jobs #memTip, #tab-convert.has-jobs .jobs { grid-column: 2; }
+  #tab-convert.has-jobs #memTip, #tab-convert.has-jobs #iosTip, #tab-convert.has-jobs #earlier, #tab-convert.has-jobs .jobs { grid-column: 2; }
 }
 @media (min-width: 720px) and (max-width: 1039px) {
   .drop.compact { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
@@ -227,6 +227,11 @@ h2, h3 { font-family: var(--display); letter-spacing: -.01em; }
   .drop.compact .drop-hint { margin: 0; flex-basis: 100%; }
 }
 #tab-convert:not(.has-jobs) .drop { max-width: 760px; width: 100%; margin: 12px auto 0; }
+
+/* results of an earlier visit (renderEarlier) */
+#tab-convert:not(.has-jobs) #earlier, #tab-convert:not(.has-jobs) #iosTip { max-width: 760px; width: 100%; margin: 16px auto 0; }
+#iosTip .btn { margin-top: 6px; }
+.earlier .out + .out, .earlier .note + h2 { margin-top: 10px; }
 
 /* ---------- job cards ---------- */
 .jobs { display: grid; gap: 16px; }
@@ -502,7 +507,7 @@ dialog { max-height: min(calc(var(--app-h, 100vh) * .88), 760px); }
     column-gap: calc(env(viewport-segment-left 1 0) - env(viewport-segment-right 0 0) + 24px);
   }
   #tab-convert .drop { grid-row: span 3; position: sticky; top: 12px; margin: 0; max-width: none; }
-  #tab-convert .jobs, #tab-convert #memTip { grid-column: 2; }
+  #tab-convert .jobs, #tab-convert #memTip, #tab-convert #iosTip, #tab-convert #earlier { grid-column: 2; }
 }
 @media (vertical-viewport-segments: 2) {
   html.mode-shell .scroller { scroll-padding-top: calc(env(viewport-segment-top 0 1) - env(viewport-segment-top 0 0) + 12px); }
