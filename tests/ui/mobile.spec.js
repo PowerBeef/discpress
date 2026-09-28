@@ -64,3 +64,26 @@ test('on iPhone, a file the share sheet cannot take is downloaded instead', asyn
   expect((await download).suggestedFilename()).toMatch(/\.chd$/);
   await expect(page.locator('.toast.err', { hasText: 'Downloading it instead' })).toBeVisible();
 });
+
+test('on iPhone, a result too large for the share sheet is downloaded without it', async ({ page }, testInfo) => {
+  test.skip(!/iphone/.test(testInfo.project.name), 'iOS only');
+  // WebKit's share sheet reads the whole file into memory, which closes the app for a large one
+  await page.addInitScript(() => {
+    window.__shared = 0;
+    navigator.canShare = () => true;
+    navigator.share = () => { window.__shared++; return Promise.resolve(); };
+  });
+  const app = new App(page, testInfo, false);
+  await app.open({ debug: { shareMax: 64 << 10 } }); // "large" = over 64 KiB here
+  await app.add(fixture('ps1-single').add);
+  const card = app.job('twine');
+  await app.settled(card);
+  await app.run(card);
+  const out = card.locator('.result .out');
+  await expect(out.locator('button')).toHaveText(/^\s*Download\s*$/);
+  await expect(out).toContainText('too large for the share sheet');
+  const download = page.waitForEvent('download');
+  await out.locator('button').click();
+  expect((await download).suggestedFilename()).toMatch(/\.chd$/);
+  expect(await page.evaluate(() => window.__shared)).toBe(0);
+});

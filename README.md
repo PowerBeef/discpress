@@ -67,7 +67,7 @@ The standard tool for making CHDs is **chdman**, a command-line program from the
 - **Official names.** For example `Metal Gear Solid (USA) (Disc 1).chd`. You can also type your own name, turn renaming off, or use **Rename** to fix the name of a CHD you already have.
 - **Fast.** Compression is spread over all your CPU cores, with WebAssembly SIMD when your browser supports it.
 - **Big files.** Results are written to the browser's private disk storage, so multi-gigabyte DVD images work. On desktop Chrome and Edge, results can go straight into a folder you choose.
-- **Made for phones.** It adapts to any screen, notch, rotation and text size, in light or dark mode. On iPhone and iPad, **Save to Files** uses the share sheet.
+- **Made for phones.** It adapts to any screen, notch, rotation and text size, in light or dark mode. On iPhone and iPad, **Save to Files** uses the share sheet; results over 512 MB are downloaded instead, since the share sheet loads the whole file into memory.
 - **Private and offline.** It's one self-contained HTML file with nothing to load from the internet.
 
 </details>

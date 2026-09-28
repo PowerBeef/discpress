@@ -1543,7 +1543,7 @@ function renderResult(job) {
     box.append(outs);
     if (job.outputs.length > 1 && job.outputs[0].kind !== 'disk') {
       var row = el('div', { class: 'row end' });
-      row.append(el('button', { class: 'btn sm', onclick: function () { downloadMany([job]); } }, icon(useShareSheet ? 'i-share' : 'i-download'), (useShareSheet ? 'Save all ' : 'Download all ') + job.outputs.length + (useShareSheet ? ' to Files' : '')));
+      row.append(saveButton(job.outputs, function () { downloadMany([job]); }, true));
       if (window.showDirectoryPicker) row.append(el('button', { class: 'btn sm', onclick: function () { saveToFolder([job]); } }, icon('i-folder'), 'Save to folder'));
       box.append(row);
     }
@@ -1555,8 +1555,9 @@ function outputRow(job, out) {
     return el('div', { class: 'out' }, el('div', { class: 'nm' }, out.name, el('small', null, fmtBytes(out.size) + ' · saved in ' + (job.folderName || 'your folder'))), el('span', { class: 'small', style: 'color:var(--ok);display:inline-flex;align-items:center;gap:4px;padding-right:6px' }, icon('i-check'), 'Saved'));
   }
   var btns = el('div', { class: 'row' });
-  btns.append(el('button', { class: 'btn sm primary', onclick: function () { saveOutput(job, out); } }, icon(useShareSheet ? 'i-share' : 'i-download'), saveLabel));
-  return el('div', { class: 'out' }, el('div', { class: 'nm' }, out.name, el('small', null, fmtBytes(out.size) + (out.downloaded ? ' · downloaded' : ''))), btns);
+  btns.append(saveButton([out], function () { saveOutput(job, out); }));
+  var tooBig = useShareSheet && !viaShare([out]);
+  return el('div', { class: 'out' }, el('div', { class: 'nm' }, out.name, el('small', null, fmtBytes(out.size) + (out.downloaded ? ' · downloaded' : tooBig ? ' · too large for the share sheet, so it downloads' : ''))), btns);
 }
 
 function renderFoot(job) {
@@ -1920,9 +1921,20 @@ async function downloadOutput(job, out) {
 // one save action per platform: iPhone/iPad use the share sheet ("Save to Files"),
 // which also works inside apps that cannot download; everything else downloads
 var useShareSheet = isIOS && !!navigator.canShare;
-var saveLabel = useShareSheet ? 'Save to Files' : 'Download';
+// but not for large files: WebKit's share sheet reads each file whole into memory and hands it to the
+// app showing the page, and iOS closes that app when memory runs out (a 1 GB PSP CHD did, in Sitecase).
+// Those are downloaded instead, which Safari streams from disk to Downloads in Files.
+var SHARE_MAX = DEBUG.shareMax || 512 * 1048576;
+function viaShare(outs) {
+  return useShareSheet && outs.reduce(function (n, o) { return n + (o.size || 0); }, 0) <= SHARE_MAX;
+}
+function saveButton(outs, onclick, many) {
+  var share = viaShare(outs);
+  return el('button', { class: 'btn sm' + (many ? '' : ' primary'), onclick: onclick }, icon(share ? 'i-share' : 'i-download'),
+    many ? (share ? 'Save all ' + outs.length + ' to Files' : 'Download all ' + outs.length) : (share ? 'Save to Files' : 'Download'));
+}
 async function saveOutput(job, out) {
-  if (!useShareSheet) return downloadOutput(job, out);
+  if (!viaShare([out])) return downloadOutput(job, out);
   var f;
   try { f = await outputFile(job, out); }
   catch (e) { toast('Could not open the result: ' + e.message, 'err'); return; }
@@ -1941,7 +1953,7 @@ async function saveOutput(job, out) {
 async function downloadMany(list) {
   var outs = [];
   list.forEach(function (job) { job.outputs.forEach(function (o) { if (o.kind !== 'disk') outs.push([job, o]); }); });
-  if (useShareSheet && outs.length) {
+  if (outs.length && viaShare(outs.map(function (x) { return x[1]; }))) {
     // one share sheet for all files
     try {
       var files = [];
@@ -2018,7 +2030,9 @@ function updateDock() {
   var withOut = jobs.filter(function (j) { return j.state === 'done' && j.outputs.length; });
   var nOut = withOut.reduce(function (s, j) { return s + j.outputs.filter(function (o) { return o.kind !== 'disk'; }).length; }, 0);
   $('#dlAll').hidden = nOut < 2;
-  $('#dlAll').lastChild.textContent = useShareSheet ? 'Save all to Files' : 'Download all';
+  var allOut = [];
+  withOut.forEach(function (j) { j.outputs.forEach(function (o) { if (o.kind !== 'disk') allOut.push(o); }); });
+  $('#dlAll').lastChild.textContent = viaShare(allOut) ? 'Save all to Files' : 'Download all';
   $('#saveAll').hidden = !window.showDirectoryPicker || nOut < 2;
   $('#clearDone').hidden = !jobs.some(function (j) { return j.state === 'done' || j.state === 'canceled' || j.state === 'error'; });
 }
@@ -2268,7 +2282,7 @@ async function cliRun() {
     cjob.outputs.forEach(function (o) {
       if (o.kind === 'disk') { outs.append(outputRow({ folderName: outDir && outDir.name }, o)); return; }
       outs.append(el('div', { class: 'out' }, el('div', { class: 'nm' }, o.name, el('small', null, fmtBytes(o.size))),
-        el('div', { class: 'row' }, el('button', { class: 'btn sm primary', onclick: function () { saveOutput({ id: cjob.id, outputs: cjob.outputs }, o); } }, icon(useShareSheet ? 'i-share' : 'i-download'), saveLabel))));
+        el('div', { class: 'row' }, saveButton([o], function () { saveOutput({ id: cjob.id, outputs: cjob.outputs }, o); }))));
     });
   } catch (e) {
     con.textContent += '\n' + (e.canceled ? (stalled ? '[stopped] ' + STALLED : '[canceled]') : 'Error: ' + e.message) + '\n';
