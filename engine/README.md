@@ -4,9 +4,12 @@
 
 The paths mirror MAME's, so every file can be compared with its original. **[`mame-0.289.diff`](mame-0.289.diff)** lists every change the fork makes; Help → About shows it too. Current changes:
 
-- **Browser build:** helper-worker hooks in `chd_file_compressor` (`chd.cpp`, `chd.h`), under `#ifdef __EMSCRIPTEN__`.
+- **Browser build**, under `#ifdef __EMSCRIPTEN__`:
+  - helper-worker hooks in `chd_file_compressor` (`chd.cpp`, `chd.h`);
+  - `chd_file::wasm_read_ahead`, which reads a window of stored hunks in one go for `verify` and the extract commands, hands the compressed ones to helper workers, and lets `read_hunk` take them from memory (with the usual CRC check);
+  - verify and extract read in 8 MB buffers instead of 32 MB.
 - **Resumable commands (`chdman.cpp`):**
-  - The commands that compress (`createraw`, `createhd`, `createcd`, `createdvd`, `createld`, `copy`) and `compress_common` are C++20 coroutines (`chdman_task`).
+  - The commands that compress (`createraw`, `createhd`, `createcd`, `createdvd`, `createld`, `copy`) and `compress_common` are C++20 coroutines (`chdman_task`). So are `verify`, `extractraw`, `extracthd`, `extractdvd` and `extractcd`, which pause while helpers decompress what they are about to read (`read_ahead`).
   - `main` is split into `chdman_start` (parse the command line) and `chdman_continue`.
   - In the browser, the page starts a command with `chdman_begin` and calls `chdman_resume` whenever the compression loop pauses to let helper workers' results arrive. This needs no Asyncify.
   - Natively nothing pauses and `main` runs each command straight through, with the same output, messages and exit codes as upstream.

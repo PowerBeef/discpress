@@ -182,7 +182,7 @@ for (const fx of fixtures) {
       const chdInput = op === 'extract' ? (cfg.native ? nativeRef(fx, preset) : null) : null;
       if (op === 'extract' && !chdInput) { log('extract needs native chdman to make the input CHD; skipped'); continue; }
       for (const simd of cfg.simd.map(s => s === 'on')) {
-        for (const threads of op === 'extract' ? [1] : cfg.threads) {
+        for (const threads of cfg.threads) {
           const runs = [];
           for (let r = 0; r < cfg.repeat; r++) {
             const res = await appRun({ fx, op, threads, simd, preset, chdInput });
@@ -217,7 +217,7 @@ for (const fx of fixtures) {
       }
       // native baseline for the same work
       if (cfg.native && cfg.nativeTiming) {
-        const threadsList = op === 'extract' ? [1] : cfg.threads;
+        const threadsList = cfg.threads;
         for (const threads of threadsList) {
           const times = [];
           for (let r = 0; r < cfg.repeat; r++) {

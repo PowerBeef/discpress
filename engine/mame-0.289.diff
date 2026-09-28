@@ -45,7 +45,7 @@
    if (outStream.overflow)
 --- a/src/lib/util/chd.cpp
 +++ b/src/lib/util/chd.cpp
-@@ -28,6 +28,16 @@
+@@ -28,6 +28,20 @@
  #include <new>
  #include <tuple>
  
@@ -55,6 +55,10 @@
 +	// provided by the JavaScript host (browser build): offload hunk compression to helper workers
 +	int wasm_par_enabled(uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression);
 +	void wasm_par_submit(void *item, const uint8_t *data, uint32_t length);
++	// and decompression, for commands that read (see chd_file::wasm_read_ahead)
++	int wasm_rd_enabled(const void *chd, uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression);
++	void wasm_rd_submit(const void *chd, uint32_t hunknum, uint32_t codec, const uint8_t *data, uint32_t length);
++	void wasm_rd_close(const void *chd);
 +}
 +static int s_wasm_par = 0;
 +#endif
@@ -62,7 +66,53 @@
  
  //**************************************************************************
  //  CONSTANTS
-@@ -3022,6 +3032,10 @@
+@@ -853,6 +867,17 @@
+ 
+ void chd_file::close()
+ {
++#ifdef __EMSCRIPTEN__
++	// Discpress: results from helper workers that are still coming are dropped
++	if (m_wasm_rd > 0)
++		wasm_rd_close(this);
++	m_wasm_rd = -1;
++	m_wasm_ahead.clear();
++	m_wasm_span.clear();
++	m_wasm_first = m_wasm_count = 0;
++	m_wasm_scan = m_wasm_queued = 0;
++#endif
++
+ 	// reset file characteristics
+ 	m_file.reset();
+ 	m_allow_reads = false;
+@@ -1115,6 +1140,11 @@
+ 					case COMPRESSION_TYPE_2:
+ 					case COMPRESSION_TYPE_3:
+ 						{
++#ifdef __EMSCRIPTEN__
++							// Discpress: the read-ahead may have it (see wasm_read_ahead; lossless codecs only)
++							if (wasm_read_cached(hunknum, rawmap[0], dest))
++								return (util::crc16_creator::simple(dest, m_hunkbytes) != blockcrc) ? std::error_condition(error::DECOMPRESSION_ERROR) : std::error_condition();
++#endif
+ 							std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
+ 							if (UNEXPECTED(err))
+ 								return err;
+@@ -1130,9 +1160,15 @@
+ 
+ 					case COMPRESSION_NONE:
+ 						{
++#ifdef __EMSCRIPTEN__
++							// Discpress: the read-ahead may have read it already
++							if (!wasm_read_cached(hunknum, rawmap[0], dest))
++#endif
++							{
+ 							std::error_condition err = file_read(blockoffs, dest, m_hunkbytes);
+ 							if (UNEXPECTED(err))
+ 								return err;
++							}
+ 							if (UNEXPECTED(util::crc16_creator::simple(dest, m_hunkbytes) != blockcrc))
+ 								return std::error_condition(error::DECOMPRESSION_ERROR);
+ 							return std::error_condition();
+@@ -3022,6 +3058,10 @@
  
  	// reset write state
  	m_write_hunk = 0;
@@ -73,7 +123,7 @@
  }
  
  /**
-@@ -3123,6 +3137,11 @@
+@@ -3123,6 +3163,11 @@
  			}
  			else
  			{
@@ -85,7 +135,7 @@
  				// otherwise, append it compressed and add to the self map
  				hunk_write_compressed(item.m_hunknum, item.m_compression, item.m_compressed, item.m_complen, item.m_hash[0].m_crc16);
  				m_total_out += item.m_complen;
-@@ -3345,6 +3364,15 @@
+@@ -3345,6 +3390,15 @@
  			assert(item.m_status == WS_READING);
  			item.m_status = WS_QUEUED;
  			item.m_hunknum = hunknum;
@@ -101,7 +151,7 @@
  			item.m_osd = osd_work_item_queue(m_work_queue, m_walking_parent ? async_walk_parent_static : async_compress_hunk_static, &item, 0);
  		}
  
-@@ -3512,3 +3540,22 @@
+@@ -3512,3 +3566,179 @@
  	metadata_entry metaentry;
  	return metadata_find(AV_METADATA_TAG, 0, metaentry);
  }
@@ -123,10 +173,215 @@
 +{
 +	chd_file_compressor::wasm_par_complete_item(item, crc16, sha1, compression, complen, data);
 +}
++
++bool chd_file::wasm_read_ahead(uint32_t first, uint32_t count)
++{
++	// only compressed v5 CHDs; helper workers decompress if the page has them for these codecs
++	if (m_wasm_rd == -1)
++		m_wasm_rd = (m_file && (m_version == 5) && compressed()) ? wasm_rd_enabled(this, m_hunkbytes, m_unitbytes, m_compression) : -2;
++	if (m_wasm_rd == -2)
++		return true;
++
++	// a new window: drop the hunks before it (one read again is read the usual way)
++	if ((first != m_wasm_first) || (count != m_wasm_count))
++	{
++		m_wasm_first = first;
++		m_wasm_count = count;
++		m_wasm_scan = first;
++		for (auto it = m_wasm_ahead.begin(); it != m_wasm_ahead.end(); )
++		{
++			if (it->first < first)
++				it = m_wasm_ahead.erase(it);
++			else
++				++it;
++		}
++	}
++
++	// the stored data of this window and the next, read in one go when it lies together in the file
++	// (every read costs far more in the browser than the bytes do): codec-compressed hunks go to the
++	// helpers, or are kept to be decompressed when read; uncompressed hunks are kept as they are
++	uint64_t const begin = std::max<uint64_t>(first, m_wasm_queued);
++	uint64_t const end = std::min<uint64_t>(uint64_t(first) + 2 * uint64_t(count), m_hunkcount);
++	if (begin < end)
++	{
++		uint64_t lo = ~uint64_t(0), hi = 0;
++		for (uint64_t hunknum = begin; hunknum < end; hunknum++)
++		{
++			uint8_t const *const rawmap = &m_rawmap[m_mapentrybytes * hunknum];
++			if (rawmap[0] > COMPRESSION_NONE)
++				continue;
++			uint64_t const blockoffs = get_u48be(&rawmap[4]);
++			uint32_t const blocklen = (rawmap[0] == COMPRESSION_NONE) ? m_hunkbytes : get_u24be(&rawmap[1]);
++			lo = std::min(lo, blockoffs);
++			hi = std::max(hi, blockoffs + blocklen);
++		}
++		uint8_t const *span = nullptr;
++		if ((lo < hi) && ((hi - lo) <= 2 * (end - begin) * m_hunkbytes))
++		{
++			try
++			{
++				m_wasm_span.resize(hi - lo);
++				if (!file_read(lo, &m_wasm_span[0], hi - lo))
++					span = &m_wasm_span[0];
++			}
++			catch (...)
++			{
++			}
++		}
++
++		for (uint64_t hunknum = begin; hunknum < end; hunknum++)
++		{
++			if (m_wasm_ahead.count(hunknum))
++				continue;
++			uint8_t const *const rawmap = &m_rawmap[m_mapentrybytes * hunknum];
++			uint8_t const type = rawmap[0];
++			uint64_t const blockoffs = get_u48be(&rawmap[4]);
++			if (type == COMPRESSION_NONE)
++			{
++				if (span)
++					m_wasm_ahead[hunknum] = wasm_ahead_hunk{ std::vector<uint8_t>(span + (blockoffs - lo), span + (blockoffs - lo) + m_hunkbytes), 4 };
++				continue;
++			}
++			if ((type > COMPRESSION_TYPE_3) || !m_decompressor[type] || m_decompressor[type]->lossy())
++				continue;
++			uint32_t const blocklen = get_u24be(&rawmap[1]);
++			uint8_t const *data = span ? (span + (blockoffs - lo)) : nullptr;
++			if (!data)
++			{
++				if ((blocklen > m_compressed.size()) || file_read(blockoffs, &m_compressed[0], blocklen))
++					continue; // read_hunk will report it
++				data = &m_compressed[0];
++			}
++			if (m_wasm_rd > 0)
++			{
++				m_wasm_ahead[hunknum];
++				wasm_rd_submit(this, hunknum, type, data, blocklen);
++			}
++			else
++			{
++				m_wasm_ahead[hunknum] = wasm_ahead_hunk{ std::vector<uint8_t>(data, data + blocklen), 3 };
++			}
++		}
++		m_wasm_queued = end;
++	}
++
++	// ready once no hunk of this window is still with a helper (m_wasm_scan: all before it are)
++	uint64_t const ready = std::min<uint64_t>(uint64_t(first) + count, m_hunkcount);
++	for ( ; m_wasm_scan < ready; m_wasm_scan++)
++	{
++		auto const found = m_wasm_ahead.find(m_wasm_scan);
++		if ((found != m_wasm_ahead.end()) && (found->second.state == 0))
++			return false;
++	}
++	return true;
++}
++
++uint8_t *chd_file::wasm_read_slot(uint32_t hunknum) noexcept
++{
++	auto const found = m_wasm_ahead.find(hunknum);
++	if ((found == m_wasm_ahead.end()) || (found->second.state != 0))
++		return nullptr; // no longer wanted
++	try
++	{
++		found->second.data.resize(m_hunkbytes);
++	}
++	catch (...)
++	{
++		return nullptr;
++	}
++	return &found->second.data[0];
++}
++
++void chd_file::wasm_read_done(uint32_t hunknum, bool ok) noexcept
++{
++	auto const found = m_wasm_ahead.find(hunknum);
++	if ((found != m_wasm_ahead.end()) && (found->second.state == 0))
++		found->second.state = (ok && (found->second.data.size() == m_hunkbytes)) ? 1 : 2;
++}
++
++// fills dest from the read-ahead if it has this hunk (decompressing kept bytes, which throws
++// like any decompression); the caller checks the CRC as usual
++bool chd_file::wasm_read_cached(uint32_t hunknum, uint8_t type, void *dest)
++{
++	auto const found = m_wasm_ahead.find(hunknum);
++	if (found == m_wasm_ahead.end())
++		return false;
++	wasm_ahead_hunk const &ahead = found->second;
++	switch (ahead.state)
++	{
++	case 1: // decompressed by a helper
++	case 4: // stored uncompressed
++		memcpy(dest, &ahead.data[0], m_hunkbytes);
++		return true;
++	case 3: // compressed bytes
++		m_decompressor[type]->decompress(&ahead.data[0], ahead.data.size(), reinterpret_cast<uint8_t *>(dest), m_hunkbytes);
++		return true;
++	default:
++		return false;
++	}
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE uint8_t *wasm_rd_slot(chd_file *chd, uint32_t hunknum)
++{
++	return chd->wasm_read_slot(hunknum);
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE void wasm_rd_done(chd_file *chd, uint32_t hunknum, int ok)
++{
++	chd->wasm_read_done(hunknum, ok != 0);
++}
 +#endif
 --- a/src/lib/util/chd.h
 +++ b/src/lib/util/chd.h
-@@ -450,6 +450,11 @@
+@@ -22,6 +22,10 @@
+ #include <string>
+ #include <string_view>
+ #include <system_error>
++#ifdef __EMSCRIPTEN__
++#include <unordered_map>
++#include <vector>
++#endif
+ 
+ 
+ /***************************************************************************
+@@ -366,6 +370,16 @@
+ 	std::error_condition check_is_dvd() const noexcept;
+ 	std::error_condition check_is_av() const noexcept;
+ 
++#ifdef __EMSCRIPTEN__
++	// Discpress (browser build): reads ahead for the commands that read a whole CHD. wasm_read_ahead
++	// reads the stored data of hunks [first, first + 2 * count) in one go, hands the compressed ones
++	// to helper workers (if the page has them), and returns true once none of the first count is
++	// still with a helper; read_hunk then takes those from memory. Other hunks are read as usual.
++	bool wasm_read_ahead(uint32_t first, uint32_t count);
++	uint8_t *wasm_read_slot(uint32_t hunknum) noexcept;
++	void wasm_read_done(uint32_t hunknum, bool ok) noexcept;
++#endif
++
+ private:
+ 	struct metadata_entry;
+ 	struct metadata_hash;
+@@ -433,6 +447,19 @@
+ 	// caching
+ 	std::vector<uint8_t>    m_cache;            // single-hunk cache for partial reads/writes
+ 	uint32_t                m_cachehunk;        // which hunk is in the cache?
++
++#ifdef __EMSCRIPTEN__
++	// Discpress: hunks handed to helper workers, by hunk number (see wasm_read_ahead)
++	// state: 0 = with a helper, 1 = decompressed by it, 2 = it failed, 3 = compressed bytes, 4 = uncompressed hunk
++	struct wasm_ahead_hunk { std::vector<uint8_t> data; int state = 0; };
++	bool wasm_read_cached(uint32_t hunknum, uint8_t type, void *dest);
++	std::unordered_map<uint32_t, wasm_ahead_hunk> m_wasm_ahead;
++	std::vector<uint8_t>    m_wasm_span;        // this window's stored data, read in one go
++	int                     m_wasm_rd = -1;     // -1 = not asked yet, -2 = no read-ahead, 0 = without helpers, 1 = with
++	uint32_t                m_wasm_first = 0, m_wasm_count = 0; // the window last asked for
++	uint64_t                m_wasm_scan = 0;    // hunks of the window before this one are ready
++	uint64_t                m_wasm_queued = 0;  // hunks before this one were handed out (if codec-compressed)
++#endif
+ };
+ 
+ 
+@@ -450,6 +477,11 @@
  	void compress_begin();
  	std::error_condition compress_continue(double &progress, double &ratio);
  
@@ -854,7 +1109,7 @@
  #include <iostream>
  #include <limits>
  #include <memory>
-@@ -41,11 +45,100 @@
+@@ -41,11 +45,120 @@
  #include <utility>
  #include <vector>
  
@@ -949,32 +1204,73 @@
 +	void await_resume() const noexcept { }
 +};
 +
++// Discpress: extract and verify wait here while helper workers decompress the hunks they are about
++// to read, and the next window's (browser only; otherwise the hunks are read the usual way)
++struct read_pause
++{
++	bool await_ready() const noexcept { return false; }
++	void await_suspend(std::coroutine_handle<> h) noexcept { s_paused = h; }
++	void await_resume() const noexcept { }
++};
++
++static chdman_task read_ahead(chd_file &chd, uint64_t offset, uint64_t length)
++{
++#ifdef __EMSCRIPTEN__
++	uint32_t const first = offset / chd.hunk_bytes();
++	uint32_t const count = (offset + length + chd.hunk_bytes() - 1) / chd.hunk_bytes() - first;
++	while (!chd.wasm_read_ahead(first, count))
++		co_await read_pause();
++#endif
++	co_return;
++}
++
 +
 +
 +//**************************************************************************
  //  CONSTANTS & DEFINES
  //**************************************************************************
  // MINGW has adopted the MSVC formatting for 64-bit ints as of GCC 4.4 and deprecated it as of GCC 9.3
-@@ -141,12 +234,12 @@
+@@ -64,8 +177,13 @@
+ // default hard disk sector size
+ constexpr uint32_t IDE_SECTOR_SIZE = 512;
+ 
+-// temporary input buffer size
++// temporary input buffer size (Discpress: smaller in the browser, where helper workers decompress
++// the next buffer's worth of hunks while this one is used, and memory is tighter)
++#ifdef __EMSCRIPTEN__
++constexpr uint32_t TEMP_BUFFER_SIZE = 8 * 1024 * 1024;
++#else
+ constexpr uint32_t TEMP_BUFFER_SIZE = 32 * 1024 * 1024;
++#endif
+ 
+ // modes
+ constexpr int MODE_NORMAL = 0;
+@@ -140,15 +258,15 @@
+ [[noreturn]] static void report_error(int error, Format &&fmt, Params &&...args);
  
  static void do_info(parameters_map &params);
- static void do_verify(parameters_map &params);
+-static void do_verify(parameters_map &params);
 -static void do_create_raw(parameters_map &params);
 -static void do_create_hd(parameters_map &params);
 -static void do_create_cd(parameters_map &params);
 -static void do_create_dvd(parameters_map &params);
 -static void do_create_ld(parameters_map &params);
 -static void do_copy(parameters_map &params);
+-static void do_extract_raw(parameters_map &params);
+-static void do_extract_cd(parameters_map &params);
++static chdman_task do_verify(parameters_map &params);
 +static chdman_task do_create_raw(parameters_map &params);
 +static chdman_task do_create_hd(parameters_map &params);
 +static chdman_task do_create_cd(parameters_map &params);
 +static chdman_task do_create_dvd(parameters_map &params);
 +static chdman_task do_create_ld(parameters_map &params);
 +static chdman_task do_copy(parameters_map &params);
- static void do_extract_raw(parameters_map &params);
- static void do_extract_cd(parameters_map &params);
++static chdman_task do_extract_raw(parameters_map &params);
++static chdman_task do_extract_cd(parameters_map &params);
  static void do_extract_ld(parameters_map &params);
-@@ -214,10 +307,19 @@
+ static void do_add_metadata(parameters_map &params);
+ static void do_del_metadata(parameters_map &params);
+@@ -214,10 +332,19 @@
  
  // ======================> command_description
  
@@ -995,7 +1291,7 @@
  	const char *description;
  	const char *valid_options[16];
  };
-@@ -1285,6 +1387,15 @@
+@@ -1285,6 +1412,15 @@
  
  static void check_existing_output_file(const parameters_map &params, std::string_view filename)
  {
@@ -1011,7 +1307,7 @@
  	if (params.find(OPTION_OUTPUT_FORCE) == params.end())
  	{
  		util::core_file::ptr file;
-@@ -1498,7 +1609,7 @@
+@@ -1498,7 +1634,7 @@
  //  compress_common - standard compression loop
  //-------------------------------------------------
  
@@ -1020,7 +1316,7 @@
  {
  	// begin compressing
  	chd.compress_begin();
-@@ -1507,10 +1618,13 @@
+@@ -1507,10 +1643,13 @@
  	double complete, ratio;
  	std::error_condition err;
  	while ((err = chd.compress_continue(complete, ratio)) == chd_file::error::WALKING_PARENT || err == chd_file::error::COMPRESSING)
@@ -1034,7 +1330,24 @@
  
  	// handle errors
  	if (err)
-@@ -1830,7 +1944,8 @@
+@@ -1781,7 +1920,7 @@
+ //  do_verify - validate the SHA-1 on a CHD
+ //-------------------------------------------------
+ 
+-static void do_verify(parameters_map &params)
++static chdman_task do_verify(parameters_map &params)
+ {
+ 	bool fix_sha1 = params.find(OPTION_FIX) != params.end();
+ 	// parse out input files
+@@ -1820,6 +1959,7 @@
+ 
+ 		// determine how much to read
+ 		uint32_t bytes_to_read = (std::min<uint64_t>)(buffer.size(), input_chd.logical_bytes() - offset);
++		co_await read_ahead(input_chd, offset, bytes_to_read);
+ 		std::error_condition err = input_chd.read_bytes(offset, &buffer[0], bytes_to_read);
+ 		if (err)
+ 			report_error(1, "Error reading CHD file (%s): %s", *input_chd_str->second, err.message());
+@@ -1830,7 +1970,8 @@
  	}
  	util::sha1_t computed_sha1 = rawsha1.finish();
  
@@ -1044,7 +1357,7 @@
  	if (raw_sha1 != computed_sha1)
  	{
  		util::stream_format(std::cerr, "Error: Raw SHA1 in header = %s\n", raw_sha1.as_string());
-@@ -1844,6 +1959,8 @@
+@@ -1844,6 +1985,8 @@
  				report_error(1, "Error updating SHA1: %s", err.message());
  			util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
  		}
@@ -1053,7 +1366,7 @@
  	}
  	else
  	{
-@@ -1868,9 +1985,13 @@
+@@ -1868,9 +2011,13 @@
  						report_error(1, "Error updating SHA1: %s", err.message());
  					util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
  				}
@@ -1067,7 +1380,7 @@
  }
  
  
-@@ -1879,7 +2000,7 @@
+@@ -1879,7 +2026,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -1076,7 +1389,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -1894,6 +2015,8 @@
+@@ -1894,6 +2041,8 @@
  	if (unit_size_str != params.end())
  	{
  		unit_size = parse_number(unit_size_str->second->c_str());
@@ -1085,7 +1398,7 @@
  		if (output_parent.opened() && (output_parent.unit_bytes() != unit_size))
  			report_error(1, "Specified unit size %u bytes does not match output parent CHD unit size %u bytes", unit_size, output_parent.unit_bytes());
  	}
-@@ -1943,7 +2066,7 @@
+@@ -1943,7 +2092,7 @@
  			chd->clone_all_metadata(output_parent);
  
  		// compress it generically
@@ -1094,7 +1407,7 @@
  	}
  	catch (...)
  	{
-@@ -1959,7 +2082,7 @@
+@@ -1959,7 +2108,7 @@
  //  disk image from a raw file
  //-------------------------------------------------
  
@@ -1103,7 +1416,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2008,6 +2131,8 @@
+@@ -2008,6 +2157,8 @@
  		if (template_str != params.end())
  			report_error(1, "Sector size cannot be specified separately when a template is specified");
  		sector_size = parse_number(sectorsize_str->second->c_str());
@@ -1112,7 +1425,7 @@
  	}
  	if (output_parent.opened() && (output_parent.unit_bytes() != sector_size))
  		report_error(1, "Sector size %u bytes does not match output parent CHD sector size %u bytes", sector_size, output_parent.unit_bytes());
-@@ -2147,7 +2272,7 @@
+@@ -2147,7 +2298,7 @@
  
  		// compress it generically
  		if (input_file)
@@ -1121,7 +1434,7 @@
  	}
  	catch (...)
  	{
-@@ -2163,7 +2288,7 @@
+@@ -2163,7 +2314,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -1130,7 +1443,7 @@
  {
  	// process input file
  	cdrom_file::track_input_info track_info;
-@@ -2227,7 +2352,7 @@
+@@ -2227,7 +2378,7 @@
  			report_error(1, "Error adding CD metadata: %s", err.message());
  
  		// compress it generically
@@ -1139,7 +1452,7 @@
  	}
  	catch (...)
  	{
-@@ -2243,7 +2368,7 @@
+@@ -2243,7 +2394,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -1148,7 +1461,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2295,7 +2420,7 @@
+@@ -2295,7 +2446,7 @@
  			report_error(1, "Error adding DVD metadata: %s", err.message());
  
  		// compress it generically
@@ -1157,7 +1470,7 @@
  	}
  	catch (...)
  	{
-@@ -2311,7 +2436,7 @@
+@@ -2311,7 +2462,7 @@
  //  input AVI file and metadata
  //-------------------------------------------------
  
@@ -1166,7 +1479,7 @@
  {
  	// process input file
  	avi_file::ptr input_file;
-@@ -2399,7 +2524,7 @@
+@@ -2399,7 +2550,7 @@
  			report_error(1, "Error adding AV metadata: %s\n", err.message());
  
  		// create the compressor and then run it generically
@@ -1175,7 +1488,7 @@
  
  		// write the final LD metadata
  		if (info.height == 524/2 || info.height == 624/2)
-@@ -2456,7 +2581,7 @@
+@@ -2456,7 +2607,7 @@
  //  another CHD
  //-------------------------------------------------
  
@@ -1184,7 +1497,7 @@
  {
  	// parse out input files
  	chd_file input_parent_chd;
-@@ -2547,7 +2672,7 @@
+@@ -2547,7 +2698,7 @@
  		}
  
  		// compress it generically
@@ -1193,7 +1506,32 @@
  	}
  	catch (...)
  	{
-@@ -2646,7 +2771,9 @@
+@@ -2563,7 +2714,7 @@
+ //  CHD image
+ //-------------------------------------------------
+ 
+-static void do_extract_raw(parameters_map &params)
++static chdman_task do_extract_raw(parameters_map &params)
+ {
+ 	// parse out input files
+ 	chd_file input_parent_chd;
+@@ -2604,6 +2755,7 @@
+ 
+ 			// determine how much to read
+ 			uint32_t bytes_to_read = (std::min<uint64_t>)(buffer.size(), input_end - offset);
++			co_await read_ahead(input_chd, offset, bytes_to_read);
+ 			std::error_condition err = input_chd.read_bytes(offset, &buffer[0], bytes_to_read);
+ 			if (err)
+ 				report_error(1, "Error reading CHD file (%s): %s", *params.find(OPTION_INPUT)->second, err.message());
+@@ -2639,14 +2791,16 @@
+ //  CHD image
+ //-------------------------------------------------
+ 
+-static void do_extract_cd(parameters_map &params)
++static chdman_task do_extract_cd(parameters_map &params)
+ {
+ 	// parse out input files
+ 	chd_file input_parent_chd;
  	chd_file input_chd;
  	parse_input_chd_parameters(params, input_chd, input_parent_chd);
  
@@ -1204,7 +1542,31 @@
  	cdrom_file *cdrom = new cdrom_file(&input_chd);
  	const cdrom_file::toc &toc = cdrom->get_toc();
  
-@@ -3387,7 +3514,8 @@
+@@ -2920,6 +3074,7 @@
+ 		uint64_t outputoffs = 0;
+ 		uint32_t discoffs = 0;
+ 		std::vector<uint8_t> buffer;
++		uint64_t ahead_start = 0, ahead_end = 0; // Discpress: the window read_ahead last covered
+ 
+ 		for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
+ 		{
+@@ -2987,6 +3142,15 @@
+ 					frameofs = frame - trackinfo.splitframes;
+ 				}
+ 
++				// Discpress: helper workers decompress a buffer's worth of hunks ahead (browser only)
++				uint64_t const chdoffs = uint64_t(toc.tracks[trk].chdframeofs + frameofs) * cdrom_file::FRAME_SIZE;
++				if ((chdoffs < ahead_start) || (chdoffs >= ahead_end))
++				{
++					co_await read_ahead(input_chd, chdoffs, TEMP_BUFFER_SIZE);
++					ahead_start = chdoffs;
++					ahead_end = chdoffs + TEMP_BUFFER_SIZE;
++				}
++
+ 				// read the data
+ 				cdrom->read_data(cdrom->get_track_start_phys(trk) + frameofs, &buffer[bufferoffs], toc.tracks[trk].trktype, true);
+ 
+@@ -3387,7 +3551,8 @@
  	{
  		// delete the output file
  		output_file.reset();
@@ -1214,7 +1576,7 @@
  		throw;
  	}
  }
-@@ -3425,14 +3553,39 @@
+@@ -3425,14 +3590,39 @@
  //  main - entry point
  //-------------------------------------------------
  
@@ -1229,8 +1591,7 @@
 +	parameters_map parameters;
 +	chdman_task task;
 +};
- 
--	// print the header
++
 +std::unique_ptr<chdman_run> s_run;
 +constexpr int CHDMAN_PAUSED = -1;
 +
@@ -1241,7 +1602,8 @@
 +}
 +
 +} // anonymous namespace
-+
+ 
+-	// print the header
 +
 +// parses the command line and prepares the command: returns CHDMAN_PAUSED when it is ready to
 +// run (chdman_continue), otherwise the exit code
@@ -1258,7 +1620,7 @@
  
  	// handle help specially
  	if (args.size() < 2)
-@@ -3459,7 +3612,7 @@
+@@ -3459,7 +3649,7 @@
  				return print_help(args[0], desc);
  
  			// otherwise, verify the parameters
@@ -1267,7 +1629,7 @@
  			while (argnum < args.size())
  			{
  				// should be an option name
-@@ -3519,30 +3672,86 @@
+@@ -3519,30 +3709,86 @@
  					return print_help(args[0], desc, "Required parameters missing");
  			}
  

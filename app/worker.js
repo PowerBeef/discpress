@@ -1,5 +1,5 @@
-/* chdman web worker: runs one chdman command (role "job") or compresses hunks for
-   another worker (role "helper"). Appended after the Emscripten glue (createChdman). */
+/* chdman web worker: runs one chdman command (role "job"), or compresses and decompresses
+   hunks for another worker (role "helper"). Appended after the Emscripten glue (createChdman). */
 'use strict';
 
 var ERR = { ENOENT: 44, EPERM: 63, EIO: 29, EINVAL: 28, EEXIST: 20, ENOTEMPTY: 55, ENOSPC: 51, EISDIR: 31 };
@@ -566,7 +566,7 @@ async function stageInput(msg, index, stages) {
   return dst;
 }
 
-/* ---------------- multi-core compression (job side) ---------------- */
+/* ---------------- multi-core compression and decompression (job side) ---------------- */
 
 function setupParallel(M, ports) {
   var helpers = ports.map(function (port, i) { return { port: port, inflight: 0, id: i }; });
@@ -611,6 +611,13 @@ function setupParallel(M, ports) {
         failed = m.message;
         postMessage({ type: 'notice', level: 'error', message: 'A helper thread failed: ' + m.message });
         maybeWake();
+        return;
+      }
+      if (m.type === 'dresult') {
+        h.inflight--;
+        rdResult(m);
+        rdDispatch();
+        rdWake();
         return;
       }
       if (m.type !== 'result') return;
@@ -666,6 +673,84 @@ function setupParallel(M, ports) {
       maybeWake();
     });
   };
+
+  // Extract and verify: helpers decompress the hunks chdman is about to read (chd_file::wasm_read_ahead
+  // hands them over with wasm_rd_submit); the results go straight into the engine's cache slots.
+  // One file at a time; a closed file's late results are dropped by generation.
+  var rd = { chd: 0, gen: 0, hb: 0, batch: 1, open: null, queue: [], busy: 0, waiting: null };
+  function rdFlush() {
+    if (rd.open && rd.open.n) rd.queue.push(rd.open);
+    rd.open = null;
+  }
+  // Every batch goes out at once, to the least busy helper: the job worker can't hand out work while
+  // chdman uses a window of hunks, so helpers need their queue (at most two windows, see wasm_read_ahead)
+  function rdDispatch() {
+    rdFlush();
+    while (rd.queue.length) {
+      var h = helpers[0];
+      for (var i = 1; i < helpers.length; i++) if (helpers[i].inflight < h.inflight) h = helpers[i];
+      var b = rd.queue.shift();
+      h.inflight++;
+      var meta = b.meta.slice(0, b.n * 3), data = b.data.slice(0, b.used);
+      h.port.postMessage({ type: 'dbatch', gen: b.gen, meta: meta, data: data.buffer }, [meta.buffer, data.buffer]);
+    }
+  }
+  function rdResult(m) {
+    var live = rd.chd && m.gen === rd.gen, meta = m.meta, ok = m.ok, out = m.out;
+    for (var i = 0; i < ok.length; i++) {
+      rd.busy--;
+      if (!live) continue;
+      var hunk = meta[i * 3];
+      var slot = ok[i] ? M._wasm_rd_slot(rd.chd, hunk) : 0;
+      if (slot) M.HEAPU8.set(out.subarray(i * rd.hb, (i + 1) * rd.hb), slot);
+      M._wasm_rd_done(rd.chd, hunk, slot ? 1 : 0);
+    }
+  }
+  function rdWake() {
+    if (rd.waiting) { var w = rd.waiting; rd.waiting = null; wake(w); }
+  }
+  M.rdSetup = function (chd, hb, ub, comps) {
+    if (!helpers.length || rd.chd) return false;
+    // the LaserDisc codec (avhu) reads settings from the CHD's own metadata
+    if (comps.indexOf(0x61766875) >= 0) return false;
+    rd.chd = chd; rd.gen++; rd.hb = hb;
+    rd.batch = Math.max(1, Math.min(64, Math.floor((512 * 1024) / hb)));
+    helpers.forEach(function (h) { h.port.postMessage({ type: 'dinit', hunkbytes: hb, unitbytes: ub, comps: comps }); });
+    postMessage({ type: 'notice', level: 'debug', message: 'multi-core decompression: ' + helpers.length + ' helper threads, batch ' + rd.batch });
+    return true;
+  };
+  M.rdSubmit = function (chd, hunk, codec, ptr, len) {
+    if (chd !== rd.chd) return;
+    if (!rd.open) rd.open = { gen: rd.gen, n: 0, used: 0, meta: new Uint32Array(3 * rd.batch), data: new Uint8Array(rd.batch * rd.hb) };
+    var o = rd.open;
+    o.data.set(M.HEAPU8.subarray(ptr, ptr + len), o.used);
+    o.meta[o.n * 3] = hunk; o.meta[o.n * 3 + 1] = codec; o.meta[o.n * 3 + 2] = len;
+    o.used += len;
+    o.n++;
+    rd.busy++;
+    if (o.n === rd.batch) rdDispatch();
+  };
+  M.rdClose = function (chd) {
+    if (chd !== rd.chd) return;
+    rdFlush();
+    rd.queue.forEach(function (b) { rd.busy -= b.n; });
+    rd.queue = [];
+    rd.chd = 0;
+    rd.gen++;
+  };
+  M.rdBusy = function () { return rd.busy > 0; };
+  // chdman paused until hunks it is about to read are in: resolves when more results arrive
+  M.rdWait = function () {
+    return new Promise(function (resolve) {
+      if (failed) {
+        postMessage({ type: 'fatal', message: 'Multi-core decompression failed (' + failed + '). Try again with 1 thread in Settings.' });
+        return; // never resolves: the job worker is terminated by the page
+      }
+      rdDispatch();
+      rd.waiting = resolve;
+      if (!rd.busy) rdWake();
+    });
+  };
 }
 
 /* ---------------- helper role ---------------- */
@@ -675,9 +760,34 @@ async function runHelper(msg) {
   var M = await instantiate({});
   var port = msg.port;
   var inbuf = 0, outbuf = 0, res = M._malloc(16), sha = M._malloc(32), hb = 0;
+  var dinbuf = 0, doutbuf = 0, dhb = 0;
   port.onmessage = function (e) {
     var m = e.data;
     try {
+      if (m.type === 'dinit') {
+        var dr = M._wasm_helper_dinit(m.hunkbytes, m.unitbytes, m.comps[0], m.comps[1], m.comps[2], m.comps[3]);
+        if (dr !== 0) throw new Error('codec init failed (' + dr + ')');
+        dinbuf = M._wasm_helper_dinbuf();
+        doutbuf = M._wasm_helper_doutbuf();
+        dhb = m.hunkbytes;
+        return;
+      }
+      if (m.type === 'dbatch') {
+        // a hunk that fails here is decompressed again by the job worker, which reports the error
+        var dmeta = m.meta, ddata = new Uint8Array(m.data), dn = dmeta.length / 3;
+        var ok = new Uint8Array(dn), dout = new Uint8Array(dn * dhb), doff = 0;
+        for (var di = 0; di < dn; di++) {
+          var dlen = dmeta[di * 3 + 2];
+          M.HEAPU8.set(ddata.subarray(doff, doff + dlen), dinbuf);
+          doff += dlen;
+          if (M._wasm_helper_decompress(dmeta[di * 3 + 1], dlen) === 0) {
+            ok[di] = 1;
+            dout.set(M.HEAPU8.subarray(doutbuf, doutbuf + dhb), di * dhb);
+          }
+        }
+        port.postMessage({ type: 'dresult', gen: m.gen, meta: dmeta, ok: ok, out: dout }, [dmeta.buffer, ok.buffer, dout.buffer]);
+        return;
+      }
       if (m.type === 'init') {
         var r = M._wasm_helper_init(m.hunkbytes, m.unitbytes, m.comps[0], m.comps[1], m.comps[2], m.comps[3]);
         if (r !== 0) throw new Error('codec init failed (' + r + ')');
@@ -731,14 +841,15 @@ function makeLineSink(stream) {
 
 // Runs a chdman command line and resolves with its exit code. A command that compresses with
 // helper workers pauses after each step (chdman_begin/chdman_resume return -1) until M.parWait()
-// says the next hunk is in, so the worker keeps receiving their results.
+// says the next hunk is in, so the worker keeps receiving their results. Extract and verify pause
+// the same way while helpers decompress the hunks they are about to read (M.rdWait()).
 async function runChdman(M, args) {
   var argv = M._malloc(4 * (args.length + 2));
   ['chdman'].concat(args).forEach(function (a, i) { var p = M.stringToNewUTF8(a); M.HEAPU32[(argv >>> 2) + i] = p; });
   M.HEAPU32[(argv >>> 2) + args.length + 1] = 0;
   var code = M._chdman_begin(args.length + 1, argv);
   while (code === -1) {
-    await M.parWait();
+    await (M.rdBusy && M.rdBusy() ? M.rdWait() : M.parWait());
     code = M._chdman_resume();
   }
   return code;

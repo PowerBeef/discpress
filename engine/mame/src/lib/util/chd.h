@@ -22,6 +22,10 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#ifdef __EMSCRIPTEN__
+#include <unordered_map>
+#include <vector>
+#endif
 
 
 /***************************************************************************
@@ -366,6 +370,16 @@ public:
 	std::error_condition check_is_dvd() const noexcept;
 	std::error_condition check_is_av() const noexcept;
 
+#ifdef __EMSCRIPTEN__
+	// Discpress (browser build): reads ahead for the commands that read a whole CHD. wasm_read_ahead
+	// reads the stored data of hunks [first, first + 2 * count) in one go, hands the compressed ones
+	// to helper workers (if the page has them), and returns true once none of the first count is
+	// still with a helper; read_hunk then takes those from memory. Other hunks are read as usual.
+	bool wasm_read_ahead(uint32_t first, uint32_t count);
+	uint8_t *wasm_read_slot(uint32_t hunknum) noexcept;
+	void wasm_read_done(uint32_t hunknum, bool ok) noexcept;
+#endif
+
 private:
 	struct metadata_entry;
 	struct metadata_hash;
@@ -433,6 +447,19 @@ private:
 	// caching
 	std::vector<uint8_t>    m_cache;            // single-hunk cache for partial reads/writes
 	uint32_t                m_cachehunk;        // which hunk is in the cache?
+
+#ifdef __EMSCRIPTEN__
+	// Discpress: hunks handed to helper workers, by hunk number (see wasm_read_ahead)
+	// state: 0 = with a helper, 1 = decompressed by it, 2 = it failed, 3 = compressed bytes, 4 = uncompressed hunk
+	struct wasm_ahead_hunk { std::vector<uint8_t> data; int state = 0; };
+	bool wasm_read_cached(uint32_t hunknum, uint8_t type, void *dest);
+	std::unordered_map<uint32_t, wasm_ahead_hunk> m_wasm_ahead;
+	std::vector<uint8_t>    m_wasm_span;        // this window's stored data, read in one go
+	int                     m_wasm_rd = -1;     // -1 = not asked yet, -2 = no read-ahead, 0 = without helpers, 1 = with
+	uint32_t                m_wasm_first = 0, m_wasm_count = 0; // the window last asked for
+	uint64_t                m_wasm_scan = 0;    // hunks of the window before this one are ready
+	uint64_t                m_wasm_queued = 0;  // hunks before this one were handed out (if codec-compressed)
+#endif
 };
 
 

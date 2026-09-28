@@ -34,6 +34,10 @@ extern "C" {
 	// provided by the JavaScript host (browser build): offload hunk compression to helper workers
 	int wasm_par_enabled(uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression);
 	void wasm_par_submit(void *item, const uint8_t *data, uint32_t length);
+	// and decompression, for commands that read (see chd_file::wasm_read_ahead)
+	int wasm_rd_enabled(const void *chd, uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression);
+	void wasm_rd_submit(const void *chd, uint32_t hunknum, uint32_t codec, const uint8_t *data, uint32_t length);
+	void wasm_rd_close(const void *chd);
 }
 static int s_wasm_par = 0;
 #endif
@@ -863,6 +867,17 @@ std::error_condition chd_file::open(
 
 void chd_file::close()
 {
+#ifdef __EMSCRIPTEN__
+	// Discpress: results from helper workers that are still coming are dropped
+	if (m_wasm_rd > 0)
+		wasm_rd_close(this);
+	m_wasm_rd = -1;
+	m_wasm_ahead.clear();
+	m_wasm_span.clear();
+	m_wasm_first = m_wasm_count = 0;
+	m_wasm_scan = m_wasm_queued = 0;
+#endif
+
 	// reset file characteristics
 	m_file.reset();
 	m_allow_reads = false;
@@ -1125,6 +1140,11 @@ std::error_condition chd_file::read_hunk(uint32_t hunknum, void *buffer)
 					case COMPRESSION_TYPE_2:
 					case COMPRESSION_TYPE_3:
 						{
+#ifdef __EMSCRIPTEN__
+							// Discpress: the read-ahead may have it (see wasm_read_ahead; lossless codecs only)
+							if (wasm_read_cached(hunknum, rawmap[0], dest))
+								return (util::crc16_creator::simple(dest, m_hunkbytes) != blockcrc) ? std::error_condition(error::DECOMPRESSION_ERROR) : std::error_condition();
+#endif
 							std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
 							if (UNEXPECTED(err))
 								return err;
@@ -1140,9 +1160,15 @@ std::error_condition chd_file::read_hunk(uint32_t hunknum, void *buffer)
 
 					case COMPRESSION_NONE:
 						{
+#ifdef __EMSCRIPTEN__
+							// Discpress: the read-ahead may have read it already
+							if (!wasm_read_cached(hunknum, rawmap[0], dest))
+#endif
+							{
 							std::error_condition err = file_read(blockoffs, dest, m_hunkbytes);
 							if (UNEXPECTED(err))
 								return err;
+							}
 							if (UNEXPECTED(util::crc16_creator::simple(dest, m_hunkbytes) != blockcrc))
 								return std::error_condition(error::DECOMPRESSION_ERROR);
 							return std::error_condition();
@@ -3557,5 +3583,162 @@ void chd_file_compressor::wasm_par_complete_item(void *itemp, uint32_t crc16, co
 extern "C" EMSCRIPTEN_KEEPALIVE void wasm_par_complete(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen, const uint8_t *data)
 {
 	chd_file_compressor::wasm_par_complete_item(item, crc16, sha1, compression, complen, data);
+}
+
+bool chd_file::wasm_read_ahead(uint32_t first, uint32_t count)
+{
+	// only compressed v5 CHDs; helper workers decompress if the page has them for these codecs
+	if (m_wasm_rd == -1)
+		m_wasm_rd = (m_file && (m_version == 5) && compressed()) ? wasm_rd_enabled(this, m_hunkbytes, m_unitbytes, m_compression) : -2;
+	if (m_wasm_rd == -2)
+		return true;
+
+	// a new window: drop the hunks before it (one read again is read the usual way)
+	if ((first != m_wasm_first) || (count != m_wasm_count))
+	{
+		m_wasm_first = first;
+		m_wasm_count = count;
+		m_wasm_scan = first;
+		for (auto it = m_wasm_ahead.begin(); it != m_wasm_ahead.end(); )
+		{
+			if (it->first < first)
+				it = m_wasm_ahead.erase(it);
+			else
+				++it;
+		}
+	}
+
+	// the stored data of this window and the next, read in one go when it lies together in the file
+	// (every read costs far more in the browser than the bytes do): codec-compressed hunks go to the
+	// helpers, or are kept to be decompressed when read; uncompressed hunks are kept as they are
+	uint64_t const begin = std::max<uint64_t>(first, m_wasm_queued);
+	uint64_t const end = std::min<uint64_t>(uint64_t(first) + 2 * uint64_t(count), m_hunkcount);
+	if (begin < end)
+	{
+		uint64_t lo = ~uint64_t(0), hi = 0;
+		for (uint64_t hunknum = begin; hunknum < end; hunknum++)
+		{
+			uint8_t const *const rawmap = &m_rawmap[m_mapentrybytes * hunknum];
+			if (rawmap[0] > COMPRESSION_NONE)
+				continue;
+			uint64_t const blockoffs = get_u48be(&rawmap[4]);
+			uint32_t const blocklen = (rawmap[0] == COMPRESSION_NONE) ? m_hunkbytes : get_u24be(&rawmap[1]);
+			lo = std::min(lo, blockoffs);
+			hi = std::max(hi, blockoffs + blocklen);
+		}
+		uint8_t const *span = nullptr;
+		if ((lo < hi) && ((hi - lo) <= 2 * (end - begin) * m_hunkbytes))
+		{
+			try
+			{
+				m_wasm_span.resize(hi - lo);
+				if (!file_read(lo, &m_wasm_span[0], hi - lo))
+					span = &m_wasm_span[0];
+			}
+			catch (...)
+			{
+			}
+		}
+
+		for (uint64_t hunknum = begin; hunknum < end; hunknum++)
+		{
+			if (m_wasm_ahead.count(hunknum))
+				continue;
+			uint8_t const *const rawmap = &m_rawmap[m_mapentrybytes * hunknum];
+			uint8_t const type = rawmap[0];
+			uint64_t const blockoffs = get_u48be(&rawmap[4]);
+			if (type == COMPRESSION_NONE)
+			{
+				if (span)
+					m_wasm_ahead[hunknum] = wasm_ahead_hunk{ std::vector<uint8_t>(span + (blockoffs - lo), span + (blockoffs - lo) + m_hunkbytes), 4 };
+				continue;
+			}
+			if ((type > COMPRESSION_TYPE_3) || !m_decompressor[type] || m_decompressor[type]->lossy())
+				continue;
+			uint32_t const blocklen = get_u24be(&rawmap[1]);
+			uint8_t const *data = span ? (span + (blockoffs - lo)) : nullptr;
+			if (!data)
+			{
+				if ((blocklen > m_compressed.size()) || file_read(blockoffs, &m_compressed[0], blocklen))
+					continue; // read_hunk will report it
+				data = &m_compressed[0];
+			}
+			if (m_wasm_rd > 0)
+			{
+				m_wasm_ahead[hunknum];
+				wasm_rd_submit(this, hunknum, type, data, blocklen);
+			}
+			else
+			{
+				m_wasm_ahead[hunknum] = wasm_ahead_hunk{ std::vector<uint8_t>(data, data + blocklen), 3 };
+			}
+		}
+		m_wasm_queued = end;
+	}
+
+	// ready once no hunk of this window is still with a helper (m_wasm_scan: all before it are)
+	uint64_t const ready = std::min<uint64_t>(uint64_t(first) + count, m_hunkcount);
+	for ( ; m_wasm_scan < ready; m_wasm_scan++)
+	{
+		auto const found = m_wasm_ahead.find(m_wasm_scan);
+		if ((found != m_wasm_ahead.end()) && (found->second.state == 0))
+			return false;
+	}
+	return true;
+}
+
+uint8_t *chd_file::wasm_read_slot(uint32_t hunknum) noexcept
+{
+	auto const found = m_wasm_ahead.find(hunknum);
+	if ((found == m_wasm_ahead.end()) || (found->second.state != 0))
+		return nullptr; // no longer wanted
+	try
+	{
+		found->second.data.resize(m_hunkbytes);
+	}
+	catch (...)
+	{
+		return nullptr;
+	}
+	return &found->second.data[0];
+}
+
+void chd_file::wasm_read_done(uint32_t hunknum, bool ok) noexcept
+{
+	auto const found = m_wasm_ahead.find(hunknum);
+	if ((found != m_wasm_ahead.end()) && (found->second.state == 0))
+		found->second.state = (ok && (found->second.data.size() == m_hunkbytes)) ? 1 : 2;
+}
+
+// fills dest from the read-ahead if it has this hunk (decompressing kept bytes, which throws
+// like any decompression); the caller checks the CRC as usual
+bool chd_file::wasm_read_cached(uint32_t hunknum, uint8_t type, void *dest)
+{
+	auto const found = m_wasm_ahead.find(hunknum);
+	if (found == m_wasm_ahead.end())
+		return false;
+	wasm_ahead_hunk const &ahead = found->second;
+	switch (ahead.state)
+	{
+	case 1: // decompressed by a helper
+	case 4: // stored uncompressed
+		memcpy(dest, &ahead.data[0], m_hunkbytes);
+		return true;
+	case 3: // compressed bytes
+		m_decompressor[type]->decompress(&ahead.data[0], ahead.data.size(), reinterpret_cast<uint8_t *>(dest), m_hunkbytes);
+		return true;
+	default:
+		return false;
+	}
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE uint8_t *wasm_rd_slot(chd_file *chd, uint32_t hunknum)
+{
+	return chd->wasm_read_slot(hunknum);
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE void wasm_rd_done(chd_file *chd, uint32_t hunknum, int ok)
+{
+	chd->wasm_read_done(hunknum, ok != 0);
 }
 #endif

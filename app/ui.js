@@ -451,6 +451,12 @@ function threadCount() {
   if (settings.threads !== 'auto') return settings.threads;
   return Tuning.result ? Tuning.result.threads : Math.min(maxThreads, isMobile ? 4 : 8);
 }
+// helper workers for verify and extract, which decompress the hunks chdman is about to read. The job
+// worker stays busy reading, checking and writing (most of the work for DVDs), so it keeps a core.
+function readHelpers() {
+  var nt = threadCount();
+  return nt > 1 ? Math.max(1, Math.min(nt, cores - 1)) : 0;
+}
 // before a compressing job in automatic mode: measure the device once
 async function ensureTuned(report) {
   if (settings.threads !== 'auto' || Tuning.result) return;
@@ -1135,6 +1141,7 @@ function buildJob(job) {
       args = ['verify', '-i', '/in/' + name].concat(parentArgs);
       display = ['verify', '-i', name].concat(parentDisp);
       slots = 0;
+      helpers = readHelpers();
     } else {
       var fmt = o.format || defaultFormat(info.type), cmdx, oname, extra = [];
       if (info.type === 'cd' || info.type === 'gdrom') {
@@ -1150,6 +1157,7 @@ function buildJob(job) {
       args = [cmdx, '-i', '/in/' + name, '-o', '/out/' + oname].concat(extra, parentArgs);
       display = [cmdx, '-i', name, '-o', oname].concat(extra, parentDisp);
       expected = info.logical || 0;
+      if (cmdx !== 'extractld') helpers = readHelpers();
     }
   }
   var outMode = settings.storage === 'memory' || !Store.available ? 'mem' : 'opfs';
@@ -2034,7 +2042,7 @@ async function cliRun() {
       jobId: cjob.id, dirPath: Store.dirPath(cjob.id), args: args, inputs: inputs, writable: writable,
       slots: /^(info|listtemplates)$/.test(args[0]) || (args[0] === 'verify' && !writable.length) ? 0 : args[0] === 'extractcd' ? 101 : 3,
       outMode: settings.storage === 'folder' && outDir ? 'stream' : settings.storage === 'memory' || !Store.available ? 'mem' : 'opfs', outDir: outDir,
-      helpers: isCreate && comp !== 'none' && nt > 1 ? nt : 0,
+      helpers: isCreate && comp !== 'none' && nt > 1 ? nt : /^(verify|extract(cd|dvd|hd|raw))$/.test(args[0]) ? readHelpers() : 0,
       onLine: function (s, t) { con.textContent += t + '\n'; con.scrollTop = con.scrollHeight; },
       onProgress: function (t) {
         if (stalledProgress(t)) { if (!stalled) { stalled = true; cli.run.cancel(); } return; }

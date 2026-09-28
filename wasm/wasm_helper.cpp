@@ -1,6 +1,7 @@
 // Browser build helper: lets a secondary WebAssembly instance (running in a
 // helper Web Worker) compress CHD hunks exactly the way chd_file_compressor
-// would, so the main chdman instance can spread compression over many cores.
+// would, so the main chdman instance can spread compression over many cores,
+// and decompress them for extract and verify.
 #include "chd.h"
 #include "chdcodec.h"
 #include "hashing.h"
@@ -77,6 +78,71 @@ extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_compress(uint32_t *result, uint8
 	int8_t const compression = s_group->find_best_compressor(s_in.data(), s_out.data(), complen);
 	result[0] = complen;
 	return compression;
+}
+
+
+// ---------------------------------------------------------------------------
+// Decompression for extract and verify: the job worker hands over a hunk's
+// compressed bytes and its codec slot, and gets the hunk back
+// (chd_file::wasm_read_ahead). The job worker still checks each hunk's CRC.
+// ---------------------------------------------------------------------------
+
+namespace {
+std::vector<uint8_t> d_store;
+std::unique_ptr<chd_file> d_chd;
+chd_decompressor::ptr d_codec[4];
+std::vector<uint8_t> d_in, d_out;
+uint32_t d_hunkbytes = 0;
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_dinit(uint32_t hunkbytes, uint32_t unitbytes, uint32_t c0, uint32_t c1, uint32_t c2, uint32_t c3)
+{
+	try
+	{
+		// codecs are made for a CHD: a scratch one with the same parameters
+		chd_codec_type comp[4] = { c0, c1, c2, c3 };
+		for (auto &codec : d_codec)
+			codec.reset();
+		d_chd.reset();
+		d_store.clear();
+		d_chd = std::make_unique<chd_file>();
+		util::random_read_write::ptr file = std::make_unique<util::vector_read_write_adapter<uint8_t>>(d_store);
+		std::error_condition err = d_chd->create(std::move(file), uint64_t(hunkbytes), hunkbytes, unitbytes, comp);
+		if (err)
+			return -1;
+		for (int i = 0; i < 4; i++)
+		{
+			if (comp[i] && !(d_codec[i] = chd_codec_list::new_decompressor(comp[i], *d_chd)))
+				return -1;
+		}
+		d_hunkbytes = hunkbytes;
+		d_in.assign(hunkbytes, 0);
+		d_out.assign(hunkbytes, 0);
+		return 0;
+	}
+	catch (...)
+	{
+		return -2;
+	}
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE uint8_t *wasm_helper_dinbuf() { return d_in.data(); }
+extern "C" EMSCRIPTEN_KEEPALIVE uint8_t *wasm_helper_doutbuf() { return d_out.data(); }
+
+// decompresses length bytes from the input buffer with codec slot 0-3; returns 0, or -1 on failure
+extern "C" EMSCRIPTEN_KEEPALIVE int wasm_helper_decompress(uint32_t codec, uint32_t length)
+{
+	if ((codec > 3) || !d_codec[codec] || (length > d_in.size()))
+		return -1;
+	try
+	{
+		d_codec[codec]->decompress(d_in.data(), length, d_out.data(), d_hunkbytes);
+		return 0;
+	}
+	catch (...)
+	{
+		return -1;
+	}
 }
 
 

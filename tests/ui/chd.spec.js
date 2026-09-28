@@ -81,14 +81,22 @@ for (const [name, command, input, xcmd, ext] of [
   });
 }
 
-test('verify passes on a good CHD and fails on a damaged one', async ({ app }) => {
+/** agent.chd with 64 bytes of its compressed data changed, as chd/damaged.chd */
+function damagedChd() {
   const good = chdInput('agent', 'createdvd', 'agent.iso');
   const badPath = path.join(FIXTURES, 'chd', 'damaged.chd');
   if (!fs.existsSync(badPath)) {
     const b = fs.readFileSync(path.join(FIXTURES, good));
     for (let i = 0; i < 64; i++) b[Math.floor(b.length * 0.6) + i] ^= 0x5a; // inside the compressed data
-    fs.writeFileSync(badPath, b);
+    fs.writeFileSync(badPath + '.tmp' + process.pid, b);
+    fs.renameSync(badPath + '.tmp' + process.pid, badPath);
   }
+  return 'chd/damaged.chd';
+}
+
+test('verify passes on a good CHD and fails on a damaged one', async ({ app }) => {
+  const good = chdInput('agent', 'createdvd', 'agent.iso');
+  damagedChd();
   await app.open();
   await app.add([good, 'chd/damaged.chd']);
   for (const [title, state, text] of [['agent', 'done', 'Verified.'], ['damaged', 'error', 'Verification failed.']]) {
@@ -99,6 +107,38 @@ test('verify passes on a good CHD and fails on a damaged one', async ({ app }) =
     await expect(card).toContainText(text);
   }
 });
+
+// Extract and verify read ahead: helper workers decompress the hunks about to be read, or with one
+// thread the stored data of a window is read in one go and kept (chd_file::wasm_read_ahead). Either
+// way the files are native chdman's, and so is the error for damaged data.
+for (const threads of [1, 4]) {
+  test(`extract and verify with ${threads} thread${threads > 1 ? 's' : ''}: same files and errors as desktop chdman`, async ({ app }) => {
+    const cd = chdInput('codec-mix-cd', 'createcd', 'codec mix cd.cue');
+    const dvd = chdInput('agent', 'createdvd', 'agent.iso');
+    await app.open({ settings: { threads } });
+    await app.add([cd, dvd, damagedChd()]);
+
+    let card = app.job('codec-mix-cd');
+    await app.settled(card);
+    await card.locator('label.field', { hasText: 'Output name' }).locator('input').fill('mix out');
+    await app.run(card);
+    sameFiles(await app.downloads(card), extract('extractcd', path.join(FIXTURES, cd), 'mix out.cue'));
+
+    card = app.job('agent');
+    await app.settled(card);
+    await card.locator('label.field', { hasText: 'Output name' }).locator('input').fill('x');
+    await app.run(card);
+    const [iso] = await app.downloads(card);
+    expect(sha1File(iso.path)).toBe(sha1File(path.join(FIXTURES, 'agent.iso')));
+
+    card = app.job('damaged');
+    await app.settled(card);
+    await card.locator('.seg button', { hasText: 'Verify' }).click();
+    await app.run(card, { expectState: 'error' });
+    await expect(card).toContainText('Verification failed.');
+    await expect(card).toContainText('Decompression error'); // chdman's own message
+  });
+}
 
 test('verify fails when the data does not match the checksum in the header', async ({ app }) => {
   // chdman 0.289 only prints the mismatch and exits 0, so the page reported "Verified."

@@ -136,6 +136,26 @@ struct compression_pause
 	void await_resume() const noexcept { }
 };
 
+// Discpress: extract and verify wait here while helper workers decompress the hunks they are about
+// to read, and the next window's (browser only; otherwise the hunks are read the usual way)
+struct read_pause
+{
+	bool await_ready() const noexcept { return false; }
+	void await_suspend(std::coroutine_handle<> h) noexcept { s_paused = h; }
+	void await_resume() const noexcept { }
+};
+
+static chdman_task read_ahead(chd_file &chd, uint64_t offset, uint64_t length)
+{
+#ifdef __EMSCRIPTEN__
+	uint32_t const first = offset / chd.hunk_bytes();
+	uint32_t const count = (offset + length + chd.hunk_bytes() - 1) / chd.hunk_bytes() - first;
+	while (!chd.wasm_read_ahead(first, count))
+		co_await read_pause();
+#endif
+	co_return;
+}
+
 
 
 //**************************************************************************
@@ -157,8 +177,13 @@ constexpr uint32_t HUNK_SIZE_MAX = 1024 * 1024;
 // default hard disk sector size
 constexpr uint32_t IDE_SECTOR_SIZE = 512;
 
-// temporary input buffer size
+// temporary input buffer size (Discpress: smaller in the browser, where helper workers decompress
+// the next buffer's worth of hunks while this one is used, and memory is tighter)
+#ifdef __EMSCRIPTEN__
+constexpr uint32_t TEMP_BUFFER_SIZE = 8 * 1024 * 1024;
+#else
 constexpr uint32_t TEMP_BUFFER_SIZE = 32 * 1024 * 1024;
+#endif
 
 // modes
 constexpr int MODE_NORMAL = 0;
@@ -233,15 +258,15 @@ template <typename Format, typename... Params>
 [[noreturn]] static void report_error(int error, Format &&fmt, Params &&...args);
 
 static void do_info(parameters_map &params);
-static void do_verify(parameters_map &params);
+static chdman_task do_verify(parameters_map &params);
 static chdman_task do_create_raw(parameters_map &params);
 static chdman_task do_create_hd(parameters_map &params);
 static chdman_task do_create_cd(parameters_map &params);
 static chdman_task do_create_dvd(parameters_map &params);
 static chdman_task do_create_ld(parameters_map &params);
 static chdman_task do_copy(parameters_map &params);
-static void do_extract_raw(parameters_map &params);
-static void do_extract_cd(parameters_map &params);
+static chdman_task do_extract_raw(parameters_map &params);
+static chdman_task do_extract_cd(parameters_map &params);
 static void do_extract_ld(parameters_map &params);
 static void do_add_metadata(parameters_map &params);
 static void do_del_metadata(parameters_map &params);
@@ -1895,7 +1920,7 @@ static void do_info(parameters_map &params)
 //  do_verify - validate the SHA-1 on a CHD
 //-------------------------------------------------
 
-static void do_verify(parameters_map &params)
+static chdman_task do_verify(parameters_map &params)
 {
 	bool fix_sha1 = params.find(OPTION_FIX) != params.end();
 	// parse out input files
@@ -1934,6 +1959,7 @@ static void do_verify(parameters_map &params)
 
 		// determine how much to read
 		uint32_t bytes_to_read = (std::min<uint64_t>)(buffer.size(), input_chd.logical_bytes() - offset);
+		co_await read_ahead(input_chd, offset, bytes_to_read);
 		std::error_condition err = input_chd.read_bytes(offset, &buffer[0], bytes_to_read);
 		if (err)
 			report_error(1, "Error reading CHD file (%s): %s", *input_chd_str->second, err.message());
@@ -2688,7 +2714,7 @@ static chdman_task do_copy(parameters_map &params)
 //  CHD image
 //-------------------------------------------------
 
-static void do_extract_raw(parameters_map &params)
+static chdman_task do_extract_raw(parameters_map &params)
 {
 	// parse out input files
 	chd_file input_parent_chd;
@@ -2729,6 +2755,7 @@ static void do_extract_raw(parameters_map &params)
 
 			// determine how much to read
 			uint32_t bytes_to_read = (std::min<uint64_t>)(buffer.size(), input_end - offset);
+			co_await read_ahead(input_chd, offset, bytes_to_read);
 			std::error_condition err = input_chd.read_bytes(offset, &buffer[0], bytes_to_read);
 			if (err)
 				report_error(1, "Error reading CHD file (%s): %s", *params.find(OPTION_INPUT)->second, err.message());
@@ -2764,7 +2791,7 @@ static void do_extract_raw(parameters_map &params)
 //  CHD image
 //-------------------------------------------------
 
-static void do_extract_cd(parameters_map &params)
+static chdman_task do_extract_cd(parameters_map &params)
 {
 	// parse out input files
 	chd_file input_parent_chd;
@@ -3047,6 +3074,7 @@ static void do_extract_cd(parameters_map &params)
 		uint64_t outputoffs = 0;
 		uint32_t discoffs = 0;
 		std::vector<uint8_t> buffer;
+		uint64_t ahead_start = 0, ahead_end = 0; // Discpress: the window read_ahead last covered
 
 		for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
 		{
@@ -3112,6 +3140,15 @@ static void do_extract_cd(parameters_map &params)
 				{
 					trk = tracknum;
 					frameofs = frame - trackinfo.splitframes;
+				}
+
+				// Discpress: helper workers decompress a buffer's worth of hunks ahead (browser only)
+				uint64_t const chdoffs = uint64_t(toc.tracks[trk].chdframeofs + frameofs) * cdrom_file::FRAME_SIZE;
+				if ((chdoffs < ahead_start) || (chdoffs >= ahead_end))
+				{
+					co_await read_ahead(input_chd, chdoffs, TEMP_BUFFER_SIZE);
+					ahead_start = chdoffs;
+					ahead_end = chdoffs + TEMP_BUFFER_SIZE;
 				}
 
 				// read the data
