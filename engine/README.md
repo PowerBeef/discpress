@@ -4,7 +4,12 @@
 
 The paths mirror MAME's, so every file can be compared with its original. **[`mame-0.289.diff`](mame-0.289.diff)** lists every change the fork makes; Help → About shows it too. Current changes:
 
-- **Browser build:** helper-worker hooks in `chd_file_compressor` (`chd.cpp`, `chd.h`) and in chdman's compress loop (`chdman.cpp`), all under `#ifdef __EMSCRIPTEN__`.
+- **Browser build:** helper-worker hooks in `chd_file_compressor` (`chd.cpp`, `chd.h`), under `#ifdef __EMSCRIPTEN__`.
+- **Resumable commands (`chdman.cpp`):**
+  - The commands that compress (`createraw`, `createhd`, `createcd`, `createdvd`, `createld`, `copy`) and `compress_common` are C++20 coroutines (`chdman_task`).
+  - `main` is split into `chdman_start` (parse the command line) and `chdman_continue`.
+  - In the browser, the page starts a command with `chdman_begin` and calls `chdman_resume` whenever the compression loop pauses to let helper workers' results arrive. This needs no Asyncify.
+  - Natively nothing pauses and `main` runs each command straight through, with the same output, messages and exit codes as upstream.
 - **`unicode.cpp`/`.h`:** the functions that needed utf8proc are removed; nothing in chdman used them.
 
 ## Contents

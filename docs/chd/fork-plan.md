@@ -155,6 +155,12 @@ This affects users today, so it ships as its own small release before any fork w
 - It builds without a MAME checkout. The objects are byte-identical to the old build's (except `unicode.o`), and the build stays reproducible.
 - The tests now compare with unmodified chdman 0.289 (`scripts/build-upstream.sh`).
 
+**Step 2 (Asyncify) done.**
+- The compressing commands are C++20 coroutines, so the page drives them step by step (`chdman_begin`/`chdman_resume`) and the whole CLI keeps working, the Advanced tab included.
+- Asyncify is gone from the build, so the wasm and its glue are smaller.
+- Natively, output, messages and exit codes match upstream.
+- Still to do in step 2: structured progress events and the push-input API that would retire `FileReaderSync` and the iOS staging protocol.
+
 1. **Extract `engine/`.** Take the 78-object closure (B §7.1) at the reference tag, re-apply `mame.patch` as ordinary code, and drop `disasmintf`, `nanosvg`, expat and the unused LZMA/7z files. Fix `THIRD_PARTY_NOTICES.md`.
 2. **Library API instead of `callMain`.** `chd_file_compressor` is already a resumable state machine (`compress_begin`/`compress_continue`). Expose:
    - `create_open` → `step` → `finish`;

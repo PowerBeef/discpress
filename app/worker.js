@@ -652,16 +652,19 @@ function setupParallel(M, ports) {
     fifo.push(item);
     if (open.n === batchSize) flushOpen();
   };
-  M.parYield = function (wakeUp) {
-    if (failed) {
-      // abort the whole run: helper failed, results would be incomplete
-      postMessage({ type: 'fatal', message: 'Multi-core compression failed (' + failed + '). Try again with 1 thread in Settings.' });
-      return; // never wake: the job worker is terminated by the page
-    }
-    dispatch();
-    headDone();
-    sleeper = wakeUp;
-    maybeWake();
+  // chdman paused after a compression step: resolves when it can go on (its next hunk is in)
+  M.parWait = function () {
+    return new Promise(function (resolve) {
+      if (failed) {
+        // abort the whole run: helper failed, results would be incomplete
+        postMessage({ type: 'fatal', message: 'Multi-core compression failed (' + failed + '). Try again with 1 thread in Settings.' });
+        return; // never resolves: the job worker is terminated by the page
+      }
+      dispatch();
+      headDone();
+      sleeper = resolve;
+      maybeWake();
+    });
   };
 }
 
@@ -726,6 +729,21 @@ function makeLineSink(stream) {
   };
 }
 
+// Runs a chdman command line and resolves with its exit code. A command that compresses with
+// helper workers pauses after each step (chdman_begin/chdman_resume return -1) until M.parWait()
+// says the next hunk is in, so the worker keeps receiving their results.
+async function runChdman(M, args) {
+  var argv = M._malloc(4 * (args.length + 2));
+  ['chdman'].concat(args).forEach(function (a, i) { var p = M.stringToNewUTF8(a); M.HEAPU32[(argv >>> 2) + i] = p; });
+  M.HEAPU32[(argv >>> 2) + args.length + 1] = 0;
+  var code = M._chdman_begin(args.length + 1, argv);
+  while (code === -1) {
+    await M.parWait();
+    code = M._chdman_resume();
+  }
+  return code;
+}
+
 async function runJob(msg) {
   await loadModule(msg);
   var backing = await makeBacking(msg);
@@ -769,15 +787,12 @@ async function runJob(msg) {
     }
   }
 
-  var out = makeLineSink(1), err = makeLineSink(2);
-  var resolveExit, rejectExit, finished = false;
-  var exited = new Promise(function (res, rej) { resolveExit = res; rejectExit = rej; });
+  var out = makeLineSink(1), err = makeLineSink(2), aborted = null;
   var M = await instantiate({
     stdin: function () { return null; },
     stdout: function (c) { out.put(c); },
     stderr: function (c) { err.put(c); },
-    onExit: function (code) { if (!finished) { finished = true; resolveExit(code); } },
-    onAbort: function (what) { if (!finished) { finished = true; rejectExit(new Error('chdman stopped unexpectedly: ' + what)); } }
+    onAbort: function (what) { aborted = 'chdman stopped unexpectedly: ' + what; }
   });
 
   var FS = M.FS, CHDFS = makeFS(FS);
@@ -789,29 +804,15 @@ async function runJob(msg) {
 
   if (msg.ports && msg.ports.length) setupParallel(M, msg.ports);
 
-  var started = performance.now();
+  var started = performance.now(), code;
   try {
-    var ret = M.callMain(msg.args);
-    var A = M.__asyncify;
-    if (A && A.currData) {
-      // main() is suspended waiting for helper threads; it finishes asynchronously
-      A.whenDone().then(function (code) {
-        try { M._fflush(0); } catch (e) { /* ignore */ }
-        if (!finished) { finished = true; resolveExit(code); }
-      }, function (e) { if (!finished) { finished = true; rejectExit(e); } });
-    } else if (typeof ret === 'number' && !finished) { finished = true; resolveExit(ret); }
+    code = await runChdman(M, msg.args);
+    M._fflush(0);
   } catch (e) {
-    if (!(e && e.name === 'ExitStatus')) {
-      if (!finished) { finished = true; rejectExit(e); }
-    }
-  }
-  var code;
-  try { code = await exited; }
-  catch (e) {
     out.flush(); err.flush();
     await backing.finalize(false);
     await dropStages();
-    postMessage({ type: 'done', code: -1, error: String(e && e.message || e), outputs: [], ms: performance.now() - started });
+    postMessage({ type: 'done', code: -1, error: aborted || String(e && e.message || e), outputs: [], ms: performance.now() - started });
     return;
   }
   out.flush(); err.flush();

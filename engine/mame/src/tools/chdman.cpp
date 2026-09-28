@@ -27,8 +27,10 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <coroutine>
 #include <cstring>
 #include <ctime>
+#include <exception>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -42,10 +44,95 @@
 #include <vector>
 
 #ifdef __EMSCRIPTEN__
-extern "C" void wasm_par_yield(void); // browser build: lets helper-worker results arrive
+#include <emscripten.h>
+
+extern "C" int wasm_par_active(void); // browser build: hunks are being compressed by helper workers
 #endif
 
 using util::string_format;
+
+
+
+//**************************************************************************
+//  RESUMABLE COMMANDS (Discpress)
+//**************************************************************************
+
+// The commands that compress are coroutines: in the browser, compress_common pauses after each
+// step while helper workers compress hunks, and the page resumes it when their results arrive.
+// Natively nothing pauses and main runs each command straight through.
+
+class chdman_task
+{
+public:
+	struct promise_type;
+	using handle = std::coroutine_handle<promise_type>;
+
+	struct promise_type
+	{
+		std::coroutine_handle<> continuation; // the task awaiting this one, if any
+		std::exception_ptr exception;
+
+		chdman_task get_return_object() noexcept { return chdman_task(handle::from_promise(*this)); }
+		std::suspend_always initial_suspend() noexcept { return {}; }
+		auto final_suspend() noexcept
+		{
+			struct awaiter
+			{
+				bool await_ready() noexcept { return false; }
+				std::coroutine_handle<> await_suspend(handle h) noexcept
+				{
+					std::coroutine_handle<> const next = h.promise().continuation;
+					return next ? next : std::noop_coroutine();
+				}
+				void await_resume() noexcept { }
+			};
+			return awaiter();
+		}
+		void return_void() noexcept { }
+		void unhandled_exception() noexcept { exception = std::current_exception(); }
+	};
+
+	chdman_task() noexcept = default;
+	chdman_task(chdman_task &&that) noexcept : m_handle(std::exchange(that.m_handle, nullptr)) { }
+	chdman_task &operator=(chdman_task &&that) noexcept { if (this != &that) { reset(); m_handle = std::exchange(that.m_handle, nullptr); } return *this; }
+	~chdman_task() { reset(); }
+
+	handle get() const noexcept { return m_handle; }
+	bool done() const noexcept { return !m_handle || m_handle.done(); }
+	void rethrow() const { if (m_handle && m_handle.promise().exception) std::rethrow_exception(m_handle.promise().exception); }
+	void reset() noexcept { if (m_handle) std::exchange(m_handle, nullptr).destroy(); }
+
+	// awaiting a task runs it, and continues the awaiting task when it is done
+	bool await_ready() const noexcept { return false; }
+	std::coroutine_handle<> await_suspend(std::coroutine_handle<> awaiting) noexcept
+	{
+		m_handle.promise().continuation = awaiting;
+		return m_handle;
+	}
+	void await_resume() const { rethrow(); }
+
+private:
+	explicit chdman_task(handle h) noexcept : m_handle(h) { }
+	handle m_handle;
+};
+
+// the innermost paused task, resumed by chdman_continue
+static std::coroutine_handle<> s_paused;
+
+// compress_common's pause point: lets helper workers' results arrive (browser only)
+struct compression_pause
+{
+	bool await_ready() const noexcept
+	{
+#ifdef __EMSCRIPTEN__
+		return !wasm_par_active();
+#else
+		return true;
+#endif
+	}
+	void await_suspend(std::coroutine_handle<> h) noexcept { s_paused = h; }
+	void await_resume() const noexcept { }
+};
 
 
 
@@ -145,12 +232,12 @@ template <typename Format, typename... Params>
 
 static void do_info(parameters_map &params);
 static void do_verify(parameters_map &params);
-static void do_create_raw(parameters_map &params);
-static void do_create_hd(parameters_map &params);
-static void do_create_cd(parameters_map &params);
-static void do_create_dvd(parameters_map &params);
-static void do_create_ld(parameters_map &params);
-static void do_copy(parameters_map &params);
+static chdman_task do_create_raw(parameters_map &params);
+static chdman_task do_create_hd(parameters_map &params);
+static chdman_task do_create_cd(parameters_map &params);
+static chdman_task do_create_dvd(parameters_map &params);
+static chdman_task do_create_ld(parameters_map &params);
+static chdman_task do_copy(parameters_map &params);
 static void do_extract_raw(parameters_map &params);
 static void do_extract_cd(parameters_map &params);
 static void do_extract_ld(parameters_map &params);
@@ -218,10 +305,19 @@ struct option_description
 
 // ======================> command_description
 
+// a command is a plain function, or a task when it compresses (see chdman_task)
+struct command_handler
+{
+	command_handler(void (*function)(parameters_map &)) : function(function) { }
+	command_handler(chdman_task (*task)(parameters_map &)) : task(task) { }
+	void (*function)(parameters_map &) = nullptr;
+	chdman_task (*task)(parameters_map &) = nullptr;
+};
+
 struct command_description
 {
 	const char *name;
-	void (*handler)(parameters_map &);
+	command_handler handler;
 	const char *description;
 	const char *valid_options[16];
 };
@@ -1502,7 +1598,7 @@ static void create_output_chd(
 //  compress_common - standard compression loop
 //-------------------------------------------------
 
-static void compress_common(chd_file_compressor &chd)
+static chdman_task compress_common(chd_file_compressor &chd)
 {
 	// begin compressing
 	chd.compress_begin();
@@ -1516,9 +1612,7 @@ static void compress_common(chd_file_compressor &chd)
 			progress(false, "Examining parent, %.1f%% complete...  \r", 100.0 * complete);
 		else
 			progress(false, "Compressing, %.1f%% complete... (ratio=%.1f%%)  \r", 100.0 * complete, 100.0 * ratio);
-#ifdef __EMSCRIPTEN__
-		wasm_par_yield();
-#endif
+		co_await compression_pause();
 	}
 
 	// handle errors
@@ -1888,7 +1982,7 @@ static void do_verify(parameters_map &params)
 //  image from a raw file
 //-------------------------------------------------
 
-static void do_create_raw(parameters_map &params)
+static chdman_task do_create_raw(parameters_map &params)
 {
 	// process input file
 	auto [input_file, input_file_str] = open_input_file(params);
@@ -1952,7 +2046,7 @@ static void do_create_raw(parameters_map &params)
 			chd->clone_all_metadata(output_parent);
 
 		// compress it generically
-		compress_common(*chd);
+		co_await compress_common(*chd);
 	}
 	catch (...)
 	{
@@ -1968,7 +2062,7 @@ static void do_create_raw(parameters_map &params)
 //  disk image from a raw file
 //-------------------------------------------------
 
-static void do_create_hd(parameters_map &params)
+static chdman_task do_create_hd(parameters_map &params)
 {
 	// process input file
 	auto [input_file, input_file_str] = open_input_file(params);
@@ -2156,7 +2250,7 @@ static void do_create_hd(parameters_map &params)
 
 		// compress it generically
 		if (input_file)
-			compress_common(*chd);
+			co_await compress_common(*chd);
 	}
 	catch (...)
 	{
@@ -2172,7 +2266,7 @@ static void do_create_hd(parameters_map &params)
 //  image from a raw file
 //-------------------------------------------------
 
-static void do_create_cd(parameters_map &params)
+static chdman_task do_create_cd(parameters_map &params)
 {
 	// process input file
 	cdrom_file::track_input_info track_info;
@@ -2236,7 +2330,7 @@ static void do_create_cd(parameters_map &params)
 			report_error(1, "Error adding CD metadata: %s", err.message());
 
 		// compress it generically
-		compress_common(*chd);
+		co_await compress_common(*chd);
 	}
 	catch (...)
 	{
@@ -2252,7 +2346,7 @@ static void do_create_cd(parameters_map &params)
 //  image from a raw file
 //-------------------------------------------------
 
-static void do_create_dvd(parameters_map &params)
+static chdman_task do_create_dvd(parameters_map &params)
 {
 	// process input file
 	auto [input_file, input_file_str] = open_input_file(params);
@@ -2304,7 +2398,7 @@ static void do_create_dvd(parameters_map &params)
 			report_error(1, "Error adding DVD metadata: %s", err.message());
 
 		// compress it generically
-		compress_common(*chd);
+		co_await compress_common(*chd);
 	}
 	catch (...)
 	{
@@ -2320,7 +2414,7 @@ static void do_create_dvd(parameters_map &params)
 //  input AVI file and metadata
 //-------------------------------------------------
 
-static void do_create_ld(parameters_map &params)
+static chdman_task do_create_ld(parameters_map &params)
 {
 	// process input file
 	avi_file::ptr input_file;
@@ -2408,7 +2502,7 @@ static void do_create_ld(parameters_map &params)
 			report_error(1, "Error adding AV metadata: %s\n", err.message());
 
 		// create the compressor and then run it generically
-		compress_common(*chd);
+		co_await compress_common(*chd);
 
 		// write the final LD metadata
 		if (info.height == 524/2 || info.height == 624/2)
@@ -2465,7 +2559,7 @@ static const std::array<chd_codec_type, 4> &get_compression_defaults(chd_file &i
 //  another CHD
 //-------------------------------------------------
 
-static void do_copy(parameters_map &params)
+static chdman_task do_copy(parameters_map &params)
 {
 	// parse out input files
 	chd_file input_parent_chd;
@@ -2556,7 +2650,7 @@ static void do_copy(parameters_map &params)
 		}
 
 		// compress it generically
-		compress_common(*chd);
+		co_await compress_common(*chd);
 	}
 	catch (...)
 	{
@@ -3434,10 +3528,33 @@ static void do_list_templates(parameters_map &params)
 //  main - entry point
 //-------------------------------------------------
 
-int CLIB_DECL main(int argc, char *argv[])
+namespace {
+
+// what a command needs until it finishes, since it may pause (see chdman_task)
+struct chdman_run
+{
+	chdman_osd_output osdoutput;
+	parameters_map parameters;
+	chdman_task task;
+};
+
+std::unique_ptr<chdman_run> s_run;
+constexpr int CHDMAN_PAUSED = -1;
+
+chdman_task run_function(void (*function)(parameters_map &), parameters_map &params)
+{
+	function(params);
+	co_return;
+}
+
+} // anonymous namespace
+
+
+// parses the command line and prepares the command: returns CHDMAN_PAUSED when it is ready to
+// run (chdman_continue), otherwise the exit code
+static int chdman_parse(int argc, char *argv[])
 {
 	const std::vector<std::string> args = osd_get_command_line(argc, argv);
-	chdman_osd_output osdoutput;
 
 	// print the header
 	extern const char build_version[];
@@ -3468,7 +3585,7 @@ int CLIB_DECL main(int argc, char *argv[])
 				return print_help(args[0], desc);
 
 			// otherwise, verify the parameters
-			parameters_map parameters;
+			parameters_map &parameters = s_run->parameters;
 			while (argnum < args.size())
 			{
 				// should be an option name
@@ -3528,30 +3645,80 @@ int CLIB_DECL main(int argc, char *argv[])
 					return print_help(args[0], desc, "Required parameters missing");
 			}
 
-			// all clear, run the command
-			try
-			{
-				(*s_command.handler)(parameters);
-				return 0;
-			}
-			catch (std::error_condition const &err)
-			{
-				util::stream_format(std::cerr, "CHD error occurred (main): %s\n", err.message());
-				return 1;
-			}
-			catch (fatal_error &err)
-			{
-				util::stream_format(std::cerr, "Fatal error occurred: %d\n", err.error());
-				return err.error();
-			}
-			catch (std::exception& ex)
-			{
-				util::stream_format(std::cerr, "Unhandled exception: %s\n", ex.what());
-				return 1;
-			}
+			// all clear, prepare the command
+			s_run->task = s_command.handler.task ? s_command.handler.task(parameters) : run_function(s_command.handler.function, parameters);
+			return CHDMAN_PAUSED;
 		}
 	}
 
 	// print generic help if nothing found
 	return print_help(args[0]);
 }
+
+
+static int chdman_start(int argc, char *argv[])
+{
+	s_run = std::make_unique<chdman_run>();
+	int const result = chdman_parse(argc, argv);
+	if (result != CHDMAN_PAUSED)
+		s_run.reset();
+	return result;
+}
+
+
+// runs the command until it finishes (returns the exit code) or pauses (returns CHDMAN_PAUSED)
+static int chdman_continue()
+{
+	std::coroutine_handle<> const next = s_paused ? std::exchange(s_paused, nullptr) : s_run->task.get();
+	next.resume();
+	if (!s_run->task.done())
+		return CHDMAN_PAUSED;
+
+	int result = 0;
+	try
+	{
+		s_run->task.rethrow();
+	}
+	catch (std::error_condition const &err)
+	{
+		util::stream_format(std::cerr, "CHD error occurred (main): %s\n", err.message());
+		result = 1;
+	}
+	catch (fatal_error &err)
+	{
+		util::stream_format(std::cerr, "Fatal error occurred: %d\n", err.error());
+		result = err.error();
+	}
+	catch (std::exception& ex)
+	{
+		util::stream_format(std::cerr, "Unhandled exception: %s\n", ex.what());
+		result = 1;
+	}
+	s_run.reset();
+	return result;
+}
+
+
+int CLIB_DECL main(int argc, char *argv[])
+{
+	int result = chdman_start(argc, argv);
+	while (result == CHDMAN_PAUSED)
+		result = chdman_continue();
+	return result;
+}
+
+
+#ifdef __EMSCRIPTEN__
+// browser build: the page starts a command with chdman_begin and calls chdman_resume while they
+// return -1 (paused while helper workers compress); anything else is the exit code
+extern "C" EMSCRIPTEN_KEEPALIVE int chdman_begin(int argc, char *argv[])
+{
+	int const result = chdman_start(argc, argv);
+	return (result == CHDMAN_PAUSED) ? chdman_continue() : result;
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE int chdman_resume()
+{
+	return chdman_continue();
+}
+#endif
