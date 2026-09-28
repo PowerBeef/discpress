@@ -162,6 +162,55 @@ test('extractcd --redump writes Redump\'s layout: CRLF, and a .bin per track unl
   // without it, the output is upstream's (tests/ui/chd.spec.js compares every format)
 });
 
+test('createcd --keepcue keeps the cue sheet, checksums unchanged, and extractcd --redump writes it back', () => {
+  const sha = chd => {
+    const t = run(UPSTREAM, ['info', '-i', chd]).out.toString();
+    return [/^SHA1:\s+(\w+)/m.exec(t)[1], /^Data SHA1:\s+(\w+)/m.exec(t)[1]];
+  };
+  const same = (a, b) => {
+    const names = fs.readdirSync(a).sort();
+    expect(names).toEqual(fs.readdirSync(b).sort());
+    for (const n of names) expect(fs.readFileSync(path.join(a, n)).equals(fs.readFileSync(path.join(b, n))), n).toBe(true);
+  };
+  const track = (stem, n) => [...Array(n)].map((_, i) => `${stem} (Track ${i + 1}).bin`);
+  // CATALOG, FLAGS, ISRC and INDEX 02; a CD-i track (CDI/2352); a GD-ROM's Redump sheet
+  for (const [cue, files] of [['fidelity.cue', track('fidelity', 3)], ['cdi disc.cue', ['cdi disc.bin']], ['aerowings.cue', track('aerowings', 3)]]) {
+    const plain = makeChd('createcd', cue), keep = tmp(`keep ${cue}.chd`);
+    expect(run(ENGINE, ['createcd', '-i', cue, '-o', keep, '-f', '--keepcue']).code).toBe(0);
+    expect(sha(keep), cue).toEqual(sha(plain));
+    // chdman 0.289 reads it as it reads the CHD without the sheet
+    expect(run(UPSTREAM, ['verify', '-i', keep]).code).toBe(0);
+    const a = tmp(`up keep ${cue}`), b = tmp(`up plain ${cue}`), dir = tmp(`redump ${cue}`);
+    for (const d of [a, b, dir]) fs.mkdirSync(d, { recursive: true });
+    expect(run(UPSTREAM, ['extractcd', '-i', keep, '-o', path.join(a, 'x.cue'), '-sb']).code).toBe(0);
+    expect(run(UPSTREAM, ['extractcd', '-i', plain, '-o', path.join(b, 'x.cue'), '-sb']).code).toBe(0);
+    same(a, b);
+    // the sheet as it was, and the files it names
+    expect(run(ENGINE, ['extractcd', '-i', keep, '-o', path.join(dir, cue), '--redump']).code).toBe(0);
+    expect(fs.readdirSync(dir).sort()).toEqual([cue, ...files].sort());
+    for (const n of [cue, ...files]) expect(fs.readFileSync(path.join(dir, n)).equals(fs.readFileSync(path.join(FIXTURES, n))), n).toBe(true);
+  }
+  // under another name, only its FILE names change
+  const keep = tmp('keep fidelity.cue.chd'), other = tmp('other');
+  fs.mkdirSync(other, { recursive: true });
+  expect(run(ENGINE, ['extractcd', '-i', keep, '-o', path.join(other, 'Other Name.cue'), '--redump']).code).toBe(0);
+  expect(fs.readFileSync(path.join(other, 'Other Name.cue'), 'latin1'))
+    .toBe(fs.readFileSync(path.join(FIXTURES, 'fidelity.cue'), 'latin1').replaceAll('"fidelity (Track', '"Other Name (Track'));
+  // a sheet whose files aren't laid out as Redump's (several tracks in one file): the sheet --redump makes itself
+  // (the engine's CHDs: 0.289 reads this sheet wrong)
+  const shared = tmp('shared keep.chd'), plain = tmp('shared.chd'), mine = tmp('shared keep'), made = tmp('shared plain');
+  for (const d of [mine, made]) fs.mkdirSync(d, { recursive: true });
+  expect(run(ENGINE, ['createcd', '-i', 'shared.cue', '-o', shared, '-f', '--keepcue']).code).toBe(0);
+  expect(run(ENGINE, ['createcd', '-i', 'shared.cue', '-o', plain, '-f']).code).toBe(0);
+  expect(run(ENGINE, ['extractcd', '-i', shared, '-o', path.join(mine, 'x.cue'), '--redump']).code).toBe(0);
+  expect(run(ENGINE, ['extractcd', '-i', plain, '-o', path.join(made, 'x.cue'), '--redump']).code).toBe(0);
+  same(mine, made);
+  // only a cue sheet can be kept
+  const r = run(ENGINE, ['createcd', '-i', 'aerowings.gdi', '-o', tmp('g.chd'), '-f', '--keepcue']);
+  expect(r.code).toBe(1);
+  expect(r.err).toContain('--keepcue needs a .cue input file');
+});
+
 test('dumpmeta to stdout writes only the metadata', () => {
   const chd = makeChd('createcd', 'twine.cue');
   const up = run(UPSTREAM, ['dumpmeta', '-i', chd, '-t', 'CHT2']);

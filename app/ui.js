@@ -74,7 +74,7 @@ var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform
 var cores = Math.max(1, navigator.hardwareConcurrency || 4);
 var maxThreads = Math.min(cores, 16);
 // threads: 'auto' (measured per device, see Tuning) or a fixed number of compression threads
-var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto' };
+var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false };
 var outDir = null; // folder picked for direct writing (not persisted)
 try {
   var saved = JSON.parse(localStorage.getItem('chdman-web-settings') || '{}');
@@ -1246,6 +1246,8 @@ function buildJob(job) {
     if (c) { args.push('-c', c); display.push('-c', c); }
     var hs = disc === 'raw' ? (o.hunk || '4096') : o.hunk;
     if (hs) { args.push('-hs', hs); display.push('-hs', hs); }
+    // the setting: keep a real cue sheet (not one written for chdman here) in the CHD (the engine's --keepcue)
+    if (settings.keepCue && job.src === 'cue' && !job.fromCcd && cmd === 'createcd') { args.push('--keepcue'); display.push('--keepcue'); }
     if (disc === 'raw') { args.push('-us', o.unit || '512'); display.push('-us', o.unit || '512'); }
     slots = 2;
     var nt = threadCount();
@@ -1462,7 +1464,8 @@ function renderControls(job) {
     if (job.action === 'extract') {
       var fmt = o.format || defaultFormat(info.type);
       f2.append(selectField('Save as', FORMATS[info.type] || FORMATS.raw, fmt, function (v) { o.format = v; refresh(); },
-        fmt === 'redump' ? 'The files of a Redump dump: its cue sheet, and one .bin per track, so they match Redump\u2019s checksums.' : null, busy));
+        fmt === 'redump' ? (info.tags && info.tags.indexOf('CUES') >= 0 ? 'The files of a Redump dump: the cue sheet kept in this CHD, and one .bin per track.' :
+          'The files of a Redump dump: its cue sheet, and one .bin per track, so they match Redump\u2019s checksums.') : null, busy));
       f2.append(textField('Output name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { disabled: busy }));
     } else if (job.action === 'rename') {
       f2.append(textField('New name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { hint: 'Saved as ' + outBase(job) + '.chd (the CHD itself is not changed)', disabled: busy }));
@@ -2013,6 +2016,7 @@ var OPT = {
   input: ['i', 'Input file', 'file'], inputparent: ['ip', 'Input parent CHD', 'file'], output: ['o', 'Output file name', 'out'],
   outputbin: ['ob', 'Output .bin name', 'out'], outputparent: ['op', 'Output parent CHD', 'file'], splitbin: ['sb', 'One .bin file per track', 'bool'],
   redump: ['rd', 'As Redump: CRLF cue sheet, a .bin per track (Discpress)', 'bool'],
+  keepcue: ['kc', 'Keep the .cue in the CHD for extractcd --redump; checksums unchanged (Discpress)', 'bool'],
   verbose: ['v', 'Verbose output', 'bool'], fix: ['f', 'Fix the SHA-1 if it is incorrect', 'bool'],
   inputstartbyte: ['isb', 'Input start byte', 'num'], inputstarthunk: ['ish', 'Input start hunk', 'num'], inputbytes: ['ib', 'Input length (bytes)', 'num'],
   inputhunks: ['ih', 'Input length (hunks)', 'num'], inputstartframe: ['isf', 'Input start frame', 'num'], inputframes: ['if', 'Input length (frames)', 'num'],
@@ -2024,7 +2028,7 @@ var OPT = {
 };
 var SLICE = ['inputstartbyte', 'inputstarthunk', 'inputbytes', 'inputhunks'];
 var CMDS = [
-  ['createcd', 'Create a CD CHD from a .cue, .gdi, .toc, .nrg or .iso', ['*input', '*output', 'compression', 'hunksize', 'outputparent'], 'Create'],
+  ['createcd', 'Create a CD CHD from a .cue, .gdi, .toc, .nrg or .iso', ['*input', '*output', 'compression', 'hunksize', 'outputparent', 'keepcue'], 'Create'],
   ['createdvd', 'Create a DVD CHD from an .iso', ['*input', '*output', 'compression', 'hunksize', 'outputparent'].concat(SLICE), 'Create'],
   ['createhd', 'Create a hard disk CHD from a raw image (or a blank one)', ['input', '*output', 'compression', 'hunksize', 'template', 'chs', 'size', 'sectorsize', 'ident', 'outputparent'].concat(SLICE), 'Create'],
   ['createraw', 'Create a raw CHD from any file', ['*input', '*output', '*hunksize', '*unitsize', 'compression', 'outputparent'].concat(SLICE), 'Create'],
@@ -2608,6 +2612,11 @@ function init() {
       j.opts.out = settings.rename && j.ident && j.ident.name ? j.ident.name : j.title;
       refreshJob(j, true);
     });
+  });
+  $('#setKeepCue').checked = !!settings.keepCue;
+  $('#setKeepCue').addEventListener('change', function (e) {
+    settings.keepCue = e.target.checked; saveSettings();
+    jobs.forEach(function (j) { if (j.el && j.kind === 'create') refreshJob(j); });
   });
   $('#setWake').checked = settings.wake;
   $('#setWake').addEventListener('change', function (e) { settings.wake = e.target.checked; saveSettings(); if (!settings.wake) releaseWake(); });

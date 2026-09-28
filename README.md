@@ -156,7 +156,7 @@ No. Hacks, translations, homebrew and modified dumps aren't in the Redump databa
 <details>
 <summary><b>Can I turn a CHD back into a .cue/.bin or .iso?</b></summary>
 <br>
-Yes. Add the <code>.chd</code> and choose Extract. A CD comes back as its Redump dump: the same cue sheet and <code>.bin</code> files. You can also verify a CHD's checksums, which compares it with Redump too, or view its details.
+Yes. Add the <code>.chd</code> and choose Extract. A CD comes back as its Redump dump: the same cue sheet and <code>.bin</code> files. For discs whose cue sheet holds more than a CHD stores (CATALOG, FLAGS, ISRC, extra indexes: common on Saturn, Sega CD, PC Engine CD, 3DO and CD-i), turn on Settings → *Keep the cue sheet in CD CHDs* before converting, and that sheet comes back too. You can also verify a CHD's checksums, which compares it with Redump too, or view its details.
 </details>
 
 <details>

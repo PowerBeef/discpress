@@ -86,6 +86,29 @@ test('a GD-ROM CHD extracts as its Redump dump too', async ({ app }) => {
   sameAsFixture(await app.downloads(card), fx.add);
 });
 
+test('with "keep the cue sheet" on, extracting gives back the dump, CATALOG, FLAGS, ISRC and INDEX 02 included', async ({ app }) => {
+  const fx = fixture('cue-fidelity');
+  await app.open();
+  await app.add(fx.add);
+  const card = app.job('fidelity');
+  await app.settled(card);
+  await expect(card.locator('code.cmd')).not.toContainText('--keepcue'); // off by default: chdman's own CHD
+  await app.settings({ setKeepCue: true });
+  await expect(card.locator('code.cmd')).toContainText('--keepcue');
+  await app.run(card);
+  const [chd] = await app.downloads(card);
+  // the checksums of desktop chdman's CHD, which has no cue sheet
+  const ref = info(reference('createcd', 'fidelity.cue')), mine = info(chd.path);
+  expect([mine.sha1, mine.dataSha1]).toEqual([ref.sha1, ref.dataSha1]);
+  fs.mkdirSync(path.join(FIXTURES, 'chd'), { recursive: true });
+  fs.copyFileSync(chd.path, path.join(FIXTURES, 'chd', 'fidelity kept.chd'));
+  const kept = await openChd(app, 'chd/fidelity kept.chd', 'fidelity kept');
+  await expect(kept.locator('label.field', { hasText: 'Save as' })).toContainText('the cue sheet kept in this CHD');
+  await kept.locator('label.field', { hasText: 'Output name' }).locator('input').fill('fidelity');
+  await app.run(kept);
+  sameAsFixture(await app.downloads(kept), fx.add);
+});
+
 test('extract a GD-ROM CHD as GDI', async ({ app }) => {
   const card = await openChd(app, chdInput('aerowings', 'createcd', 'aerowings.gdi'), 'aerowings');
   await expect(card.locator('.sub')).toContainText('GD-ROM');

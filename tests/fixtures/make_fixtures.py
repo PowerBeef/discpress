@@ -341,6 +341,25 @@ fixture('cue-wave-tracks', {
 }, add=['wavs.cue', 'wavs (Track 1).bin', 'wavs audio.wav', 'wavs (Track 4).bin'], ref='wavs-ref.cue',
    job='create', disc='cd', command='createcd', sys=None, ident='none', name='wavs')
 
+# ---------------------------------------------------------------- cue sheets with more than a CHD's tracks hold
+# Redump's cue sheets for many systems carry what chdman doesn't store: CATALOG, FLAGS, ISRC, INDEX
+# 02 and later, the CDI/2352 track type. `createcd --keepcue` keeps the sheet in the CHD, and
+# `extractcd --redump` writes it back (engine.spec.js, chd.spec.js); without it, a CHD is chdman's.
+fixture('cue-fidelity', {
+    'fidelity.cue': lambda: ('CATALOG 4988602165921\r\n'
+                             'FILE "fidelity (Track 1).bin" BINARY\r\n  TRACK 01 MODE1/2352\r\n    INDEX 01 00:00:00\r\n'
+                             'FILE "fidelity (Track 2).bin" BINARY\r\n  TRACK 02 AUDIO\r\n    FLAGS DCP\r\n    ISRC JPPI00652340\r\n'
+                             '    INDEX 00 00:00:00\r\n    INDEX 01 00:02:00\r\n    INDEX 02 00:03:00\r\n'
+                             'FILE "fidelity (Track 3).bin" BINARY\r\n  TRACK 03 AUDIO\r\n    FLAGS DCP PRE\r\n'
+                             '    INDEX 00 00:00:00\r\n    INDEX 01 00:01:00\r\n').encode(),
+    'fidelity (Track 1).bin': lambda: cue_data(126), 'fidelity (Track 2).bin': cue_t2, 'fidelity (Track 3).bin': cue_t3,
+}, add=['fidelity.cue', 'fidelity (Track 1).bin', 'fidelity (Track 2).bin', 'fidelity (Track 3).bin'],
+   job='create', disc='cd', command='createcd', sys=None, ident='none', name='fidelity')
+fixture('cue-cdi', {
+    'cdi disc.cue': lambda: b'FILE "cdi disc.bin" BINARY\r\n  TRACK 01 CDI/2352\r\n    INDEX 01 00:00:00\r\n',
+    'cdi disc.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660({'README.TXT': b'cd-i test', 'DATA.BIN': g.filler(300 << 10, 127)}, 'CDITEST')), 2),
+}, add=['cdi disc.cue', 'cdi disc.bin'], job='create', disc='cd', command='createcd', sys=None, ident='none', name='cdi disc')
+
 # ---------------------------------------------------------------- ECM images
 # CD images packed by the ecm tools (g.ecm writes what their bin2ecm does). The page gives chdman the
 # image inside, so the CHD must be the one desktop chdman makes from the image itself: from the files

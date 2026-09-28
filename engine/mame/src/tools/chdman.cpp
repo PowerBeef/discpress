@@ -190,6 +190,9 @@ constexpr int MODE_NORMAL = 0;
 constexpr int MODE_CUEBIN = 1;
 constexpr int MODE_GDI = 2;
 
+// Discpress: the input cue sheet, as createcd --keepcue stores it (metadata that no checksum covers)
+constexpr chd_metadata_tag CUE_SHEET_METADATA_TAG = CHD_MAKE_TAG('C','U','E','S');
+
 // osd printf verbosity
 constexpr bool OSD_PRINTF_VERBOSE = false;
 
@@ -222,6 +225,7 @@ constexpr bool OSD_PRINTF_VERBOSE = false;
 #define OPTION_OUTPUT_BIN "outputbin"
 #define OPTION_OUTPUT_SPLITBIN "splitbin"
 #define OPTION_REDUMP "redump"
+#define OPTION_KEEPCUE "keepcue"
 #define OPTION_OUTPUT_FORCE "force"
 #define OPTION_INPUT_START_BYTE "inputstartbyte"
 #define OPTION_INPUT_START_HUNK "inputstarthunk"
@@ -811,6 +815,7 @@ static const option_description s_options[] =
 	{ OPTION_OUTPUT_BIN,            "ob",   true, " <filename>: output file name for binary data" },
 	{ OPTION_OUTPUT_SPLITBIN,       "sb",   false, ": output one binary file per track" },
 	{ OPTION_REDUMP,                "rd",   false, ": write a .cue as Redump does: CRLF line ends, and one binary file per track unless there is only one" },
+	{ OPTION_KEEPCUE,               "kc",   false, ": keep the input .cue in the CHD, as metadata that leaves its checksums unchanged; extractcd --redump writes it back" },
 	{ OPTION_OUTPUT_FORCE,          "f",    false, ": force overwriting an existing file" },
 	{ OPTION_OUTPUT_PARENT,         "op",   true, " <filename>: parent file name for output CHD" },
 	{ OPTION_INPUT_START_BYTE,      "isb",  true, " <offset>: starting byte offset within the input" },
@@ -902,7 +907,8 @@ static const command_description s_commands[] =
 			REQUIRED OPTION_INPUT,
 			OPTION_HUNK_SIZE,
 			OPTION_COMPRESSION,
-			OPTION_NUMPROCESSORS
+			OPTION_NUMPROCESSORS,
+			OPTION_KEEPCUE
 		}
 	},
 	{ COMMAND_CREATE_DVD, do_create_dvd, ": create a DVD CHD from the input file",
@@ -2364,6 +2370,19 @@ static chdman_task do_create_cd(parameters_map &params)
 			report_error(1, "Error parsing input file (%s): no tracks found\n", *input_file_str->second);
 	}
 
+	// Discpress: --keepcue, the cue sheet as it is, for extractcd --redump to write back
+	std::vector<uint8_t> cue_sheet;
+	if (params.find(OPTION_KEEPCUE) != params.end())
+	{
+		if (!core_filename_ends_with(*input_file_str->second, ".cue"))
+			report_error(1, "--%s needs a .cue input file", OPTION_KEEPCUE);
+		std::error_condition const err = util::core_file::load(*input_file_str->second, cue_sheet);
+		if (err)
+			report_error(1, "Unable to read the cue sheet (%s): %s", *input_file_str->second, err.message());
+		if (cue_sheet.size() > 1024 * 1024)
+			report_error(1, "The cue sheet (%s) is too large to keep", *input_file_str->second);
+	}
+
 	// process output CHD
 	chd_file output_parent;
 	const auto output_chd_str = parse_output_chd_parameters(params, output_parent);
@@ -2416,6 +2435,14 @@ static chdman_task do_create_cd(parameters_map &params)
 		const std::error_condition err = cdrom_file::write_metadata(chd.get(), toc);
 		if (err)
 			report_error(1, "Error adding CD metadata: %s", err.message());
+
+		// Discpress: then the kept cue sheet, without CHD_MDFLAGS_CHECKSUM: neither SHA-1 changes
+		if (!cue_sheet.empty())
+		{
+			const std::error_condition cueerr = chd->write_metadata(CUE_SHEET_METADATA_TAG, 0, cue_sheet, 0);
+			if (cueerr)
+				report_error(1, "Error adding the cue sheet: %s", cueerr.message());
+		}
 
 		// compress it generically
 		co_await compress_common(*chd);
@@ -2831,6 +2858,99 @@ static chdman_task do_extract_raw(parameters_map &params)
 //  CHD image
 //-------------------------------------------------
 
+//-------------------------------------------------
+//  Discpress: kept_cue_sheet - the cue sheet createcd
+//  --keepcue stored, to write instead of a new one,
+//  if its files are the ones extractcd --redump
+//  writes: one BINARY file per track, or one file
+//  and track for a single-track disc. Its FILE names
+//  become theirs, in order (unless already the same);
+//  anything else stays as it is, with LF line ends
+//  (the writer turns them into CRLF). Empty if the
+//  layout differs.
+//-------------------------------------------------
+
+static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::vector<std::string> &track_filenames)
+{
+	std::vector<std::string> files;
+	for (size_t i = 0; i < track_filenames.size(); i++)
+		if (i == 0 || track_filenames[i] != track_filenames[i - 1])
+			files.emplace_back(core_filename_extract_base(track_filenames[i]));
+
+	// an upper-case keyword at `at`, in any case and followed by a space or the end: skips it and the spaces after it
+	auto const keyword = [] (std::string_view line, size_t &at, std::string_view word)
+	{
+		size_t const end = at + word.size();
+		if (line.size() < end || (line.size() > end && !isspace(uint8_t(line[end]))))
+			return false;
+		for (size_t i = 0; i < word.size(); i++)
+			if (std::toupper(uint8_t(line[at + i])) != word[i])
+				return false;
+		at = end;
+		while (at < line.size() && isspace(uint8_t(line[at])))
+			at++;
+		return true;
+	};
+
+	std::string const text(sheet.begin(), sheet.end());
+	std::string out;
+	size_t file = 0, tracks = 0, file_tracks = 0;
+	for (size_t pos = 0; pos < text.size(); )
+	{
+		size_t const nl = text.find('\n', pos);
+		std::string line = text.substr(pos, ((nl == std::string::npos) ? text.size() : nl) - pos);
+		pos = (nl == std::string::npos) ? text.size() : (nl + 1);
+		if (!line.empty() && line.back() == '\r')
+			line.pop_back();
+
+		// the keyword, after spaces (and the byte order mark some sheets start with)
+		size_t at = (out.empty() && line.compare(0, 3, "\xef\xbb\xbf") == 0) ? 3 : 0;
+		while (at < line.size() && isspace(uint8_t(line[at])))
+			at++;
+		if (keyword(line, at, "FILE"))
+		{
+			if ((file > 0 && file_tracks != 1) || file >= files.size())
+				return std::string();
+			size_t const name_start = at;
+			std::string name;
+			if (at < line.size() && line[at] == '"')
+			{
+				size_t const close = line.find('"', at + 1);
+				if (close == std::string::npos)
+					return std::string();
+				name = line.substr(at + 1, close - at - 1);
+				at = close + 1;
+			}
+			else
+			{
+				while (at < line.size() && !isspace(uint8_t(line[at])))
+					name += line[at++];
+			}
+			size_t type = at;
+			while (type < line.size() && isspace(uint8_t(line[type])))
+				type++;
+			if (!keyword(line, type, "BINARY") || type != line.size())
+				return std::string();
+			if (name != files[file])
+				line = line.substr(0, name_start) + "\"" + files[file] + "\"" + line.substr(at);
+			file++;
+			file_tracks = 0;
+		}
+		else if (keyword(line, at, "TRACK"))
+		{
+			file_tracks++;
+			tracks++;
+		}
+		out += line;
+		if (nl != std::string::npos)
+			out += '\n';
+	}
+	if (file != files.size() || file_tracks != 1 || tracks != track_filenames.size())
+		return std::string();
+	return out;
+}
+
+
 static chdman_task do_extract_cd(parameters_map &params)
 {
 	// parse out input files
@@ -3007,6 +3127,20 @@ static chdman_task do_extract_cd(parameters_map &params)
 			track_filenames.push_back(filename_formatted);
 		}
 
+		// Discpress: with --redump, the cue sheet createcd --keepcue stored, if it fits these files
+		std::string kept_cue;
+		if (redump)
+		{
+			std::vector<uint8_t> sheet;
+			if (!input_chd.read_metadata(CUE_SHEET_METADATA_TAG, 0, sheet))
+				kept_cue = kept_cue_sheet(sheet, track_filenames);
+			if (!kept_cue.empty())
+			{
+				util::stream_format(std::cout, "Cue sheet:    the one kept when the CHD was made\n");
+				toc_out.printf("%s", kept_cue);
+			}
+		}
+
 		// GDI must start with the # of tracks
 		if (mode == MODE_GDI)
 		{
@@ -3143,7 +3277,7 @@ static chdman_task do_extract_cd(parameters_map &params)
 				output_bin_filenames.push_back(trackbin_name);
 			}
 
-			if (cdrom->is_gdrom() && mode == MODE_CUEBIN)
+			if (cdrom->is_gdrom() && mode == MODE_CUEBIN && kept_cue.empty())
 			{
 				if (tracknum == 0)
 					toc_out.printf("REM SINGLE-DENSITY AREA\n");
@@ -3151,9 +3285,10 @@ static chdman_task do_extract_cd(parameters_map &params)
 					toc_out.printf("REM HIGH-DENSITY AREA\n");
 			}
 
-			// output the metadata about the track to the TOC file
+			// output the metadata about the track to the TOC file (Discpress: unless the kept cue sheet was written)
 			const cdrom_file::track_info &trackinfo = toc.tracks[tracknum];
-			output_track_metadata(mode, toc_out, tracknum, trackinfo, std::string(core_filename_extract_base(trackbin_name)), discoffs, outputoffs);
+			if (kept_cue.empty())
+				output_track_metadata(mode, toc_out, tracknum, trackinfo, std::string(core_filename_extract_base(trackbin_name)), discoffs, outputoffs);
 
 			// If this is bin/cue output and the CHD contains subdata, warn the user and don't include
 			// the subdata size in the buffer calculation.
