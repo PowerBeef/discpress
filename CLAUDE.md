@@ -73,7 +73,7 @@ Consequences: app JS is plain browser script (no modules/imports, ES5-style `var
   - **Hosted copy.** Safari can't open local HTML, so the Release workflow also publishes the release file on GitHub Pages (`pages` job; `web/` holds its service worker, manifest and icons, which the page adds itself only over https: `initHosted`).
   - **CSP.** `app/index.html`'s Content-Security-Policy has `connect-src 'none'`: nothing in the page may use the network.
   - **Saving.** The share sheet loads the whole file into memory, so on iOS results over `SHARE_MAX` (512 MB) are downloaded instead. App web views (`iosWebView`) usually can't download, so `#iosTip` points to the hosted copy.
-  - **Threads.** Automatic threads are capped on iOS (`iosThreadCap`: iPhone 2, iPad 4).
+  - **Threads.** The speed test tries at most 4 threads on iPhones (`iosThreadCap`), which report 4 cores whatever they have; a stored result that stopped at a lower limit (`cap`) is measured again.
   - **Recovery.** `Recovery` keeps a `localStorage` record of the running job and unsaved results, so after iOS reloads the page, `Store.cleanupStale` keeps those results and `renderEarlier` lists them.
 - **`wasm/`**: `sources.mk` lists the engine sources that are compiled; `shim/SDL2/SDL.h` stubs the only SDL calls chdman needs; `version.cpp` supplies the version strings.
 

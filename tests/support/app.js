@@ -32,7 +32,7 @@ function seedStorage(o) {
     if (o.tuned !== false) {
       const cores = Math.max(1, o.cores || navigator.hardwareConcurrency || 4);
       localStorage.setItem('chdman-web-tuning', JSON.stringify({ key: cores + '|' + navigator.userAgent,
-        threads: Math.min(4, cores), rate: 1, steps: [[1, 1]], cores, date: Date.now() }));
+        threads: Math.min(4, cores), rate: 1, steps: [[1, 1]], cores, date: Date.now(), ...o.tuning }));
     }
   } catch (e) { /* storage may be blocked */ }
 }
@@ -69,7 +69,8 @@ export class App {
   }
 
   /** Open the page. Options: settings, debug, noSimd, noOpfs, cores, theme, testdb (extra database rows),
-   *  tuned (false: no stored per-device speed test, so automatic threads measure the device). */
+   *  tuned (false: no stored per-device speed test, so automatic threads measure the device),
+   *  tuning (fields that replace the stored speed test's). */
   async open(opts = {}) {
     const o = { ...opts };
     if (o.theme) o.settings = { ...(o.settings || {}), theme: o.theme };

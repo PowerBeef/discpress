@@ -80,7 +80,7 @@ game database when it is requested as `/discpress.html?testdb=1` (`app.open({ te
 | `advanced` | the Advanced tab: form, text commands, validation, listtemplates |
 | `edge-cases` | missing tracks, lone tracks, duplicates, unsupported files, descriptors and CloneCD images chdman can't convert, truncated images, compressed ISOs (as a CD, not one at all, damaged), DVD/CD switch, cancel, remove |
 | `fallbacks` | no SIMD, no OPFS, memory-only, input staging and page streaming (iOS web views, also of a compressed ISO), single core |
-| `mobile` | phone layout, thread defaults (2 on iPhones), the fixed-header scrolling used inside iOS app web views, saving through the share sheet (its failure falls back to a download, results too large for it download), the Safari tip in iOS app web views |
+| `mobile` | phone layout, thread defaults (the iPhone speed test tries up to 4, and one stored at 1.3.1's limit of 2 is measured again), the fixed-header scrolling used inside iOS app web views, saving through the share sheet (its failure falls back to a download, results too large for it download), the Safari tip in iOS app web views |
 | `recovery` | results kept from an earlier visit (listed after a reload, saved, deleted) and a conversion stopped by a reload |
 | `hosted` | the hosted copy (`web/`): manifest, icons, service worker, working offline; the Content Security Policy blocks network requests |
 | `layout` | 7 screen sizes × light/dark × 5 screens: no horizontal overflow; screenshots in `.cache/screens/` |
