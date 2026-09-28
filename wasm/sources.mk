@@ -1,6 +1,9 @@
 # The chdman engine (engine/mame, see engine/README.md): chdman and exactly the parts of MAME it links.
 # M can point at a MAME 0.289 checkout instead, with UPSTREAM=1 (scripts/build-upstream.sh).
-M ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST)))../engine/mame)
+# (set once: MAKEFILE_LIST changes as the Makefile includes the objects' .d files)
+ifndef M
+M := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))../engine/mame)
+endif
 UTIL := avhuff aviio bitmap cdrom chd chdcodec corefile corestr flac hashing huffman ioprocs palette path strformat unicode vbiparse vecstream
 UTIL_SRC := $(addprefix $(M)/src/lib/util/,$(addsuffix .cpp,$(UTIL)))
 OSD_SRC := $(addprefix $(M)/src/osd/,osdcore.cpp strconv.cpp osdsync.cpp modules/lib/osdlib_unix.cpp modules/file/posixfile.cpp modules/file/posixptty.cpp modules/file/posixsocket.cpp)

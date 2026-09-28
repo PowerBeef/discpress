@@ -30,13 +30,15 @@ CPP_SRC := $(UTIL_SRC) $(OSD_SRC) $(filter-out wasm_helper.cpp,$(TOOL_SRC))
 endif
 obj = $(O)/$(subst /,_,$(subst $(M)/,,$(basename $(1)))).o
 
+# -MMD -MP: each object also gets a .d file listing the headers it includes, so changing a
+# header recompiles everything that uses it (a stale object could disagree on a class layout)
 define cxxrule
 $(call obj,$(1)): $(1) | $(O)
-	$$(CXX) $$(CXXFLAGS) -c $$< -o $$@
+	$$(CXX) $$(CXXFLAGS) -MMD -MP -c $$< -o $$@
 endef
 define crule
 $(call obj,$(1)): $(1) | $(O)
-	$$(CC) $$(COMMON) $(2) -std=gnu11 -c $$< -o $$@
+	$$(CC) $$(COMMON) $(2) -std=gnu11 -MMD -MP -c $$< -o $$@
 endef
 $(foreach s,$(CPP_SRC),$(eval $(call cxxrule,$(s))))
 $(foreach s,$(ZLIB_SRC),$(eval $(call crule,$(s),-I$(M)/3rdparty/zlib)))
@@ -47,6 +49,9 @@ $(foreach s,$(UTF8_SRC),$(eval $(call crule,$(s),)))
 
 ALL_SRC := $(CPP_SRC) $(ZLIB_SRC) $(ZSTD_SRC) $(FLAC_SRC) $(LZMA_SRC) $(UTF8_SRC)
 OBJS := $(foreach s,$(ALL_SRC),$(call obj,$(s)))
+-include $(OBJS:.o=.d)
+# and a change to the flags or the source list recompiles everything
+$(OBJS): Makefile sources.mk
 
 $(O):
 	mkdir -p $(O)
