@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Discpress is MAME 0.289's `chdman` compiled to WebAssembly and shipped as **one self-contained, offline HTML file** (`dist/discpress.html`) that converts game disc images to/from CHD in the browser, on phones and desktops. It also identifies the console/game and names outputs from a built-in Redump database. The app has no server, no bundler and no npm dependencies; the end-to-end tests and benchmarks in `tests/` (Playwright, see `tests/README.md`) are the only tooling with a `package.json`. There is no linter.
 
-Research for the planned chdman fork (CHD format, chdman internals, disc layouts, emulator compatibility, measurements, roadmap) lives in `docs/chd/`: start with `docs/chd/README.md` and `docs/chd/fork-plan.md`. Check a change against the compatibility contract there before it alters CHD output.
+Research for the planned chdman fork (CHD format, chdman internals, disc layouts, emulator compatibility, measurements, roadmap) lives in `docs/chd/`: start with `docs/chd/README.md` and `docs/chd/fork-plan.md`. Check a change against the compatibility contract there before it alters CHD output. What limits the app on iPhone and iPad (saving large results, memory, background, storage) and the plan for it are in `docs/ios/README.md`.
 
 ## Commands
 
