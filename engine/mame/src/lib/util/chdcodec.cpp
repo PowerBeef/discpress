@@ -259,6 +259,7 @@ private:
 	// internal state
 	bool            m_big_endian;
 	flac_encoder    m_encoder;
+	std::vector<uint8_t> m_buffer_be;   // Discpress: the big-endian encoding, kept for when it wins
 };
 
 
@@ -376,7 +377,8 @@ public:
 			}
 		}
 
-		// encode the base portion
+		// encode the base portion (Discpress: it may give up once header + base reach the limit)
+		m_base_compressor.set_limit((m_limit > header_bytes) ? (m_limit - header_bytes) : 1);
 		uint32_t complen = m_base_compressor.compress(&m_buffer[0], frames * cdrom_file::MAX_SECTOR_DATA, &dest[header_bytes]);
 		if (complen >= srclen)
 			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
@@ -740,12 +742,27 @@ int8_t chd_compressor_group::find_best_compressor(const uint8_t *src, uint8_t *c
 	// determine best compression technique
 	complen = m_hunkbytes;
 	int8_t compression = -1;
+
+	// Discpress: the codec that won the previous hunk goes first, and every other codec only
+	// has to beat the best result so far, so it can give up as soon as it can't (set_limit).
+	// Ties still go to the lower codec number, so the choice and the data are upstream's.
+	int order[std::size(m_compressor)], count = 0;
+	if (m_last_best >= 0)
+		order[count++] = m_last_best;
 	for (int codecnum = 0; codecnum < std::size(m_compressor); codecnum++)
+		if (codecnum != m_last_best)
+			order[count++] = codecnum;
+
+	for (int const codecnum : order)
 		if (m_compressor[codecnum])
 		{
 			// attempt to compress, swallowing errors
 			try
 			{
+				// Discpress: a codec numbered below the best so far wins a tie, the others must beat it
+				bool const precedes = (compression >= 0) && (codecnum < compression);
+				m_compressor[codecnum]->set_limit(precedes ? complen + 1 : complen);
+
 				// if this is the best one, copy the data into the permanent buffer
 				uint32_t compbytes = m_compressor[codecnum]->compress(src, m_hunkbytes, &m_compress_test[0]);
 #if CHDCODEC_VERIFY_COMPRESSION
@@ -772,7 +789,7 @@ int8_t chd_compressor_group::find_best_compressor(const uint8_t *src, uint8_t *c
 				}
 printf("   codec%d=%d bytes            \n", codecnum, compbytes);
 #endif
-				if (compbytes < complen)
+				if ((compbytes < complen) || ((compbytes == complen) && (compression >= 0) && (codecnum < compression)))
 				{
 					compression = codecnum;
 					complen = compbytes;
@@ -787,6 +804,7 @@ printf("   codec%d=%d bytes            \n", codecnum, compbytes);
 	// if the best is none, copy it over
 	if (compression == -1)
 		memcpy(compressed, src, m_hunkbytes);
+	m_last_best = compression;
 	return compression;
 }
 
@@ -938,8 +956,9 @@ uint32_t chd_zlib_compressor::compress(const uint8_t *src, uint32_t srclen, uint
 	m_deflater.next_in = const_cast<Bytef *>(src);
 	m_deflater.avail_in = srclen;
 	m_deflater.total_in = 0;
+	uint32_t const destlen = std::min(srclen, m_limit); // Discpress: stop at the limit
 	m_deflater.next_out = dest;
-	m_deflater.avail_out = srclen;
+	m_deflater.avail_out = destlen;
 	m_deflater.total_out = 0;
 	int zerr = deflateReset(&m_deflater);
 	if (zerr != Z_OK)
@@ -949,7 +968,7 @@ uint32_t chd_zlib_compressor::compress(const uint8_t *src, uint32_t srclen, uint
 	zerr = deflate(&m_deflater, Z_FINISH);
 
 	// if we ended up with more data than we started with, return an error
-	if (zerr != Z_STREAM_END || m_deflater.total_out >= srclen)
+	if (zerr != Z_STREAM_END || m_deflater.total_out >= destlen)
 		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
 
 	// otherwise, return the length
@@ -1066,7 +1085,7 @@ uint32_t chd_zstd_compressor::compress(const uint8_t *src, uint32_t srclen, uint
 
 	// do it
 	ZSTD_inBuffer input{ src, srclen, 0 };
-	ZSTD_outBuffer output = { dest, srclen, 0 };
+	ZSTD_outBuffer output = { dest, std::min(srclen, m_limit), 0 }; // Discpress: stop at the limit
 	while (output.pos < output.size)
 	{
 		result = ZSTD_compressStream2(m_stream, &output, &input, ZSTD_e_end);
@@ -1284,8 +1303,8 @@ uint32_t chd_lzma_compressor::compress(const uint8_t *src, uint32_t srclen, uint
 		if (res != SZ_OK)
 			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
 
-		// run it
-		SizeT complen = srclen;
+		// run it (Discpress: into a buffer only as big as a usable result, so it stops early)
+		SizeT complen = std::min<SizeT>(srclen, SizeT(m_limit) - 1);
 		res = LzmaEnc_MemEncode(encoder, dest, &complen, src, srclen, 0, nullptr, &m_allocator, &m_allocator);
 		if (res != SZ_OK)
 			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
@@ -1419,7 +1438,7 @@ chd_huffman_compressor::chd_huffman_compressor(chd_file &chd, uint32_t hunkbytes
 uint32_t chd_huffman_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
 {
 	uint32_t complen;
-	if (m_encoder.encode(src, srclen, dest, srclen, complen) != HUFFERR_NONE)
+	if (m_encoder.encode(src, srclen, dest, std::min(srclen, m_limit - 1), complen) != HUFFERR_NONE) // Discpress: limit
 		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
 	return complen;
 }
@@ -1474,6 +1493,7 @@ chd_flac_compressor::chd_flac_compressor(chd_file &chd, uint32_t hunkbytes, bool
 	m_encoder.set_num_channels(2);
 	m_encoder.set_block_size(blocksize(hunkbytes));
 	m_encoder.set_strip_metadata(true);
+	m_buffer_be.resize(hunkbytes);
 }
 
 
@@ -1483,32 +1503,47 @@ chd_flac_compressor::chd_flac_compressor(chd_file &chd, uint32_t hunkbytes, bool
 
 uint32_t chd_flac_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
 {
-	// reset and encode big-endian
-	m_encoder.reset(dest + 1, hunkbytes() - 1);
-	if (!m_encoder.encode_interleaved(reinterpret_cast<const int16_t *>(src), srclen / 4, !m_big_endian))
-		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+	// Discpress: an encoding of more than this can't give a usable result (complen + 1 < limit),
+	// so the encoder may give up on it early; a byte order that gives up counts as too large
+	uint32_t const give_up = (m_limit >= 2) ? (m_limit - 2) : 0;
+
+	// reset and encode big-endian (Discpress: into its own buffer, so it needn't be encoded again if it wins)
+	m_encoder.reset(&m_buffer_be[0], hunkbytes() - 1);
+	m_encoder.set_give_up(give_up);
+	bool const encoded_be = m_encoder.encode_interleaved(reinterpret_cast<const int16_t *>(src), srclen / 4, !m_big_endian);
 	uint32_t complen_be = m_encoder.finish();
+	if (!encoded_be)
+	{
+		if (!m_encoder.gave_up())
+			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+		complen_be = UINT32_MAX;
+	}
 
 	// reset and encode little-endian
 	m_encoder.reset(dest + 1, hunkbytes() - 1);
-	if (!m_encoder.encode_interleaved(reinterpret_cast<const int16_t *>(src), srclen / 4, m_big_endian))
-		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+	m_encoder.set_give_up(give_up);
+	bool const encoded_le = m_encoder.encode_interleaved(reinterpret_cast<const int16_t *>(src), srclen / 4, m_big_endian);
 	uint32_t complen_le = m_encoder.finish();
-
-	// pick the best one and add a byte
-	uint32_t complen = std::min(complen_le, complen_be);
-	if (complen + 1 >= hunkbytes())
+	if (!encoded_le)
+	{
+		if (!m_encoder.gave_up())
+			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+		complen_le = UINT32_MAX;
+	}
+	if ((complen_be == UINT32_MAX) && (complen_le == UINT32_MAX))
 		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
 
-	// if big-endian was better, re-do it
+	// pick the best one and add a byte (Discpress: the caller can't use complen + 1 >= limit either)
+	uint32_t complen = std::min(complen_le, complen_be);
+	if (complen + 1 >= hunkbytes() || complen + 1 >= m_limit)
+		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+
+	// if big-endian was better, use it (Discpress: copied, not encoded a third time)
 	dest[0] = 'L';
 	if (complen != complen_le)
 	{
 		dest[0] = 'B';
-		m_encoder.reset(dest + 1, hunkbytes() - 1);
-		if (!m_encoder.encode_interleaved(reinterpret_cast<const int16_t *>(src), srclen / 4, !m_big_endian))
-			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
-		m_encoder.finish();
+		memcpy(dest + 1, &m_buffer_be[0], complen);
 	}
 	return complen + 1;
 }
@@ -1642,14 +1677,16 @@ uint32_t chd_cd_flac_compressor::compress(const uint8_t *src, uint32_t srclen, u
 		memcpy(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA + framenum * cdrom_file::MAX_SUBCODE_DATA], &src[framenum * cdrom_file::FRAME_SIZE + cdrom_file::MAX_SECTOR_DATA], cdrom_file::MAX_SUBCODE_DATA);
 	}
 
-	// reset and encode the audio portion
+	// reset and encode the audio portion (Discpress: giving up once the result can't be usable)
 	m_encoder.reset(dest, hunkbytes());
+	m_encoder.set_give_up((m_limit >= 1) ? (m_limit - 1) : 0);
 	uint8_t *buffer = &m_buffer[0];
-	if (!m_encoder.encode_interleaved(reinterpret_cast<int16_t *>(buffer), frames * cdrom_file::MAX_SECTOR_DATA/4, m_swap_endian))
-		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+	bool const encoded = m_encoder.encode_interleaved(reinterpret_cast<int16_t *>(buffer), frames * cdrom_file::MAX_SECTOR_DATA/4, m_swap_endian);
 
 	// finish up
 	uint32_t complen = m_encoder.finish();
+	if (!encoded || complen >= m_limit)
+		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
 
 	// deflate the subcode data
 	m_deflater.next_in = const_cast<Bytef *>(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA]);

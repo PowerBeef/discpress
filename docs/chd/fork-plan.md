@@ -187,6 +187,14 @@ This affects users today, so it ships as its own small release before any fork w
 
 ### Milestone 2: performance (1–2 weeks)
 
+**Status: 2.4 done, and part of 2.2** (see `engine/README.md`; measured in measurements §2).
+- **2.4 early abort.** Each hunk tries the previous hunk's winner first, and every other codec stops once it can't beat the best result. The output is byte-identical: 294 fixture, stress-image and codec-list combinations match unmodified 0.289, and `tests/ui/engine.spec.js` keeps checking it.
+- Measured CPU savings: 1.06× on CD data, 1.47× on CD audio, 1.10× on DVD. That is below the estimate, because deflate and single-frame FLAC can't stop partway through a hunk.
+- In the page, the benchmark CD and DVD convert 5–8% faster with 1 or 4 threads.
+- **2.2, done so far:** FLAC skips its MD5 in memory, and generic `flac` never encodes a hunk a third time.
+- **2.2, still open:** ECC verify once per CD hunk, and in-flight dedupe.
+- **Build fix found on the way:** `wasm/Makefile` now tracks header dependencies. A stale object had disagreed with a changed class layout.
+
 Numbers are single-core CPU unless noted (measurements §1–2, G §11–12).
 
 | # | Change | Tier | Measured or estimated gain |

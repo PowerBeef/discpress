@@ -411,6 +411,7 @@ struct CLzmaEnc
 
   BoolInt fastMode;
   BoolInt writeEndMark;
+  size_t outLimit; /* Discpress: LzmaEnc_MemEncode's buffer size, to stop once the output can't fit; 0 = none */
   BoolInt finished;
   BoolInt multiThread;
   BoolInt needInit;
@@ -2321,6 +2322,7 @@ Z7_NO_INLINE static void FillDistancesPrices(CLzmaEnc *p)
 static void LzmaEnc_Construct(CLzmaEnc *p)
 {
   RangeEnc_Construct(&p->rc);
+  p->outLimit = 0;
   MatchFinder_Construct(&MFB);
   
   #ifndef Z7_ST
@@ -2672,6 +2674,10 @@ static SRes LzmaEnc_CodeOneBlock(CLzmaEnc *p, UInt32 maxPackSize, UInt32 maxUnpa
         p->nowPos64 += nowPos32 - startPos32;
         return CheckErrors(p);
       }
+
+      /* Discpress: the output only grows, so once it is past the buffer the result can't fit */
+      if (p->outLimit && RangeEnc_GetProcessed_sizet(&p->rc) > p->outLimit)
+        return SZ_ERROR_OUTPUT_EOF;
     }
   }
 
@@ -3092,6 +3098,7 @@ SRes LzmaEnc_MemEncode(CLzmaEncHandle p, Byte *dest, SizeT *destLen, const Byte 
 
   p->writeEndMark = writeEndMark;
   p->rc.outStream = &outStream.vt;
+  p->outLimit = *destLen;
 
   res = LzmaEnc_MemPrepare(p, src, srcLen, 0, alloc, allocBig);
   
@@ -3101,6 +3108,7 @@ SRes LzmaEnc_MemEncode(CLzmaEncHandle p, Byte *dest, SizeT *destLen, const Byte 
     if (res == SZ_OK && p->nowPos64 != srcLen)
       res = SZ_ERROR_FAIL;
   }
+  p->outLimit = 0;
 
   *destLen -= (SizeT)outStream.rem;
   if (outStream.overflow)

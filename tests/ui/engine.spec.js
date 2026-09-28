@@ -3,6 +3,7 @@
 // where 0.289 crashes, loses data or reports success on a failure.
 import { test, expect } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { FIXTURES, ROOT } from '../support/paths.js';
@@ -85,4 +86,27 @@ test('dumpmeta to stdout writes only the metadata', () => {
   expect(r.out.toString()).toMatch(/^TRACK:1 /);
   expect(up.out.toString()).toContain(r.out.toString()); // upstream puts the banner first
   expect(r.err).toContain('chdman - MAME Compressed Hunks of Data');
+});
+
+// The engine tries each hunk's codecs in a different order and stops a codec as soon as it can't
+// win (see engine/README.md). The chosen codec and the bytes must still be upstream's, whatever
+// the codec list and hunk size: larger hunks make FLAC give up between blocks.
+test('codec trials that stop early still make the same CHDs', () => {
+  const sha1 = file => crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex');
+  const cases = [
+    ['createcd', 'codec mix cd.cue', []],
+    ['createcd', 'codec mix cd.cue', ['-c', 'cdfl,cdzl,cdlz']],
+    ['createcd', 'codec mix cd.cue', ['-c', 'cdzs,cdfl']],
+    ['createhd', 'codec mix.img', []],
+    ['createhd', 'codec mix.img', ['-c', 'flac,huff,zlib,lzma']],
+    ['createraw', 'codec mix.img', ['-hs', '16384', '-us', '4', '-c', 'zstd,flac,lzma']],
+    ['createraw', 'codec mix.img', ['-hs', '65536', '-us', '4']],
+  ];
+  for (const [command, input, extra] of cases) {
+    const what = [command, input, ...extra].join(' ');
+    const up = tmp('up.chd'), en = tmp('engine.chd');
+    expect(run(UPSTREAM, [command, '-i', input, '-o', up, '-f', ...extra]).code, `upstream ${what}`).toBe(0);
+    expect(run(ENGINE, [command, '-i', input, '-o', en, '-f', ...extra]).code, what).toBe(0);
+    expect(sha1(en), what).toBe(sha1(up));
+  }
 });

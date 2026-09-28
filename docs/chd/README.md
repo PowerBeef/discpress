@@ -126,7 +126,7 @@ Separately, the generic FLAC codec encodes each hunk two or three times.
 | Codec plan per track type, CD audio | **2.8× faster** | identical |
 | Codec plan per track type, CD data | 2.0× faster | +0.22% |
 | Codec plan per track type, DVD | 1.55× faster | +0.06% |
-| Byte-identical early abort | 1.2–1.65× faster | identical |
+| Byte-identical early abort (built, milestone 2.4) | 1.06× (CD data), 1.47× (CD audio), 1.10× (DVD) less CPU | identical |
 
 There are serial bottlenecks too:
 

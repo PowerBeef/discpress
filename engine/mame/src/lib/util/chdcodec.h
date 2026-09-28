@@ -71,6 +71,13 @@ public:
 
 	// implementation
 	virtual uint32_t compress(const uint8_t *src, uint32_t srclen, uint8_t *dest) = 0;
+
+	// Discpress: a result of limit bytes or more can't be used, so a codec may give up (throw)
+	// as soon as it knows its output will be that large; results below the limit are unaffected
+	void set_limit(uint32_t limit) noexcept { m_limit = limit; }
+
+protected:
+	uint32_t m_limit = UINT32_MAX;
 };
 
 
@@ -126,6 +133,7 @@ private:
 	uint32_t                m_hunkbytes;        // number of bytes in a hunk
 	chd_compressor::ptr     m_compressor[4];    // array of active codecs
 	std::vector<uint8_t>    m_compress_test;    // test buffer for compression
+	int                     m_last_best = -1;   // Discpress: codec that won the previous hunk
 #if CHDCODEC_VERIFY_COMPRESSION
 	chd_decompressor::ptr   m_decompressor[4];  // array of active codecs
 	std::vector<uint8_t>    m_decompressed;     // verification buffer

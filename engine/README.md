@@ -11,6 +11,11 @@ The paths mirror MAME's, so every file can be compared with its original. **[`ma
   - In the browser, the page starts a command with `chdman_begin` and calls `chdman_resume` whenever the compression loop pauses to let helper workers' results arrive. This needs no Asyncify.
   - Natively nothing pauses and `main` runs each command straight through, with the same output, messages and exit codes as upstream.
 - **`unicode.cpp`/`.h`:** the functions that needed utf8proc are removed; nothing in chdman used them.
+- **Faster codec trials with the same output (`chdcodec.cpp`, `flac.cpp`, LZMA SDK `LzmaEnc.c`):**
+  - For each hunk, the codec that won the previous hunk is tried first. Every other codec gets the best size so far as a limit and gives up as soon as its result can't win. As upstream, a codec listed earlier wins a tie, so the chosen codec and the compressed bytes don't change.
+  - zlib, zstd and Huffman write into buffers only as large as a winning result. LZMA stops once its output passes that size (a check added to the SDK's encoder loop). FLAC stops after a block whose output passes it.
+  - The generic `flac` codec keeps its big-endian encoding in its own buffer instead of encoding it a third time when it wins.
+  - FLAC skips the MD5 of the audio when encoding to memory; the MD5 never reaches the CHD.
 - **Fixes to 0.289's failure handling (`chdman.cpp`); output for valid input is unchanged:**
   - `verify` exits 1 when the data doesn't match the header's SHA-1, unless `--fix` corrects it. Upstream exits 0, so scripts and the page reported success.
   - An output is never written over an input: `copy -i x -o x -f` used to truncate `x` and then delete it.

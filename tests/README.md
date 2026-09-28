@@ -53,6 +53,8 @@ CD audio, and console boot headers for PlayStation, PS2, PSP, Saturn, Sega CD an
 They carry serial numbers of real games, so identification can be tested against the built-in
 Redump database, but contain no game data. `manifest.json` lists each fixture with the job and
 identification the app should produce. `--bench` adds large, realistic images for benchmarks.
+The two `codec mix` images change content every hunk (data, noise, and audio in both byte orders),
+so that each codec wins, loses and stops early in turn.
 
 The driver stores a per-device speed test result before each page opens (`Math.min(4, cores)` threads),
 so tests don't each spend seconds measuring; `app.open({ tuned: false })` leaves it out.
@@ -70,6 +72,8 @@ game database when it is requested as `/discpress.html?testdb=1` (`app.open({ te
 | `chd` | CHD inputs: identification from inside the CHD, extract (cue, split bins, toc, gdi, iso, img), verify (good and damaged), info, rename, parent CHDs |
 | `identify` | checksum-verified identification (via extra database rows, below), conversions that start before the checksum finishes and are renamed after it, starting while identification is still running |
 | `tuning` | the automatic thread count: one-off speed test on the first conversion, reuse, not capped by the reported core count, manual override, Measure again |
+| `gdrom` | Dreamcast GD-ROM layout from a `.gdi` and a Redump cue: no pregaps, track 3 at LBA 45000 |
+| `engine` | the engine's own command line against unmodified chdman 0.289: the 0.289 defects it fixes, and identical CHDs when codec trials stop early |
 | `advanced` | the Advanced tab: form, text commands, validation, listtemplates |
 | `edge-cases` | missing tracks, lone tracks, duplicates, unsupported files, truncated images, DVD/CD switch, cancel, remove |
 | `fallbacks` | no SIMD, no OPFS, memory-only, input staging and page streaming (iOS web views), single core |

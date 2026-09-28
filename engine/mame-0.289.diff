@@ -1,3 +1,48 @@
+--- a/3rdparty/lzma/C/LzmaEnc.c
++++ b/3rdparty/lzma/C/LzmaEnc.c
+@@ -411,6 +411,7 @@
+ 
+   BoolInt fastMode;
+   BoolInt writeEndMark;
++  size_t outLimit; /* Discpress: LzmaEnc_MemEncode's buffer size, to stop once the output can't fit; 0 = none */
+   BoolInt finished;
+   BoolInt multiThread;
+   BoolInt needInit;
+@@ -2321,6 +2322,7 @@
+ static void LzmaEnc_Construct(CLzmaEnc *p)
+ {
+   RangeEnc_Construct(&p->rc);
++  p->outLimit = 0;
+   MatchFinder_Construct(&MFB);
+   
+   #ifndef Z7_ST
+@@ -2672,6 +2674,10 @@
+         p->nowPos64 += nowPos32 - startPos32;
+         return CheckErrors(p);
+       }
++
++      /* Discpress: the output only grows, so once it is past the buffer the result can't fit */
++      if (p->outLimit && RangeEnc_GetProcessed_sizet(&p->rc) > p->outLimit)
++        return SZ_ERROR_OUTPUT_EOF;
+     }
+   }
+ 
+@@ -3092,6 +3098,7 @@
+ 
+   p->writeEndMark = writeEndMark;
+   p->rc.outStream = &outStream.vt;
++  p->outLimit = *destLen;
+ 
+   res = LzmaEnc_MemPrepare(p, src, srcLen, 0, alloc, allocBig);
+   
+@@ -3101,6 +3108,7 @@
+     if (res == SZ_OK && p->nowPos64 != srcLen)
+       res = SZ_ERROR_FAIL;
+   }
++  p->outLimit = 0;
+ 
+   *destLen -= (SizeT)outStream.rem;
+   if (outStream.overflow)
 --- a/src/lib/util/chd.cpp
 +++ b/src/lib/util/chd.cpp
 @@ -28,6 +28,16 @@
@@ -93,6 +138,317 @@
  protected:
  	// required override: read more data
  	virtual uint32_t read_data(void *dest, uint64_t offset, uint32_t length) = 0;
+--- a/src/lib/util/chdcodec.cpp
++++ b/src/lib/util/chdcodec.cpp
+@@ -259,6 +259,7 @@
+ 	// internal state
+ 	bool            m_big_endian;
+ 	flac_encoder    m_encoder;
++	std::vector<uint8_t> m_buffer_be;   // Discpress: the big-endian encoding, kept for when it wins
+ };
+ 
+ 
+@@ -376,7 +377,8 @@
+ 			}
+ 		}
+ 
+-		// encode the base portion
++		// encode the base portion (Discpress: it may give up once header + base reach the limit)
++		m_base_compressor.set_limit((m_limit > header_bytes) ? (m_limit - header_bytes) : 1);
+ 		uint32_t complen = m_base_compressor.compress(&m_buffer[0], frames * cdrom_file::MAX_SECTOR_DATA, &dest[header_bytes]);
+ 		if (complen >= srclen)
+ 			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+@@ -740,12 +742,27 @@
+ 	// determine best compression technique
+ 	complen = m_hunkbytes;
+ 	int8_t compression = -1;
++
++	// Discpress: the codec that won the previous hunk goes first, and every other codec only
++	// has to beat the best result so far, so it can give up as soon as it can't (set_limit).
++	// Ties still go to the lower codec number, so the choice and the data are upstream's.
++	int order[std::size(m_compressor)], count = 0;
++	if (m_last_best >= 0)
++		order[count++] = m_last_best;
+ 	for (int codecnum = 0; codecnum < std::size(m_compressor); codecnum++)
++		if (codecnum != m_last_best)
++			order[count++] = codecnum;
++
++	for (int const codecnum : order)
+ 		if (m_compressor[codecnum])
+ 		{
+ 			// attempt to compress, swallowing errors
+ 			try
+ 			{
++				// Discpress: a codec numbered below the best so far wins a tie, the others must beat it
++				bool const precedes = (compression >= 0) && (codecnum < compression);
++				m_compressor[codecnum]->set_limit(precedes ? complen + 1 : complen);
++
+ 				// if this is the best one, copy the data into the permanent buffer
+ 				uint32_t compbytes = m_compressor[codecnum]->compress(src, m_hunkbytes, &m_compress_test[0]);
+ #if CHDCODEC_VERIFY_COMPRESSION
+@@ -772,7 +789,7 @@
+ 				}
+ printf("   codec%d=%d bytes            \n", codecnum, compbytes);
+ #endif
+-				if (compbytes < complen)
++				if ((compbytes < complen) || ((compbytes == complen) && (compression >= 0) && (codecnum < compression)))
+ 				{
+ 					compression = codecnum;
+ 					complen = compbytes;
+@@ -787,6 +804,7 @@
+ 	// if the best is none, copy it over
+ 	if (compression == -1)
+ 		memcpy(compressed, src, m_hunkbytes);
++	m_last_best = compression;
+ 	return compression;
+ }
+ 
+@@ -938,8 +956,9 @@
+ 	m_deflater.next_in = const_cast<Bytef *>(src);
+ 	m_deflater.avail_in = srclen;
+ 	m_deflater.total_in = 0;
++	uint32_t const destlen = std::min(srclen, m_limit); // Discpress: stop at the limit
+ 	m_deflater.next_out = dest;
+-	m_deflater.avail_out = srclen;
++	m_deflater.avail_out = destlen;
+ 	m_deflater.total_out = 0;
+ 	int zerr = deflateReset(&m_deflater);
+ 	if (zerr != Z_OK)
+@@ -949,7 +968,7 @@
+ 	zerr = deflate(&m_deflater, Z_FINISH);
+ 
+ 	// if we ended up with more data than we started with, return an error
+-	if (zerr != Z_STREAM_END || m_deflater.total_out >= srclen)
++	if (zerr != Z_STREAM_END || m_deflater.total_out >= destlen)
+ 		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+ 
+ 	// otherwise, return the length
+@@ -1066,7 +1085,7 @@
+ 
+ 	// do it
+ 	ZSTD_inBuffer input{ src, srclen, 0 };
+-	ZSTD_outBuffer output = { dest, srclen, 0 };
++	ZSTD_outBuffer output = { dest, std::min(srclen, m_limit), 0 }; // Discpress: stop at the limit
+ 	while (output.pos < output.size)
+ 	{
+ 		result = ZSTD_compressStream2(m_stream, &output, &input, ZSTD_e_end);
+@@ -1284,8 +1303,8 @@
+ 		if (res != SZ_OK)
+ 			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+ 
+-		// run it
+-		SizeT complen = srclen;
++		// run it (Discpress: into a buffer only as big as a usable result, so it stops early)
++		SizeT complen = std::min<SizeT>(srclen, SizeT(m_limit) - 1);
+ 		res = LzmaEnc_MemEncode(encoder, dest, &complen, src, srclen, 0, nullptr, &m_allocator, &m_allocator);
+ 		if (res != SZ_OK)
+ 			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+@@ -1419,7 +1438,7 @@
+ uint32_t chd_huffman_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
+ {
+ 	uint32_t complen;
+-	if (m_encoder.encode(src, srclen, dest, srclen, complen) != HUFFERR_NONE)
++	if (m_encoder.encode(src, srclen, dest, std::min(srclen, m_limit - 1), complen) != HUFFERR_NONE) // Discpress: limit
+ 		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+ 	return complen;
+ }
+@@ -1474,6 +1493,7 @@
+ 	m_encoder.set_num_channels(2);
+ 	m_encoder.set_block_size(blocksize(hunkbytes));
+ 	m_encoder.set_strip_metadata(true);
++	m_buffer_be.resize(hunkbytes);
+ }
+ 
+ 
+@@ -1483,32 +1503,47 @@
+ 
+ uint32_t chd_flac_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
+ {
+-	// reset and encode big-endian
+-	m_encoder.reset(dest + 1, hunkbytes() - 1);
+-	if (!m_encoder.encode_interleaved(reinterpret_cast<const int16_t *>(src), srclen / 4, !m_big_endian))
+-		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
++	// Discpress: an encoding of more than this can't give a usable result (complen + 1 < limit),
++	// so the encoder may give up on it early; a byte order that gives up counts as too large
++	uint32_t const give_up = (m_limit >= 2) ? (m_limit - 2) : 0;
++
++	// reset and encode big-endian (Discpress: into its own buffer, so it needn't be encoded again if it wins)
++	m_encoder.reset(&m_buffer_be[0], hunkbytes() - 1);
++	m_encoder.set_give_up(give_up);
++	bool const encoded_be = m_encoder.encode_interleaved(reinterpret_cast<const int16_t *>(src), srclen / 4, !m_big_endian);
+ 	uint32_t complen_be = m_encoder.finish();
++	if (!encoded_be)
++	{
++		if (!m_encoder.gave_up())
++			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
++		complen_be = UINT32_MAX;
++	}
+ 
+ 	// reset and encode little-endian
+ 	m_encoder.reset(dest + 1, hunkbytes() - 1);
+-	if (!m_encoder.encode_interleaved(reinterpret_cast<const int16_t *>(src), srclen / 4, m_big_endian))
+-		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
++	m_encoder.set_give_up(give_up);
++	bool const encoded_le = m_encoder.encode_interleaved(reinterpret_cast<const int16_t *>(src), srclen / 4, m_big_endian);
+ 	uint32_t complen_le = m_encoder.finish();
++	if (!encoded_le)
++	{
++		if (!m_encoder.gave_up())
++			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
++		complen_le = UINT32_MAX;
++	}
++	if ((complen_be == UINT32_MAX) && (complen_le == UINT32_MAX))
++		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+ 
+-	// pick the best one and add a byte
++	// pick the best one and add a byte (Discpress: the caller can't use complen + 1 >= limit either)
+ 	uint32_t complen = std::min(complen_le, complen_be);
+-	if (complen + 1 >= hunkbytes())
++	if (complen + 1 >= hunkbytes() || complen + 1 >= m_limit)
+ 		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+ 
+-	// if big-endian was better, re-do it
++	// if big-endian was better, use it (Discpress: copied, not encoded a third time)
+ 	dest[0] = 'L';
+ 	if (complen != complen_le)
+ 	{
+ 		dest[0] = 'B';
+-		m_encoder.reset(dest + 1, hunkbytes() - 1);
+-		if (!m_encoder.encode_interleaved(reinterpret_cast<const int16_t *>(src), srclen / 4, !m_big_endian))
+-			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+-		m_encoder.finish();
++		memcpy(dest + 1, &m_buffer_be[0], complen);
+ 	}
+ 	return complen + 1;
+ }
+@@ -1642,14 +1677,16 @@
+ 		memcpy(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA + framenum * cdrom_file::MAX_SUBCODE_DATA], &src[framenum * cdrom_file::FRAME_SIZE + cdrom_file::MAX_SECTOR_DATA], cdrom_file::MAX_SUBCODE_DATA);
+ 	}
+ 
+-	// reset and encode the audio portion
++	// reset and encode the audio portion (Discpress: giving up once the result can't be usable)
+ 	m_encoder.reset(dest, hunkbytes());
++	m_encoder.set_give_up((m_limit >= 1) ? (m_limit - 1) : 0);
+ 	uint8_t *buffer = &m_buffer[0];
+-	if (!m_encoder.encode_interleaved(reinterpret_cast<int16_t *>(buffer), frames * cdrom_file::MAX_SECTOR_DATA/4, m_swap_endian))
+-		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
++	bool const encoded = m_encoder.encode_interleaved(reinterpret_cast<int16_t *>(buffer), frames * cdrom_file::MAX_SECTOR_DATA/4, m_swap_endian);
+ 
+ 	// finish up
+ 	uint32_t complen = m_encoder.finish();
++	if (!encoded || complen >= m_limit)
++		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+ 
+ 	// deflate the subcode data
+ 	m_deflater.next_in = const_cast<Bytef *>(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA]);
+--- a/src/lib/util/chdcodec.h
++++ b/src/lib/util/chdcodec.h
+@@ -71,6 +71,13 @@
+ 
+ 	// implementation
+ 	virtual uint32_t compress(const uint8_t *src, uint32_t srclen, uint8_t *dest) = 0;
++
++	// Discpress: a result of limit bytes or more can't be used, so a codec may give up (throw)
++	// as soon as it knows its output will be that large; results below the limit are unaffected
++	void set_limit(uint32_t limit) noexcept { m_limit = limit; }
++
++protected:
++	uint32_t m_limit = UINT32_MAX;
+ };
+ 
+ 
+@@ -126,6 +133,7 @@
+ 	uint32_t                m_hunkbytes;        // number of bytes in a hunk
+ 	chd_compressor::ptr     m_compressor[4];    // array of active codecs
+ 	std::vector<uint8_t>    m_compress_test;    // test buffer for compression
++	int                     m_last_best = -1;   // Discpress: codec that won the previous hunk
+ #if CHDCODEC_VERIFY_COMPRESSION
+ 	chd_decompressor::ptr   m_decompressor[4];  // array of active codecs
+ 	std::vector<uint8_t>    m_decompressed;     // verification buffer
+--- a/src/lib/util/flac.cpp
++++ b/src/lib/util/flac.cpp
+@@ -20,6 +20,9 @@
+ #include <new>
+ #include <tuple>
+ 
++// Discpress: libFLAC exports this, but declares it only in its private share/private.h
++extern "C" FLAC_API FLAC__bool FLAC__stream_encoder_set_do_md5(FLAC__StreamEncoder *encoder, FLAC__bool value);
++
+ 
+ //**************************************************************************
+ //  FLAC ENCODER
+@@ -71,11 +74,15 @@
+ 	m_compressed_offset = 0;
+ 	m_ignore_bytes = m_strip_metadata ? 4 : 0;
+ 	m_found_audio = !m_strip_metadata;
++	m_give_up = UINT32_MAX;
++	m_gave_up = false;
+ 
+ 	// configure the encoder in a standard way
+ 	// note we do this on each reset; if we don't, results are NOT consistent!
+ 	FLAC__stream_encoder_set_verify(m_encoder, false);
+-//  FLAC__stream_encoder_set_do_md5(m_encoder, false);
++	// Discpress: the MD5 only ends up in the STREAMINFO header, which is rewritten at the end
++	// only when writing to a file; in memory it costs time and changes nothing
++	FLAC__stream_encoder_set_do_md5(m_encoder, m_file != nullptr);
+ 	FLAC__stream_encoder_set_compression_level(m_encoder, 8);
+ 	FLAC__stream_encoder_set_channels(m_encoder, m_channels);
+ 	FLAC__stream_encoder_set_bits_per_sample(m_encoder, 16);
+@@ -192,6 +199,10 @@
+ 
+ uint32_t flac_encoder::finish()
+ {
++	// Discpress: never give up here. libFLAC encodes the last block in finish, so the work is
++	// done by the time it is written, and after a write error there it can't be reset again
++	m_give_up = UINT32_MAX;
++
+ 	// process the data and return the amount written
+ 	FLAC__stream_encoder_finish(m_encoder);
+ 	if (m_file)
+@@ -229,6 +240,8 @@
+ 	m_strip_metadata = false;
+ 	m_ignore_bytes = 0;
+ 	m_found_audio = false;
++	m_give_up = UINT32_MAX;
++	m_gave_up = false;
+ }
+ 
+ 
+@@ -273,6 +286,12 @@
+ 			}
+ 			else
+ 			{
++				// Discpress: stop once the output passes the limit the caller can use
++				if (m_compressed_offset + count > m_give_up)
++				{
++					m_gave_up = true;
++					return FLAC__STREAM_ENCODER_WRITE_STATUS_FATAL_ERROR;
++				}
+ 				if (m_compressed_offset + count <= m_compressed_length)
+ 					memcpy(m_compressed_start + m_compressed_offset, buffer, count);
+ 				m_compressed_offset += count;
+--- a/src/lib/util/flac.h
++++ b/src/lib/util/flac.h
+@@ -40,6 +40,10 @@
+ 	void set_num_channels(uint8_t num_channels) { m_channels = num_channels; }
+ 	void set_block_size(uint32_t block_size) { m_block_size = block_size; }
+ 	void set_strip_metadata(bool strip) { m_strip_metadata = strip; }
++	// Discpress: after reset, give up (encode fails) once the output would pass this many bytes;
++	// finish still completes the encoder, and gave_up tells a give-up from other failures
++	void set_give_up(uint32_t bytes) { m_give_up = bytes; }
++	bool gave_up() const { return m_gave_up; }
+ 
+ 	// getters (valid after reset)
+ 	FLAC__StreamEncoderState state() const { return FLAC__stream_encoder_get_state(m_encoder); }
+@@ -83,6 +87,8 @@
+ 	bool                    m_strip_metadata;       // strip the metadata?
+ 	uint32_t                m_ignore_bytes;         // how many bytes to ignore when writing
+ 	bool                    m_found_audio;          // have we hit the audio yet?
++	uint32_t                m_give_up;              // Discpress: most output bytes wanted (set_give_up)
++	bool                    m_gave_up;              // Discpress: stopped at that limit
+ };
+ 
+ 
 --- a/src/lib/util/unicode.cpp
 +++ b/src/lib/util/unicode.cpp
 @@ -16,71 +16,12 @@

@@ -96,6 +96,18 @@ How easy this is depends on the library:
 - libFLAC can abort from its write callback, at frame granularity.
 - The LZMA SDK has a pack-size stop in `LzmaEnc_CodeOneBlock` (used by LZMA2). In the one-shot LZMA1 path, however, the encoder only returns every 128 KB and the range coder buffers 64 KB. Early abort for hunk-sized inputs therefore needs a small SDK patch, which cannot change the bits.
 
+**Measured, as built (milestone 2.4, `engine/README.md`).** CPU time over all threads, `-np 4`, the engine against unmodified chdman 0.289, same bytes every time (4-core Xeon, 2.1 GHz):
+
+| Input | chdman 0.289 | Engine | Less CPU |
+|---|---|---|---|
+| CD data (`data_m2`, 96 MB) | 30.2 s | 28.5 s | 1.06× |
+| CD audio (the music, 114 MB) | 20.4 s | 13.9 s | 1.47× |
+| DVD (`payload.iso`, 83 MB) | 30.5 s | 27.8 s | 1.10× |
+| Benchmark CD (300 MB, 70% data) | 58.5 s | 50.6 s | 1.16× |
+| Benchmark DVD (1 GB) | 211.8 s | 192.0 s | 1.10× |
+
+The gains are below the estimate because codecs don't emit output evenly. Deflate writes a hunk as one block, so it can't stop early. Generic FLAC on 4 KB DVD hunks encodes one frame. CD FLAC stops after the first of its two frames. LZMA stops as soon as its output passes the best result, which is where CD audio gains the most. The DVD figure also includes the generic `flac` codec no longer encoding a third time (milestone 2.2).
+
 ## 3. Encoder tuning that every reader can decode
 
 This test used a chdman variant whose encoders are selected by environment variables (`lab/chdcodec-variants.diff`, `lab/flac-variants.diff`). With no variable set it is byte-identical to stock.

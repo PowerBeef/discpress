@@ -128,6 +128,46 @@ def audio(frames, seed=1, silence=0):
     return bytes(silence * RAW) + pcm
 
 
+def _tone(rng, n, noise, big_endian=False):
+    t = np.arange(n) / 44100.0
+    x = np.sin(2 * np.pi * float(rng.uniform(100, 2000)) * t) * float(rng.uniform(2000, 12000)) + rng.normal(0, noise, n)
+    pcm = np.clip(np.stack([x, np.roll(x, 7) * 0.8], 1), -32768, 32767)
+    return pcm.astype('>i2' if big_endian else '<i2').tobytes()
+
+
+def codec_audio(frames, seed=1):
+    """CD audio whose best codec changes from hunk to hunk (8 sectors): clean and noisy tones,
+    white noise, silence, and hunks that turn from noise to a tone or back halfway."""
+    rng = np.random.default_rng(seed)
+    out = bytearray()
+    while len(out) < frames * RAW:
+        n = 8 * 588
+        k = int(rng.integers(0, 6))
+        if k == 0: out += _tone(rng, n, 0)
+        elif k == 1: out += _tone(rng, n, float(rng.choice([100, 1000, 4000])))
+        elif k == 2: out += _tone(rng, n, 20000)[: n * 2] + bytes(n * 2) if rng.integers(0, 2) else _tone(rng, n, 20000)
+        elif k == 3: out += bytes(n * 4)
+        elif k == 4: out += _tone(rng, n // 2, 20000) + _tone(rng, n - n // 2, 0)
+        else: out += _tone(rng, n // 2, 0) + _tone(rng, n - n // 2, 20000)
+    return bytes(out[: frames * RAW])
+
+
+def codec_mix(size, grain, seed=1):
+    """Data whose best codec changes every `grain` bytes: zeros, random and low-entropy bytes, text,
+    filler, and 16-bit audio in both byte orders, clean and noisy."""
+    rng = np.random.default_rng(seed)
+    out = bytearray()
+    while len(out) < size:
+        k = int(rng.integers(0, 9))
+        if k == 0: out += bytes(grain)
+        elif k == 1: out += rng.integers(0, 256, grain, dtype=np.uint8).tobytes()
+        elif k == 2: out += rng.integers(0, 16, grain, dtype=np.uint8).tobytes()
+        elif k == 3: out += (b'LEVEL SCORE PLAYER ITEM the quick brown fox ' * (grain // 44 + 1))[:grain]
+        elif k == 4: out += filler(max(grain, SECTOR), int(rng.integers(1, 1 << 30)))[:grain]
+        else: out += _tone(rng, grain // 4, float(rng.choice([0, 30, 3000])), big_endian=k >= 7)
+    return bytes(out[:size])
+
+
 def filler(size, seed=1):
     """Deterministic data with a realistic mix: runs of zeros, structured/text-like
     data, graphics-like gradients and incompressible (already compressed) blocks."""

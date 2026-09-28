@@ -20,6 +20,9 @@
 #include <new>
 #include <tuple>
 
+// Discpress: libFLAC exports this, but declares it only in its private share/private.h
+extern "C" FLAC_API FLAC__bool FLAC__stream_encoder_set_do_md5(FLAC__StreamEncoder *encoder, FLAC__bool value);
+
 
 //**************************************************************************
 //  FLAC ENCODER
@@ -71,11 +74,15 @@ bool flac_encoder::reset()
 	m_compressed_offset = 0;
 	m_ignore_bytes = m_strip_metadata ? 4 : 0;
 	m_found_audio = !m_strip_metadata;
+	m_give_up = UINT32_MAX;
+	m_gave_up = false;
 
 	// configure the encoder in a standard way
 	// note we do this on each reset; if we don't, results are NOT consistent!
 	FLAC__stream_encoder_set_verify(m_encoder, false);
-//  FLAC__stream_encoder_set_do_md5(m_encoder, false);
+	// Discpress: the MD5 only ends up in the STREAMINFO header, which is rewritten at the end
+	// only when writing to a file; in memory it costs time and changes nothing
+	FLAC__stream_encoder_set_do_md5(m_encoder, m_file != nullptr);
 	FLAC__stream_encoder_set_compression_level(m_encoder, 8);
 	FLAC__stream_encoder_set_channels(m_encoder, m_channels);
 	FLAC__stream_encoder_set_bits_per_sample(m_encoder, 16);
@@ -192,6 +199,10 @@ bool flac_encoder::encode(int16_t *const *samples, uint32_t samples_per_channel,
 
 uint32_t flac_encoder::finish()
 {
+	// Discpress: never give up here. libFLAC encodes the last block in finish, so the work is
+	// done by the time it is written, and after a write error there it can't be reset again
+	m_give_up = UINT32_MAX;
+
 	// process the data and return the amount written
 	FLAC__stream_encoder_finish(m_encoder);
 	if (m_file)
@@ -229,6 +240,8 @@ void flac_encoder::init_common()
 	m_strip_metadata = false;
 	m_ignore_bytes = 0;
 	m_found_audio = false;
+	m_give_up = UINT32_MAX;
+	m_gave_up = false;
 }
 
 
@@ -273,6 +286,12 @@ FLAC__StreamEncoderWriteStatus flac_encoder::write_callback(const FLAC__byte buf
 			}
 			else
 			{
+				// Discpress: stop once the output passes the limit the caller can use
+				if (m_compressed_offset + count > m_give_up)
+				{
+					m_gave_up = true;
+					return FLAC__STREAM_ENCODER_WRITE_STATUS_FATAL_ERROR;
+				}
 				if (m_compressed_offset + count <= m_compressed_length)
 					memcpy(m_compressed_start + m_compressed_offset, buffer, count);
 				m_compressed_offset += count;

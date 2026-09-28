@@ -211,6 +211,20 @@ fixture('hard-disk', {
     'arcade.img': lambda: bytes(446) + bytes([0x80, 1, 1, 0, 0x06, 0x0F, 0x3F, 0x20, 0x3F, 0, 0, 0, 0xC1, 0x3F, 0, 0]) + bytes(48) + b'\x55\xaa' + g.filler((8 << 20) - 512, 81),
 }, add=['arcade.img'], job='create', disc='hd', command='createhd', sys=None, ident='none', name='arcade')
 
+# content whose best codec keeps changing, so that every codec trial runs first, gives up early and
+# wins in turn (the engine's early abort, which must not change a byte). `codec mix.img` has audio in
+# both byte orders; the CD's audio track has hunks where FLAC gives up after its first block.
+fixture('codec-mix-hd', {
+    'codec mix.img': lambda: g.codec_mix(3 << 20, 4096, 101),
+}, add=['codec mix.img'], job='create', disc='hd', command='createhd', sys=None, ident='none', name='codec mix')
+
+fixture('codec-mix-cd', {
+    'codec mix cd.cue': lambda: cue([('codec mix cd (Track 1).bin', 'MODE1/2352', 0), ('codec mix cd (Track 2).bin', 'AUDIO', 150)]),
+    'codec mix cd (Track 1).bin': lambda: g.raw_sectors(g.codec_mix(640 * 2048, 3 * 2048, 102), 1),
+    'codec mix cd (Track 2).bin': lambda: bytes(150 * g.RAW) + g.codec_audio(800, 103),
+}, add=['codec mix cd.cue', 'codec mix cd (Track 1).bin', 'codec mix cd (Track 2).bin'], job='create', disc='cd',
+   command='createcd', sys=None, ident='none', name='codec mix cd')
+
 # ---------------------------------------------------------------- benchmark images
 if args.bench:
     cd_audio_frames = int(args.cd_mb * 0.3 * (1 << 20)) // 2352 // 3
