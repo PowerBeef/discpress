@@ -1223,6 +1223,7 @@ async function runJob(msg) {
 
   inStores.forEach(function (st) { if (st.store.setModule) st.store.setModule(M); });
   backing.M = M;
+  M.outFull = sinkFull; // wasm_out_full: chdman pauses while a folder is behind
   var FS = M.FS, CHDFS = makeFS(FS);
   FS.mkdir('/in');
   FS.mount(CHDFS, { files: inStores }, '/in');

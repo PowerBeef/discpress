@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect, fixture } from '../support/app.js';
 import { FIXTURES } from '../support/paths.js';
-import { nativeChdman, reference } from '../support/native.js';
+import { chdman, nativeChdman } from '../support/native.js';
 
 function fakeFolder(delay = 0) {
   const files = new Map(); // name -> Uint8Array
@@ -113,8 +113,16 @@ test('a cancelled conversion leaves no new file behind', async ({ app, page }) =
 for (const threads of [1, 4]) {
   test(`writing into a slow folder keeps little waiting in memory (${threads} thread${threads > 1 ? 's' : ''})`, async ({ app, page }) => {
     test.skip(!nativeChdman(), 'needs native chdman to make the CHD');
-    fs.mkdirSync(path.join(FIXTURES, 'chd'), { recursive: true });
-    fs.copyFileSync(reference('createdvd', 'agent.iso'), path.join(FIXTURES, 'chd', 'agent-dvd.chd'));
+    // a 64 MB DVD image, stored uncompressed (quick to make and to read)
+    const dir = path.join(FIXTURES, 'gen');
+    fs.mkdirSync(dir, { recursive: true });
+    const size = 64 << 20;
+    if (!fs.existsSync(path.join(dir, 'big.chd'))) {
+      const iso = Buffer.alloc(size);
+      for (let i = 0; i < size; i += 2048) iso.writeUInt32LE(i, i); // no two sectors alike
+      fs.writeFileSync(path.join(dir, 'big.iso'), iso);
+      chdman(['createdvd', '-i', 'gen/big.iso', '-o', 'gen/big.chd', '-c', 'none', '-f']);
+    }
     await page.addInitScript(fakeFolder, 25); // 25 ms per 1 MiB write: about 40 MB/s
     // the bytes the page has received to write but not written yet, at most
     await page.addInitScript(() => {
@@ -133,13 +141,14 @@ for (const threads of [1, 4]) {
       };
     });
     await app.open({ settings: { storage: 'folder', rename: false, threads }, debug: { sinkMax: 2 << 20 } });
-    await app.add(['chd/agent-dvd.chd']);
-    const card = app.job('agent-dvd');
+    await app.add(['gen/big.chd']);
+    const card = app.job('big');
     await app.settled(card);
     await card.locator('.seg button', { hasText: 'Extract' }).click();
     await app.run(card, { timeout: 60_000 });
-    const size = fs.statSync(path.join(FIXTURES, 'agent.iso')).size;
-    expect(await page.evaluate(() => window.__folder.get('agent-dvd.iso').length)).toBe(size);
-    expect(await page.evaluate(() => window.__maxWaiting)).toBeLessThan(8 << 20); // 2 MiB, plus what a pause lets through
+    expect(await page.evaluate(() => window.__folder.get('big.iso').length)).toBe(size);
+    // at most the 2 MiB limit, one 8 MiB step of chdman's, and what the worker sends when chdman ends
+    // (the file's first 8 MiB, kept for rewrites, and its last step): not the whole 64 MiB
+    expect(await page.evaluate(() => window.__maxWaiting)).toBeLessThan(32 << 20);
   });
 }

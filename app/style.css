@@ -359,7 +359,7 @@ code.cmd { display: block; font: 0.7812rem/1.55 var(--mono); background: var(--s
 }
 
 /* ---------- help ---------- */
-.help { max-width: 860px; margin: 0 auto; }
+.help { max-width: 860px; margin: 0 auto; overflow-wrap: break-word; }
 .help h2 { font-size: 1.25rem; margin: 0 0 10px; }
 .help h3 { font-size: 0.9688rem; margin: 16px 0 4px; }
 .help p { margin: 6px 0; }
