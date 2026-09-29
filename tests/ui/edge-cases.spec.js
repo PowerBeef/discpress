@@ -561,3 +561,25 @@ test('a cancelled conversion leaves nothing in private storage', async ({ app, p
   await app.waitState(card, 'canceled');
   await expect.poll(() => workFiles(page), { timeout: 15_000 }).toEqual([]);
 });
+
+// "Notify me when all jobs are done" (Settings): the notification code was there, but nothing ever
+// asked for the permission it needs (audit, remaining items)
+test('a notification says when all jobs are done, if turned on', async ({ app, page }) => {
+  await page.addInitScript(() => {
+    window.__notes = [];
+    window.Notification = class {
+      constructor(title, o) { window.__notes.push(title + ': ' + o.body); }
+      static get permission() { return window.__perm || 'default'; }
+      static async requestPermission() { window.__perm = 'granted'; return 'granted'; }
+    };
+    Object.defineProperty(document, 'hidden', { get: () => !!window.__hidden, configurable: true });
+  });
+  await app.open();
+  await app.settings({ setNotify: true });
+  await app.add(['tnd.iso']);
+  const card = app.job('tnd');
+  await app.settled(card);
+  await page.evaluate(() => { window.__hidden = true; }); // the page is in the background
+  await app.run(card);
+  await expect.poll(() => page.evaluate(() => window.__notes)).toEqual(['Discpress: All jobs are done.']);
+});

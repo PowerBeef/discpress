@@ -83,7 +83,7 @@ var HOSTED_URL = 'https://powerbeef.github.io/discpress/';
 var iosThreadCap = isIOS && !(/iPad/.test(navigator.userAgent) || navigator.platform === 'MacIntel') ? 4 : 0;
 var maxThreads = Math.min(cores, 16);
 // threads: 'auto' (measured per device, see Tuning) or a fixed number of compression threads
-var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false };
+var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false, notify: false };
 var outDir = null; // folder picked for direct writing (not persisted)
 try {
   var saved = JSON.parse(localStorage.getItem('chdman-web-settings') || '{}');
@@ -250,6 +250,8 @@ function makeSink(dir) {
       return Promise.all(Object.keys(files).map(function (k) { return files[k].chain; })).then(function () { if (failed) throw failed; });
     },
     abort: function () {
+      // writes still queued are skipped (a cancel while the last ones are saved: "Saving to folder")
+      if (!failed) failed = new Error('canceled');
       Object.keys(files).forEach(function (k) {
         var f = files[k];
         f.chain = f.chain.then(function () {
@@ -289,7 +291,7 @@ var Engine = {
   },
   // runs one chdman command; returns {promise, cancel}
   run: function (o) {
-    var self = this, worker = null, helpers = [], finished = false, rejectFn;
+    var self = this, worker = null, helpers = [], finished = false, saving = false, rejectFn;
     var sink = o.outMode === 'stream' ? makeSink(o.outDir) : null;
     var ackWait = null;
     // the worker could not read an input itself: read it here and send it over
@@ -350,7 +352,11 @@ var Engine = {
           cleanup();
           if (!sink) { resolve(m); return; }
           o.onProgress && o.onProgress('Saving to folder, 100% complete');
-          sink.finish().then(function () { resolve(m); }, function (e) {
+          // chdman is done, the last writes are still going: Cancel can still stop them (saving)
+          saving = true;
+          sink.finish().then(function () { if (saving) { saving = false; resolve(m); } }, function (e) {
+            if (!saving) return;
+            saving = false;
             reject(new Error('Could not write to the output folder: ' + (e && e.message || e)));
           });
         }
@@ -358,6 +364,7 @@ var Engine = {
       worker.onerror = function (e) {
         if (finished) return;
         cleanup();
+        if (sink) sink.abort(); // a crashed worker's files in the folder: thrown away, like a cancel's
         reject(new Error(e.message || 'The background worker failed to start.'));
       };
       self.post(worker, {
@@ -368,7 +375,8 @@ var Engine = {
     return {
       promise: promise,
       cancel: function () {
-        if (finished) return;
+        if (finished && !saving) return;
+        saving = false;
         cleanup();
         if (sink) sink.abort();
         var err = new Error('Canceled');
@@ -415,6 +423,8 @@ var Tuning = {
   },
   _measure: async function (onStep) {
     await Engine.ready();
+    // a game being identified (its checksum takes a core) finishes first, up to 10 s
+    for (var wait = 0; identActive && wait < 50; wait++) await sleep(200);
     var HB = 4096, BATCH = 16, WARM = 250, WINDOW = 500, seq = 0;
     // the default DVD codecs (lzma, zlib, huff, flac): the same work as a real conversion
     var comps = [0x6c7a6d61, 0x7a6c6962, 0x68756666, 0x666c6163];
@@ -693,8 +703,12 @@ var Recovery = {
       }
       self.report(rec);
     });
-    var all = this.read(); // this visit's record may have been written meanwhile
-    if (all[Store.session]) keep[Store.session] = all[Store.session];
+    // records written meanwhile, while old folders were deleted: this visit's, and those of other open
+    // visits (or visits opened since), which keep their newest state
+    var all = this.read();
+    Object.keys(all).forEach(function (k) {
+      if (k === Store.session || (held && held.has('chdman-web-' + k)) || !(k in records)) keep[k] = all[k];
+    });
     this.write(keep);
   }
 };
@@ -911,7 +925,7 @@ async function sniffSync(file) {
 /*IDENT*/
 
 /* ---------- identification scheduling ---------- */
-var identQueue = [], identBusy = false;
+var identQueue = [], identBusy = false, identActive = false;
 function scheduleIdentify(job) {
   if (job.identPromise || (job.kind === 'create' && (job.missing.length || job.needCue || job.invalid))) return;
   job.identState = 'pending';
@@ -922,9 +936,17 @@ function scheduleIdentify(job) {
 }
 async function pumpIdentify() {
   if (identBusy) return;
+  // the speed test measures the device: identification (its checksums) waits until it's done
+  if (Tuning.running && identQueue.length) {
+    identBusy = true;
+    try { await Tuning.running; } catch (e) { /* measured or not, go on */ }
+    identBusy = false;
+    return pumpIdentify();
+  }
   var it = identQueue.shift();
   if (!it) return;
   identBusy = true;
+  identActive = true;
   // whatever happens to this job, the queue moves on
   try {
     var job = it.job;
@@ -960,7 +982,7 @@ async function pumpIdentify() {
     }
   } finally {
     it.resolve();
-    identBusy = false;
+    identBusy = identActive = false;
     pumpIdentify();
   }
 }
@@ -1383,7 +1405,7 @@ async function doProbe(job) {
     } else {
       job.state = 'ready';
       job.opts.format = defaultFormat(job.info.type);
-      if (!job.info.parent) scheduleIdentify(job);
+      if (!job.info.parent) scheduleIdentify(job); // a child CHD: once its parent is here (linkParents)
     }
   } catch (e) {
     job.state = 'error';
@@ -1426,6 +1448,8 @@ function linkParents() {
     var p = jobs.find(function (o) { return o !== job && o.kind === 'chd' && o.info && o.info.sha1 === job.info.parent; });
     var had = job.parentJob;
     job.parentJob = p || null;
+    // identified through its parent, which holds the data it shares
+    if (job.parentJob && !job.identPromise && job.state !== 'error') scheduleIdentify(job);
     if (had !== job.parentJob && job.el) refreshJob(job, true);
   });
 }
@@ -2164,10 +2188,16 @@ function releaseWake() {
 document.addEventListener('visibilitychange', function () {
   if (document.visibilityState === 'visible' && current) acquireWake();
 });
-function notifyDone() {
+// Settings: "Notify me when all jobs are done" (asks the browser's permission when turned on). Android's
+// Chrome only shows notifications through a service worker: the online version's, when it has one
+async function notifyDone() {
+  if (!settings.notify || !window.Notification || Notification.permission !== 'granted') return;
+  var body = 'All jobs are done.';
   try {
-    if (window.Notification && Notification.permission === 'granted') new Notification('Discpress', { body: 'All jobs finished.' });
-  } catch (e) { /* ignore */ }
+    var reg = navigator.serviceWorker && location.protocol === 'https:' ? await navigator.serviceWorker.getRegistration() : null;
+    if (reg) await reg.showNotification('Discpress', { body: body });
+    else new Notification('Discpress', { body: body });
+  } catch (e) { /* not shown here: nothing to do */ }
 }
 
 // the hosted copy (https, web/README.md): an installable web app that works offline. The file stays the same
@@ -2335,6 +2365,8 @@ async function downloadMany(list) {
     await downloadOutput(outs[i][0], outs[i][1]);
     await sleep(700);
   }
+  // browsers ask before a page downloads several files, and a "Block" there can't be seen from here
+  if (outs.length > 1) toast('If your browser asks whether to allow several downloads, allow them. A file that didn\u2019t arrive can be downloaded again from its card.', null, 8000);
 }
 // never replace a file already in the folder without asking: an earlier run's result, another game's
 // that got the same name, or anything else the user keeps there
@@ -3040,6 +3072,19 @@ function init() {
     settings.keepCue = e.target.checked; saveSettings();
     jobs.forEach(function (j) { if (j.el && j.kind === 'create') refreshJob(j); });
   });
+  if (window.Notification) {
+    $('#notifyRow').hidden = false;
+    $('#setNotify').checked = !!settings.notify && Notification.permission === 'granted';
+    $('#setNotify').addEventListener('change', async function (e) {
+      var box = e.target;
+      if (box.checked && Notification.permission !== 'granted') {
+        var p = 'denied';
+        try { p = await Notification.requestPermission(); } catch (x) { /* not allowed to ask */ }
+        if (p !== 'granted') { box.checked = false; toast('The browser didn\u2019t allow notifications for this page. You can allow them in its site settings.', 'err'); }
+      }
+      settings.notify = box.checked; saveSettings();
+    });
+  }
   $('#setWake').checked = settings.wake;
   $('#setWake').addEventListener('change', function (e) { settings.wake = e.target.checked; saveSettings(); if (!settings.wake) releaseWake(); });
   $('#setScroll').value = settings.scroll || 'auto';

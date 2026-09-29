@@ -152,3 +152,45 @@ for (const threads of [1, 4]) {
     expect(await page.evaluate(() => window.__maxWaiting)).toBeLessThan(32 << 20);
   });
 }
+
+// Once chdman had finished, the last writes into the folder could take a while, and Cancel did nothing
+// meanwhile ("Saving to folder"); a worker that crashed left its files half written (audit, remaining items).
+test('Cancel works while the last writes into the folder are still going', async ({ app, page }) => {
+  await page.addInitScript(fakeFolder, 150); // 150 ms per 1 MiB write: seconds after chdman is done
+  await app.open({ settings: { storage: 'folder', rename: false, threads: 1 } });
+  await app.add(fixture('ps2-dvd').add);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await card.locator('.job-foot button.primary').click();
+  await expect(card.locator('.ptext')).toContainText('Saving to folder', { timeout: 60_000 });
+  await card.locator('.job-foot button.danger', { hasText: 'Cancel' }).click();
+  await app.waitState(card, 'canceled');
+  await expect.poll(() => page.evaluate(() => [...window.__folder.keys()])).toEqual([]);
+});
+
+test('a job worker that crashes leaves no half-written file in the folder', async ({ app, page }) => {
+  await page.addInitScript(fakeFolder);
+  await page.addInitScript(() => {
+    const W = window.Worker;
+    window.Worker = class extends W {
+      constructor(...a) {
+        super(...a);
+        this.addEventListener('message', e => {
+          if (e.data && e.data.type === 's-write' && !this.crashed) {
+            this.crashed = true;
+            this.terminate();
+            setTimeout(() => this.onerror && this.onerror(new ErrorEvent('error', { message: 'the worker crashed' })));
+          }
+        });
+      }
+    };
+  });
+  await app.open({ settings: { storage: 'folder', rename: false, threads: 1 } });
+  await app.add(fixture('ps2-dvd').add);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await card.locator('.job-foot button.primary').click();
+  await app.waitState(card, 'error', 60_000);
+  await expect(card).toContainText('the worker crashed');
+  await expect.poll(() => page.evaluate(() => [...window.__folder.keys()])).toEqual([]);
+});

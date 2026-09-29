@@ -146,8 +146,9 @@ function readerWorker(msg, timeout) {
   });
 }
 // opens a CHD in a worker and reads sectors from it (ciso: a CSO/ZSO compressed ISO, read like a DVD CHD)
-function chdReader(file, ciso) {
-  return readerWorker({ type: 'reader', name: 'x.chd', blob: file, ciso: !!ciso }).then(function (r) {
+// (parent: the parent CHD a child CHD needs)
+function chdReader(file, ciso, parent) {
+  return readerWorker({ type: 'reader', name: 'x.chd', blob: file, ciso: !!ciso, parent: parent || null }).then(function (r) {
     var m = r.info;
     return { kind: m.kind, tracks: m.tracks, logical: m.logical, read: function (track, lba) { return r.request({ track: track, lba: lba }); }, close: r.close };
   });
@@ -263,6 +264,9 @@ function psSerial(path) {
   return m ? m[1] + '-' + m[2] + m[3] : '';
 }
 
+// the database lists NAOMI and NAOMI 2 GD-ROMs apart, and their headers look alike: one family
+function sameSys(a, b) { return a === b || (/^naomi2?$/.test(a) && /^naomi2?$/.test(b)); }
+
 /* ---------- console detection from the first sectors of a data track ---------- */
 async function detectTrack(rd) {
   var s0 = await rd.read(0);
@@ -271,7 +275,8 @@ async function detectTrack(rd) {
   if (h === 'SEGA SEGASATURN ') return { sys: 'saturn', serial: clean(asc(s0, 0x20, 10)), title: clean(asc(s0, 0x60, 112)) };
   if (h === 'SEGA SEGAKATANA ') {
     var hw = clean(asc(s0, 0x30, 16));
-    return { sys: /NAOMI/i.test(clean(asc(s0, 0x10, 16)) + hw) ? 'naomi' : 'dc', serial: clean(asc(s0, 0x40, 10)), title: clean(asc(s0, 0x80, 128)) };
+    var arcade = clean(asc(s0, 0x10, 16)) + ' ' + hw;
+    return { sys: /NAOMI\s*2/i.test(arcade) ? 'naomi2' : /NAOMI/i.test(arcade) ? 'naomi' : 'dc', serial: clean(asc(s0, 0x40, 10)), title: clean(asc(s0, 0x80, 128)) };
   }
   if (/^SEGADISCSYSTEM|^SEGABOOTDISC|^SEGA-CD|^SEGA_CD/.test(h)) {
     var m = /^\s*(?:GM|AI|OS|BR)?\s*([A-Z0-9][A-Z0-9-]*)/.exec(asc(s0, 0x180, 14));
@@ -303,14 +308,16 @@ async function detectTrack(rd) {
       } catch (e) { /* ignore */ }
       return r;
     }
+    // a boot file named after the serial (SLUS_005.94) in the root: for discs whose SYSTEM.CNF boots
+    // a generic PSX.EXE, and those without one
+    var exe = null;
+    files.forEach(function (v, k) { if (!exe && /^[A-Z]{4}_\d{3}\.\d{2}(;1)?$/.test(k)) exe = k; });
     if (files.has('SYSTEM.CNF')) {
       var cnf = new TextDecoder().decode(await isoFile(rd, files.get('SYSTEM.CNF'), 2048));
       var b2 = /BOOT2\s*=\s*([^\r\n]+)/i.exec(cnf), b1 = /BOOT\s*=\s*([^\r\n]+)/i.exec(cnf);
       if (b2) return { sys: 'ps2', serial: psSerial(b2[1].trim()), title: volId };
-      if (b1) return { sys: 'ps1', serial: psSerial(b1[1].trim()), title: volId };
+      if (b1) return { sys: 'ps1', serial: psSerial(b1[1].trim()) || (exe ? psSerial(exe) : ''), title: volId };
     }
-    var exe = null;
-    files.forEach(function (v, k) { if (!exe && /^[A-Z]{4}_\d{3}\.\d{2}$/.test(k)) exe = k; });
     if (/PLAYSTATION/i.test(sysId)) return { sys: 'ps1', serial: exe ? psSerial(exe) : '', title: volId };
     if (files.has('IPL.TXT')) return { sys: 'ngcd', title: volId };
     if (/CDTV/i.test(sysId)) return { sys: 'cdtv', title: volId };
@@ -451,7 +458,7 @@ async function identifyJob(job, onStatus, onProvisional) {
   var chd = null, ecm = null;
   try {
     if (job.kind === 'chd') {
-      chd = await chdReader(job.files[0].file);
+      chd = await chdReader(job.files[0].file, false, job.parentJob && job.parentJob.files[0].file);
       if (chd.kind === 1) {
         // as for .gdi files, a GD-ROM's IP.BIN header is on the high-density data track, the last one;
         // the low-density track 1 holds a plain ISO 9660 volume that alone would pass for a PC disc
@@ -497,7 +504,7 @@ async function identifyJob(job, onStatus, onProvisional) {
         sizes.push(size);
         var bySize = GameDB.size(size);
         if (det && !det.weak) {
-          var same = bySize.filter(function (e) { return e.sys === det.sys; });
+          var same = bySize.filter(function (e) { return sameSys(e.sys, det.sys); });
           if (same.length) bySize = same;
         }
         // the checksum of what a CSO/ZSO or ECM file holds: a worker unpacks it again
@@ -542,7 +549,7 @@ async function identifyJob(job, onStatus, onProvisional) {
       // track is still a strong hint. Not without the console: among 40,000 discs, an audio track or a
       // PC disc often has the size of some game's (a music CD was named after one)
       var pool = [];
-      dataSizes.forEach(function (s) { GameDB.size(s).forEach(function (e) { if (e.sys === det.sys) pool.push(e); }); });
+      dataSizes.forEach(function (s) { GameDB.size(s).forEach(function (e) { if (sameSys(e.sys, det.sys)) pool.push(e); }); });
       var uniq = pool.map(function (e) { return e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
       if (uniq.length === 1) { entry = pool[0]; method = 'size'; }
     }

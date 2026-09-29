@@ -442,7 +442,10 @@ OpfsStore.prototype.read = function (dst, pos, len) {
   if (pos >= this.sizeV) return 0;
   len = Math.min(len, this.sizeV - pos);
   this.flushRange(pos, len, null);
-  return this.h.read(dst.subarray(0, len), { at: pos });
+  var n = this.h.read(dst.subarray(0, len), { at: pos });
+  // below the file's size, a part never written (past the end of what's on disk) reads as zeros, as in POSIX
+  if (n < len) dst.fill(0, n, len);
+  return len;
 };
 OpfsStore.prototype.write = function (src, pos) {
   var len = src.length;
@@ -1273,7 +1276,9 @@ async function runReader(msg) {
   var path = '/in/' + msg.name, enc = new TextEncoder().encode(path + '\0');
   var pp = M._malloc(enc.length);
   M.HEAPU8.set(enc, pp);
-  var kind = M._wasm_probe_open(pp);
+  var ppar = 0; // a child CHD's parent (msg.parent), mounted as parent.chd
+  if (msg.parent) { var encp = new TextEncoder().encode('/in/parent.chd\0'); ppar = M._malloc(encp.length); M.HEAPU8.set(encp, ppar); }
+  var kind = M._wasm_probe_open(pp, ppar);
   var tracks = [], info = M._malloc(32), buf = M._malloc(2048);
   var n = kind === 1 ? M._wasm_probe_tracks() : 0;
   for (var t = 0; t < n; t++) {

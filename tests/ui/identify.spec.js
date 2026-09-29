@@ -235,3 +235,21 @@ test('a reader worker that dies fails its identification, and the next job is id
   await app.settled(twine);
   await expect(twine.locator('.note.ident')).toContainText('SLUS-01272');
 });
+
+// A CHD made against a parent (-op) holds only what differs from it; it was never identified.
+test('a child CHD is identified through its parent', async ({ app }) => {
+  test.skip(!nativeChdman(), 'needs native chdman');
+  const dir = path.join(FIXTURES, 'gen');
+  fs.mkdirSync(dir, { recursive: true });
+  chdman(['createcd', '-i', 'twine.cue', '-o', 'gen/twine-parent.chd', '-f']);
+  chdman(['createcd', '-i', 'twine.cue', '-o', 'gen/twine-child.chd', '-op', 'gen/twine-parent.chd', '-f']);
+  await app.open();
+  await app.add(['gen/twine-child.chd']);
+  const child = app.job('twine-child');
+  await app.waitState(child, 'ready');
+  await expect(child.locator('.note.ident')).toHaveCount(0); // no parent yet
+  await app.add(['gen/twine-parent.chd']);
+  await app.settled(child);
+  await expect(child.locator('.note.ident')).toContainText('SLUS-01272');
+  await expect(child).toContainText('007 - The World Is Not Enough (USA)');
+});

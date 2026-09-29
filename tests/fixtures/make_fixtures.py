@@ -150,6 +150,14 @@ fixture('ps1-slash-serial', {
    ident='serial', name='All Star Action (Europe) (Disc 1)')
 
 # a PlayStation CD game stored as a plain 2048-byte .iso: must become a CD CHD, not a DVD one
+# SYSTEM.CNF boots a generic PSX.EXE: the serial is the name of a file in the root (SLUS_009.75)
+def psxexe_iso():
+    cnf = b'BOOT = cdrom:\\PSX.EXE;1\r\nTCB = 4\r\nEVENT = 10\r\nSTACK = 801FFF00\r\n'
+    return g.pad_sectors(g.iso9660({'SYSTEM.CNF': cnf, 'PSX.EXE': exe('SLUS_009.75'), 'SLUS_009.75': b'serial\r\n',
+                                    'DATA/MOVIE.STR': g.filler(1 << 20, 91)}, 'TND', 'PLAYSTATION'))
+fixture('ps1-psxexe', {'psxexe.iso': psxexe_iso}, add=['psxexe.iso'], job='create', disc='cd', command='createcd', sys='ps1',
+   serial='SLUS-00975', ident='serial', name='007 - Tomorrow Never Dies (USA)')
+
 fixture('ps1-as-iso', {
     'tnd.iso': lambda: ps1_iso('SLUS_009.75', 'TND', 1, 14),
 }, add=['tnd.iso'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-00975',
@@ -264,6 +272,17 @@ fixture('dreamcast-gdi', {
         ipbin(b'SEGA SEGAKATANA ', 0x40, b'T-40201N  ', 0x80, b'AEROWINGS', {0x10: b'SEGA ENTERPRISES', 0x30: b'GD-ROM1/1       '}))), 1, 45000),
 }, add=['aerowings.gdi', 'track01.bin', 'track02.raw', 'track03.bin'], job='create', disc='gdrom', command='createcd', sys='dc',
    serial='T-40201N', ident='serial', name='AeroWings (USA)')
+
+# a NAOMI GD-ROM whose serial the database lists under NAOMI 2: the two share one header layout
+fixture('naomi2-gdi', {
+    'spikers.gdi': lambda: b'3\r\n1 0 4 2352 spikers01.bin 0\r\n2 450 0 2352 spikers02.raw 0\r\n3 45000 4 2352 spikers03.bin 0\r\n',
+    'spikers01.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660({'README.TXT': b'fixture'}, 'SPIKERS')), 1, 0),
+    'spikers02.raw': lambda: g.audio(302, 65),
+    'spikers03.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(
+        {'1ST_READ.BIN': g.filler(1 << 20, 66)}, 'SPIKERS', '',
+        ipbin(b'SEGA SEGAKATANA ', 0x40, b'GDS-0014  ', 0x80, b'BEACH SPIKERS', {0x10: b'SEGA ENTERPRISES', 0x30: b'NAOMI           '}))), 1, 45000),
+}, add=['spikers.gdi', 'spikers01.bin', 'spikers02.raw', 'spikers03.bin'], job='create', disc='gdrom', command='createcd', sys='naomi2',
+   serial='GDS-0014', ident='serial', name='Beach Spikers - Virtua Beach Volleyball (World) (En,Ja)')
 
 # The Redump layout of a GD-ROM: one .bin per track, track 2's 2-second pregap stored at the start of
 # its file (INDEX 00), and REM lines marking the high-density area, which chdman places at LBA 45000.
