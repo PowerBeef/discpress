@@ -120,7 +120,7 @@ test('no tracks, no data or too many tracks is an error', () => {
   for (const [name, text, upstream, message] of [
     ['none.cue', 'REM nothing here\n', null, 'no tracks found'], // upstream: never finishes
     ['t00.cue', 'FILE "t.bin" BINARY\n  TRACK 00 MODE1/2352\n    INDEX 01 00:00:00\n', null, 'track number 00 is not between 1 and 99'],
-    ['nolength.toc', 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "t.bin" #0 0\n', null, 'track 1 holds no data'], // upstream: -nan% forever
+    ['nolength.toc', 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "t.bin" #940800\n', null, 'track 1 holds no data'], // upstream: -nan% forever
     ['t100.cue', cue(100), 'crash', 'track number 100 is not between 1 and 99'],
     ['t100.gdi', gdi(100), 'crash', 'GDI expects too many tracks'],
   ]) {
@@ -428,9 +428,16 @@ test('a broken NRG image is an error, not a crash or a hang', () => {
   expect(sha1of(en)).toBe(sha1of(up));
   const size0 = write('size0.nrg', nrg({ size: 0 }));
   expect(run(UPSTREAM, ['createcd', '-i', size0, '-o', tmp('u.chd'), '-f']).signal).toBeTruthy(); // SIGFPE
-  // (0.289 never finishes the others)
+  // a sector size other than the mode's: 0.289 reads that many bytes into each frame of 2448 (a heap overflow for
+  // 65535, which an AddressSanitizer build shows), and exits 0 with a CHD of other data
+  const size4000 = write('size4000.nrg', nrg({ size: 4000 }));
+  expect(run(UPSTREAM, ['createcd', '-i', size4000, '-o', tmp('u.chd'), '-f']).code).toBe(0);
+  // (0.289 crashes on these, never finishes, or makes a CHD of other data)
   for (const [name, image, message] of [
-    ['size0.nrg', null, 'has a sector size of 0'],
+    ['size0.nrg', null, 'has sectors of 0 bytes, which its mode (0) doesn\'t have'],
+    ['size4000.nrg', null, 'has sectors of 4000 bytes'],
+    ['size65535.nrg', nrg({ size: 65535 }), 'has sectors of 65535 bytes'],
+    ['size2352.nrg', nrg({ size: 2352 }), 'has sectors of 2352 bytes'],
     ['track0.nrg', nrg({ start: 0 }), 'has tracks 0 to 0'],
     ['noend.nrg', nrg({ end: false }), 'end without an END! chunk'],
     ['past.nrg', nrg({ daoxSize: 1 << 20 }), 'end without an END! chunk'],
@@ -562,10 +569,28 @@ test('cdrdao TOCs make the CHD of the same disc as a cue sheet', () => {
   }
   // what the engine refuses
   for (const [toc, message] of [
-    [t1 + 'TRACK AUDIO\nFILE "pg.raw" 0\nFILE "a2.raw" SWAP 0\n', 'are not all SWAP'],
+    [t1 + 'TRACK AUDIO\nFILE "pg.raw" 0\nFILE "a2.raw" SWAP 0\n', 'has samples in both byte orders'],
     [t1 + 'TRACK AUDIO\nFILE "pg.raw" 0\nSTART 00:02:00\n', 'START is at or past its end'],
     [t1 + 'TRACK AUDIO\nFILE "gone.raw" 0\n', 'couldn\'t find bin file'],
     [t1 + 'TRACK AUDIO\nSILENCE\n', 'without a length'],
+    // past the end of the file (0.289 failed reading)
+    [t1 + 'TRACK AUDIO\nFILE "pg.raw" SWAP 0 00:02:01\n', 'track 2 asks for 355152 bytes of [' + tmp('pg.raw') + '] from byte 0, but only 352800 are there'],
+    [t1 + 'TRACK AUDIO\nFILE "pg.raw" SWAP 00:02:01\n', 'from byte 355152, but only 0 are there'],
+    // numbers too large to be lengths: the engine before wrapped them (a length of 2^64 - 1 bytes gave a track of 0
+    // frames, 2^62 samples none at all, the rest of the file), and 0.289 overflowed the minutes
+    ['CD_ROM\nTRACK MODE1\nDATAFILE "d1.bin" 00:00:10\nDATAFILE "d1.bin" #20480 18446744073709551615\n', 'too large (18446744073709551615)'],
+    ['CD_ROM\nTRACK MODE1\nDATAFILE "d1.bin" #18446744073709551616\n', 'too large'],
+    [t1 + 'TRACK AUDIO\nFILE "a2.raw" SWAP 0 4611686018427387904\n', 'too large'],
+    [t1 + 'TRACK AUDIO\nFILE "a2.raw" SWAP 0 999999999:00:00\n', 'too large'],
+    [t1 + 'TRACK AUDIO\nZERO 999999999:00:00\n', 'is too long'],
+    [t1 + 'TRACK AUDIO\nFILE "a2.raw" SWAP 0\nSTART 999999999:00:00\n', 'START is at or past its end'],
+    // samples in a track with sub-channel data, and ZERO in another mode than its track's (cdrdao refuses the
+    // first, and makes sectors of that mode for the second, which a CHD track can't hold)
+    ['CD_DA\nTRACK AUDIO RW_RAW\nFILE "a2.raw" 0\n', 'has sub-channel data, which a FILE of samples'],
+    ['CD_DA\nTRACK AUDIO RW\nSILENCE 00:02:00\n', 'has sub-channel data, which a SILENCE of samples'],
+    ['CD_ROM\nTRACK MODE1_RAW\nZERO MODE1 20480\nDATAFILE "d1.bin"\n', 'ZERO has MODE1, which isn\'t the track\'s mode'],
+    ['CD_ROM\nTRACK MODE1_RAW\nZERO MODE1_RAW RW 00:00:10\nDATAFILE "d1.bin"\n', 'ZERO has RW, which isn\'t the track\'s mode'],
+    [t1 + 'TRACK AUDIO\nSILENCE AUDIO 00:02:00\n', 'SILENCE has AUDIO'],
   ]) {
     const r = run(ENGINE, ['createcd', '-i', write('bad.toc', toc), '-o', tmp('e.chd'), '-f']);
     expect({ code: r.code, signal: r.signal }, toc).toEqual({ code: 1, signal: null });
@@ -675,11 +700,21 @@ test('a WAVE file in a TOC is read as in a cue sheet', () => {
   expect(run(ENGINE, ['createcd', '-i', write('ws.toc', t + 'AUDIOFILE "w.wav" SWAP 0\n'), '-o', a, '-f']).code).toBe(0);
   expect(run(ENGINE, ['createcd', '-i', write('wr.toc', t + 'AUDIOFILE "w.raw" 0\n'), '-o', b, '-f']).code).toBe(0);
   expect(sha1of(a)).toBe(sha1of(b));
-  // not a WAVE file
+  // #offset: where the WAVE file starts in the file, as cdrdao reads it (TrackData.cc: waveLength parses the header
+  // there), and start and length count from its samples; the engine before counted the offset from the samples
+  write('in.wav', Buffer.concat([noise(83, 1000), wavOf(pcm, true), noise(84, 5000)]));
+  for (const toc of [t + 'AUDIOFILE "in.wav" #1000 0\nSTART 00:02:00\n', t + 'AUDIOFILE "in.wav" #1000 0 88200\nSTART\nAUDIOFILE "in.wav" #1000 88200\n']) {
+    const en = tmp('in.chd');
+    expect(run(ENGINE, ['createcd', '-i', write('in.toc', toc), '-o', en, '-f']).code, toc).toBe(0);
+    expect(sha1of(en), toc).toBe(sha1of(plain)); // (the data chunk ends before the 5000 bytes after it)
+  }
+  // not a WAVE file, or no WAVE file at the offset
   write('bad.wav', noise(82, 10 * F));
-  const r = run(ENGINE, ['createcd', '-i', write('bad.toc', t + 'AUDIOFILE "bad.wav" 0\n'), '-o', tmp('e.chd'), '-f']);
-  expect({ code: r.code, signal: r.signal }).toEqual({ code: 1, signal: null });
-  expect(r.err).toContain('not a valid .WAV');
+  for (const toc of [t + 'AUDIOFILE "bad.wav" 0\n', t + 'AUDIOFILE "w.wav" #44 0\n', t + 'AUDIOFILE "in.wav" 0\n']) {
+    const r = run(ENGINE, ['createcd', '-i', write('bad.toc', toc), '-o', tmp('e.chd'), '-f']);
+    expect({ code: r.code, signal: r.signal }, toc).toEqual({ code: 1, signal: null });
+    expect(r.err, toc).toContain('not a valid .WAV');
+  }
 });
 
 // cdrdao pads a track whose data ends inside a sector with zeros; 0.289, and the engine before, dropped that last
@@ -751,6 +786,8 @@ test('logical reads give each pregap its own data, and zeros where the CHD holds
   expect(text).toContain('leadout 906');
   // each LBA is its track's from INDEX 00 on
   expect(text.match(/^lba \d+ track \d+$/gm)).toEqual(['lba 0 track 1', 'lba 301 track 2', 'lba 651 track 3', 'lba 856 track 4']);
+  // and INDEX 00 in a pregap (the engine before counted back from INDEX 01 there, which wrapped)
+  expect(text.match(/^lba \d+ index \d+$/gm)).toEqual(['lba 0 index 1', 'lba 301 index 0', 'lba 451 index 1', 'lba 651 index 0', 'lba 726 index 1']);
   const be = b => Buffer.from(b).swap16(); // the CHD's audio is big-endian
   const want = Buffer.concat([t1, be(pg2), be(t2), Buffer.alloc(75 * F), t3, Buffer.alloc(30 * F), be(t4)]);
   const got = fs.readFileSync(out);
@@ -760,12 +797,14 @@ test('logical reads give each pregap its own data, and zeros where the CHD holds
   expect(wrong).toEqual([]);
 });
 
-// Damaged FLAC data (cdfl) can make libFLAC's LPC restore overflow 32 bits, which C leaves undefined (the build
-// wrapped, as two's complement). It computes modulo 2^32 now: the same results, so such a hunk fails as before.
+// Damaged FLAC data (cdfl) can make libFLAC's LPC and fixed-predictor restores overflow 32 bits, which C leaves
+// undefined (the build wrapped, as two's complement). They compute modulo 2^32 now: the same results, so such a hunk
+// fails as before.
 // 0.289's decoder hangs on each of these.
 test('damaged FLAC audio is an error', () => {
   const good = makeChd('createcd', 'codec mix cd.cue');
-  for (const [at, xor] of [[1176968, 17], [1391207, 11], [1410799, 169], [1419408, 218], [1470418, 37], [1603281, 66]]) {
+  // (the last two overflowed libFLAC's fixed-predictor restore, fixed.c, in the same way)
+  for (const [at, xor] of [[1176968, 17], [1391207, 11], [1410799, 169], [1419408, 218], [1470418, 37], [1603281, 66], [1215763, 157], [1219803, 59]]) {
     const bad = tmp('bad.chd'), b = fs.readFileSync(good);
     b[at] ^= xor;
     fs.writeFileSync(bad, b);
@@ -951,4 +990,154 @@ test('extractcd of a damaged CHD is an error, and leaves no files', () => {
   expect(fs.readdirSync(en)).toEqual([]);
   // as extractraw fails on the same CHD
   expect(run(ENGINE, ['extractraw', '-i', bad, '-o', path.join(en, 'x.raw')]).code).toBe(1);
+});
+
+// A Dreamcast disc of each GD-ROM layout (the high-density area: one data track; data, then audio; two data
+// tracks; data, audio, data), as Redump lays it out (a cue sheet, each track's pregap at the start of its own
+// file) and as TOSEC does (a GDI: track 2's pregap in no file, the others at the end of the previous file, but
+// for a last data track after audio, whose 3 s are 75 frames there and 150 in no file). The pregaps are zeros,
+// so both hold the same disc.
+function gdDisc(name, hd) {
+  const F = 2352, zeros = n => Buffer.alloc(n * F);
+  const tracks = [{ data: true, frames: 300, pregap: 0 }, { data: false, frames: 200, pregap: 150 },
+    ...hd.map((data, i) => ({ data, frames: 100 + 37 * i, pregap: i === 0 ? 0 : (data && i === hd.length - 1) ? 225 : 150 }))];
+  tracks.forEach((t, i) => { t.body = noise(90 + i, t.frames * F); });
+  let cue = '';
+  tracks.forEach((t, i) => {
+    const file = `${name} (Track ${i + 1}).bin`;
+    write(file, Buffer.concat([zeros(t.pregap), t.body]));
+    if (i === 0) cue += 'REM SINGLE-DENSITY AREA\r\n';
+    if (i === 2) cue += 'REM HIGH-DENSITY AREA\r\n';
+    cue += `FILE "${file}" BINARY\r\n  TRACK ${String(i + 1).padStart(2, '0')} ${t.data ? 'MODE1/2352' : 'AUDIO'}\r\n` +
+      (t.pregap ? `    INDEX 00 00:00:00\r\n    INDEX 01 00:0${t.pregap / 75}:00\r\n` : '    INDEX 01 00:00:00\r\n');
+  });
+  let gdi = `${tracks.length}\n`, lba = 0;
+  tracks.forEach((t, i) => {
+    const next = tracks[i + 1], file = `${name}${String(i + 1).padStart(2, '0')}.${t.data ? 'bin' : 'raw'}`;
+    // what of the next track's pregap is at the end of this file (the rest is in no file)
+    const split = i >= 2 && next ? (next.data && !t.data && i + 2 === tracks.length ? 75 : next.pregap) : 0;
+    if (i === 1) lba = 450;
+    if (i === 2) lba = 45000;
+    gdi += `${i + 1} ${lba} ${t.data ? 4 : 0} 2352 ${file} 0\n`;
+    write(file, Buffer.concat([t.body, zeros(split)]));
+    lba += t.frames + (next ? next.pregap : 0);
+  });
+  return { dir: path.dirname(write(`${name}.gdi`, gdi)), cue: write(`${name}.cue`, cue), gdi: tmp(`${name}.gdi`) };
+}
+
+// 0.289 and the engine before read a GD-ROM cue sheet's PREGAP (which extractcd writes for the gap a GDI leaves
+// out) from the start of the track's file, and wrote .toc files for GD-ROMs whose lengths the files don't hold:
+// only the .gdi, and the .cue of a CHD made from a Redump cue sheet, read back. Now every GD-ROM output reads back
+// as the same CHD; --redump writes Redump's layout, whatever the CHD was made from; and a TOC, which can't describe
+// a GD-ROM, is refused.
+test('every GD-ROM extract reads back as the same disc, and a TOC is refused', () => {
+  const info = chd => run(ENGINE, ['info', '-v', '-i', chd]).out.toString();
+  const data = chd => /^Data SHA1:\s+(\w+)/m.exec(info(chd))[1];
+  const extract = (bin, chd, dir, out, args = []) => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.mkdirSync(dir, { recursive: true });
+    return run(bin, ['extractcd', '-i', chd, '-o', path.join(dir, out), ...args]);
+  };
+  for (const [name, hd] of [['gd1', [true]], ['gd2', [true, false, false]], ['gd3', [true, true]], ['gd3s', [true, false, true]]]) {
+    const disc = gdDisc(name, hd);
+    const made = {};
+    for (const src of ['gdi', 'cue']) {
+      const en = tmp(`${name}-${src}.chd`), up = tmp(`${name}-${src}-up.chd`);
+      expect(run(ENGINE, ['createcd', '-i', disc[src], '-o', en, '-f']).code, `${name} ${src}`).toBe(0);
+      expect(run(UPSTREAM, ['createcd', '-i', disc[src], '-o', up, '-f']).code, `upstream ${name} ${src}`).toBe(0);
+      expect(sha1of(en), `${name} ${src}: 0.289's CHD`).toBe(sha1of(up));
+      // 0.289's layout: no gaps, the high-density area at LBA 45000
+      const frames = [...info(en).matchAll(/TRACK:\d+ TYPE:\S+ SUBTYPE:NONE FRAMES:(\d+) PAD:\d+ PREGAP:0 PGTYPE:\S+ PGSUB:NONE POSTGAP:0/g)].map(m => +m[1]);
+      expect(frames.length, `${name} ${src}`).toBe(hd.length + 2);
+      expect(frames[0] + frames[1], `${name} ${src}`).toBe(45000);
+      made[src] = en;
+    }
+    // the same data (the GDI's gaps are padding in its CHD, and data of the track before in the cue sheet's)
+    expect(data(made.gdi), name).toBe(data(made.cue));
+    const redumpFiles = fs.readdirSync(disc.dir).filter(n => n.startsWith(`${name} (Track `) || n === `${name}.cue`).sort();
+    for (const src of ['gdi', 'cue']) {
+      const chd = made[src];
+      for (const [fmt, out, args] of [['gdi', 'x.gdi', []], ['cue', 'x.cue', []], ['redump', `${name}.cue`, ['--redump']]]) {
+        const dir = tmp(`${name}-${src}-${fmt}`), back = tmp(`${name}-${src}-${fmt}.chd`), what = `${name} ${src} -> ${fmt}`;
+        expect(extract(ENGINE, chd, dir, out, args).code, what).toBe(0);
+        expect(run(ENGINE, ['createcd', '-i', path.join(dir, out), '-o', back, '-f']).code, what).toBe(0);
+        // the same CHD; Redump's layout makes the one its cue sheet makes
+        expect(sha1of(back), what).toBe(sha1of(fmt === 'redump' ? made.cue : chd));
+        if (fmt === 'redump') {
+          // Redump's files, byte for byte
+          const names = fs.readdirSync(dir).sort();
+          expect(names, what).toEqual(redumpFiles);
+          for (const n of names) expect(sha1of(path.join(dir, n)), `${what}: ${n}`).toBe(sha1of(path.join(disc.dir, n)));
+        }
+        if (fmt === 'gdi' || (fmt === 'cue' && src === 'cue')) {
+          // 0.289 writes the same files
+          const up = tmp(`${name}-${src}-${fmt}-up`);
+          expect(extract(UPSTREAM, chd, up, out).code, what).toBe(0);
+          expect(fs.readdirSync(up).sort(), what).toEqual(fs.readdirSync(dir).sort());
+          for (const n of fs.readdirSync(dir)) expect(sha1of(path.join(up, n)), `${what}: ${n}`).toBe(sha1of(path.join(dir, n)));
+        }
+      }
+      if (src === 'gdi') {
+        // the bug: 0.289's .cue of a CHD made from a GDI reads back as an error, or as another disc
+        const dir = tmp(`${name}-up-cue`), back = tmp(`${name}-up-cue.chd`);
+        expect(extract(UPSTREAM, chd, dir, 'x.cue').code).toBe(0);
+        const r = run(UPSTREAM, ['createcd', '-i', path.join(dir, 'x.cue'), '-o', back, '-f']);
+        expect(r.code === 0 ? sha1of(back) : 'failed', `upstream ${name}`).not.toBe(sha1of(chd));
+        // the engine reads it as the same disc: its PREGAP is the GDI's gap (0.289's .cue of gd3s leaves out 75
+        // frames at the end of track 4, zeros here, which then read back as padding)
+        expect(run(ENGINE, ['createcd', '-i', path.join(dir, 'x.cue'), '-o', back, '-f']).code, name).toBe(0);
+        if (name === 'gd3s') expect(data(back), name).toBe(data(chd));
+        else expect(sha1of(back), name).toBe(sha1of(chd));
+      }
+      // a TOC: refused, with or without -sb
+      for (const sb of [[], ['-sb']]) {
+        const dir = tmp(`${name}-toc`);
+        const r = extract(ENGINE, chd, dir, 'x.toc', sb);
+        expect({ code: r.code, signal: r.signal }, `${name} ${src} toc ${sb}`).toEqual({ code: 1, signal: null });
+        expect(r.err).toContain('A GD-ROM can\'t be written as a TOC');
+        expect(fs.readdirSync(dir)).toEqual([]);
+      }
+    }
+  }
+  // 0.289's TOC of a GD-ROM, whose lengths its files don't hold: a clear error, where 0.289 fails reading
+  const dir = tmp('gd-up-toc');
+  expect(extract(UPSTREAM, tmp('gd1-gdi.chd'), dir, 'x.toc').code).toBe(0);
+  expect(run(UPSTREAM, ['createcd', '-i', path.join(dir, 'x.toc'), '-o', tmp('e.chd'), '-f']).code).toBe(1);
+  const r = run(ENGINE, ['createcd', '-i', path.join(dir, 'x.toc'), '-o', tmp('e.chd'), '-f']);
+  expect({ code: r.code, signal: r.signal }).toEqual({ code: 1, signal: null });
+  expect(r.err).toMatch(/track 2 asks for \d+ bytes of \[.*x\.bin\] from byte \d+, but only \d+ are there/);
+});
+
+// Cue sheets with INDEX points out of order, or a track with no frames from its INDEX 01 on: 0.289 made tracks of a
+// negative length (exit 0, or a read error) or of none (exit 0), whose TOC does not read back (START at the end)
+test('INDEX points out of order, or a track without data, are an error', () => {
+  const F = 2352;
+  write('ix.bin', noise(100, 400 * F));
+  write('ix.wav', wavOf(noise(101, 400 * F)));
+  write('ix0.bin', noise(102, 137 * F + 1520));
+  write('ix1.bin', noise(103, 2400));
+  const one = 'FILE "ix.bin" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n';
+  for (const [name, cue, upstream, message] of [
+    // the next track starts before this one (in a .bin and in a .wav)
+    ['back.cue', 'FILE "ix.bin" BINARY\n  TRACK 01 AUDIO\n    INDEX 01 00:00:03\n  TRACK 02 AUDIO\n    INDEX 01 00:00:01\n', 1, 'track 2 starts where track 1 does, or before'],
+    ['backwav.cue', 'FILE "ix.wav" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:03\n  TRACK 02 AUDIO\n    INDEX 01 00:00:01\n', 0, 'track 2 starts where track 1 does, or before'],
+    // INDEX 00 after INDEX 01, or past it
+    ['late0.cue', one + '  TRACK 02 AUDIO\n    INDEX 01 00:02:00\n    INDEX 00 00:01:00\n', 0, 'track 2\'s INDEX 00 is out of order'],
+    ['past0.cue', one.replace('00:00:00\n', '00:00:00\n  TRACK 02 AUDIO\n    INDEX 00 00:03:00\n    INDEX 01 00:02:00\n'), 0, 'track 2\'s INDEX 01 is out of order'],
+    // a track that is only its pregap: INDEX 01 where the next track starts, or at the end of its file
+    ['pgonly.cue', one.replace('00:00:00\n', '00:00:00\n  TRACK 02 AUDIO\n    INDEX 00 00:01:00\n    INDEX 01 00:02:00\n  TRACK 03 AUDIO\n    INDEX 00 00:02:00\n    INDEX 01 00:03:00\n'), 0, 'track 2 has no data from its INDEX 01 on'],
+    ['eacpg.cue', 'FILE "ix0.bin" MOTOROLA\n  TRACK 01 MODE2/2352\n    INDEX 00 00:01:00\nFILE "ix1.bin" MOTOROLA\n    INDEX 01 00:00:01\n', null, 'track 1 has no data from its INDEX 01 on'],
+  ]) {
+    const input = write(name, cue);
+    if (upstream !== null) expect(run(UPSTREAM, ['createcd', '-i', input, '-o', tmp('u.chd'), '-f']).code, `upstream ${name}`).toBe(upstream);
+    const r = run(ENGINE, ['createcd', '-i', input, '-o', tmp('e.chd'), '-f']);
+    expect({ code: r.code, signal: r.signal }, name).toEqual({ code: 1, signal: null });
+    expect(r.err, name).toContain(message);
+  }
+  // INDEX points in order, a pregap in its file and one that isn't: as 0.289
+  const ok = write('ok.cue', one + '  TRACK 02 AUDIO\n    INDEX 00 00:01:00\n    INDEX 01 00:02:00\n    INDEX 02 00:03:00\n  TRACK 03 AUDIO\n    PREGAP 00:01:00\n    INDEX 01 00:04:00\n');
+  const en = tmp('ok-en.chd'), up = tmp('ok-up.chd');
+  expect(run(ENGINE, ['createcd', '-i', ok, '-o', en, '-f']).code).toBe(0);
+  expect(run(UPSTREAM, ['createcd', '-i', ok, '-o', up, '-f']).code).toBe(0);
+  expect(sha1of(en)).toBe(sha1of(up));
 });
