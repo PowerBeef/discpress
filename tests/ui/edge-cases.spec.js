@@ -564,7 +564,9 @@ test('a cue sheet may name its file in single quotes, as chdman reads it', async
   }
 });
 
-test('a cancelled conversion leaves nothing in private storage', async ({ app, page }) => {
+test('a cancelled conversion leaves nothing in private storage', async ({ app, page, browserName }) => {
+  test.skip(browserName === 'webkit', 'Playwright\'s WebKit has no navigator.storage');
+
   await app.open({ settings: { threads: 1 } });
   await app.add(fixture('ps2-dvd').add);
   const card = app.jobs().first();

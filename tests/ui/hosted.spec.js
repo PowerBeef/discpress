@@ -6,7 +6,7 @@ import { App, fixture } from '../support/app.js';
 
 const test = base;
 
-test('served as the hosted copy, it installs a service worker and opens offline', async ({ page, context }, testInfo) => {
+test('served as the hosted copy, it installs a service worker and opens offline', async ({ page, context, browserName }, testInfo) => {
   const app = new App(page, testInfo, false);
   await app.open({ debug: { hosted: true } });
   await expect(page.locator('link[rel="manifest"]')).toHaveAttribute('href', 'manifest.webmanifest');
@@ -17,6 +17,9 @@ test('served as the hosted copy, it installs a service worker and opens offline'
   const others = [...new Set(app.requests)].filter(u => !u.startsWith(origin + '/') && !u.startsWith('blob:') && !u.startsWith('data:'));
   expect(others).toEqual([]);
   // offline: the page still opens, from the service worker's cache, and converts
+  // (Playwright's WebKit fails any navigation while offline, even one the service worker answers;
+  // the tests below cover the saved copy there)
+  if (browserName === 'webkit') return;
   await context.setOffline(true);
   await page.reload();
   await expect(page.locator('#chipEngine')).toContainText(/ready/i, { timeout: 60_000 });

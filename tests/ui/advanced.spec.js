@@ -156,7 +156,9 @@ test('typed commands accept single quotes and smart quotes around file names', a
 });
 
 // audit, batch 3: each run's results used to stay in private storage until the next visit
-test('a new command, or Clear temporary storage, removes the last command’s results', async ({ app, page }) => {
+test('a new command, or Clear temporary storage, removes the last command’s results', async ({ app, page, browserName }) => {
+  test.skip(browserName === 'webkit', 'Playwright\'s WebKit has no navigator.storage');
+
   const workDirs = () => page.evaluate(async () => {
     const out = [];
     try {

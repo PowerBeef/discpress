@@ -6,8 +6,9 @@ import { test, expect, fixture } from '../support/app.js';
 import { reference, sameVersion, sha1File, nativeChdman } from '../support/native.js';
 
 // the tests of results kept in the browser's storage, which a page opened as a file doesn't get in Chrome
-test.beforeEach(({}, testInfo) => {
+test.beforeEach(({ browserName }, testInfo) => {
   test.skip(testInfo.project.name === 'file-url' && !/memory/.test(testInfo.title), 'no private storage for file:// pages');
+  test.skip(browserName === 'webkit' && !/memory/.test(testInfo.title), 'Playwright\'s WebKit has no navigator.storage');
 });
 
 test('a finished but unsaved result is listed after a reload, and can be saved or deleted', async ({ app, page }) => {
@@ -78,7 +79,9 @@ test('where results live in memory, a reload says which were lost and how to kee
   await expect(page.locator('#chipStore')).toHaveText(/Results in memory/);
   const tip = page.locator('#memTip');
   await expect(tip).toContainText('closing or reloading the page loses those not saved yet');
-  await expect(tip).toContainText('have results written straight into a folder, or use Discpress online at powerbeef.github.io/discpress');
+  // only browsers with a folder picker (Chrome, Edge) offer the folder
+  const folder = await page.evaluate(() => !!window.showDirectoryPicker);
+  await expect(tip).toContainText((folder ? 'have results written straight into a folder, or ' : '') + 'use Discpress online at powerbeef.github.io/discpress');
   await app.add(fixture('ps1-single').add);
   const card = app.job('twine');
   await app.settled(card);

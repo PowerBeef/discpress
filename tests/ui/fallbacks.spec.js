@@ -61,7 +61,9 @@ test('"memory only" setting keeps results in memory', async ({ app, page }) => {
   await convertAgent(app);
 });
 
-test('private storage is used when available', async ({ app, page }) => {
+test('private storage is used when available', async ({ app, page, browserName }) => {
+  test.skip(browserName === 'webkit', 'Playwright\'s WebKit has no navigator.storage');
+
   await app.open();
   await expect(page.locator('#chipStore')).toHaveText('Large files OK');
 });
