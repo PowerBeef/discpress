@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect, fixture } from '../support/app.js';
 import { FIXTURES } from '../support/paths.js';
-import { extract, info, nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
+import { engineReference, extract, info, nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
 
 test('a cue with a missing track waits for it, then continues', async ({ app }) => {
   await app.open();
@@ -63,7 +63,6 @@ test('a truncated image gets a warning', async ({ app }) => {
 for (const [name, text, why] of [
   ['no tracks', 'FILE "lone.bin" BINARY\r\n', 'This CUE file lists no tracks.'],
   ['track zero', 'FILE "lone.bin" BINARY\r\n  TRACK 00 MODE2/2352\r\n    INDEX 01 00:00:00\r\n', 'Track numbers go from 01 to 99'],
-  ['no length', 'CD_ROM_XA\n\nTRACK MODE2_RAW\nDATAFILE "lone.bin"\n', 'chdman can\u2019t tell the length of track 1'],
 ]) {
   test(`a descriptor chdman can't convert is refused: ${name}`, async ({ app }) => {
     const file = name + (text.startsWith('CD_ROM') ? '.toc' : '.cue');
@@ -79,6 +78,21 @@ for (const [name, text, why] of [
     await expect(card.locator('code.cmd')).toBeEmpty();
   });
 }
+
+// chdman 0.289 never finished on a TOC without lengths; the engine reads cdrdao's grammar, where a
+// missing length is the rest of the file
+test('a TOC without lengths converts the whole file', async ({ app }) => {
+  fs.writeFileSync(path.join(FIXTURES, 'no length.toc'), 'CD_ROM_XA\n\nTRACK MODE2_RAW\nDATAFILE "lone.bin"\n');
+  await app.open();
+  await app.add(['no length.toc', 'lone.bin']);
+  const card = app.job('no length');
+  await app.settled(card);
+  await expect(card.locator('.note.ident')).toContainText('SLUS-00975');
+  await app.run(card);
+  const [out] = await app.downloads(card);
+  const ref = engineReference('createcd', 'no length.toc');
+  if (ref) expect(sha1File(out.path)).toBe(sha1File(ref));
+});
 
 // a CloneCD .ccd becomes a cue sheet for its .img (convert.spec: ps1-clonecd); it waits for the .img,
 // and what a cue sheet can't describe is refused

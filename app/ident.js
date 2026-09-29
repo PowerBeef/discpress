@@ -368,33 +368,60 @@ function probePlan(job, images, nrg) {
       });
     });
   } else if (job.src === 'toc' && job.descText) {
-    // where chdman 0.289 finds each track (cdrom_file::parse_toc): `#bytes` or an MSF offset after the
-    // file name, a second MSF adding to it, START inside the file before index 1
-    var tt = [], cnt = new Map();
+    // where the engine finds each track (cdrdao's grammar, cdrom_file::parse_toc): a track is a run of
+    // pieces, files and zeros (ZERO, SILENCE, PREGAP); INDEX 01 is at START, else at its first frame.
+    // Times are mm:ss:ff; plain numbers are bytes (DATAFILE, ZERO) or samples of 4 bytes (AUDIOFILE, SILENCE)
+    var tt = [], ends = new Map();
+    var units = function (w, stride, sample) {
+      if (/^\d+:\d+:\d+$/.test(w)) return msfFrames(w) * stride;
+      return (+w || 0) * (sample ? 4 : 1);
+    };
     job.descText.split(/\r?\n/).forEach(function (ln) {
-      var a = tokenize(ln.replace(/\/\/.*$/, '')), t = tt[tt.length - 1];
-      if (a[0] === 'TRACK' && a[1]) {
+      var a = tokenize(ln.replace(/\/\/.*$/, '')), t = tt[tt.length - 1], k = a[0];
+      if (k === 'TRACK' && a[1]) {
         var ss = { MODE1: 2048, MODE2_FORM1: 2048, MODE2: 2336, MODE2_FORM_MIX: 2336, MODE1_RAW: 2352, MODE2_RAW: 2352 }[a[1]] || 0;
-        tt.push({ no: tt.length + 1, size: ss, stride: ss + (/^RW(_RAW)?$/.test(a[2] || '') ? 96 : 0), file: null, offset: 0, start: 0 });
-      } else if (t && !t.file && /^(DATAFILE|AUDIOFILE|FILE)$/.test(a[0]) && a[1] != null) {
-        t.file = byName(a[1]);
-        var i = a[2] === 'SWAP' ? 3 : 2, off = 0;
-        if (/^#\d/.test(a[i] || '')) off = +a[i].slice(1);
-        else if (/^\d/.test(a[i] || '')) off = msfFrames(a[i]) * t.stride;
-        if (/^\d/.test(a[i + 1] || '') && /^\d/.test(a[i + 2] || '')) off += msfFrames(a[i + 1]) * t.stride;
-        else if (!/^\d/.test(a[i + 1] || '') && t.no === 1 && !/^#/.test(a[i] || '')) off = 0; // a lone length
-        t.offset = off;
-        if (t.file) cnt.set(t.file, (cnt.get(t.file) || 0) + 1);
-      } else if (t && a[0] === 'START' && a[1]) t.start = msfFrames(a[1]);
+        tt.push({ no: tt.length + 1, size: ss, stride: (ss || 2352) + (/^RW(_RAW)?$/.test(a[2] || '') ? 96 : 0), runs: [], bytes: 0, start: null });
+        return;
+      }
+      if (!t) return;
+      var num = function (w) { return /^\d/.test(w || '') || /^#\d/.test(w || ''); };
+      if (/^(DATAFILE|AUDIOFILE|FILE)$/.test(k) && a[1] != null) {
+        var f = byName(a[1]), i = a[2] === 'SWAP' ? 3 : 2, audio = k !== 'DATAFILE', off;
+        if (/^#\d/.test(a[i] || '')) off = +a[i++].slice(1);
+        else off = k === 'DATAFILE' ? (ends.get(a[1]) || 0) : 0; // a DATAFILE goes on where the file's last use ended
+        if (audio && num(a[i])) off += units(a[i++], t.stride, true); // AUDIOFILE/FILE: the start in the file
+        var len = num(a[i]) ? units(a[i], t.stride, audio) : f ? Math.max(0, f.size - off) : 0;
+        t.runs.push({ file: f, offset: off, bytes: len });
+        t.bytes += len;
+        ends.set(a[1], off + len);
+      } else if ((k === 'ZERO' || k === 'SILENCE') && num(a[a.length - 1])) {
+        var z = units(a[a.length - 1], t.stride, k === 'SILENCE');
+        t.runs.push({ file: null, bytes: z }); t.bytes += z;
+      } else if (k === 'PREGAP' && a[1]) {
+        var pg = msfFrames(a[1]) * t.stride;
+        t.runs.push({ file: null, bytes: pg }); t.bytes += pg;
+        t.start = t.bytes;
+      } else if (k === 'START') t.start = a[1] ? msfFrames(a[1]) * t.stride : t.bytes;
     });
-    var hashed = new Set();
+    var tracksOf = new Map();
+    tt.forEach(function (t) { t.runs.forEach(function (r) { if (r.file) (tracksOf.get(r.file) || tracksOf.set(r.file, new Set()).get(r.file)).add(t.no); }); });
+    tracksOf.forEach(function (nos, f) { hashes.push({ file: f, track: nos.size === 1 ? nos.values().next().value : 0 }); });
     tt.forEach(function (t) {
-      if (!t.file) return;
-      if (!hashed.has(t.file)) { hashed.add(t.file); hashes.push({ file: t.file, track: cnt.get(t.file) === 1 ? t.no : 0 }); }
-      if (t.size) readers.push(fileReader(t.file, t.offset + t.start * t.stride, t.size, t.stride));
+      if (!t.size) return; // audio
+      // INDEX 01: the byte `start` of the track's runs; from zeros, the next file's first byte
+      var at = t.start || 0, pos = 0;
+      for (var r = 0; r < t.runs.length; r++) {
+        var run = t.runs[r];
+        if (at < pos + run.bytes || r === t.runs.length - 1) {
+          var fr = run.file ? run : t.runs.slice(r).find(function (x) { return x.file; });
+          if (fr) readers.push(fileReader(fr.file, fr.offset + (fr === run ? at - pos : 0), t.size, t.stride));
+          break;
+        }
+        pos += run.bytes;
+      }
     });
   } else if (job.src === 'nrg' && nrg) {
-    // a Nero image: one file, its track list at the end (read by nrgTracks)
+    // a Nero image: one file, its track list at the end (read by nrgTracks); each track's data from index1
     var nf = fileOf(job.files[0]);
     nrg.forEach(function (t) {
       if (t.size === 2352) hashes.push({ file: nf.slice(t.no === 1 ? t.index1 : t.index0, t.end), track: t.no });
@@ -425,7 +452,7 @@ function probePlan(job, images, nrg) {
   return { readers: readers, hashes: hashes };
 }
 
-// the tracks of a Nero 5.5 or later image (.nrg), as chdman 0.289 reads them (cdrom_file::parse_nero):
+// the tracks of a Nero 5.5 or later image (.nrg), as the engine reads them (cdrom_file::parse_nero):
 // the file ends with "NER5" and the offset of a chain of chunks, DAOX lists the tracks. null if not one
 async function nrgTracks(file) {
   var bytes = async function (at, n) { return new Uint8Array(await file.slice(at, at + n).arrayBuffer()); };

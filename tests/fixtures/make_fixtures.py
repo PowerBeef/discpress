@@ -126,10 +126,13 @@ fixture('ps1-toc', {
     'mgs disc1.toc': toc_text,
     'mgs disc1 (Track 1).bin': lambda: g.raw_sectors(mgs_iso(), 2),
     'mgs disc1 (Track 2).bin': lambda: g.audio(225, 5, silence=150),
-}, add=['mgs disc1.toc', 'mgs disc1 (Track 1).bin', 'mgs disc1 (Track 2).bin'], job='create', disc='cd', command='createcd',
+}, add=['mgs disc1.toc', 'mgs disc1 (Track 1).bin', 'mgs disc1 (Track 2).bin'], engine=True, job='create', disc='cd', command='createcd',
    sys='ps1', serial='SLUS-00594', ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'])
 
-fixture('ps1-nrg', {'mgs.nrg': nrg_image}, add=['mgs.nrg'], job='create', disc='cd', command='createcd',
+# the engine keeps the Nero image's stored pregap as a cue sheet's INDEX 00 is kept: the CHD of mgs ccd-ref.cue
+# (chdman 0.289 dropped it); the TOC's START is a stored pregap too, and its audio big-endian (cdrdao):
+# compared with the engine's native build (`engine`)
+fixture('ps1-nrg', {'mgs.nrg': nrg_image}, add=['mgs.nrg'], ref='mgs ccd-ref.cue', job='create', disc='cd', command='createcd',
    sys='ps1', serial='SLUS-00594', ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'])
 
 fixture('ps1-single', {

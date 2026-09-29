@@ -41,7 +41,13 @@ for (const fx of manifest().filter(f => f.job === 'create' && !f.bench && !f.tes
 
     const extra = fx.sys === 'psp' ? ['-hs', '2048'] : [];
     if (fx.key === 'ps1-lone-bin') return; // the app generates its own .cue for a lone .bin
-    // `ref`: the input native chdman gets instead, when the app gives chdman a corrected or generated descriptor
+    // `ref`: the input native chdman gets instead, when the app gives chdman a corrected or generated descriptor;
+    // `engine`: an input chdman 0.289 reads wrongly, compared with the engine's native build instead
+    if (fx.engine) {
+      const ref = engineReference(fx.command, fx.ref || inputOf(fx), extra);
+      if (ref) expect(sha1File(outs[0].path), `engine ${fx.command} ${inputOf(fx)} byte for byte`).toBe(sha1File(ref));
+      return;
+    }
     expectSameAsNative(outs[0].path, fx.command, fx.ref || inputOf(fx), extra);
   });
 }

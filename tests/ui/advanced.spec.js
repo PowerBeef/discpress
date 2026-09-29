@@ -54,7 +54,7 @@ test('missing required options are reported instead of run', async ({ app, page 
 // chdman 0.289 never finishes on these (0% forever, or -nan%); the engine reports an error
 for (const [label, file, text, message] of [
   ['a .bin read as a cdrdao TOC, with no tracks', 'lone.bin', null, 'no tracks found'],
-  ['a TOC without track lengths', 'nolength.toc', 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "lone.bin"\n', 'the tracks hold no data'],
+  ['a TOC whose track holds no data', 'nolength.toc', 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "lone.bin" #0 0\n', 'track 1 holds no data'],
 ]) {
   test(`a command chdman would never finish is an error: ${label}`, async ({ app, page }) => {
     if (text) fs.writeFileSync(path.join(FIXTURES, file), text);

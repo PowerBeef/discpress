@@ -788,21 +788,6 @@ function decodeText(b) {
   try { return { text: new TextDecoder('utf-8', { fatal: true }).decode(b), recoded: false }; }
   catch (e) { return { text: new TextDecoder('windows-1252').decode(b), recoded: true }; }
 }
-// chdman's msf_to_frames: "mm:ss:ff", or a plain number of frames
-function tocMsf(s) {
-  var m = /^(\d+):(\d+):(\d+)/.exec(s);
-  return m ? (+m[1] * 60 + +m[2]) * 75 + +m[3] : parseInt(s, 10) || 0;
-}
-// the length chdman 0.289 reads from the words after a TOC file name: `#offset length`, `start length`
-// or `#offset start length`; a single value is the length only on track 1, elsewhere an offset
-function tocFrames(a, first) {
-  var i = 0, w = a[i++] || '', num = function (s) { return /^\d/.test(s || ''); };
-  if (w === 'SWAP') w = a[i++] || '';
-  var offset = w.charAt(0) === '#' ? parseInt(w.slice(1), 10) || 0 : num(w) ? tocMsf(w) : 0;
-  var len = a[i++] || '';
-  if (num(len)) { var after = a[i++] || ''; return tocMsf(num(after) ? after : len); }
-  return first ? offset : 0;
-}
 // A CloneCD control file (.ccd, INI style) as a cue sheet for its image: the .img holds raw 2,352-byte
 // sectors from LBA 0, and each [TRACK n] gives MODE (0 audio, 1 or 2 data) and INDEX n=LBA.
 // Returns {text, changed, problem} like fixDescriptor. The .sub (subchannel) has no place in the CHD.
@@ -859,27 +844,9 @@ function fixDescriptor(kind, text) {
     });
     if (!tracks) problem = 'This CUE file lists no tracks.';
   } else if (kind === 'toc') {
-    var frames = 0, file = null, prevFile = null;
-    var endTrack = function () {
-      if (tracks && !frames && !problem) problem = 'chdman can\u2019t tell the length of track ' + tracks + ' from this TOC file.';
-    };
-    lines = lines.map(function (ln) {
-      var t = tokenize(ln);
-      if (t[0] === 'TRACK') { endTrack(); tracks++; prevFile = file; file = null; frames = 0; }
-      else if (/^(FILE|DATAFILE|AUDIOFILE)$/.test(t[0]) && tracks && t.length > 1) {
-        var a = t.slice(2);
-        frames = tocFrames(a, tracks === 1);
-        // `DATAFILE "file" length`, as chdman itself writes for one file per track, starts at the
-        // beginning of its file; chdman reads the length as an offset past track 1 and drops the track
-        if (!frames && t[0] === 'DATAFILE' && tracks > 1 && /^\d/.test(a[0] || '') && !/^\d/.test(a[1] || '') && t[1] !== prevFile) {
-          ln = ln.replace(/^(\s*DATAFILE\s+(?:"[^"]*"|\S+)\s+)/, '$1#0 ');
-          frames = tocMsf(a[0]);
-        }
-        file = t[1];
-      }
-      return ln;
-    });
-    endTrack();
+    // the engine reads cdrdao's TOC grammar (a missing length is the rest of the file); a TOC without
+    // tracks is still refused, as chdman 0.289 never finished on one
+    lines.forEach(function (ln) { if (tokenize(ln)[0] === 'TRACK') tracks++; });
     if (!tracks) problem = 'This TOC file lists no tracks.';
   } else {
     return { text: text, changed: false, problem: '' };
