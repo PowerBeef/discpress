@@ -253,3 +253,19 @@ test('a child CHD is identified through its parent', async ({ app }) => {
   await expect(child.locator('.note.ident')).toContainText('SLUS-01272');
   await expect(child).toContainText('007 - The World Is Not Enough (USA)');
 });
+
+// The checksum step reads an ECM image to its end, where a damaged one shows: that was dropped, and
+// the card said nothing until converting failed (audit, remaining items)
+test('an ECM image found damaged while checking against the database says so', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'damaged-ecm');
+  fs.mkdirSync(dir, { recursive: true });
+  const src = Buffer.from(fs.readFileSync(path.join(FIXTURES, 'xa.bin.ecm')));
+  src[src.length - 1] ^= 0x01; // the EDC the file ends with
+  fs.writeFileSync(path.join(dir, 'xa.bin.ecm'), src);
+  fs.copyFileSync(path.join(FIXTURES, 'xa.cue'), path.join(dir, 'xa.cue'));
+  await app.open({ testdb: true }); // xa.bin's size is in the database, so its checksum is computed
+  await app.add(['gen/damaged-ecm/xa.cue', 'gen/damaged-ecm/xa.bin.ecm']);
+  const card = app.job('xa');
+  await app.settled(card);
+  await expect(card.locator('.ident-damaged')).toContainText('"xa.bin.ecm" is damaged: the image rebuilt from it doesn’t match the checksum it ends with.');
+});

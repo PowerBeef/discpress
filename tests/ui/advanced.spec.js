@@ -179,3 +179,15 @@ test('a new command, or Clear temporary storage, removes the last command’s re
   await expect.poll(workDirs).toEqual([]);
   await expect(page.locator('#cliOuts')).toBeEmpty();
 });
+
+test('typed commands accept backslash escapes, as a shell does', async ({ app, page }) => {
+  const dir = path.join(FIXTURES, 'gen');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'agent.iso'), path.join(dir, 'my game.iso'));
+  await openCli(app, page);
+  await addCliFiles(app, ['gen/my game.iso']);
+  await page.click('#cliEditToggle');
+  await page.locator('#cliText').fill('chdman createdvd -i my\\ game.iso -o "the \\"best\\" game.chd" -c none');
+  expect(await runCli(page)).toContain('[exit code 0]');
+  await expect(page.locator('#cliOuts')).toContainText('the "best" game.chd');
+});

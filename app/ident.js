@@ -205,11 +205,13 @@ function crcWorker(blob, start, end, onProgress, how) {
   return Engine.ready().then(function () {
     return new Promise(function (resolve, reject) {
       var w = new Worker(Engine.url);
+      var why = null; // what the worker said was wrong (a damaged compressed ISO or ECM image)
       w.onmessage = function (e) {
         var m = e.data;
         if (m.type === 'crc-progress') onProgress && onProgress(m.done / m.total);
         else if (m.type === 'crc') { w.terminate(); resolve(m.crc); }
-        else if (m.type === 'fatal') { w.terminate(); reject(new Error(m.message)); }
+        else if (m.type === 'notice') { if (m.level === 'error' && !why) why = m.message; }
+        else if (m.type === 'fatal') { w.terminate(); reject(new Error(why || m.message)); }
       };
       w.onerror = function (e) { w.terminate(); reject(new Error(e.message || 'worker error')); };
       Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end, ciso: how === 'ciso', ecm: how === 'ecm' }); // with the compiled module, for zlib's crc32
@@ -454,7 +456,7 @@ async function nrgTracks(file) {
 // (console, serial, sizes), so a conversion can start while the checksum confirms the release
 async function identifyJob(job, onStatus, onProvisional) {
   await GameDB.ready();
-  var det = null, sizes = [], dataSizes = [], exact = null, cands = [];
+  var det = null, sizes = [], dataSizes = [], exact = null, cands = [], damaged = '';
   var chd = null, ecm = null;
   try {
     if (job.kind === 'chd') {
@@ -516,7 +518,7 @@ async function identifyJob(job, onStatus, onProvisional) {
         onStatus && onStatus('Checking against the game database…', 0);
         var crc = null;
         try { crc = await crcOf(th.file, 0, th.size, function (p) { onStatus && onStatus('Checking against the game database…', p); }, th.how); }
-        catch (e) { if (!th.how) throw e; } // a damaged compressed ISO or ECM image: no exact match (converting it reports the damage)
+        catch (e) { if (!th.how) throw e; damaged = e.message; } // a damaged compressed ISO or ECM image: no exact match, and the card says why
         var hits = th.bySize.filter(function (e) { return e.crc === crc; });
         if (hits.length) exact = hits;
       }
@@ -557,7 +559,7 @@ async function identifyJob(job, onStatus, onProvisional) {
     return {
       sys: sys, detected: det, entry: entry, method: method,
       name: entry ? entry.name : '', serial: (det && det.serial) || (entry && entry.serial) || '',
-      headerTitle: det && det.title || '', checking: checking
+      headerTitle: det && det.title || '', checking: checking, damaged: damaged
     };
   }
 }

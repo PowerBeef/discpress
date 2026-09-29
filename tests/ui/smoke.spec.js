@@ -47,3 +47,10 @@ test('converts a CD and the result matches desktop chdman', async ({ app }) => {
   else expect(info(out.path).dataSha1).toBe(info(ref).dataSha1);
   expect(fs.statSync(out.path).size).toBeGreaterThan(0);
 });
+
+test('a debug setting of null does not break the page', async ({ app, page }) => {
+  await page.addInitScript(() => localStorage.setItem('chdman-web-debug', 'null'));
+  await app.open(); // waits for the engine to be ready; uncaught errors fail the test
+  await app.add(['tnd.iso']);
+  await app.settled(app.job('tnd'));
+});

@@ -6852,8 +6852,8 @@ function base(name) { return name.replace(/^.*[\/\\]/, ''); }
 function stem(name) { return base(name).replace(/\.[^.]*$/, ''); }
 function dirOf(path) { var i = path.lastIndexOf('/'); return i < 0 ? '' : path.slice(0, i); }
 function uid() { return Math.random().toString(36).slice(2, 10); }
-// quoted as the Advanced tab reads commands back (tokenize): in double quotes, or single quotes around a name with "
-function quoteArg(a) { return /^[A-Za-z0-9_.,:\/=+-]+$/.test(a) ? a : a.indexOf('"') >= 0 ? "'" + a + "'" : '"' + a + '"'; }
+// quoted as the Advanced tab reads commands back (shellWords)
+function quoteArg(a) { return /^[A-Za-z0-9_.,:\/=+-]+$/.test(a) ? a : '"' + a.replace(/(["\\])/g, '\\$1') + '"'; }
 function plural(n, w, p) { return n + ' ' + (n === 1 ? w : (p || w + 's')); }
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
@@ -7061,7 +7061,8 @@ function makeSink(dir) {
 }
 
 var DEBUG = {};
-try { DEBUG = JSON.parse(localStorage.getItem('chdman-web-debug') || '{}'); } catch (e) { /* ignore */ }
+try { DEBUG = JSON.parse(localStorage.getItem('chdman-web-debug') || '{}') || {}; } catch (e) { /* ignore */ }
+if (typeof DEBUG !== 'object') DEBUG = {}; // a stored null, number or string: no debug options
 
 var Engine = {
   module: null, bytes: null, url: null, loading: null, error: null, simd: false,
@@ -7927,11 +7928,13 @@ function crcWorker(blob, start, end, onProgress, how) {
   return Engine.ready().then(function () {
     return new Promise(function (resolve, reject) {
       var w = new Worker(Engine.url);
+      var why = null; // what the worker said was wrong (a damaged compressed ISO or ECM image)
       w.onmessage = function (e) {
         var m = e.data;
         if (m.type === 'crc-progress') onProgress && onProgress(m.done / m.total);
         else if (m.type === 'crc') { w.terminate(); resolve(m.crc); }
-        else if (m.type === 'fatal') { w.terminate(); reject(new Error(m.message)); }
+        else if (m.type === 'notice') { if (m.level === 'error' && !why) why = m.message; }
+        else if (m.type === 'fatal') { w.terminate(); reject(new Error(why || m.message)); }
       };
       w.onerror = function (e) { w.terminate(); reject(new Error(e.message || 'worker error')); };
       Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end, ciso: how === 'ciso', ecm: how === 'ecm' }); // with the compiled module, for zlib's crc32
@@ -8176,7 +8179,7 @@ async function nrgTracks(file) {
 // (console, serial, sizes), so a conversion can start while the checksum confirms the release
 async function identifyJob(job, onStatus, onProvisional) {
   await GameDB.ready();
-  var det = null, sizes = [], dataSizes = [], exact = null, cands = [];
+  var det = null, sizes = [], dataSizes = [], exact = null, cands = [], damaged = '';
   var chd = null, ecm = null;
   try {
     if (job.kind === 'chd') {
@@ -8238,7 +8241,7 @@ async function identifyJob(job, onStatus, onProvisional) {
         onStatus && onStatus('Checking against the game database…', 0);
         var crc = null;
         try { crc = await crcOf(th.file, 0, th.size, function (p) { onStatus && onStatus('Checking against the game database…', p); }, th.how); }
-        catch (e) { if (!th.how) throw e; } // a damaged compressed ISO or ECM image: no exact match (converting it reports the damage)
+        catch (e) { if (!th.how) throw e; damaged = e.message; } // a damaged compressed ISO or ECM image: no exact match, and the card says why
         var hits = th.bySize.filter(function (e) { return e.crc === crc; });
         if (hits.length) exact = hits;
       }
@@ -8279,7 +8282,7 @@ async function identifyJob(job, onStatus, onProvisional) {
     return {
       sys: sys, detected: det, entry: entry, method: method,
       name: entry ? entry.name : '', serial: (det && det.serial) || (entry && entry.serial) || '',
-      headerTitle: det && det.title || '', checking: checking
+      headerTitle: det && det.title || '', checking: checking, damaged: damaged
     };
   }
 }
@@ -8399,7 +8402,9 @@ function identNote(job) {
   var id = job.ident;
   if (!id) return null;
   if (id.error) return el('div', { class: 'note' + (id.readFail ? ' warn' : '') }, id.readFail ? readFailHint(id.error) : 'Could not identify this game (' + id.error + ').');
-  if (!id.sys) return el('div', { class: 'note' }, 'Game not recognized. The output keeps the original name.');
+  // a compressed ISO or ECM image whose checksum step found it damaged: converting it will stop too
+  var damage = id.damaged ? id.damaged + ' Converting it stops with this error.' : '';
+  if (!id.sys) return el('div', { class: 'note' + (damage ? ' warn' : '') }, damage || 'Game not recognized. The output keeps the original name.');
   var box = el('div', { class: 'note ident' + (id.name ? ' ok' : '') });
   var sc = sysColor(id.sys);
   var head = el('div', { class: 'ident-head' }, el('span', { class: 'sysbadge', style: sc ? '--sys:' + sc[0] + ';--sys-fg:' + sc[1] : null }, sysShort(id.sys)), el('b', null, sysName(id.sys)));
@@ -8434,6 +8439,7 @@ function identNote(job) {
     job.ui.identLine = chk;
     box.append(chk);
   }
+  if (damage) box.append(el('div', { class: 'small ident-damaged', style: 'margin-top:4px;color:var(--warn)' }, damage));
   if (id.sys === 'gc' || id.sys === 'wii') box.append(el('div', { class: 'small', style: 'margin-top:4px' }, 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.'));
   return box;
 }
@@ -9972,9 +9978,31 @@ function cliPreview() {
   var c = cliCommand();
   $('#cliPreview').textContent = c.display + (c.missing.length ? '\n# still needed: ' + c.missing.join(', ') : '');
 }
+// a typed command's words as a shell splits them: "…" (where \" and \\ stand for " and \), '…' as
+// it is, and \ before any other character outside quotes (a name with a space: my\ game.cue)
+function shellWords(line) {
+  var out = [], cur = null, q = null;
+  for (var i = 0; i < line.length; i++) {
+    var c = line[i];
+    if (q === "'") { if (c === "'") q = null; else cur += c; continue; }
+    if (q === '"') {
+      if (c === '"') q = null;
+      else if (c === '\\' && (line[i + 1] === '"' || line[i + 1] === '\\')) cur += line[++i];
+      else cur += c;
+      continue;
+    }
+    if (/\s/.test(c)) { if (cur !== null) { out.push(cur); cur = null; } continue; }
+    if (cur === null) cur = '';
+    if (c === '"' || c === "'") q = c;
+    else if (c === '\\' && i + 1 < line.length) cur += line[++i];
+    else cur += c;
+  }
+  if (cur !== null) out.push(cur);
+  return out;
+}
 function cliParseText(text) {
   // quotes as phones type them (iOS smart punctuation) count as plain ones
-  var toks = tokenize(text.trim().replace(/[\u201c\u201d\u201e]/g, '"').replace(/[\u2018\u2019]/g, "'")), args = [];
+  var toks = shellWords(text.trim().replace(/[\u201c\u201d\u201e]/g, '"').replace(/[\u2018\u2019]/g, "'")), args = [];
   if (toks[0] && /^chdman(\.exe)?$/i.test(toks[0])) toks.shift();
   var cmd = toks[0];
   var writable = cmd === 'addmeta' || cmd === 'delmeta' || (cmd === 'verify' && toks.some(function (t) { return t === '-f' || t === '--fix'; }));
