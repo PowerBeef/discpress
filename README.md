@@ -39,7 +39,7 @@
 
 A single PlayStation or Saturn game can be a dozen `.bin` files plus a `.cue`. **CHD** packs the whole disc into one compressed file that takes much less space, loses nothing, and loads directly in MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast and more.
 
-The standard tool for making CHDs is **chdman**, a command-line program from the MAME project. **Discpress** puts the real chdman inside a friendly app that runs in your web browser, on your phone or your computer. There's no terminal and nothing to install, and your files never leave your device. It also recognizes your games and names each file after its official title.
+The standard tool for making CHDs is **chdman**, a command-line program from the MAME project. **Discpress** puts its own fork of chdman, built from MAME 0.289 and made faster with its bugs fixed, inside a friendly app that runs in your web browser, on your phone or your computer. By default it makes the very same CHD files as chdman 0.289. There's no terminal and nothing to install, and your files never leave your device. It also recognizes your games and names each file after its official title.
 
 Use it the way that suits you: **download it** as one HTML file that works anywhere, even without internet, or **use it online** with nothing to download. The online version is also the way to convert big games on iPhone and iPad.
 
@@ -50,7 +50,7 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
     <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/steps-mobile-dark.png">
     <source media="(max-width: 600px)" srcset="docs/brand/steps-mobile-light.png">
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/steps-dark.png">
-    <img src="docs/brand/steps-light.png" width="100%" alt="1. Add your games: pick the cue and bin files, a gdi set or an iso; Discpress spots the console and the exact game. 2. Press Start: the real chdman compresses every disc using all your CPU cores. 3. Save the CHDs, named after the official title and ready for your emulator.">
+    <img src="docs/brand/steps-light.png" width="100%" alt="1. Add your games: pick the cue and bin files, a gdi set or an iso; Discpress spots the console and the exact game. 2. Press Start: Discpress’s chdman compresses every disc using all your CPU cores. 3. Save the CHDs, named after the official title and ready for your emulator.">
   </picture>
 </p>
 
@@ -61,7 +61,7 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
     <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/features-mobile-dark.png">
     <source media="(max-width: 600px)" srcset="docs/brand/features-mobile-light.png">
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/features-dark.png">
-    <img src="docs/brand/features-light.png" width="100%" alt="The real chdman. Knows your games. Multi-core fast. Made for phones. Big discs welcome. Totally private.">
+    <img src="docs/brand/features-light.png" width="100%" alt="chdman, improved. Knows your games. Multi-core fast. Made for phones. Big discs welcome. Totally private.">
   </picture>
 </p>
 
