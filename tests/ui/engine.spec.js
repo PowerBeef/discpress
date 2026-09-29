@@ -320,3 +320,210 @@ test('libdeflate keeps the checksums, and 0.289 verifies what it makes', () => {
     if (upExtra.includes('-c')) expect(sha1(ld), `${what}: not zlib's bytes`).not.toBe(sha1(up));
   }
 });
+
+// Robustness fixes for malformed or unusual input. For valid input the engine's CHDs stay 0.289's.
+
+// deterministic noise (xorshift32), so the tests make the same files every time
+function noise(seed, n) {
+  let x = seed >>> 0;
+  const b = Buffer.alloc(n);
+  for (let i = 0; i < n; i++) {
+    x = (x ^ (x << 13)) >>> 0;
+    x = (x ^ (x >>> 17)) >>> 0;
+    x = (x ^ (x << 5)) >>> 0;
+    b[i] = x & 0xff;
+  }
+  return b;
+}
+const sha1of = file => crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex');
+const write = (name, data) => { const p = tmp(name); fs.writeFileSync(p, data); return p; };
+
+// A CD codec compresses the sectors, then the subcode after them into a buffer as large as a hunk.
+// 0.289 lets the subcode run past its end when the sectors hardly compress (an AddressSanitizer build
+// shows the heap overflow with these hunks); such a result can't win, so the CHD is the same.
+test('a CD hunk whose subcode doesn\'t fit after its sectors makes upstream\'s CHD', () => {
+  const raw = noise(1, 4 * 8 * 2448);
+  for (let f = 0; f < 32; f++) raw.fill(0, f * 2448, f * 2448 + 10); // sectors that deflate to 18,813-18,815 bytes of 18,816
+  const input = write('ovf.raw', raw);
+  for (const codecs of ['cdzl', 'cdlz,cdzl,cdfl', 'cdzs']) {
+    const up = tmp(`up-${codecs}.chd`), en = tmp(`en-${codecs}.chd`);
+    const args = ['-i', input, '-hs', '19584', '-us', '2448', '-c', codecs, '-f'];
+    expect(run(UPSTREAM, ['createraw', ...args, '-o', up]).code, `upstream ${codecs}`).toBe(0);
+    expect(run(ENGINE, ['createraw', ...args, '-o', en]).code, codecs).toBe(0);
+    expect(sha1of(en), codecs).toBe(sha1of(up));
+    expect(run(ENGINE, ['verify', '-i', en]).code, `verify ${codecs}`).toBe(0);
+  }
+});
+
+// cue and cdrdao TOC lines that belong to a track, before the first TRACK: 0.289 writes them before its
+// track table (track -1), which can crash it or not, depending on what lies there
+test('track lines before the first TRACK are an error, disc lines are fine', () => {
+  write('t.bin', noise(2, 300 * 2352));
+  const track = 'FILE "t.bin" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n';
+  const toc = 'TRACK MODE1_RAW\nDATAFILE "t.bin" 00:04:00\n';
+  for (const [name, text, message] of [
+    ['index.cue', 'FILE "t.bin" BINARY\n  INDEX 01 00:00:00\n' + track, 'INDEX before the first TRACK'],
+    ['pregap.cue', 'PREGAP 00:02:00\n' + track, 'PREGAP before the first TRACK'],
+    ['postgap.cue', 'POSTGAP 00:02:00\n' + track, 'POSTGAP before the first TRACK'],
+    ['flags.cue', 'FLAGS DCP\n' + track, 'FLAGS before the first TRACK'],
+    ['leadout.cue', 'REM LEAD-OUT 00:10:00\n' + track, 'REM LEAD-OUT before the first TRACK'],
+    ['datafile.toc', 'CD_ROM\nDATAFILE "t.bin"\n' + toc, 'DATAFILE before the first TRACK'],
+    ['copy.toc', 'CD_ROM\nCOPY\n' + toc, 'COPY before the first TRACK'],
+    ['start.toc', 'CD_ROM\nSTART 00:02:00\n' + toc, 'START before the first TRACK'],
+  ]) {
+    const input = write(name, text);
+    const r = run(ENGINE, ['createcd', '-i', input, '-o', tmp('e.chd'), '-f']);
+    expect({ code: r.code, signal: r.signal }, name).toEqual({ code: 1, signal: null });
+    expect(r.err, name).toContain(message);
+  }
+  // what belongs to the disc may come first, as in 0.289
+  for (const [name, text] of [
+    ['header.cue', 'CATALOG 0000000000000\nREM GENRE Test\nREM COMMENT "x"\n' + track],
+    ['header.toc', 'CD_ROM_XA\n// a comment\nCATALOG "0000000000000"\n' + toc],
+  ]) {
+    const input = write(name, text), up = tmp(`u-${name}.chd`), en = tmp(`e-${name}.chd`);
+    expect(run(UPSTREAM, ['createcd', '-i', input, '-o', up, '-f']).code, `upstream ${name}`).toBe(0);
+    expect(run(ENGINE, ['createcd', '-i', input, '-o', en, '-f']).code, name).toBe(0);
+    expect(sha1of(en), name).toBe(sha1of(up));
+  }
+});
+
+// A Nero image: 40 sectors of 2048 bytes, a DAOX chunk for one track, END! and the NER5 footer
+function nrg({ start = 1, size = 2048, end = true, daoxSize = 64 } = {}) {
+  const data = noise(3, 40 * 2048);
+  const daox = Buffer.alloc(72);
+  daox.write('DAOX', 0);
+  daox.writeUInt32BE(daoxSize, 4);
+  daox[28] = start; // first and last track
+  daox[29] = start;
+  daox.writeUInt16BE(size, 42); // sector size; mode 0 (2048-byte data) at 44
+  daox.writeBigUInt64BE(BigInt(data.length), 64); // index 0 and 1 at 48 and 56 are 0, then the end
+  const footer = Buffer.alloc(12);
+  footer.write('NER5', 0);
+  footer.writeBigUInt64BE(BigInt(data.length), 4);
+  return Buffer.concat([data, daox, end ? Buffer.from('END!\0\0\0\0', 'latin1') : Buffer.alloc(0), footer]);
+}
+
+test('a broken NRG image is an error, not a crash or a hang', () => {
+  // a well-formed one is still 0.289's
+  const ok = write('ok.nrg', nrg()), up = tmp('ok-up.chd'), en = tmp('ok-en.chd');
+  expect(run(UPSTREAM, ['createcd', '-i', ok, '-o', up, '-f']).code).toBe(0);
+  expect(run(ENGINE, ['createcd', '-i', ok, '-o', en, '-f']).code).toBe(0);
+  expect(sha1of(en)).toBe(sha1of(up));
+  const size0 = write('size0.nrg', nrg({ size: 0 }));
+  expect(run(UPSTREAM, ['createcd', '-i', size0, '-o', tmp('u.chd'), '-f']).signal).toBeTruthy(); // SIGFPE
+  // (0.289 never finishes the others)
+  for (const [name, image, message] of [
+    ['size0.nrg', null, 'has a sector size of 0'],
+    ['track0.nrg', nrg({ start: 0 }), 'has tracks 0 to 0'],
+    ['noend.nrg', nrg({ end: false }), 'end without an END! chunk'],
+    ['past.nrg', nrg({ daoxSize: 1 << 20 }), 'end without an END! chunk'],
+    ['short.nrg', Buffer.from('NER5'), 'Not a Nero 5.5 or later image'],
+  ]) {
+    const input = image ? write(name, image) : tmp(name);
+    const r = run(ENGINE, ['createcd', '-i', input, '-o', tmp('e.chd'), '-f']);
+    expect({ code: r.code, signal: r.signal }, name).toEqual({ code: 1, signal: null });
+    expect(r.err, name).toContain(message);
+  }
+});
+
+// 0.289 sizes the map's buffer without the Huffman tree that starts it, so the map of a CHD of a hunk
+// or so overflows: creation exits 0, but the map's last bytes are whatever lay past the buffer, and
+// the CHD usually can't be opened
+test('a CHD of a few hunks can be read', () => {
+  write('one frame.bin', Buffer.alloc(2352));
+  write('one hunk.bin', noise(11, 8 * 2352));
+  const cue = bin => write(`${bin}.cue`, `FILE "${bin}.bin" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n`);
+  const tiny = [
+    ['createcd', ['-i', cue('one frame')], true],
+    ['createcd', ['-i', cue('one hunk')], true],
+    ['createraw', ['-i', write('one.raw', noise(4, 19584)), '-hs', '19584', '-us', '2448'], false],
+  ];
+  for (const [command, args, broken] of tiny) {
+    const what = `${command} ${path.basename(args[1])}`, up = tmp('up.chd'), en = tmp('en.chd');
+    expect(run(UPSTREAM, [command, ...args, '-o', up, '-f']).code, `upstream ${what}`).toBe(0);
+    if (broken) expect(run(UPSTREAM, ['verify', '-i', up]).err, `upstream ${what}`).toContain('Decompression error'); // the bug
+    expect(run(ENGINE, [command, ...args, '-o', en, '-f']).code, what).toBe(0);
+    expect(run(ENGINE, ['verify', '-i', en]).code, what).toBe(0);
+    expect(run(UPSTREAM, ['verify', '-i', en]).code, `0.289 reads the engine's ${what}`).toBe(0);
+  }
+});
+
+test('the last track of a file that another file follows ends with its file', () => {
+  const data = noise(5, 300 * 2352), audio = noise(6, 300 * 2352), more = noise(7, 300 * 2352);
+  write('a.bin', Buffer.concat([data, audio]));
+  write('b.bin', more);
+  write('t1.bin', data);
+  write('t2.bin', audio);
+  const mix = write('mix.cue', 'FILE "a.bin" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    INDEX 01 00:04:00\n' +
+    'FILE "b.bin" BINARY\n  TRACK 03 AUDIO\n    INDEX 01 00:00:00\n');
+  const twin = write('twin.cue', 'FILE "t1.bin" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\nFILE "t2.bin" BINARY\n  TRACK 02 AUDIO\n    INDEX 01 00:00:00\n' +
+    'FILE "b.bin" BINARY\n  TRACK 03 AUDIO\n    INDEX 01 00:00:00\n');
+  const en = tmp('mix.chd'), up = tmp('mix-up.chd'), plain = tmp('twin.chd');
+  expect(run(UPSTREAM, ['createcd', '-i', twin, '-o', plain, '-f']).code).toBe(0);
+  expect(run(UPSTREAM, ['createcd', '-i', mix, '-o', up, '-f']).code).toBe(0);
+  expect(run(ENGINE, ['createcd', '-i', mix, '-o', en, '-f']).code).toBe(0);
+  expect(sha1of(en)).toBe(sha1of(plain));
+  expect(sha1of(up)).not.toBe(sha1of(plain)); // the bug: track 2 got all of a.bin, 600 frames
+});
+
+test('data in a MOTOROLA file is not byte-swapped', () => {
+  write('d.bin', noise(8, 100 * 2352));
+  const moto = write('moto data.cue', 'FILE "d.bin" MOTOROLA\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n');
+  const bin = write('bin data.cue', 'FILE "d.bin" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n');
+  const en = tmp('moto.chd'), up = tmp('moto-up.chd'), plain = tmp('bin.chd');
+  expect(run(UPSTREAM, ['createcd', '-i', bin, '-o', plain, '-f']).code).toBe(0);
+  expect(run(UPSTREAM, ['createcd', '-i', moto, '-o', up, '-f']).code).toBe(0);
+  expect(run(ENGINE, ['createcd', '-i', moto, '-o', en, '-f']).code).toBe(0);
+  expect(sha1of(en)).toBe(sha1of(plain));
+  expect(sha1of(up)).not.toBe(sha1of(plain)); // the bug
+});
+
+test('an output is never written over a track file', () => {
+  const cases = [
+    ['t.cue', 'FILE "a2.bin" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n'],
+    ['t.gdi', '1\n1 0 4 2352 a2.bin 0\n'],
+    ['t.toc', 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "a2.bin" 00:04:00\n'],
+  ];
+  for (const [name, text] of cases) {
+    const input = write(name, text), track = write('a2.bin', noise(9, 300 * 2352)), before = fs.readFileSync(track);
+    const r = run(ENGINE, ['createcd', '-i', input, '-o', track, '-f']);
+    expect({ code: r.code, signal: r.signal }, name).toEqual({ code: 1, signal: null });
+    expect(r.err, name).toContain('is also an input file');
+    expect(fs.readFileSync(track).equals(before), name).toBe(true);
+    // upstream truncates it, then deletes it
+    run(UPSTREAM, ['createcd', '-i', input, '-o', track, '-f']);
+    expect(fs.existsSync(track) && fs.readFileSync(track).equals(before), `upstream ${name}`).toBe(false);
+  }
+});
+
+test('a GDI track file that is missing, or a track size of 0, is an error', () => {
+  write('t1.bin', noise(10, 300 * 2352));
+  const missing = write('missing.gdi', '2\n1 0 4 2352 t1.bin 0\n2 600 4 2352 gone.bin 0\n');
+  expect(run(UPSTREAM, ['createcd', '-i', missing, '-o', tmp('u.chd'), '-f']).code).toBe(0); // the bug: an empty track 2
+  let r = run(ENGINE, ['createcd', '-i', missing, '-o', tmp('e.chd'), '-f']);
+  expect({ code: r.code, signal: r.signal }).toEqual({ code: 1, signal: null });
+  expect(r.err).toContain('couldn\'t find bin file');
+  const size0 = write('size0.gdi', '1\n1 0 0 0 t1.bin 0\n');
+  expect(run(UPSTREAM, ['createcd', '-i', size0, '-o', tmp('u.chd'), '-f']).signal).toBeTruthy(); // SIGFPE
+  r = run(ENGINE, ['createcd', '-i', size0, '-o', tmp('e.chd'), '-f']);
+  expect({ code: r.code, signal: r.signal }).toEqual({ code: 1, signal: null });
+  expect(r.err).toContain('Unknown track type 0 and track size 0');
+});
+
+test('extractcd of a damaged CHD is an error, and leaves no files', () => {
+  const good = makeChd('createcd', 'twine.cue');
+  const bad = tmp('bad.chd'), b = fs.readFileSync(good);
+  b[b.length >> 1] ^= 0xff; // in the middle of the hunks
+  fs.writeFileSync(bad, b);
+  const up = tmp('up'), en = tmp('en');
+  for (const d of [up, en]) fs.mkdirSync(d, { recursive: true });
+  expect(run(UPSTREAM, ['extractcd', '-i', bad, '-o', path.join(up, 'x.cue')]).code).toBe(0); // the bug
+  const r = run(ENGINE, ['extractcd', '-i', bad, '-o', path.join(en, 'x.cue')]);
+  expect({ code: r.code, signal: r.signal }).toEqual({ code: 1, signal: null });
+  expect(r.err).toContain('Error reading CHD file');
+  expect(r.err).toContain('Decompression error');
+  expect(fs.readdirSync(en)).toEqual([]);
+  // as extractraw fails on the same CHD
+  expect(run(ENGINE, ['extractraw', '-i', bad, '-o', path.join(en, 'x.raw')]).code).toBe(1);
+});
