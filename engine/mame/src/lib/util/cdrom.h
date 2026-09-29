@@ -20,6 +20,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 
 class cdrom_file {
@@ -121,16 +122,28 @@ public:
 		track_info tracks[MAX_TRACKS + 1];
 	};
 
+	// Discpress: a run of a track's frames in a file, or zeros (no file name)
+	struct track_input_piece
+	{
+		std::string fname;
+		uint64_t offset;
+		uint32_t frames;
+	};
+
 	struct track_input_entry
 	{
 		track_input_entry() { reset(); }
-		void reset() { fname.clear(); offset = 0; leadin = leadout = -1; swap = false; std::fill(std::begin(idx), std::end(idx), -1); }
+		void reset() { fname.clear(); offset = 0; leadin = leadout = -1; swap = false; std::fill(std::begin(idx), std::end(idx), -1); pieces.clear(); }
 
 		std::string fname;      // filename for each track
 		uint32_t offset;      // offset in the data file for each track
 		bool swap;          // data needs to be byte swapped
 		int32_t idx[MAX_INDEX + 1];
 		int32_t leadin, leadout; // TODO: these should probably be their own tracks entirely
+		// Discpress: when not empty, where the track's frames are, in order, instead of fname and offset:
+		// for a track in several files (a cdrdao TOC, or a cue sheet with INDEX 00 in the previous FILE)
+		// or with frames of zeros that no file holds
+		std::vector<track_input_piece> pieces;
 	};
 
 	struct track_input_info
