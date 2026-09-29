@@ -25,6 +25,7 @@ does all of this when a session starts.
 | `npm run test:dev` | the same against a page assembled from the current `app/` and `db/` (with `build/`'s wasm, taken first from `dist/discpress.html` when that is newer and differs) |
 | `npx playwright test ui/convert.spec.js` | one file; add `-g "ps2"` to filter by test name |
 | `npx playwright test --project=iphone` | one project: `desktop`, `file-url`, `iphone`, `android`, `layout` |
+| `EXTRA_BROWSERS=1 npx playwright test --project=webkit` | real WebKit and Firefox too (`webkit`, `iphone-webkit`, `firefox`), once installed: `PLAYWRIGHT_BROWSERS_PATH=<dir> npx playwright install webkit firefox` and `npx playwright install-deps webkit firefox`, with Chromium linked into `<dir>`. Playwright's Linux WebKit has no `navigator.storage` and fails navigations while offline, so the private-storage tests and the offline reload skip there; `engine.spec` runs in the Chromium projects only |
 | `npm run report` | open the HTML report of the last run (traces and screenshots of failures) |
 | `npm run bench -- --quick` | quick benchmark on the small fixtures (about 1.5 minutes) |
 | `npm run bench` | full benchmark on large generated images (300 MB CD, 1 GB DVD) |
@@ -54,7 +55,7 @@ it serves, and the run stops if that isn't the page `DISCPRESS_HTML` picks (stop
 
 `fixtures/make_fixtures.py` generates synthetic discs into `.cache/fixtures/` (deterministic,
 about a second): ISO 9660 file systems, raw CD sectors with valid EDC/ECC (Mode 1 and Mode 2),
-CD audio, a CloneCD image, a cdrdao TOC and a Nero image, compressed ISOs (CSO v1 and v2, ZSO; the generator has its own LZ4 encoder), ECM images (the generator's encoder writes the same bytes as the ecm tools' `bin2ecm`, including Mode 2 Form 2 sectors and silence stored as sectors), cue sheets chdman 0.289 misreads (each with a plain twin), cue sheets with more than a CHD's tracks hold (CATALOG, FLAGS, ISRC, INDEX 02, `CDI/2352`), and console boot headers for PlayStation, PS2, PSP, Saturn, Sega CD and Dreamcast (GDI).
+CD audio, a CloneCD image, a cdrdao TOC and a Nero image (compared with the engine's native build, `engine: true`, or a cue twin, since chdman 0.289 reads their pregaps wrongly), a PlayStation disc booting `PSX.EXE`, a NAOMI 2 GD-ROM, compressed ISOs (CSO v1 and v2, ZSO; the generator has its own LZ4 encoder), ECM images (the generator's encoder writes the same bytes as the ecm tools' `bin2ecm`, including Mode 2 Form 2 sectors and silence stored as sectors), cue sheets chdman 0.289 misreads (each with a plain twin), cue sheets with more than a CHD's tracks hold (CATALOG, FLAGS, ISRC, INDEX 02, `CDI/2352`), and console boot headers for PlayStation, PS2, PSP, Saturn, Sega CD and Dreamcast (GDI).
 They carry serial numbers of real games, so identification can be tested against the built-in
 Redump database, but contain no game data. `manifest.json` lists each fixture with the job and
 identification the app should produce. `--bench` adds large, realistic images for benchmarks.

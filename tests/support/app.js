@@ -85,7 +85,8 @@ export class App {
   }
 
   allowErrors(re) { this.allowed.push(re); }
-  unexpectedErrors() { return this.errors.filter(e => !this.allowed.some(re => re.test(e))); }
+  // (WebKit logs the viewport's interactive-widget key, which only Chrome reads, as an error)
+  unexpectedErrors() { return this.errors.filter(e => !/^Viewport argument key "interactive-widget" not recognized/.test(e) && !this.allowed.some(re => re.test(e))); }
   foreignRequests() {
     const page = this.page.url().split('#')[0];
     return [...new Set(this.requests)].filter(u => !(u.split('#')[0] === page || u.startsWith('blob:') || u.startsWith('data:')));

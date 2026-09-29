@@ -146,8 +146,9 @@ function readerWorker(msg, timeout) {
   });
 }
 // opens a CHD in a worker and reads sectors from it (ciso: a CSO/ZSO compressed ISO, read like a DVD CHD)
-function chdReader(file, ciso) {
-  return readerWorker({ type: 'reader', name: 'x.chd', blob: file, ciso: !!ciso }).then(function (r) {
+// (parent: the parent CHD a child CHD needs)
+function chdReader(file, ciso, parent) {
+  return readerWorker({ type: 'reader', name: 'x.chd', blob: file, ciso: !!ciso, parent: parent || null }).then(function (r) {
     var m = r.info;
     return { kind: m.kind, tracks: m.tracks, logical: m.logical, read: function (track, lba) { return r.request({ track: track, lba: lba }); }, close: r.close };
   });
@@ -188,6 +189,7 @@ async function crcHere(blob, start, end, onProgress) {
     for (var i = 0, l = b.length; i < l; i++) crc = T[(crc ^ b[i]) & 255] ^ (crc >>> 8);
     onProgress && onProgress((pos - (start || 0)) / (end - (start || 0)));
     await sleep(0);
+    if (Tuning.running) { try { await Tuning.running; } catch (e) { /* measured or not, go on */ } }
   }
   crc = (crc ^ -1) >>> 0;
   return ('00000000' + crc.toString(16).toUpperCase()).slice(-8);
@@ -195,23 +197,45 @@ async function crcHere(blob, start, end, onProgress) {
 // how: 'ciso', the checksum of the ISO inside a CSO/ZSO image, or 'ecm', of the image inside an ECM
 // file, which only a worker can unpack
 function crcOf(blob, start, end, onProgress, how) {
-  var w = DEBUG.stage && !how ? Promise.reject(new Error('debug')) : crcWorker(blob, start, end, onProgress, how);
-  var p = how ? w : w.catch(function () { return crcHere(blob, start, end, onProgress); });
+  // a checksum stopped for the device's speed test (pauseChecksums) starts over once the test is done
+  var run = function () {
+    // not while the speed test measures (one that starts meanwhile is stopped by pauseChecksums)
+    var w = Promise.resolve(Tuning.running).catch(function () {}).then(function () {
+      return DEBUG.stage && !how ? Promise.reject(new Error('debug')) : crcWorker(blob, start, end, onProgress, how);
+    });
+    return w.catch(function (e) {
+      if (e && e.paused) return Promise.resolve(Tuning.running).catch(function () {}).then(run);
+      if (how) throw e;
+      return crcHere(blob, start, end, onProgress);
+    });
+  };
+  var p = run();
   // DEBUG.crcDelay (ms): a slow checksum, for testing that conversions don't wait for it
   return DEBUG.crcDelay ? p.then(function (c) { return sleep(DEBUG.crcDelay).then(function () { return c; }); }) : p;
 }
+// checksum workers running now, which the speed test stops so that it measures an idle device
+var crcRunning = new Set();
+function pauseChecksums() {
+  crcRunning.forEach(function (c) { c.stop(); });
+}
 function crcWorker(blob, start, end, onProgress, how) {
   return Engine.ready().then(function () {
-    return new Promise(function (resolve, reject) {
+    return new Promise(function (resolveRaw, rejectRaw) {
       var w = new Worker(Engine.url);
+      var entry = { stop: function () { w.terminate(); var e = new Error('paused'); e.paused = true; reject(e); } };
+      var resolve = function (v) { crcRunning.delete(entry); resolveRaw(v); };
+      var reject = function (e) { crcRunning.delete(entry); rejectRaw(e); };
+      crcRunning.add(entry);
+      var why = null; // what the worker said was wrong (a damaged compressed ISO or ECM image)
       w.onmessage = function (e) {
         var m = e.data;
         if (m.type === 'crc-progress') onProgress && onProgress(m.done / m.total);
         else if (m.type === 'crc') { w.terminate(); resolve(m.crc); }
-        else if (m.type === 'fatal') { w.terminate(); reject(new Error(m.message)); }
+        else if (m.type === 'notice') { if (m.level === 'error' && !why) why = m.message; }
+        else if (m.type === 'fatal') { w.terminate(); reject(new Error(why || m.message)); }
       };
       w.onerror = function (e) { w.terminate(); reject(new Error(e.message || 'worker error')); };
-      Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end, ciso: how === 'ciso', ecm: how === 'ecm' }); // with the compiled module, for zlib's crc32
+      Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end, ciso: how === 'ciso', ecm: how === 'ecm', debugSlow: DEBUG.crcSlow }); // with the compiled module, for zlib's crc32
     });
   });
 }
@@ -263,6 +287,9 @@ function psSerial(path) {
   return m ? m[1] + '-' + m[2] + m[3] : '';
 }
 
+// the database lists NAOMI and NAOMI 2 GD-ROMs apart, and their headers look alike: one family
+function sameSys(a, b) { return a === b || (/^naomi2?$/.test(a) && /^naomi2?$/.test(b)); }
+
 /* ---------- console detection from the first sectors of a data track ---------- */
 async function detectTrack(rd) {
   var s0 = await rd.read(0);
@@ -271,7 +298,8 @@ async function detectTrack(rd) {
   if (h === 'SEGA SEGASATURN ') return { sys: 'saturn', serial: clean(asc(s0, 0x20, 10)), title: clean(asc(s0, 0x60, 112)) };
   if (h === 'SEGA SEGAKATANA ') {
     var hw = clean(asc(s0, 0x30, 16));
-    return { sys: /NAOMI/i.test(clean(asc(s0, 0x10, 16)) + hw) ? 'naomi' : 'dc', serial: clean(asc(s0, 0x40, 10)), title: clean(asc(s0, 0x80, 128)) };
+    var arcade = clean(asc(s0, 0x10, 16)) + ' ' + hw;
+    return { sys: /NAOMI\s*2/i.test(arcade) ? 'naomi2' : /NAOMI/i.test(arcade) ? 'naomi' : 'dc', serial: clean(asc(s0, 0x40, 10)), title: clean(asc(s0, 0x80, 128)) };
   }
   if (/^SEGADISCSYSTEM|^SEGABOOTDISC|^SEGA-CD|^SEGA_CD/.test(h)) {
     var m = /^\s*(?:GM|AI|OS|BR)?\s*([A-Z0-9][A-Z0-9-]*)/.exec(asc(s0, 0x180, 14));
@@ -303,14 +331,16 @@ async function detectTrack(rd) {
       } catch (e) { /* ignore */ }
       return r;
     }
+    // a boot file named after the serial (SLUS_005.94) in the root: for discs whose SYSTEM.CNF boots
+    // a generic PSX.EXE, and those without one
+    var exe = null;
+    files.forEach(function (v, k) { if (!exe && /^[A-Z]{4}_\d{3}\.\d{2}(;1)?$/.test(k)) exe = k; });
     if (files.has('SYSTEM.CNF')) {
       var cnf = new TextDecoder().decode(await isoFile(rd, files.get('SYSTEM.CNF'), 2048));
       var b2 = /BOOT2\s*=\s*([^\r\n]+)/i.exec(cnf), b1 = /BOOT\s*=\s*([^\r\n]+)/i.exec(cnf);
       if (b2) return { sys: 'ps2', serial: psSerial(b2[1].trim()), title: volId };
-      if (b1) return { sys: 'ps1', serial: psSerial(b1[1].trim()), title: volId };
+      if (b1) return { sys: 'ps1', serial: psSerial(b1[1].trim()) || (exe ? psSerial(exe) : ''), title: volId };
     }
-    var exe = null;
-    files.forEach(function (v, k) { if (!exe && /^[A-Z]{4}_\d{3}\.\d{2}$/.test(k)) exe = k; });
     if (/PLAYSTATION/i.test(sysId)) return { sys: 'ps1', serial: exe ? psSerial(exe) : '', title: volId };
     if (files.has('IPL.TXT')) return { sys: 'ngcd', title: volId };
     if (/CDTV/i.test(sysId)) return { sys: 'cdtv', title: volId };
@@ -359,33 +389,63 @@ function probePlan(job, images, nrg) {
       });
     });
   } else if (job.src === 'toc' && job.descText) {
-    // where chdman 0.289 finds each track (cdrom_file::parse_toc): `#bytes` or an MSF offset after the
-    // file name, a second MSF adding to it, START inside the file before index 1
-    var tt = [], cnt = new Map();
+    // where the engine finds each track (cdrdao's grammar, cdrom_file::parse_toc): a track is a run of
+    // pieces, files and zeros (ZERO, SILENCE, PREGAP); INDEX 01 is at START, else at its first frame.
+    // Times are mm:ss:ff; plain numbers are bytes (DATAFILE, ZERO) or samples of 4 bytes (AUDIOFILE,
+    // SILENCE), but frames for START and PREGAP (msf_to_frames). A run ends on a whole sector (zeros pad it)
+    var tt = [];
+    var units = function (w, stride, sample) {
+      if (/^\d+:\d+:\d+$/.test(w)) return msfFrames(w) * stride;
+      return (+w || 0) * (sample ? 4 : 1);
+    };
+    var frames = function (w) { return /:/.test(w) ? msfFrames(w) : +w || 0; };
+    var sectors = function (bytes, stride) { return Math.ceil(bytes / stride) * stride; };
     job.descText.split(/\r?\n/).forEach(function (ln) {
-      var a = tokenize(ln.replace(/\/\/.*$/, '')), t = tt[tt.length - 1];
-      if (a[0] === 'TRACK' && a[1]) {
+      var a = tokenize(ln.replace(/\/\/.*$/, '')), t = tt[tt.length - 1], k = a[0];
+      if (k === 'TRACK' && a[1]) {
         var ss = { MODE1: 2048, MODE2_FORM1: 2048, MODE2: 2336, MODE2_FORM_MIX: 2336, MODE1_RAW: 2352, MODE2_RAW: 2352 }[a[1]] || 0;
-        tt.push({ no: tt.length + 1, size: ss, stride: ss + (/^RW(_RAW)?$/.test(a[2] || '') ? 96 : 0), file: null, offset: 0, start: 0 });
-      } else if (t && !t.file && /^(DATAFILE|AUDIOFILE|FILE)$/.test(a[0]) && a[1] != null) {
-        t.file = byName(a[1]);
-        var i = a[2] === 'SWAP' ? 3 : 2, off = 0;
-        if (/^#\d/.test(a[i] || '')) off = +a[i].slice(1);
-        else if (/^\d/.test(a[i] || '')) off = msfFrames(a[i]) * t.stride;
-        if (/^\d/.test(a[i + 1] || '') && /^\d/.test(a[i + 2] || '')) off += msfFrames(a[i + 1]) * t.stride;
-        else if (!/^\d/.test(a[i + 1] || '') && t.no === 1 && !/^#/.test(a[i] || '')) off = 0; // a lone length
-        t.offset = off;
-        if (t.file) cnt.set(t.file, (cnt.get(t.file) || 0) + 1);
-      } else if (t && a[0] === 'START' && a[1]) t.start = msfFrames(a[1]);
+        tt.push({ no: tt.length + 1, size: ss, stride: (ss || 2352) + (/^RW(_RAW)?$/.test(a[2] || '') ? 96 : 0), runs: [], bytes: 0, start: null });
+        return;
+      }
+      if (!t) return;
+      var num = function (w) { return /^\d/.test(w || '') || /^#\d/.test(w || ''); };
+      if (/^(DATAFILE|AUDIOFILE|FILE)$/.test(k) && a[1] != null) {
+        var f = byName(a[1]), i = a[2] === 'SWAP' ? 3 : 2, audio = k !== 'DATAFILE', off;
+        off = /^#\d/.test(a[i] || '') ? +a[i++].slice(1) : 0;
+        // AUDIOFILE/FILE: the start in the file; chdman 0.289's DATAFILE "f" start length: likewise
+        if (num(a[i]) && (audio || num(a[i + 1]))) off += units(a[i++], t.stride, audio);
+        var len = num(a[i]) ? units(a[i], t.stride, audio) : f ? Math.max(0, f.size - off) : 0;
+        len = sectors(len, t.stride);
+        t.runs.push({ file: f, offset: off, bytes: len });
+        t.bytes += len;
+      } else if ((k === 'ZERO' || k === 'SILENCE') && num(a[a.length - 1])) {
+        var z = sectors(units(a[a.length - 1], t.stride, k === 'SILENCE'), t.stride);
+        t.runs.push({ file: null, bytes: z }); t.bytes += z;
+      } else if (k === 'PREGAP' && a[1]) {
+        var pg = frames(a[1]) * t.stride;
+        t.runs.push({ file: null, bytes: pg }); t.bytes += pg;
+        t.start = t.bytes;
+      } else if (k === 'START') t.start = a[1] ? frames(a[1]) * t.stride : t.bytes;
     });
-    var hashed = new Set();
+    var tracksOf = new Map();
+    tt.forEach(function (t) { t.runs.forEach(function (r) { if (r.file) (tracksOf.get(r.file) || tracksOf.set(r.file, new Set()).get(r.file)).add(t.no); }); });
+    tracksOf.forEach(function (nos, f) { hashes.push({ file: f, track: nos.size === 1 ? nos.values().next().value : 0 }); });
     tt.forEach(function (t) {
-      if (!t.file) return;
-      if (!hashed.has(t.file)) { hashed.add(t.file); hashes.push({ file: t.file, track: cnt.get(t.file) === 1 ? t.no : 0 }); }
-      if (t.size) readers.push(fileReader(t.file, t.offset + t.start * t.stride, t.size, t.stride));
+      if (!t.size) return; // audio
+      // INDEX 01: the byte `start` of the track's runs; from zeros, the next file's first byte
+      var at = t.start || 0, pos = 0;
+      for (var r = 0; r < t.runs.length; r++) {
+        var run = t.runs[r];
+        if (at < pos + run.bytes || r === t.runs.length - 1) {
+          var fr = run.file ? run : t.runs.slice(r).find(function (x) { return x.file; });
+          if (fr) readers.push(fileReader(fr.file, fr.offset + (fr === run ? at - pos : 0), t.size, t.stride));
+          break;
+        }
+        pos += run.bytes;
+      }
     });
   } else if (job.src === 'nrg' && nrg) {
-    // a Nero image: one file, its track list at the end (read by nrgTracks)
+    // a Nero image: one file, its track list at the end (read by nrgTracks); each track's data from index1
     var nf = fileOf(job.files[0]);
     nrg.forEach(function (t) {
       if (t.size === 2352) hashes.push({ file: nf.slice(t.no === 1 ? t.index1 : t.index0, t.end), track: t.no });
@@ -416,7 +476,7 @@ function probePlan(job, images, nrg) {
   return { readers: readers, hashes: hashes };
 }
 
-// the tracks of a Nero 5.5 or later image (.nrg), as chdman 0.289 reads them (cdrom_file::parse_nero):
+// the tracks of a Nero 5.5 or later image (.nrg), as the engine reads them (cdrom_file::parse_nero):
 // the file ends with "NER5" and the offset of a chain of chunks, DAOX lists the tracks. null if not one
 async function nrgTracks(file) {
   var bytes = async function (at, n) { return new Uint8Array(await file.slice(at, at + n).arrayBuffer()); };
@@ -447,11 +507,11 @@ async function nrgTracks(file) {
 // (console, serial, sizes), so a conversion can start while the checksum confirms the release
 async function identifyJob(job, onStatus, onProvisional) {
   await GameDB.ready();
-  var det = null, sizes = [], dataSizes = [], exact = null, cands = [];
+  var det = null, sizes = [], dataSizes = [], exact = null, cands = [], damaged = '';
   var chd = null, ecm = null;
   try {
     if (job.kind === 'chd') {
-      chd = await chdReader(job.files[0].file);
+      chd = await chdReader(job.files[0].file, false, job.parentJob && job.parentJob.files[0].file);
       if (chd.kind === 1) {
         // as for .gdi files, a GD-ROM's IP.BIN header is on the high-density data track, the last one;
         // the low-density track 1 holds a plain ISO 9660 volume that alone would pass for a PC disc
@@ -497,7 +557,7 @@ async function identifyJob(job, onStatus, onProvisional) {
         sizes.push(size);
         var bySize = GameDB.size(size);
         if (det && !det.weak) {
-          var same = bySize.filter(function (e) { return e.sys === det.sys; });
+          var same = bySize.filter(function (e) { return sameSys(e.sys, det.sys); });
           if (same.length) bySize = same;
         }
         // the checksum of what a CSO/ZSO or ECM file holds: a worker unpacks it again
@@ -509,7 +569,7 @@ async function identifyJob(job, onStatus, onProvisional) {
         onStatus && onStatus('Checking against the game database…', 0);
         var crc = null;
         try { crc = await crcOf(th.file, 0, th.size, function (p) { onStatus && onStatus('Checking against the game database…', p); }, th.how); }
-        catch (e) { if (!th.how) throw e; } // a damaged compressed ISO or ECM image: no exact match (converting it reports the damage)
+        catch (e) { if (!th.how) throw e; damaged = e.message; } // a damaged compressed ISO or ECM image: no exact match, and the card says why
         var hits = th.bySize.filter(function (e) { return e.crc === crc; });
         if (hits.length) exact = hits;
       }
@@ -526,6 +586,9 @@ async function identifyJob(job, onStatus, onProvisional) {
       entry = exact[0];
       if (det && det.serial && exact.length > 1) entry = exact.find(function (e) { return normSerial(e.serial) === normSerial(det.serial); }) || entry;
       method = 'hash';
+      // one checksum listed under several names (the same dump released twice): the choice stays
+      var hn = exact.map(function (e) { return e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
+      if (hn.length > 1) entry = Object.assign({}, entry, { alternatives: hn });
     } else if (det && det.serial && (GameDB.serial(det.serial, det.sys).length || GameDB.serial(det.serial).length)) {
       cands = GameDB.serial(det.serial, det.sys);
       if (!cands.length) cands = GameDB.serial(det.serial);
@@ -542,7 +605,7 @@ async function identifyJob(job, onStatus, onProvisional) {
       // track is still a strong hint. Not without the console: among 40,000 discs, an audio track or a
       // PC disc often has the size of some game's (a music CD was named after one)
       var pool = [];
-      dataSizes.forEach(function (s) { GameDB.size(s).forEach(function (e) { if (e.sys === det.sys) pool.push(e); }); });
+      dataSizes.forEach(function (s) { GameDB.size(s).forEach(function (e) { if (sameSys(e.sys, det.sys)) pool.push(e); }); });
       var uniq = pool.map(function (e) { return e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
       if (uniq.length === 1) { entry = pool[0]; method = 'size'; }
     }
@@ -550,7 +613,7 @@ async function identifyJob(job, onStatus, onProvisional) {
     return {
       sys: sys, detected: det, entry: entry, method: method,
       name: entry ? entry.name : '', serial: (det && det.serial) || (entry && entry.serial) || '',
-      headerTitle: det && det.title || '', checking: checking
+      headerTitle: det && det.title || '', checking: checking, damaged: damaged
     };
   }
 }

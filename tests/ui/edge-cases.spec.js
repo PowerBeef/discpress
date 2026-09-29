@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect, fixture } from '../support/app.js';
 import { FIXTURES } from '../support/paths.js';
-import { extract, info, nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
+import { engineReference, extract, info, nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
 
 test('a cue with a missing track waits for it, then continues', async ({ app }) => {
   await app.open();
@@ -63,7 +63,6 @@ test('a truncated image gets a warning', async ({ app }) => {
 for (const [name, text, why] of [
   ['no tracks', 'FILE "lone.bin" BINARY\r\n', 'This CUE file lists no tracks.'],
   ['track zero', 'FILE "lone.bin" BINARY\r\n  TRACK 00 MODE2/2352\r\n    INDEX 01 00:00:00\r\n', 'Track numbers go from 01 to 99'],
-  ['no length', 'CD_ROM_XA\n\nTRACK MODE2_RAW\nDATAFILE "lone.bin"\n', 'chdman can\u2019t tell the length of track 1'],
 ]) {
   test(`a descriptor chdman can't convert is refused: ${name}`, async ({ app }) => {
     const file = name + (text.startsWith('CD_ROM') ? '.toc' : '.cue');
@@ -79,6 +78,21 @@ for (const [name, text, why] of [
     await expect(card.locator('code.cmd')).toBeEmpty();
   });
 }
+
+// chdman 0.289 never finished on a TOC without lengths; the engine reads cdrdao's grammar, where a
+// missing length is the rest of the file
+test('a TOC without lengths converts the whole file', async ({ app }) => {
+  fs.writeFileSync(path.join(FIXTURES, 'no length.toc'), 'CD_ROM_XA\n\nTRACK MODE2_RAW\nDATAFILE "lone.bin"\n');
+  await app.open();
+  await app.add(['no length.toc', 'lone.bin']);
+  const card = app.job('no length');
+  await app.settled(card);
+  await expect(card.locator('.note.ident')).toContainText('SLUS-00975');
+  await app.run(card);
+  const [out] = await app.downloads(card);
+  const ref = engineReference('createcd', 'no length.toc');
+  if (ref) expect(sha1File(out.path)).toBe(sha1File(ref));
+});
 
 // a CloneCD .ccd becomes a cue sheet for its .img (convert.spec: ps1-clonecd); it waits for the .img,
 // and what a cue sheet can't describe is refused
@@ -550,7 +564,9 @@ test('a cue sheet may name its file in single quotes, as chdman reads it', async
   }
 });
 
-test('a cancelled conversion leaves nothing in private storage', async ({ app, page }) => {
+test('a cancelled conversion leaves nothing in private storage', async ({ app, page, browserName }) => {
+  test.skip(browserName === 'webkit', 'Playwright\'s WebKit has no navigator.storage');
+
   await app.open({ settings: { threads: 1 } });
   await app.add(fixture('ps2-dvd').add);
   const card = app.jobs().first();
@@ -560,4 +576,42 @@ test('a cancelled conversion leaves nothing in private storage', async ({ app, p
   await card.locator('.job-foot button.danger', { hasText: 'Cancel' }).click();
   await app.waitState(card, 'canceled');
   await expect.poll(() => workFiles(page), { timeout: 15_000 }).toEqual([]);
+});
+
+// "Notify me when all jobs are done" (Settings): the notification code was there, but nothing ever
+// asked for the permission it needs (audit, remaining items)
+test('a notification says when all jobs are done, if turned on', async ({ app, page }) => {
+  await page.addInitScript(() => {
+    window.__notes = [];
+    window.Notification = class {
+      constructor(title, o) { window.__notes.push(title + ': ' + o.body); }
+      static get permission() { return window.__perm || 'default'; }
+      static async requestPermission() { window.__perm = 'granted'; return 'granted'; }
+    };
+    Object.defineProperty(document, 'hidden', { get: () => !!window.__hidden, configurable: true });
+  });
+  await app.open();
+  await app.settings({ setNotify: true });
+  await app.add(['tnd.iso']);
+  const card = app.job('tnd');
+  await app.settled(card);
+  await page.evaluate(() => { window.__hidden = true; }); // the page is in the background
+  await app.run(card);
+  await expect.poll(() => page.evaluate(() => window.__notes)).toEqual(['Discpress: All jobs are done.']);
+});
+
+// a lone file from folder A counted as "picked on its own": a cue sheet in folder B, added later, took it
+// (second review)
+test('a cue sheet added later does not take a lone file of the same name from another folder', async ({ app }, testInfo) => {
+  const root = testInfo.outputPath('two');
+  fs.mkdirSync(path.join(root, 'A'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'B'), { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'tnd.iso'), path.join(root, 'A', 'disc.iso'));
+  fs.writeFileSync(path.join(root, 'B', 'disc.cue'), 'FILE "disc.iso" BINARY\r\n  TRACK 01 MODE1/2048\r\n    INDEX 01 00:00:00\r\n');
+  await app.open();
+  await addFolder(app, path.join(root, 'A'));
+  await app.settled(app.job('disc'));
+  await addFolder(app, path.join(root, 'B'));
+  await expect(app.jobs()).toHaveCount(2);
+  await expect(app.page.locator('#jobs article.job[data-state="blocked"]')).toContainText('disc.iso');
 });

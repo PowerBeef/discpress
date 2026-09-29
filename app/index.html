@@ -9,13 +9,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="text-scale" content="scale">
 <script>
-/* Pick the scrolling model before anything paints.
+/* Pick the scrolling model and the theme before anything paints.
    doc   = the page scrolls (real browsers: toolbar collapse, tap-to-top, pull-to-refresh work natively)
    shell = fixed header + inner scroll area sized to the measured visible height
            (in-app web views and installed web apps, where the host insets the page unpredictably) */
 (function () {
-  var d = document.documentElement, ua = navigator.userAgent, pref = 'auto';
-  try { pref = (JSON.parse(localStorage.getItem('chdman-web-settings') || '{}').scroll) || 'auto'; } catch (e) {}
+  var d = document.documentElement, ua = navigator.userAgent, pref = 'auto', saved = {};
+  try { saved = JSON.parse(localStorage.getItem('chdman-web-settings') || '{}') || {}; pref = saved.scroll || 'auto'; } catch (e) {}
+  // the chosen theme too: ui.js runs after the 3 MB of inlined data, and WebKit paints before that
+  if (saved.theme === 'light' || saved.theme === 'dark') d.setAttribute('data-theme', saved.theme);
   var iOS = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   var standalone = (window.matchMedia && matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches) || navigator.standalone === true;
   var iosWebView = iOS && !/Safari\//.test(ua);
@@ -166,12 +168,13 @@
       </select>
       <span class="hint" id="storageInfo"></span>
     </label>
-    <div class="row" id="folderRow" hidden><button class="btn sm" id="pickFolder"><svg><use href="#i-folder"/></svg>Choose folder</button><span class="small muted">Current: <b id="folderName">none</b>. Files with the same name are replaced.</span></div>
+    <div class="row" id="folderRow" hidden><button class="btn sm" id="pickFolder"><svg><use href="#i-folder"/></svg>Choose folder</button><span class="small muted">Current: <b id="folderName">none</b>. A file already there is replaced only if you agree.</span></div>
     <label class="check"><input type="checkbox" id="setRename"> Name results after the official (Redump) game title</label>
     <div class="field"><label class="check"><input type="checkbox" id="setKeepCue"> Keep the cue sheet in CD CHDs</label>
       <span class="hint">Extracting as Redump then gives back the very same cue sheet, with what CHDs don't otherwise keep (CATALOG, FLAGS, ISRC, extra indexes). The CHD's checksums stay the same and emulators ignore the sheet, but the file is no longer byte for byte desktop chdman's.</span>
     </div>
     <label class="check"><input type="checkbox" id="setWake"> Keep the screen awake while working</label>
+    <label class="check" id="notifyRow" hidden><input type="checkbox" id="setNotify"> Notify me when all jobs are done while this page is in the background</label>
     <label class="field"><span>Appearance</span>
       <select id="setTheme"><option value="">Match system</option><option value="light">Light</option><option value="dark">Dark</option></select>
     </label>

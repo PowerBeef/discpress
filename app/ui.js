@@ -54,8 +54,8 @@ function base(name) { return name.replace(/^.*[\/\\]/, ''); }
 function stem(name) { return base(name).replace(/\.[^.]*$/, ''); }
 function dirOf(path) { var i = path.lastIndexOf('/'); return i < 0 ? '' : path.slice(0, i); }
 function uid() { return Math.random().toString(36).slice(2, 10); }
-// quoted as the Advanced tab reads commands back (tokenize): in double quotes, or single quotes around a name with "
-function quoteArg(a) { return /^[A-Za-z0-9_.,:\/=+-]+$/.test(a) ? a : a.indexOf('"') >= 0 ? "'" + a + "'" : '"' + a + '"'; }
+// quoted as the Advanced tab reads commands back (shellWords)
+function quoteArg(a) { return /^[A-Za-z0-9_.,:\/=+-]+$/.test(a) ? a : '"' + a.replace(/(["\\])/g, '\\$1') + '"'; }
 function plural(n, w, p) { return n + ' ' + (n === 1 ? w : (p || w + 's')); }
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
@@ -83,7 +83,7 @@ var HOSTED_URL = 'https://powerbeef.github.io/discpress/';
 var iosThreadCap = isIOS && !(/iPad/.test(navigator.userAgent) || navigator.platform === 'MacIntel') ? 4 : 0;
 var maxThreads = Math.min(cores, 16);
 // threads: 'auto' (measured per device, see Tuning) or a fixed number of compression threads
-var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false };
+var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false, notify: false };
 var outDir = null; // folder picked for direct writing (not persisted)
 try {
   var saved = JSON.parse(localStorage.getItem('chdman-web-settings') || '{}');
@@ -214,9 +214,16 @@ async function gunzip(bytes, size) {
 }
 
 // writes results streamed by the worker into a folder the user picked
-function makeSink(dir) {
-  var files = {}, failed = null;
-  function fail(e) { if (!failed) failed = e; }
+// opts.agreed: names the user already agreed to replace; opts.onFail(err): the first failure (a write
+// the folder refused, or a file the user chose to keep), which stops the run
+function makeSink(dir, opts) {
+  opts = opts || {};
+  var files = {}, failed = null, agreed = new Set(opts.agreed || []);
+  function fail(e) {
+    if (failed) return;
+    failed = e;
+    if (opts.onFail) opts.onFail(e);
+  }
   function q(id, fn) {
     var f = files[id];
     if (!f) return;
@@ -230,7 +237,18 @@ function makeSink(dir) {
         // only files this job created are removed
         var f = files[m.id] = { name: m.name, w: null, closed: false, size: 0, existed: false };
         f.chain = dir.getFileHandle(m.name).then(function () { f.existed = true; }, function () {})
-          .then(function () { return dir.getFileHandle(m.name, { create: true }); })
+          .then(function () {
+            // a file of the result (an extract's track file, say) that nobody asked about yet
+            if (f.existed && !agreed.has(m.name)) {
+              if (!confirm('\u201c' + m.name + '\u201d is already in the folder \u201c' + dir.name + '\u201d. Replace it?')) {
+                var e = new Error('Stopped: \u201c' + m.name + '\u201d is already in the folder, and you chose to keep it.');
+                e.kept = true;
+                throw e;
+              }
+              agreed.add(m.name);
+            }
+            return dir.getFileHandle(m.name, { create: true });
+          })
           .then(function (fh) { return fh.createWritable({ keepExistingData: false }); })
           .then(function (w) { f.w = w; }).catch(fail);
       } else if (m.type === 's-write') {
@@ -250,6 +268,8 @@ function makeSink(dir) {
       return Promise.all(Object.keys(files).map(function (k) { return files[k].chain; })).then(function () { if (failed) throw failed; });
     },
     abort: function () {
+      // writes still queued are skipped (a cancel while the last ones are saved: "Saving to folder")
+      if (!failed) failed = new Error('canceled');
       Object.keys(files).forEach(function (k) {
         var f = files[k];
         f.chain = f.chain.then(function () {
@@ -261,7 +281,8 @@ function makeSink(dir) {
 }
 
 var DEBUG = {};
-try { DEBUG = JSON.parse(localStorage.getItem('chdman-web-debug') || '{}'); } catch (e) { /* ignore */ }
+try { DEBUG = JSON.parse(localStorage.getItem('chdman-web-debug') || '{}') || {}; } catch (e) { /* ignore */ }
+if (typeof DEBUG !== 'object') DEBUG = {}; // a stored null, number or string: no debug options
 
 var Engine = {
   module: null, bytes: null, url: null, loading: null, error: null, simd: false,
@@ -289,8 +310,19 @@ var Engine = {
   },
   // runs one chdman command; returns {promise, cancel}
   run: function (o) {
-    var self = this, worker = null, helpers = [], finished = false, rejectFn;
-    var sink = o.outMode === 'stream' ? makeSink(o.outDir) : null;
+    var self = this, worker = null, helpers = [], finished = false, saving = false, rejectFn;
+    var sink = o.outMode === 'stream' ? makeSink(o.outDir, {
+      agreed: o.agreed,
+      // a write into the folder failed, or the user kept a file: stop now (not after the whole conversion)
+      onFail: function (e) {
+        if (finished && !saving) return;
+        if (e.kept) { e.canceled = true; toast(e.message); } // the user said no: canceled, as for the main file
+        saving = false;
+        cleanup();
+        sink.abort();
+        rejectFn(e);
+      }
+    }) : null;
     var ackWait = null;
     // the worker could not read an input itself: read it here and send it over
     async function feedStage(m) {
@@ -350,14 +382,20 @@ var Engine = {
           cleanup();
           if (!sink) { resolve(m); return; }
           o.onProgress && o.onProgress('Saving to folder, 100% complete');
-          sink.finish().then(function () { resolve(m); }, function (e) {
-            reject(new Error('Could not write to the output folder: ' + (e && e.message || e)));
+          // chdman is done, the last writes are still going: Cancel can still stop them (saving)
+          saving = true;
+          sink.finish().then(function () { if (saving) { saving = false; resolve(m); } }, function (e) {
+            if (!saving) return;
+            saving = false;
+            sink.abort(); // the files it created go (a failed write left an empty or partial one)
+            reject(e && e.kept ? e : new Error('Could not write to the output folder: ' + (e && e.message || e)));
           });
         }
       };
       worker.onerror = function (e) {
         if (finished) return;
         cleanup();
+        if (sink) sink.abort(); // a crashed worker's files in the folder: thrown away, like a cancel's
         reject(new Error(e.message || 'The background worker failed to start.'));
       };
       self.post(worker, {
@@ -368,7 +406,8 @@ var Engine = {
     return {
       promise: promise,
       cancel: function () {
-        if (finished) return;
+        if (finished && !saving) return;
+        saving = false;
         cleanup();
         if (sink) sink.abort();
         var err = new Error('Canceled');
@@ -415,6 +454,8 @@ var Tuning = {
   },
   _measure: async function (onStep) {
     await Engine.ready();
+    // a game's checksum (a core busy) stops now and starts over after the test (crcOf)
+    pauseChecksums();
     var HB = 4096, BATCH = 16, WARM = 250, WINDOW = 500, seq = 0;
     // the default DVD codecs (lzma, zlib, huff, flac): the same work as a real conversion
     var comps = [0x6c7a6d61, 0x7a6c6962, 0x68756666, 0x666c6163];
@@ -621,6 +662,7 @@ var Recovery = {
     var rec = all[key] || { results: {} };
     rec.results = rec.results || {};
     fn(rec);
+    if (key === Store.session) rec.alive = Date.now(); // for visits in browsers without Web Locks (settle)
     if (!rec.running && !Object.keys(rec.results).length) delete all[key];
     else all[key] = rec;
     this.write(all);
@@ -630,7 +672,7 @@ var Recovery = {
   },
   // results in memory ('blob') are recorded too: a reload loses them, and the next visit says so
   finished: function (job) {
-    var outs = job.outputs.filter(function (o) { return (o.kind === 'opfs' || o.kind === 'blob') && !o.downloaded; });
+    var outs = job.outputs.filter(function (o) { return (o.kind === 'opfs' || o.kind === 'blob') && !o.downloaded && !o.input; });
     this.update(function (rec) {
       if (outs.length) rec.results[job.id] = { title: job.title, outputs: outs.map(function (o) { return { name: o.name, size: o.size, slot: o.slot, kind: o.kind }; }) };
       else delete rec.results[job.id];
@@ -684,7 +726,8 @@ var Recovery = {
     var keep = {}, self = this;
     Object.keys(records).forEach(function (k) {
       if (k === Store.session) return;
-      var rec = records[k], open = !!held && held.has('chdman-web-' + k);
+      // open: holds its Web Lock; where the browser has none, wrote its record in the last few minutes
+      var rec = records[k], open = held ? held.has('chdman-web-' + k) : !!rec.alive && Date.now() - rec.alive < 5 * 60000;
       if (open) { keep[k] = rec; return; }
       if (names.indexOf(k) >= 0) {
         var res = self.kept(rec);
@@ -693,11 +736,21 @@ var Recovery = {
       }
       self.report(rec);
     });
-    var all = this.read(); // this visit's record may have been written meanwhile
-    if (all[Store.session]) keep[Store.session] = all[Store.session];
+    // records written meanwhile, while old folders were deleted: this visit's, and those of other open
+    // visits (or visits opened since), which keep their newest state
+    var all = this.read();
+    Object.keys(all).forEach(function (k) {
+      var open = held ? held.has('chdman-web-' + k) : !!all[k].alive && Date.now() - all[k].alive < 5 * 60000;
+      if (k === Store.session || open || !(k in records)) keep[k] = all[k];
+    });
     this.write(keep);
   }
 };
+
+// without Web Locks, a visit with a record keeps it fresh, so other visits leave it alone (settle)
+if (!(navigator.locks && navigator.locks.query)) {
+  setInterval(function () { if (Recovery.read()[Store.session]) Recovery.update(function () {}); }, 60000);
+}
 
 /* ============================================================
    disc descriptors (.cue / .gdi / .toc)
@@ -773,21 +826,6 @@ function decodeText(b) {
   try { return { text: new TextDecoder('utf-8', { fatal: true }).decode(b), recoded: false }; }
   catch (e) { return { text: new TextDecoder('windows-1252').decode(b), recoded: true }; }
 }
-// chdman's msf_to_frames: "mm:ss:ff", or a plain number of frames
-function tocMsf(s) {
-  var m = /^(\d+):(\d+):(\d+)/.exec(s);
-  return m ? (+m[1] * 60 + +m[2]) * 75 + +m[3] : parseInt(s, 10) || 0;
-}
-// the length chdman 0.289 reads from the words after a TOC file name: `#offset length`, `start length`
-// or `#offset start length`; a single value is the length only on track 1, elsewhere an offset
-function tocFrames(a, first) {
-  var i = 0, w = a[i++] || '', num = function (s) { return /^\d/.test(s || ''); };
-  if (w === 'SWAP') w = a[i++] || '';
-  var offset = w.charAt(0) === '#' ? parseInt(w.slice(1), 10) || 0 : num(w) ? tocMsf(w) : 0;
-  var len = a[i++] || '';
-  if (num(len)) { var after = a[i++] || ''; return tocMsf(num(after) ? after : len); }
-  return first ? offset : 0;
-}
 // A CloneCD control file (.ccd, INI style) as a cue sheet for its image: the .img holds raw 2,352-byte
 // sectors from LBA 0, and each [TRACK n] gives MODE (0 audio, 1 or 2 data) and INDEX n=LBA.
 // Returns {text, changed, problem} like fixDescriptor. The .sub (subchannel) has no place in the CHD.
@@ -844,27 +882,9 @@ function fixDescriptor(kind, text) {
     });
     if (!tracks) problem = 'This CUE file lists no tracks.';
   } else if (kind === 'toc') {
-    var frames = 0, file = null, prevFile = null;
-    var endTrack = function () {
-      if (tracks && !frames && !problem) problem = 'chdman can\u2019t tell the length of track ' + tracks + ' from this TOC file.';
-    };
-    lines = lines.map(function (ln) {
-      var t = tokenize(ln);
-      if (t[0] === 'TRACK') { endTrack(); tracks++; prevFile = file; file = null; frames = 0; }
-      else if (/^(FILE|DATAFILE|AUDIOFILE)$/.test(t[0]) && tracks && t.length > 1) {
-        var a = t.slice(2);
-        frames = tocFrames(a, tracks === 1);
-        // `DATAFILE "file" length`, as chdman itself writes for one file per track, starts at the
-        // beginning of its file; chdman reads the length as an offset past track 1 and drops the track
-        if (!frames && t[0] === 'DATAFILE' && tracks > 1 && /^\d/.test(a[0] || '') && !/^\d/.test(a[1] || '') && t[1] !== prevFile) {
-          ln = ln.replace(/^(\s*DATAFILE\s+(?:"[^"]*"|\S+)\s+)/, '$1#0 ');
-          frames = tocMsf(a[0]);
-        }
-        file = t[1];
-      }
-      return ln;
-    });
-    endTrack();
+    // the engine reads cdrdao's TOC grammar (a missing length is the rest of the file); a TOC without
+    // tracks is still refused, as chdman 0.289 never finished on one
+    lines.forEach(function (ln) { if (tokenize(ln)[0] === 'TRACK') tracks++; });
     if (!tracks) problem = 'This TOC file lists no tracks.';
   } else {
     return { text: text, changed: false, problem: '' };
@@ -922,6 +942,13 @@ function scheduleIdentify(job) {
 }
 async function pumpIdentify() {
   if (identBusy) return;
+  // the speed test measures the device: identification (its checksums) waits until it's done
+  if (Tuning.running && identQueue.length) {
+    identBusy = true;
+    try { await Tuning.running; } catch (e) { /* measured or not, go on */ }
+    identBusy = false;
+    return pumpIdentify();
+  }
   var it = identQueue.shift();
   if (!it) return;
   identBusy = true;
@@ -1016,7 +1043,9 @@ function identNote(job) {
   var id = job.ident;
   if (!id) return null;
   if (id.error) return el('div', { class: 'note' + (id.readFail ? ' warn' : '') }, id.readFail ? readFailHint(id.error) : 'Could not identify this game (' + id.error + ').');
-  if (!id.sys) return el('div', { class: 'note' }, 'Game not recognized. The output keeps the original name.');
+  // a compressed ISO or ECM image whose checksum step found it damaged: converting it will stop too
+  var damage = id.damaged ? id.damaged + ' Converting it stops with this error.' : '';
+  if (!id.sys) return el('div', { class: 'note' + (damage ? ' warn' : '') }, damage || 'Game not recognized. The output keeps the original name.');
   var box = el('div', { class: 'note ident' + (id.name ? ' ok' : '') });
   var sc = sysColor(id.sys);
   var head = el('div', { class: 'ident-head' }, el('span', { class: 'sysbadge', style: sc ? '--sys:' + sc[0] + ';--sys-fg:' + sc[1] : null }, sysShort(id.sys)), el('b', null, sysName(id.sys)));
@@ -1031,7 +1060,8 @@ function identNote(job) {
       var sel = el('select', { onchange: function () {
         id.name = job.versionPicked = sel.value;
         if (job.state === 'done') renameOutputs(job);
-        else if (job.state !== 'running' && job.state !== 'queued' && !job.outEdited && settings.rename) job.opts.out = id.name;
+        // until chdman runs (queued, or started but still waiting), the name is still to be used
+        else if (!job.run && !job.outEdited && settings.rename) job.opts.out = id.name;
         refreshJob(job, true);
       } });
       id.entry.alternatives.forEach(function (n) { sel.append(el('option', { value: n, selected: n === id.name }, n)); });
@@ -1051,6 +1081,7 @@ function identNote(job) {
     job.ui.identLine = chk;
     box.append(chk);
   }
+  if (damage) box.append(el('div', { class: 'small ident-damaged', style: 'margin-top:4px;color:var(--warn)' }, damage));
   if (id.sys === 'gc' || id.sys === 'wii') box.append(el('div', { class: 'small', style: 'margin-top:4px' }, 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.'));
   return box;
 }
@@ -1258,6 +1289,8 @@ async function addEntriesNow(entries) {
       ignored.push(name);
       continue;
     }
+    // where the file came from (its folder): a cue sheet taking it over later needs it (pickTrack)
+    if (job2.files.length === 1 && !job2.files[0].path) job2.files[0].path = e.path;
     created.push(job2);
   }
 
@@ -1316,7 +1349,7 @@ async function descriptorJob(d, pool, claimed) {
     if (!cands.length) {
       jobs.forEach(function (other) {
         if ((other.lone || (other.src === 'iso' && other.files.length === 1)) && other.state !== 'running' && other.state !== 'queued' && other.state !== 'done' && other.files[0] && other.files[0].name.toLowerCase() === want) {
-          cands.push({ file: other.files[0].file, path: other.files[0].name, fromJob: other });
+          cands.push({ file: other.files[0].file, path: other.files[0].path || other.files[0].name, fromJob: other });
         }
       });
     }
@@ -1383,7 +1416,7 @@ async function doProbe(job) {
     } else {
       job.state = 'ready';
       job.opts.format = defaultFormat(job.info.type);
-      if (!job.info.parent) scheduleIdentify(job);
+      if (!job.info.parent) scheduleIdentify(job); // a child CHD: once its parent is here (linkParents)
     }
   } catch (e) {
     job.state = 'error';
@@ -1426,6 +1459,8 @@ function linkParents() {
     var p = jobs.find(function (o) { return o !== job && o.kind === 'chd' && o.info && o.info.sha1 === job.info.parent; });
     var had = job.parentJob;
     job.parentJob = p || null;
+    // identified through its parent, which holds the data it shares
+    if (job.parentJob && !job.identPromise && job.state !== 'error') scheduleIdentify(job);
     if (had !== job.parentJob && job.el) refreshJob(job, true);
   });
 }
@@ -1917,7 +1952,7 @@ function abortStart(job) {
 }
 // results not saved anywhere yet (downloaded, shared or written into a folder)
 function unsaved(job) {
-  return job.state === 'done' && job.outputs.some(function (o) { return !o.downloaded && o.kind !== 'disk'; });
+  return job.state === 'done' && job.outputs.some(function (o) { return !o.downloaded && o.kind !== 'disk' && !o.input; });
 }
 // silent: don't ask; keepFiles: its files moved to another job, so they stay known (no re-adding them)
 function removeJob(job, silent, keepFiles) {
@@ -2010,13 +2045,24 @@ async function runJobNow(job) {
     try {
       if (settings.storage === 'folder' && outDir) {
         setProgress(job, null, 'Copying to folder…');
+        var had = await outDir.getFileHandle(nm).then(function () { return true; }, function () { return false; });
         var fh = await outDir.getFileHandle(nm, { create: true });
         var w = await fh.createWritable();
-        await src.stream().pipeTo(w);
+        // Cancel or Remove stop the copy (the writable is aborted: a file that was there stays as it was)
+        var ac = new AbortController();
+        aborted.then(function () { ac.abort(); });
+        try { await src.stream().pipeTo(w, { signal: ac.signal }); }
+        catch (e) {
+          if (!job.aborted) throw e;
+          if (!had) await outDir.removeEntry(nm).catch(function () {});
+          job.state = 'canceled';
+          if (jobs.indexOf(job) >= 0) refreshJob(job, true);
+          return;
+        }
         job.folderName = outDir.name;
         job.outputs = [{ name: nm, size: src.size, kind: 'disk' }];
       } else {
-        job.outputs = [{ name: nm, size: src.size, kind: 'blob', blob: src }];
+        job.outputs = [{ name: nm, size: src.size, kind: 'blob', blob: src, input: true }]; // the user's own file, renamed
       }
       job.state = 'done';
     } catch (e) { job.state = 'error'; job.errorText = e.message; }
@@ -2036,7 +2082,7 @@ async function runJobNow(job) {
   var t0 = performance.now(), phaseStart = t0, lastPhase = '', lastPct = 0, workerError = '';
   job.run = Engine.run({
     jobId: job.id, dirPath: Store.claim(job.id), args: spec.args, inputs: spec.inputs, writable: spec.writable,
-    slots: spec.slots, helpers: spec.helpers, outMode: spec.outMode, outDir: outDir,
+    slots: spec.slots, helpers: spec.helpers, outMode: spec.outMode, outDir: outDir, agreed: main ? [main] : [],
     onLine: function (s, t) {
       appendLog(job, t);
       var fm = /final ratio = ([\d.]+)%/.exec(t);
@@ -2164,10 +2210,16 @@ function releaseWake() {
 document.addEventListener('visibilitychange', function () {
   if (document.visibilityState === 'visible' && current) acquireWake();
 });
-function notifyDone() {
+// Settings: "Notify me when all jobs are done" (asks the browser's permission when turned on). Android's
+// Chrome only shows notifications through a service worker: the online version's, when it has one
+async function notifyDone() {
+  if (!settings.notify || !window.Notification || Notification.permission !== 'granted') return;
+  var body = 'All jobs are done.';
   try {
-    if (window.Notification && Notification.permission === 'granted') new Notification('Discpress', { body: 'All jobs finished.' });
-  } catch (e) { /* ignore */ }
+    var reg = navigator.serviceWorker && location.protocol === 'https:' ? await navigator.serviceWorker.getRegistration() : null;
+    if (reg) await reg.showNotification('Discpress', { body: body });
+    else new Notification('Discpress', { body: body });
+  } catch (e) { /* not shown here: nothing to do */ }
 }
 
 // the hosted copy (https, web/README.md): an installable web app that works offline. The file stays the same
@@ -2335,6 +2387,8 @@ async function downloadMany(list) {
     await downloadOutput(outs[i][0], outs[i][1]);
     await sleep(700);
   }
+  // browsers ask before a page downloads several files, and a "Block" there can't be seen from here
+  if (outs.length > 1) toast('If your browser asks whether to allow several downloads, allow them. A file that didn\u2019t arrive can be downloaded again from its card.', null, 8000);
 }
 // never replace a file already in the folder without asking: an earlier run's result, another game's
 // that got the same name, or anything else the user keeps there
@@ -2579,9 +2633,36 @@ function cliPreview() {
   var c = cliCommand();
   $('#cliPreview').textContent = c.display + (c.missing.length ? '\n# still needed: ' + c.missing.join(', ') : '');
 }
+// a typed command's words as a shell splits them: "…" (where \" and \\ stand for " and \), '…' as
+// it is, and \ before a space or a quote outside quotes (a name with a space: my\ game.cue)
+function shellWords(line) {
+  var out = [], cur = null, q = null;
+  for (var i = 0; i < line.length; i++) {
+    var c = line[i];
+    if (q === "'") { if (c === "'") q = null; else cur += c; continue; }
+    if (q === '"') {
+      if (c === '"') q = null;
+      else if (c === '\\' && (line[i + 1] === '"' || line[i + 1] === '\\')) cur += line[++i];
+      else cur += c;
+      continue;
+    }
+    if (/\s/.test(c)) { if (cur !== null) { out.push(cur); cur = null; } continue; }
+    if (cur === null) cur = '';
+    if (c === '"' || c === "'") q = c;
+    // \ escapes a space, a quote or itself; before anything else it stays (a Windows path: C:\games\x.cue)
+    else if (c === '\\' && i + 1 < line.length && /[\s"'\\]/.test(line[i + 1])) cur += line[++i];
+    else cur += c;
+  }
+  if (cur !== null) out.push(cur);
+  return out;
+}
 function cliParseText(text) {
-  // quotes as phones type them (iOS smart punctuation) count as plain ones
-  var toks = tokenize(text.trim().replace(/[\u201c\u201d\u201e]/g, '"').replace(/[\u2018\u2019]/g, "'")), args = [];
+  // quotes as phones type them (iOS smart punctuation) count as plain ones where they open or close a
+  // word; inside one (Tony Hawk\u2019s.iso) they are part of the name
+  var plain = text.trim()
+    .replace(/(^|\s)[\u201c\u201d\u201e]/g, '$1"').replace(/[\u201c\u201d](?=\s|$)/g, '"')
+    .replace(/(^|\s)[\u2018\u2019]/g, "$1'").replace(/[\u2018\u2019](?=\s|$)/g, "'");
+  var toks = shellWords(plain), args = [];
   if (toks[0] && /^chdman(\.exe)?$/i.test(toks[0])) toks.shift();
   var cmd = toks[0];
   var writable = cmd === 'addmeta' || cmd === 'delmeta' || (cmd === 'verify' && toks.some(function (t) { return t === '-f' || t === '--fix'; }));
@@ -2589,7 +2670,9 @@ function cliParseText(text) {
     var t = toks[i], prev = toks[i - 1];
     if (i > 0 && FILE_FLAGS[prev]) {
       var name = base(t);
-      var f = cli.files.find(function (x) { return x.name === name; }) || cli.files.find(function (x) { return x.name.toLowerCase() === name.toLowerCase(); });
+      // (apostrophes typed either way: ' or \u2019)
+      var loose = function (n) { return n.toLowerCase().replace(/[\u2018\u2019]/g, "'"); };
+      var f = cli.files.find(function (x) { return x.name === name; }) || cli.files.find(function (x) { return loose(x.name) === loose(name); });
       if (!f) throw new Error('"' + t + '" is not in the file list. Add it with "Add files" first.');
       args.push((writable && (prev === '-i' || prev === '--input') ? '/out/' : '/in/') + f.name);
     } else if (i > 0 && OUT_FLAGS[prev]) args.push('/out/' + base(t));
@@ -3040,6 +3123,19 @@ function init() {
     settings.keepCue = e.target.checked; saveSettings();
     jobs.forEach(function (j) { if (j.el && j.kind === 'create') refreshJob(j); });
   });
+  if (window.Notification) {
+    $('#notifyRow').hidden = false;
+    $('#setNotify').checked = !!settings.notify && Notification.permission === 'granted';
+    $('#setNotify').addEventListener('change', async function (e) {
+      var box = e.target;
+      if (box.checked && Notification.permission !== 'granted') {
+        var p = 'denied';
+        try { p = await Notification.requestPermission(); } catch (x) { /* not allowed to ask */ }
+        if (p !== 'granted') { box.checked = false; toast('The browser didn\u2019t allow notifications for this page. You can allow them in its site settings.', 'err'); }
+      }
+      settings.notify = box.checked; saveSettings();
+    });
+  }
   $('#setWake').checked = settings.wake;
   $('#setWake').addEventListener('change', function (e) { settings.wake = e.target.checked; saveSettings(); if (!settings.wake) releaseWake(); });
   $('#setScroll').value = settings.scroll || 'auto';

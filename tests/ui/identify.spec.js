@@ -235,3 +235,37 @@ test('a reader worker that dies fails its identification, and the next job is id
   await app.settled(twine);
   await expect(twine.locator('.note.ident')).toContainText('SLUS-01272');
 });
+
+// A CHD made against a parent (-op) holds only what differs from it; it was never identified.
+test('a child CHD is identified through its parent', async ({ app }) => {
+  test.skip(!nativeChdman(), 'needs native chdman');
+  const dir = path.join(FIXTURES, 'gen');
+  fs.mkdirSync(dir, { recursive: true });
+  chdman(['createcd', '-i', 'twine.cue', '-o', 'gen/twine-parent.chd', '-f']);
+  chdman(['createcd', '-i', 'twine.cue', '-o', 'gen/twine-child.chd', '-op', 'gen/twine-parent.chd', '-f']);
+  await app.open();
+  await app.add(['gen/twine-child.chd']);
+  const child = app.job('twine-child');
+  await app.waitState(child, 'ready');
+  await expect(child.locator('.note.ident')).toHaveCount(0); // no parent yet
+  await app.add(['gen/twine-parent.chd']);
+  await app.settled(child);
+  await expect(child.locator('.note.ident')).toContainText('SLUS-01272');
+  await expect(child).toContainText('007 - The World Is Not Enough (USA)');
+});
+
+// The checksum step reads an ECM image to its end, where a damaged one shows: that was dropped, and
+// the card said nothing until converting failed (audit, remaining items)
+test('an ECM image found damaged while checking against the database says so', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'damaged-ecm');
+  fs.mkdirSync(dir, { recursive: true });
+  const src = Buffer.from(fs.readFileSync(path.join(FIXTURES, 'xa.bin.ecm')));
+  src[src.length - 1] ^= 0x01; // the EDC the file ends with
+  fs.writeFileSync(path.join(dir, 'xa.bin.ecm'), src);
+  fs.copyFileSync(path.join(FIXTURES, 'xa.cue'), path.join(dir, 'xa.cue'));
+  await app.open({ testdb: true }); // xa.bin's size is in the database, so its checksum is computed
+  await app.add(['gen/damaged-ecm/xa.cue', 'gen/damaged-ecm/xa.bin.ecm']);
+  const card = app.job('xa');
+  await app.settled(card);
+  await expect(card.locator('.ident-damaged')).toContainText('"xa.bin.ecm" is damaged: the image rebuilt from it doesn’t match the checksum it ends with.');
+});

@@ -190,18 +190,27 @@ extern "C" EMSCRIPTEN_KEEPALIVE int wasm_inflate_raw(const uint8_t *src, uint32_
 
 namespace {
 std::unique_ptr<chd_file> p_chd;
+std::unique_ptr<chd_file> p_parent; // the parent CHD a child CHD needs, if it has one
 std::unique_ptr<cdrom_file> p_cd;
 }
 
 // returns 1 = CD/GD-ROM, 2 = other (DVD, HD, raw), -1 = cannot open, -2 = needs parent
-extern "C" EMSCRIPTEN_KEEPALIVE int wasm_probe_open(const char *path)
+// parent: the path of the child's parent CHD, or null
+extern "C" EMSCRIPTEN_KEEPALIVE int wasm_probe_open(const char *path, const char *parent)
 {
 	p_cd.reset();
 	p_chd.reset();
+	p_parent.reset();
 	try
 	{
+		if (parent && *parent)
+		{
+			p_parent = std::make_unique<chd_file>();
+			if (p_parent->open(parent))
+				p_parent.reset();
+		}
 		p_chd = std::make_unique<chd_file>();
-		std::error_condition err = p_chd->open(path);
+		std::error_condition err = p_chd->open(path, false, p_parent.get());
 		if (err == chd_file::error::REQUIRES_PARENT)
 			return -2;
 		if (err)

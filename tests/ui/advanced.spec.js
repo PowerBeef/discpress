@@ -54,7 +54,7 @@ test('missing required options are reported instead of run', async ({ app, page 
 // chdman 0.289 never finishes on these (0% forever, or -nan%); the engine reports an error
 for (const [label, file, text, message] of [
   ['a .bin read as a cdrdao TOC, with no tracks', 'lone.bin', null, 'no tracks found'],
-  ['a TOC without track lengths', 'nolength.toc', 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "lone.bin"\n', 'the tracks hold no data'],
+  ['a TOC whose track holds no data', 'nolength.toc', 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "lone.bin" #0 0\n', 'track 1 holds no data'],
 ]) {
   test(`a command chdman would never finish is an error: ${label}`, async ({ app, page }) => {
     if (text) fs.writeFileSync(path.join(FIXTURES, file), text);
@@ -156,7 +156,9 @@ test('typed commands accept single quotes and smart quotes around file names', a
 });
 
 // audit, batch 3: each run's results used to stay in private storage until the next visit
-test('a new command, or Clear temporary storage, removes the last command’s results', async ({ app, page }) => {
+test('a new command, or Clear temporary storage, removes the last command’s results', async ({ app, page, browserName }) => {
+  test.skip(browserName === 'webkit', 'Playwright\'s WebKit has no navigator.storage');
+
   const workDirs = () => page.evaluate(async () => {
     const out = [];
     try {
@@ -178,4 +180,27 @@ test('a new command, or Clear temporary storage, removes the last command’s re
   await page.click('#settingsClose');
   await expect.poll(workDirs).toEqual([]);
   await expect(page.locator('#cliOuts')).toBeEmpty();
+});
+
+test('typed commands accept backslash escapes, as a shell does', async ({ app, page }) => {
+  const dir = path.join(FIXTURES, 'gen');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'agent.iso'), path.join(dir, 'my game.iso'));
+  await openCli(app, page);
+  await addCliFiles(app, ['gen/my game.iso']);
+  await page.click('#cliEditToggle');
+  await page.locator('#cliText').fill('chdman createdvd -i my\\ game.iso -o "the \\"best\\" game.chd" -c none');
+  expect(await runCli(page)).toContain('[exit code 0]');
+  await expect(page.locator('#cliOuts')).toContainText('the "best" game.chd');
+});
+
+test('typed commands keep an apostrophe inside a name, typed either way', async ({ app, page }) => {
+  await openCli(app, page);
+  // (as a buffer: Playwright's file chooser drops a path with \u2019 in it)
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#cliAdd')]);
+  await chooser.setFiles([{ name: 'Tony Hawk\u2019s.iso', mimeType: 'application/octet-stream', buffer: fs.readFileSync(path.join(FIXTURES, 'agent.iso')) }]);
+  await page.click('#cliEditToggle');
+  await page.locator('#cliText').fill('chdman createdvd -i “Tony Hawk’s.iso” -o “Tony Hawk’s.chd” -c none');
+  expect(await runCli(page)).toContain('[exit code 0]');
+  await expect(page.locator('#cliOuts')).toContainText('Tony Hawk’s.chd');
 });

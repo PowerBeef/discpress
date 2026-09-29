@@ -275,6 +275,7 @@ static chdman_task do_create_dvd(parameters_map &params);
 static chdman_task do_create_ld(parameters_map &params);
 static chdman_task do_copy(parameters_map &params);
 static chdman_task do_extract_raw(parameters_map &params);
+static chdman_task do_extract_dvd(parameters_map &params); // Discpress
 static chdman_task do_extract_cd(parameters_map &params);
 static void do_extract_ld(parameters_map &params);
 static void do_add_metadata(parameters_map &params);
@@ -622,7 +623,8 @@ public:
 			if (offset >= startoffs && offset < endoffs)
 			{
 				// if we don't already have this file open, open it now
-				if (!m_file || m_lastfile.compare(m_info.track[tracknum].fname)!=0)
+				// Discpress: a track in pieces opens each piece's file as it reads it
+				if (m_info.track[tracknum].pieces.empty() && (!m_file || m_lastfile.compare(m_info.track[tracknum].fname)!=0))
 				{
 					m_file.reset();
 					m_lastfile = m_info.track[tracknum].fname;
@@ -663,6 +665,39 @@ public:
 						if (src_frame_start >= pad_track_start && src_frame_start < split_track_start)
 						{
 							memset(dest, 0, bytesperframe);
+						}
+						else if (!m_info.track[tracknum].pieces.empty())
+						{
+							// Discpress: a track in pieces, whose frames add up to the track's
+							uint64_t frame = (src_frame_start - src_track_start) / bytesperframe;
+							for (const cdrom_file::track_input_piece &piece : m_info.track[tracknum].pieces)
+							{
+								if (frame >= piece.frames)
+								{
+									frame -= piece.frames;
+									continue;
+								}
+								if (!piece.fname.empty()) // else zeros
+								{
+									if (!m_file || m_lastfile.compare(piece.fname) != 0)
+									{
+										m_file.reset();
+										m_lastfile = piece.fname;
+										std::error_condition const filerr = util::core_file::open(m_lastfile, OPEN_FLAG_READ, m_file);
+										if (filerr)
+											report_error(1, "Error opening input file (%s): %s", m_lastfile, filerr.message());
+									}
+									// the last frame may be partly in the file, and zeros after that (dest is zeroed)
+									std::size_t const want = (piece.tail != 0 && frame == piece.frames - 1) ? piece.tail : bytesperframe;
+									std::error_condition err = m_file->seek(piece.offset + frame * bytesperframe, SEEK_SET);
+									std::size_t count = 0;
+									if (!err)
+										std::tie(err, count) = read(*m_file, dest, want);
+									if (err || (count != want))
+										report_error(1, "Error reading input file (%s)'", m_lastfile);
+								}
+								break;
+							}
 						}
 						else
 						{
@@ -1018,7 +1053,7 @@ static const command_description s_commands[] =
 		}
 	},
 
-	{ COMMAND_EXTRACT_DVD, do_extract_raw, ": extract DVD file from a CHD input file",
+	{ COMMAND_EXTRACT_DVD, do_extract_dvd, ": extract DVD file from a CHD input file",
 		{
 			REQUIRED OPTION_OUTPUT,
 			OPTION_OUTPUT_FORCE,
@@ -1828,7 +1863,9 @@ void output_track_metadata(int mode, toc_writer &file, int tracknum, const cdrom
 		}
 
 		// output pregap
-		if (info.pregap > 0)
+		// Discpress: only a pregap that isn't in the file is zeros; one in the file is its data before START
+		// (0.289 wrote ZERO for both, which reads back as zeros followed by the pregap's data)
+		if (info.pregap > 0 && info.pgdatasize == 0)
 			file.printf("ZERO %s %s\n", modesubmode, msf_string_from_frames(info.pregap));
 
 		if (outputoffs == 0)
@@ -2436,6 +2473,9 @@ static chdman_task do_create_cd(parameters_map &params)
 		std::error_code ec;
 		if (std::filesystem::equivalent(std::filesystem::path(*output_chd_str), std::filesystem::path(track_info.track[tracknum].fname), ec))
 			report_error(1, "Error: output file (%s) is also an input file", *output_chd_str);
+		for (const cdrom_file::track_input_piece &piece : track_info.track[tracknum].pieces)
+			if (!piece.fname.empty() && std::filesystem::equivalent(std::filesystem::path(*output_chd_str), std::filesystem::path(piece.fname), ec))
+				report_error(1, "Error: output file (%s) is also an input file", *output_chd_str);
 	}
 
 	// process hunk size
@@ -3014,6 +3054,25 @@ static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::
 	std::error_condition const err = input_chd.read_bytes(offset, &frame[0], cdrom_file::FRAME_SIZE);
 	report_error(1, "Error reading CHD file (%s) at offset %d: %s", input_name, offset, err ? err.message() : std::string("read error"));
 }
+
+//-------------------------------------------------
+//  do_extract_dvd - Discpress: extractraw, but not
+//  of a CD (0.289 wrote its frames, subcode and
+//  all, as an .iso)
+//-------------------------------------------------
+
+static chdman_task do_extract_dvd(parameters_map &params)
+{
+	{
+		chd_file input_parent_chd;
+		chd_file input_chd;
+		parse_input_chd_parameters(params, input_chd, input_parent_chd);
+		if (!input_chd.check_is_cd() || !input_chd.check_is_gd())
+			report_error(1, "Input CHD is a CD-ROM or GD-ROM; extract it with extractcd, or its frames with extractraw");
+	}
+	co_await do_extract_raw(params);
+}
+
 
 static chdman_task do_extract_cd(parameters_map &params)
 {
