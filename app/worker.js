@@ -6,6 +6,14 @@ var ERR = { ENOENT: 44, EPERM: 63, EIO: 29, EINVAL: 28, EEXIST: 20, ENOTEMPTY: 5
 var S_IFDIR = 0o040000, S_IFREG = 0o100000;
 var DIR_MODE = S_IFDIR | 0o777, FILE_MODE = S_IFREG | 0o777;
 var BLOCK = 1 << 20;
+// an error for people: the stores throw {errno} objects, which print as "[object Object]"
+function errText(err) {
+  if (err && typeof err.errno === 'number') {
+    return err.errno === ERR.ENOSPC ? 'the browser\u2019s storage is full. Free some space, or delete earlier results (Settings \u2192 Clear temporary storage), and try again'
+      : err.errno === ERR.EIO ? 'a file could not be read or written' : 'file system error ' + err.errno;
+  }
+  return String(err && err.message || err);
+}
 var wasmModule = null;
 var syncReader = null;
 
@@ -376,7 +384,7 @@ function lz4Block(src, from, to, out, o, want) {
     i += 2;
     var m = (token & 15) + 4;
     if ((token & 15) === 15) { var c; do { c = src[i++]; m += c; } while (c === 255 && i < to); }
-    if (!off || off > o - start) return -1;
+    if (i > to || !off || off > o - start) return -1; // a length running past the block: damaged
     m = Math.min(m, end - o);
     if (off >= m) out.copyWithin(o, o - off, o - off + m);
     else for (var k = 0; k < m; k++) out[o + k] = out[o + k - off]; // overlapping: repeats the last bytes
@@ -509,6 +517,7 @@ StreamStore.prototype.write = function (src, pos) {
     var n = Math.min(len - done, BLOCK - off);
     if (this.flushed[ci]) {
       // region already on disk: forward a positional write
+      sinkPending += n;
       postMessage({ type: 's-write', id: this.id, pos: p, data: src.slice(done, done + n) });
     } else {
       var c = this.chunks[ci];
@@ -519,15 +528,18 @@ StreamStore.prototype.write = function (src, pos) {
   }
   if (pos + len > this.sizeV) this.sizeV = pos + len;
   // hand finished chunks (well behind the write position) to the page
+  // (from where the last scan stopped: a chunk written again behind it goes at finish())
   var upto = Math.floor(pos / BLOCK) - 1;
-  for (var k = PIN; k < upto; k++) {
+  for (var k = Math.max(PIN, this.scanned || 0); k < upto; k++) {
     var ch = this.chunks[k];
     if (ch) {
       this.chunks[k] = null;
       this.flushed[k] = true;
+      sinkPending += ch.length;
       postMessage({ type: 's-write', id: this.id, pos: k * BLOCK, data: ch }, [ch.buffer]);
     }
   }
+  if (upto > (this.scanned || 0)) this.scanned = upto;
   return len;
 };
 StreamStore.prototype.truncate = function (n) {
@@ -825,6 +837,7 @@ async function stageInput(msg, index, stages) {
       prog();
     }
   } catch (e) {
+    if (e && typeof e.errno === 'number') throw e; // the copy couldn't be written (storage full): not a read problem
     // async reads fail too: let the page read the file and send it over
     await new Promise(function (resolve, reject) {
       stageWaiter = { dst: dst, resolve: resolve, reject: reject, size: size, onChunk: function (p) { pos = p; prog(); } };
@@ -882,6 +895,7 @@ function setupParallel(M, ports) {
         failed = m.message;
         postMessage({ type: 'notice', level: 'error', message: 'A helper thread failed: ' + m.message });
         maybeWake();
+        rdWake(); // an extract or verify waiting on it: rdWait reports the failure
         return;
       }
       if (m.type === 'dresult') {
@@ -1089,7 +1103,7 @@ async function runHelper(msg) {
           [m.items.buffer, meta.buffer, sha1.buffer, out.buffer]);
       }
     } catch (err) {
-      port.postMessage({ type: 'error', message: String(err && err.message || err) });
+      port.postMessage({ type: 'error', message: errText(err) });
     }
   };
   postMessage({ type: 'helper-ready' });
@@ -1113,6 +1127,18 @@ function makeLineSink(stream) {
   };
 }
 
+// Results streamed into a folder (StreamStore) that the page hasn't written yet: over SINK_MAX, chdman
+// pauses (wasm_out_full) until the page's s-ack messages bring it under half of that
+var sinkPending = 0, sinkWaiter = null, SINK_MAX = 64 << 20;
+function sinkFull() { return sinkPending > SINK_MAX; }
+function sinkDrained() {
+  return new Promise(function (resolve) { if (sinkPending <= SINK_MAX / 2) resolve(); else sinkWaiter = resolve; });
+}
+function sinkAck(bytes) {
+  sinkPending = Math.max(0, sinkPending - bytes);
+  if (sinkWaiter && sinkPending <= SINK_MAX / 2) { var w = sinkWaiter; sinkWaiter = null; w(); }
+}
+
 // Runs a chdman command line and resolves with its exit code. A command that compresses with
 // helper workers pauses after each step (chdman_begin/chdman_resume return -1) until M.parWait()
 // says the next hunk is in, so the worker keeps receiving their results. Extract and verify pause
@@ -1123,13 +1149,16 @@ async function runChdman(M, args) {
   M.HEAPU32[(argv >>> 2) + args.length + 1] = 0;
   var code = M._chdman_begin(args.length + 1, argv);
   while (code === -1) {
-    await (M.rdBusy && M.rdBusy() ? M.rdWait() : M.parWait());
+    if (sinkFull()) await sinkDrained();
+    if (M.rdBusy && M.rdBusy()) await M.rdWait();
+    else if (M.parWait) await M.parWait();
     code = M._chdman_resume();
   }
   return code;
 }
 
 async function runJob(msg) {
+  if (msg.debugSinkMax) SINK_MAX = msg.debugSinkMax; // testing: a small limit
   await loadModule(msg);
   var backing = await makeBacking(msg);
   postMessage({ type: 'storage', mode: backing.mode });
@@ -1159,7 +1188,8 @@ async function runJob(msg) {
       catch (e) {
         stages.forEach(function (st) { try { st.slot.handle.close(); } catch (x) { /* ignore */ } });
         await backing.finalize(false);
-        postMessage({ type: 'done', code: -1, readFail: true, error: 'The browser could not read "' + inputs[ii].name + '": ' + (e && e.message || e), outputs: [] });
+        var full = e && typeof e.errno === 'number';
+        postMessage({ type: 'done', code: -1, readFail: !full, error: full ? 'Could not copy "' + inputs[ii].name + '" to private storage: ' + errText(e) + '.' : 'The browser could not read "' + inputs[ii].name + '": ' + errText(e), outputs: [] });
         return;
       }
     }
@@ -1376,12 +1406,13 @@ self.onmessage = function (e) {
       stageWaiter.dst.write(new Uint8Array(msg.data), msg.pos);
       stageWaiter.onChunk(msg.pos + msg.data.byteLength);
       postMessage({ type: 'stage-ack' });
-    } catch (err) { stageWaiter.reject(new Error('could not store the copy (' + (err && err.name || err) + ')')); }
+    } catch (err) { stageWaiter.reject(err && typeof err.errno === 'number' ? err : new Error('could not store the copy (' + (err && err.name || err) + ')')); }
     return;
   }
+  if (msg.type === 's-ack') { sinkAck(msg.bytes); return; }
   if (msg.type === 'stage-end' && stageWaiter) { stageWaiter.resolve(); return; }
   if (msg.type === 'stage-fail' && stageWaiter) { stageWaiter.reject(new Error(msg.message)); return; }
-  if (msg.type === 'crc') { runCrc(msg).catch(function (err) { postMessage({ type: 'fatal', message: String(err && err.message || err) }); }); return; }
+  if (msg.type === 'crc') { runCrc(msg).catch(function (err) { postMessage({ type: 'fatal', message: errText(err) }); }); return; }
   var p = msg.type === 'helper' ? runHelper(msg) : msg.type === 'run' ? runJob(msg) : msg.type === 'reader' ? runReader(msg) : null;
-  if (p) p.catch(function (err) { postMessage({ type: 'fatal', message: String(err && err.stack || err && err.message || err) }); });
+  if (p) p.catch(function (err) { postMessage({ type: 'fatal', message: err && typeof err.errno === 'number' ? errText(err) : String(err && err.stack || err && err.message || err) }); });
 };

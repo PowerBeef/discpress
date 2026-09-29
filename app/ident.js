@@ -344,8 +344,8 @@ function probePlan(job, images, nrg) {
   if (job.src === 'cue' && job.descText) {
     var cur = null, curMode = null, fileTracks = [];
     job.descText.split(/\r?\n/).forEach(function (ln) {
-      var m;
-      if ((m = /^\s*FILE\s+(?:"([^"]*)"|(\S+))/i.exec(ln))) { cur = byName(m[1] != null ? m[1] : m[2]); fileTracks.push({ file: cur, tracks: [] }); }
+      var m, fw = refWord('cue', ln);
+      if (fw) { cur = byName(fw.text); fileTracks.push({ file: cur, tracks: [] }); }
       else if ((m = /^\s*TRACK\s+(\d+)\s+(\S+)/i.exec(ln))) { curMode = m[2].toUpperCase(); fileTracks.length && fileTracks[fileTracks.length - 1].tracks.push({ no: +m[1], mode: curMode, index: 0 }); }
       else if ((m = /^\s*INDEX\s+01\s+(\S+)/i.exec(ln))) { var ft = fileTracks[fileTracks.length - 1]; if (ft && ft.tracks.length) ft.tracks[ft.tracks.length - 1].index = msfFrames(m[1]); }
     });

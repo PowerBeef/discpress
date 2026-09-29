@@ -54,7 +54,8 @@ function base(name) { return name.replace(/^.*[\/\\]/, ''); }
 function stem(name) { return base(name).replace(/\.[^.]*$/, ''); }
 function dirOf(path) { var i = path.lastIndexOf('/'); return i < 0 ? '' : path.slice(0, i); }
 function uid() { return Math.random().toString(36).slice(2, 10); }
-function quoteArg(a) { return /^[A-Za-z0-9_.,:\/=+-]+$/.test(a) ? a : '"' + a.replace(/"/g, '\\"') + '"'; }
+// quoted as the Advanced tab reads commands back (tokenize): in double quotes, or single quotes around a name with "
+function quoteArg(a) { return /^[A-Za-z0-9_.,:\/=+-]+$/.test(a) ? a : a.indexOf('"') >= 0 ? "'" + a + "'" : '"' + a + '"'; }
 function plural(n, w, p) { return n + ' ' + (n === 1 ? w : (p || w + 's')); }
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
@@ -222,7 +223,7 @@ function makeSink(dir) {
     f.chain = f.chain.then(function () { if (!failed) return fn(f); }).catch(fail);
   }
   return {
-    handle: function (m) {
+    handle: function (m, worker) {
       if (m.type === 's-open') {
         // existed: a file of that name was already in the folder (the user agreed to replace it). The
         // browser writes to a temporary copy until close, so on cancel or failure it stays as it was:
@@ -234,6 +235,9 @@ function makeSink(dir) {
           .then(function (w) { f.w = w; }).catch(fail);
       } else if (m.type === 's-write') {
         q(m.id, function (f) { return f.w.write({ type: 'write', position: m.pos, data: m.data }); });
+        // tells the worker, which pauses chdman while too much waits here (a slow USB drive or network folder)
+        var n = m.data.byteLength, ack = function () { worker.postMessage({ type: 's-ack', bytes: n }); };
+        if (files[m.id]) files[m.id].chain = files[m.id].chain.then(ack); else ack();
       } else if (m.type === 's-trunc') {
         q(m.id, function (f) { return f.w.truncate(m.size); });
       } else if (m.type === 's-close') {
@@ -334,7 +338,7 @@ var Engine = {
       worker.onmessage = function (e) {
         var m = e.data;
         if (finished) return;
-        if (m.type.charAt(0) === 's' && m.type.charAt(1) === '-') { if (sink) sink.handle(m); }
+        if (m.type.charAt(0) === 's' && m.type.charAt(1) === '-') { if (sink) sink.handle(m, worker); }
         else if (m.type === 'stage-request') feedStage(m);
         else if (m.type === 'stage-ack') { var a = ackWait; ackWait = null; if (a) a(); }
         else if (m.type === 'line') o.onLine && o.onLine(m.stream, m.text);
@@ -358,7 +362,7 @@ var Engine = {
       };
       self.post(worker, {
         type: 'run', jobId: o.jobId, dirPath: o.dirPath, args: o.args, inputs: o.inputs || [],
-        writable: o.writable || [], slots: o.slots || 0, outMode: o.outMode || 'mem', ports: ports, debugStage: DEBUG.stage
+        writable: o.writable || [], slots: o.slots || 0, outMode: o.outMode || 'mem', ports: ports, debugStage: DEBUG.stage, debugSinkMax: DEBUG.sinkMax
       }, ports);
     });
     return {
@@ -546,6 +550,9 @@ var Store = {
     Recovery.settle(records, names, held);
   },
   dirPath: function (jobId, session) { return ['chdman-work', session || this.session, jobId]; },
+  // a run about to write the job's folder: a removal still retrying on it (removeJob) gives up
+  runs: {},
+  claim: function (jobId) { this.runs[jobId] = (this.runs[jobId] || 0) + 1; return this.dirPath(jobId); },
   // session: an earlier visit's (Recovery), else this one's
   file: async function (jobId, slot, session) {
     var d = await navigator.storage.getDirectory();
@@ -560,7 +567,14 @@ var Store = {
       var d = await navigator.storage.getDirectory();
       d = await d.getDirectoryHandle('chdman-work');
       d = await d.getDirectoryHandle(session || this.session);
-      await d.removeEntry(jobId, { recursive: true });
+      // right after a cancel, the stopped worker's files can stay locked for a moment: try again,
+      // unless the job runs again meanwhile
+      var run = this.runs[jobId];
+      for (var t = 0; ; t++) {
+        try { await d.removeEntry(jobId, { recursive: true }); break; }
+        catch (e) { if (e && e.name === 'NotFoundError' || t >= 5) throw e; await sleep(200 << t); }
+        if (!session && this.runs[jobId] !== run) return;
+      }
       if (session) { // an earlier visit's folder goes once it's empty
         var left = false;
         for await (var k of d.keys()) { left = true; void k; break; }
@@ -681,22 +695,40 @@ var Recovery = {
 /* ============================================================
    disc descriptors (.cue / .gdi / .toc)
    ============================================================ */
-function tokenize(line) {
-  var re = /"([^"]*)"|(\S+)/g, out = [], m;
-  while ((m = re.exec(line))) out.push(m[1] != null ? m[1] : m[2]);
+// a descriptor line's words as chdman 0.289 reads them (cdrom_file::tokenize): double and single
+// quotes each group a word and can start or end anywhere in it, and aren't part of it.
+// Each word: {text, start, end} (its span in the line, quotes included)
+function chdWords(line) {
+  var out = [], i = 0, n = line.length;
+  while (i < n) {
+    while (i < n && /\s/.test(line[i])) i++;
+    if (i >= n) break;
+    var start = i, text = '', dq = false, sq = false;
+    for (; i < n; i++) {
+      var c = line[i];
+      if (!sq && c === '"') dq = !dq;
+      else if (!dq && c === "'") sq = !sq;
+      else if (!sq && !dq && /\s/.test(c)) break;
+      else text += c;
+    }
+    out.push({ text: text, start: start, end: i });
+  }
   return out;
+}
+function tokenize(line) { return chdWords(line).map(function (w) { return w.text; }); }
+// the file a cue FILE line or a TOC FILE/DATAFILE/AUDIOFILE line names: its word, or null
+function refWord(kind, line) {
+  var w = chdWords(line), k = w[0] && w[0].text.toUpperCase();
+  if (w.length < 2) return null;
+  if (kind === 'cue' ? k === 'FILE' : kind === 'toc' && /^(FILE|DATAFILE|AUDIOFILE)$/.test(k)) return w[1];
+  return null;
 }
 function parseRefs(kind, text) {
   var refs = [], lines = text.replace(/^﻿/, '').split(/\r?\n/);
-  if (kind === 'cue') {
+  if (kind === 'cue' || kind === 'toc') {
     lines.forEach(function (ln) {
-      var m = /^\s*FILE\s+(?:"([^"]*)"|(\S+))/i.exec(ln);
-      if (m) refs.push(m[1] != null ? m[1] : m[2]);
-    });
-  } else if (kind === 'toc') {
-    lines.forEach(function (ln) {
-      var re = /\b(?:FILE|DATAFILE|AUDIOFILE)\s+"([^"]*)"/gi, m;
-      while ((m = re.exec(ln))) refs.push(m[1]);
+      var w = refWord(kind, ln);
+      if (w) refs.push(w.text);
     });
   } else if (kind === 'gdi') {
     lines.slice(1).forEach(function (ln) {
@@ -709,16 +741,9 @@ function parseRefs(kind, text) {
 function rewriteRefs(kind, text, map) {
   var lines = text.replace(/^﻿/, '').split(/\r?\n/);
   return lines.map(function (ln, idx) {
-    if (kind === 'cue') {
-      return ln.replace(/^(\s*FILE\s+)(?:"([^"]*)"|(\S+))/i, function (all, pre, q, u) {
-        var ref = q != null ? q : u;
-        return map[ref] ? pre + '"' + map[ref] + '"' : all;
-      });
-    }
-    if (kind === 'toc') {
-      return ln.replace(/\b(FILE|DATAFILE|AUDIOFILE)(\s+)"([^"]*)"/gi, function (all, kw, sp, ref) {
-        return map[ref] ? kw + sp + '"' + map[ref] + '"' : all;
-      });
+    if (kind === 'cue' || kind === 'toc') {
+      var w = refWord(kind, ln);
+      return w && map[w.text] ? ln.slice(0, w.start) + '"' + map[w.text] + '"' + ln.slice(w.end) : ln;
     }
     if (kind === 'gdi' && idx > 0) {
       var t = tokenize(ln);
@@ -957,6 +982,7 @@ function applyIdent(job, starting) {
     } else if (id.sys === 'gc' || id.sys === 'wii' || id.sys === 'pc') bySystem = false;
     else job.disc = 'cd';
     if (job.choices && job.choices.indexOf(job.disc) < 0) { job.disc = job.choices[0]; bySystem = false; }
+    if (!(HUNKS[job.disc] || []).some(function (h) { return h[0] === job.opts.hunk; })) job.opts.hunk = '';
     job.discBySystem = bySystem;
     job.action = KIND[job.disc].cmd;
   }
@@ -1097,7 +1123,22 @@ function fileKind(f) { return f.ecm ? (ext(f.name) ? ext(f.name) + '.' : '') + '
 /* ---------- grouping new files into jobs ---------- */
 var IGNORE = /^(txt|nfo|sbi|sub|m3u|dat|md5|sfv|sha1|jpg|jpeg|png|gif|webp|pdf|url|ini|cfg|xml|json|html|htm|db|ds_store|zip|7z|rar)$/;
 
-async function addEntries(entries) {
+// adds run one after another: a second pick or drop while the first still reads its files (slow
+// cloud files) would otherwise work from a list of jobs that is about to change
+var addChain = Promise.resolve();
+function addEntries(entries) {
+  var p = addChain.then(function () { return addEntriesNow(entries); });
+  addChain = p.catch(function () {});
+  return p;
+}
+async function addEntriesNow(entries) {
+  // macOS keeps metadata in "._name" companion files (on FAT and exFAT drives, and in zips' __MACOSX
+  // folders): they share the game files' extensions but aren't games
+  var junk = [];
+  entries = entries.filter(function (e) {
+    if (/^\._/.test(base(e.path)) || /(^|\/)__MACOSX\//.test(e.path)) { junk.push(base(e.path)); return false; }
+    return true;
+  });
   var fresh = [];
   entries.forEach(function (e) {
     var key = fileKey(e.file, e.path);
@@ -1106,9 +1147,9 @@ async function addEntries(entries) {
     seenKeys.set(e.file, key);
     fresh.push(e);
   });
-  if (!fresh.length) { toast('Those files are already in the list.'); return; }
+  if (!fresh.length) { toast(entries.length ? 'Those files are already in the list.' : 'Nothing to convert in ' + plural(junk.length, 'file') + '. Add .cue/.bin, .gdi, .iso or .chd files.', entries.length ? null : 'err'); return; }
 
-  var created = [], ignored = [];
+  var created = [], ignored = junk.slice();
   var claimed = new Set();
 
   // 1) new files may complete jobs that were waiting for missing tracks
@@ -1264,17 +1305,17 @@ async function descriptorJob(d, pool, claimed) {
     var cands = pool.filter(function (e) { return e !== d && base(e.path).toLowerCase() === want; });
     // or an ECM image of it (Game.bin.ecm for Game.bin)
     if (!cands.length) cands = pool.filter(function (e) { return e !== d && base(e.path).toLowerCase() === want + '.ecm'; });
-    // also steal files from not-yet-started auto-cue jobs
+    // also steal files from not-yet-started jobs of a lone image (a .bin with a generated cue, an .iso)
     if (!cands.length) {
       jobs.forEach(function (other) {
-        if (other.lone && other.state !== 'running' && other.state !== 'queued' && other.state !== 'done' && other.files[0] && other.files[0].name.toLowerCase() === want) {
+        if ((other.lone || (other.src === 'iso' && other.files.length === 1)) && other.state !== 'running' && other.state !== 'queued' && other.state !== 'done' && other.files[0] && other.files[0].name.toLowerCase() === want) {
           cands.push({ file: other.files[0].file, path: other.files[0].name, fromJob: other });
         }
       });
     }
     var hit = pickTrack(cands, dir, ref, claimed);
     if (!hit) { job.missing.push(ref); return; }
-    if (hit.fromJob) removeJob(hit.fromJob, true);
+    if (hit.fromJob) removeJob(hit.fromJob, true, true);
     claimed.add(hit);
     var li = looseFiles.indexOf(hit);
     if (li >= 0) looseFiles.splice(li, 1);
@@ -1435,7 +1476,9 @@ function buildJob(job) {
     var preset = presetFor(disc), c = preset[2];
     if (c) { args.push('-c', c); display.push('-c', c); }
     (preset[4] || []).forEach(function (a) { args.push(a); display.push(a); });
-    var hs = disc === 'raw' ? (o.hunk || '4096') : o.hunk;
+    // a hunk size picked for another disc type (identification can turn an ISO's DVD into a CD) doesn't carry over
+    var hs = (HUNKS[disc] || []).some(function (h) { return h[0] === o.hunk; }) ? o.hunk : '';
+    if (disc === 'raw') hs = hs || '4096';
     if (hs) { args.push('-hs', hs); display.push('-hs', hs); }
     // the setting: keep a real cue sheet (not one written for chdman here) in the CHD (the engine's --keepcue)
     if (settings.keepCue && job.src === 'cue' && !job.fromCcd && cmd === 'createcd') { args.push('--keepcue'); display.push('--keepcue'); }
@@ -1865,15 +1908,21 @@ function abortStart(job) {
   job.aborted = true;
   if (job.abortResolve) job.abortResolve();
 }
-function removeJob(job, silent) {
-  if (job.state === 'running' && !silent && !confirm('Stop and remove "' + job.title + '"?')) return;
+// results not saved anywhere yet (downloaded, shared or written into a folder)
+function unsaved(job) {
+  return job.state === 'done' && job.outputs.some(function (o) { return !o.downloaded && o.kind !== 'disk'; });
+}
+// silent: don't ask; keepFiles: its files moved to another job, so they stay known (no re-adding them)
+function removeJob(job, silent, keepFiles) {
+  if (!silent && job.state === 'running' && !confirm('Stop and remove "' + job.title + '"?')) return;
+  if (!silent && unsaved(job) && !confirm('Remove "' + job.title + '"? Its results haven\u2019t been saved and will be deleted.')) return;
   if (job.run) job.run.cancel();
   else if (job.state === 'running') abortStart(job);
   queue = queue.filter(function (j) { return j !== job; });
   jobs = jobs.filter(function (j) { return j !== job; });
   if (job.el) job.el.remove();
   Store.removeJob(job.id);
-  if (!silent) {
+  if (!keepFiles) {
     job.files.forEach(function (f) { forgetFile(f.file); });
     if (job.descFile) forgetFile(job.descFile);
   }
@@ -1978,7 +2027,7 @@ async function runJobNow(job) {
   if (job.aborted) { Recovery.running(null); job.state = 'canceled'; if (jobs.indexOf(job) >= 0) refreshJob(job, true); return; }
   var t0 = performance.now(), phaseStart = t0, lastPhase = '', lastPct = 0, workerError = '';
   job.run = Engine.run({
-    jobId: job.id, dirPath: Store.dirPath(job.id), args: spec.args, inputs: spec.inputs, writable: spec.writable,
+    jobId: job.id, dirPath: Store.claim(job.id), args: spec.args, inputs: spec.inputs, writable: spec.writable,
     slots: spec.slots, helpers: spec.helpers, outMode: spec.outMode, outDir: outDir,
     onLine: function (s, t) {
       appendLog(job, t);
@@ -2175,15 +2224,18 @@ function renderEarlier() {
     card.append(el('p', { class: 'small muted', style: 'margin:0 0 8px' }, 'These results were finished but not saved when the page was closed or reloaded. Save them, or delete them to free space.'));
     items.forEach(function (it) {
       var job = { id: it.jobId, outputs: it.outputs };
-      it.outputs.forEach(function (out) {
+      it.outputs.forEach(function (out, i) {
         var btns = el('div', { class: 'row' });
         btns.append(saveButton([out], function () { saveOutput(job, out); }));
-        btns.append(el('button', { class: 'btn sm', onclick: async function () {
+        // one Delete for the job's results together (they are stored together), on its first file
+        var n = it.outputs.length;
+        if (i === 0) btns.append(el('button', { class: 'btn sm', onclick: async function () {
+          if (n > 1 && !confirm('Delete all ' + n + ' files of \u201c' + it.title + '\u201d?')) return;
           Recovery.earlier = Recovery.earlier.filter(function (e) { return e !== it; });
           await Store.removeJob(it.jobId, it.session);
           renderEarlier();
           refreshStorageInfo();
-        } }, 'Delete'));
+        } }, n > 1 ? 'Delete all ' + n : 'Delete'));
         card.append(el('div', { class: 'out' }, el('div', { class: 'nm' }, out.name, el('small', null, fmtBytes(out.size) + ' \u00b7 ' + it.title)), btns));
       });
     });
@@ -2394,7 +2446,7 @@ var CMDS = [
 ];
 var FILE_FLAGS = { '-i': 1, '--input': 1, '-ip': 1, '--inputparent': 1, '-op': 1, '--outputparent': 1, '-vf': 1, '--valuefile': 1, '-id': 1, '--ident': 1 };
 var OUT_FLAGS = { '-o': 1, '--output': 1, '-ob': 1, '--outputbin': 1 };
-var cli = { cmd: 'createcd', files: [], vals: {}, textMode: false, run: null, templates: null, outAuto: true };
+var cli = { cmd: 'createcd', files: [], vals: {}, textMode: false, run: null, last: null, templates: null, outAuto: true };
 
 function cliSpec() { return CMDS.find(function (c) { return c[0] === cli.cmd; }); }
 function cliWritable() { return cli.cmd === 'addmeta' || cli.cmd === 'delmeta' || (cli.cmd === 'verify' && cli.vals.fix); }
@@ -2520,7 +2572,8 @@ function cliPreview() {
   $('#cliPreview').textContent = c.display + (c.missing.length ? '\n# still needed: ' + c.missing.join(', ') : '');
 }
 function cliParseText(text) {
-  var toks = tokenize(text.trim()), args = [];
+  // quotes as phones type them (iOS smart punctuation) count as plain ones
+  var toks = tokenize(text.trim().replace(/[\u201c\u201d\u201e]/g, '"').replace(/[\u2018\u2019]/g, "'")), args = [];
   if (toks[0] && /^chdman(\.exe)?$/i.test(toks[0])) toks.shift();
   var cmd = toks[0];
   var writable = cmd === 'addmeta' || cmd === 'delmeta' || (cmd === 'verify' && toks.some(function (t) { return t === '-f' || t === '--fix'; }));
@@ -2549,6 +2602,12 @@ async function cliRun() {
     }
   } catch (e) { toast(e.message, 'err'); return; }
   if (!args.length) return;
+  // the last command's results give way to this one's (only one command's results are shown)
+  if (cli.last) {
+    if (unsaved(cli.last) && !confirm('The last command\u2019s results haven\u2019t been saved. Run this one and delete them?')) return;
+    Store.removeJob(cli.last.id);
+    cli.last = null;
+  }
   var writable = [], inputs = [];
   var writeTarget = args.find(function (a) { return /^\/out\//.test(a) && cli.files.some(function (f) { return '/out/' + f.name === a; }); });
   cli.files.forEach(function (f) {
@@ -2565,7 +2624,8 @@ async function cliRun() {
   ptext.textContent = 'Running…';
   $('#cliRun').disabled = true;
   $('#cliCancel').hidden = false;
-  var cjob = { id: 'cli' + uid(), outputs: [], el: null }, stalled = false;
+  var cjob = { id: 'cli' + uid(), state: 'done', outputs: [], el: null }, stalled = false;
+  cli.last = cjob;
   try {
     await Engine.ready();
     var isCreate = /^(create|copy)/.test(args[0]);
@@ -2577,7 +2637,7 @@ async function cliRun() {
     }
     var nt = threadCount();
     cli.run = Engine.run({
-      jobId: cjob.id, dirPath: Store.dirPath(cjob.id), args: args, inputs: inputs, writable: writable,
+      jobId: cjob.id, dirPath: Store.claim(cjob.id), args: args, inputs: inputs, writable: writable,
       slots: /^(info|listtemplates)$/.test(args[0]) || (args[0] === 'verify' && !writable.length) ? 0 : args[0] === 'extractcd' ? 101 : 3,
       outMode: settings.storage === 'folder' && outDir ? 'stream' : settings.storage === 'memory' || !Store.available ? 'mem' : 'opfs', outDir: outDir,
       helpers: isCreate && comp !== 'none' && nt > 1 ? nt : /^(verify|extract(cd|dvd|hd|raw))$/.test(args[0]) ? readHelpers() : 0,
@@ -2604,6 +2664,7 @@ async function cliRun() {
     con.textContent += '\n' + (e.canceled ? (stalled ? '[stopped] ' + STALLED : '[canceled]') : 'Error: ' + e.message) + '\n';
     prog.hidden = true;
   } finally {
+    if (!cjob.outputs.some(function (o) { return o.kind !== 'disk'; })) { Store.removeJob(cjob.id); if (cli.last === cjob) cli.last = null; }
     cli.run = null;
     $('#cliRun').disabled = false;
     $('#cliCancel').hidden = true;
@@ -2908,7 +2969,10 @@ function init() {
   // dock
   $('#startAll').addEventListener('click', startAll);
   $('#clearDone').addEventListener('click', function () {
-    jobs.filter(function (j) { return j.state === 'done' || j.state === 'canceled' || j.state === 'error'; }).forEach(function (j) { removeJob(j, true); });
+    var done = jobs.filter(function (j) { return j.state === 'done' || j.state === 'canceled' || j.state === 'error'; });
+    var n = done.filter(unsaved).length;
+    if (n && !confirm(plural(n, 'finished job') + ' ha' + (n > 1 ? 've' : 's') + ' results that haven\u2019t been saved. Remove ' + (n > 1 ? 'them' : 'it') + ' and delete the results?')) return;
+    done.forEach(function (j) { removeJob(j, true); });
   });
   $('#dlAll').addEventListener('click', function () { downloadMany(jobs.filter(function (j) { return j.state === 'done'; })); });
   $('#saveAll').addEventListener('click', function () { saveToFolder(jobs.filter(function (j) { return j.state === 'done' && j.outputs.length; })); });
@@ -2990,6 +3054,7 @@ function init() {
     if (busy) { toast('Wait for the running job to finish first.', 'err'); return; }
     if (!confirm('Delete all finished results from browser storage? Download anything you need first.')) return;
     for (var i = 0; i < jobs.length; i++) if (jobs[i].state === 'done') { await Store.removeJob(jobs[i].id); jobs[i].outputs = []; jobs[i].state = 'ready'; refreshJob(jobs[i], true); }
+    if (cli.last && !cli.run) { await Store.removeJob(cli.last.id); cli.last = null; $('#cliOuts').replaceChildren(); }
     var earlier = Recovery.earlier;
     Recovery.earlier = [];
     for (var j = 0; j < earlier.length; j++) await Store.removeJob(earlier[j].jobId, earlier[j].session);
@@ -3005,9 +3070,9 @@ function init() {
   });
 
   window.addEventListener('beforeunload', function (e) {
-    var busy = jobs.some(function (j) { return j.state === 'running' || j.state === 'queued'; });
-    var unsaved = jobs.some(function (j) { return j.state === 'done' && j.outputs.some(function (o) { return !o.downloaded && o.kind !== 'disk'; }); });
-    if (busy || unsaved) { e.preventDefault(); e.returnValue = ''; }
+    var busy = jobs.some(function (j) { return j.state === 'running' || j.state === 'queued'; }) || !!cli.run;
+    var left = jobs.some(unsaved) || (cli.last && unsaved(cli.last));
+    if (busy || left) { e.preventDefault(); e.returnValue = ''; }
   });
 
   cliInit();

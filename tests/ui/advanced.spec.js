@@ -141,3 +141,41 @@ test('addmeta edits a copy of the CHD in place, exactly like desktop chdman', as
   await dl.saveAs(got);
   expect(sha1File(got)).toBe(sha1File(expected));
 });
+
+// audit, batch 3: typed commands read quotes the way the form writes them, and as phones type them
+test('typed commands accept single quotes and smart quotes around file names', async ({ app, page }) => {
+  const dir = path.join(FIXTURES, 'gen');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'agent.iso'), path.join(dir, 'my game.iso'));
+  await openCli(app, page);
+  await addCliFiles(app, ['gen/my game.iso']);
+  await page.click('#cliEditToggle');
+  await page.locator('#cliText').fill("chdman createdvd -i 'my game.iso' -o “my game.chd” -c none");
+  expect(await runCli(page)).toContain('[exit code 0]');
+  await expect(page.locator('#cliOuts')).toContainText('my game.chd');
+});
+
+// audit, batch 3: each run's results used to stay in private storage until the next visit
+test('a new command, or Clear temporary storage, removes the last command’s results', async ({ app, page }) => {
+  const workDirs = () => page.evaluate(async () => {
+    const out = [];
+    try {
+      const work = await (await navigator.storage.getDirectory()).getDirectoryHandle('chdman-work');
+      for await (const [, s] of work.entries()) for await (const [n] of s.entries()) out.push(n);
+    } catch (e) { /* none */ }
+    return out.filter(n => n.startsWith('cli'));
+  });
+  await openCli(app, page);
+  await addCliFiles(app, ['twine.cue', 'twine.bin']);
+  expect(await runCli(page)).toContain('[exit code 0]');
+  await expect.poll(workDirs).toHaveLength(1);
+  const first = (await workDirs())[0];
+  expect(await runCli(page)).toContain('[exit code 0]'); // unsaved: the harness agrees to delete them
+  await expect.poll(workDirs).toHaveLength(1);
+  expect((await workDirs())[0]).not.toBe(first);
+  await page.click('#settingsBtn');
+  await page.click('#clearStorage');
+  await page.click('#settingsClose');
+  await expect.poll(workDirs).toEqual([]);
+  await expect(page.locator('#cliOuts')).toBeEmpty();
+});

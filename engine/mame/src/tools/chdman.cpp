@@ -49,6 +49,7 @@
 #include <emscripten.h>
 
 extern "C" int wasm_par_active(void); // browser build: hunks are being compressed by helper workers
+extern "C" int wasm_out_full(void); // Discpress: browser build: results written into a folder are waiting to be written
 #endif
 
 using util::string_format;
@@ -127,7 +128,7 @@ struct compression_pause
 	bool await_ready() const noexcept
 	{
 #ifdef __EMSCRIPTEN__
-		return !wasm_par_active();
+		return !wasm_par_active() && !wasm_out_full(); // Discpress: also waits for a slow output folder
 #else
 		return true;
 #endif
@@ -150,7 +151,8 @@ static chdman_task read_ahead(chd_file &chd, uint64_t offset, uint64_t length)
 #ifdef __EMSCRIPTEN__
 	uint32_t const first = offset / chd.hunk_bytes();
 	uint32_t const count = (offset + length + chd.hunk_bytes() - 1) / chd.hunk_bytes() - first;
-	while (!chd.wasm_read_ahead(first, count))
+	// Discpress: also waits while the output folder is behind (results streamed into it pile up otherwise)
+	while (wasm_out_full() || !chd.wasm_read_ahead(first, count))
 		co_await read_pause();
 #endif
 	co_return;
