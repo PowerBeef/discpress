@@ -22,7 +22,7 @@ does all of this when a session starts.
 | Command | What it does |
 |---|---|
 | `npm test` | all UI tests against `dist/discpress.html` (about 4 minutes on 4 cores) |
-| `npm run test:dev` | the same against a page assembled from the current `app/` and `db/` |
+| `npm run test:dev` | the same against a page assembled from the current `app/` and `db/` (with `build/`'s wasm, taken first from `dist/discpress.html` when that is newer and differs) |
 | `npx playwright test ui/convert.spec.js` | one file; add `-g "ps2"` to filter by test name |
 | `npx playwright test --project=iphone` | one project: `desktop`, `file-url`, `iphone`, `android`, `layout` |
 | `npm run report` | open the HTML report of the last run (traces and screenshots of failures) |
@@ -32,6 +32,8 @@ does all of this when a session starts.
 
 Environment: `DISCPRESS_HTML` picks the page (relative to the repo root), `WORKERS` the number of
 parallel test workers (default 2), `CHDMAN` a native chdman binary, `REGEN_FIXTURES=1` rebuilds fixtures.
+Outside CI a test server already running on `PORT` (default 4173) is reused; its `/healthz` names the page
+it serves, and the run stops if that isn't the page `DISCPRESS_HTML` picks (stop it, or use another `PORT`).
 
 ## How correctness is checked
 
@@ -83,7 +85,7 @@ game database when it is requested as `/discpress.html?testdb=1` (`app.open({ te
 | `mobile` | phone layout, thread defaults (the iPhone speed test tries up to 4, and one stored at 1.3.1's limit of 2 is measured again), the fixed-header scrolling used inside iOS app web views, saving through the share sheet (its failure falls back to a download, results too large for it download), the Safari tip in iOS app web views, the Safari fallback for big results in a Home Screen web app |
 | `recovery` | results kept from an earlier visit (listed after a reload, saved, deleted) and a conversion stopped by a reload; where results live in memory (also from `file://`, where Chrome gives no private storage), which results a reload lost |
 | `folder` | writing results into a folder (a fake File System Access folder): a file already there is replaced only if the user agrees, and never deleted by a cancel; a cancel leaves no new file |
-| `hosted` | the online version (`web/`), on desktop and emulated phones: manifest, icons, service worker, working offline, opening from its saved copy on a slow network, a copy without `web/`'s files; the Content Security Policy blocks network requests |
+| `hosted` | the online version (`web/`), on desktop and emulated phones: manifest, icons, service worker, working offline, opening from its saved copy on a slow network or when the site answers with an error, a copy without `web/`'s files; the Content Security Policy blocks network requests |
 | `layout` | 7 screen sizes × light/dark × 5 screens: no horizontal overflow; screenshots in `.cache/screens/` |
 | `a11y` | axe-core audit of every screen in both themes; serious problems fail |
 

@@ -44,8 +44,9 @@ for key, fn in SYS:
     out[key] = '\n'.join(rows)
     tot += len(rows)
     print(key, len(rows))
-ver = re.search(r'version "(.*?)"', open(D + SYS[0][1]).read()).group(1)
+ver = re.search(r'version "(.*?)"', open(D + SYS[0][1], encoding='utf-8').read()).group(1)
 blob = json.dumps({'version': ver, 'systems': out}, ensure_ascii=False).encode()
 gz = gzip_fixed(blob)
-open(OUT, 'wb').write(gz)
+with open(OUT, 'wb') as f:
+    f.write(gz)
 print('entries', tot, 'raw', len(blob), 'gz', len(gz), 'version', ver)

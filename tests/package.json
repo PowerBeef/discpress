@@ -6,7 +6,7 @@
   "scripts": {
     "fixtures": "python3 fixtures/make_fixtures.py",
     "native": "../scripts/build-native.sh",
-    "dev-page": "test -f ../build/chdman.wasm || python3 ../scripts/extract-build.py; python3 ../scripts/assemble.py ../build/discpress-dev.html",
+    "dev-page": "python3 ../scripts/extract-build.py --if-stale && python3 ../scripts/assemble.py ../build/discpress-dev.html",
     "test": "playwright test",
     "test:dev": "npm run dev-page && DISCPRESS_HTML=build/discpress-dev.html playwright test",
     "report": "playwright show-report .cache/report",
