@@ -17,7 +17,7 @@ while read -r f; do
   s=0; diff -u --label "a/$f" --label "b/$f" "$UP/$f" "$f" >> "$TMP" || s=$?
   [ "$s" -le 1 ] || exit "$s"
 done < "$ROOT/engine/FILES"
-extra="$(comm -13 "$ROOT/engine/FILES" <(find . -type f | sed 's|^\./||' | LC_ALL=C sort))"
+extra="$(LC_ALL=C comm -13 "$ROOT/engine/FILES" <(find . -type f | sed 's|^\./||' | LC_ALL=C sort))"
 [ -z "$extra" ] || { echo "not in engine/FILES (add upstream files there; new code goes outside engine/mame):" >&2; echo "$extra" >&2; exit 1; }
 
 if [ "${1:-}" = "--check" ]; then

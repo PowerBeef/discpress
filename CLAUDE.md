@@ -17,7 +17,7 @@ source ~/emsdk/emsdk_env.sh
 ./build.sh                         # -> build/ (gitignored) and dist/discpress.html; JOBS= optional
 
 # after changing only app/ or db/: no Emscripten needed
-python3 scripts/extract-build.py   # once: recovers build/chdman.js + both .wasm from dist/discpress.html
+python3 scripts/extract-build.py   # once: recovers build/chdman.js + both .wasm (and the engine sources' hash) from dist/discpress.html
 python3 scripts/assemble.py        # [output.html], default dist/discpress.html
 
 # native chdman: the tests' reference, and the engine itself
@@ -26,7 +26,7 @@ python3 scripts/assemble.py        # [output.html], default dist/discpress.html
 ./scripts/engine-diff.sh           # after changing engine/mame: refresh engine/mame-0.289.diff (--check to verify)
 
 # releases (see Releases below)
-./scripts/check-dist.sh            # dist/discpress.html is what app/ and db/ assemble to (the release refuses otherwise)
+./scripts/check-dist.sh            # dist/discpress.html is what app/, db/ and the engine sources make (the release refuses otherwise)
 ./scripts/check-release.sh         # the latest release's download and the online version are the same file
 
 # tests and benchmarks (run from tests/; see tests/README.md)
@@ -47,9 +47,9 @@ Compiler experiments: `make -C wasm ... EXTRA="<flags>"` adds flags to every com
 
 ## Testing workflow
 
-When changing `app/`: `npm run dev-page` (in `tests/`) re-assembles `build/discpress-dev.html` in under a second, `npm run test:dev` runs the suite on it, and `npm run bench:dev -- --compare latest` checks performance. Tests fail on any console error or network request. Review UI changes with the screenshots the layout spec writes to `tests/.cache/screens/<size>/<theme>-<screen>.png`. Once satisfied, `python3 scripts/assemble.py` updates `dist/discpress.html`, which must be committed with the source change. Bugs found but not fixed yet are pinned with `test.fail()` in the relevant spec, or in the `ACCEPTED` list of `tests/ui/a11y.spec.js`; remove the marker when fixing one. Fixtures are synthetic (`tests/fixtures/`); never add real game data to the repo.
+When changing `app/`: `npm run dev-page` (in `tests/`) re-assembles `build/discpress-dev.html` in under a second (first taking the wasm from `dist/discpress.html` when that is newer than `build/`'s and differs: `extract-build.py --if-stale`, which leaves a fresher `./build.sh` output alone), `npm run test:dev` runs the suite on it, and `npm run bench:dev -- --compare latest` checks performance. Tests fail on any console error or network request. Review UI changes with the screenshots the layout spec writes to `tests/.cache/screens/<size>/<theme>-<screen>.png`. Once satisfied, `python3 scripts/assemble.py` updates `dist/discpress.html`, which must be committed with the source change. Bugs found but not fixed yet are pinned with `test.fail()` in the relevant spec, or in the `ACCEPTED` list of `tests/ui/a11y.spec.js`; remove the marker when fixing one. Fixtures are synthetic (`tests/fixtures/`); never add real game data to the repo.
 
-The build is reproducible: a clean build must produce a byte-identical `dist/discpress.html` (gzip uses `mtime=0`; `build.sh` fails if the SIMD and non-SIMD JS glue differ). `dist/discpress.html` is committed and is what releases ship, so **regenerate and commit it whenever `app/`, `wasm/` or `db/` change**.
+The build is reproducible: a clean build must produce a byte-identical `dist/discpress.html` (gzip uses `mtime=0`; `build.sh` fails if the SIMD and non-SIMD JS glue differ). `dist/discpress.html` is committed and is what releases ship, so **regenerate and commit it whenever `app/`, `wasm/`, `engine/` or `db/` change**: after `app/` or `db/`, `assemble.py` is enough; after `engine/`, `wasm/` or `build.sh`, only `./build.sh` will do. The page records the sources its wasm was built from: `build.sh` hashes them (`scripts/engine-sources.py`: the contents of `build.sh` and of `engine/` and `wasm/`'s files git tracks, without `*.md`, `engine/FILES` and the diff; paths sorted, no dates) into `build/engine-sources.sha256`, which `assemble.py` writes after `</html>` and `extract-build.py` recovers, and `scripts/check-dist.sh` refuses a page whose hash isn't the current sources'.
 
 To try the app, open `dist/discpress.html` directly in a browser (`file://` works). Setting `localStorage['chdman-web-debug'] = '{"stage":1}'` makes the worker copy every input into storage with async reads before running, and uses the main-thread CRC; `"stage":2` also makes those reads fail, so the page streams inputs to the worker (the iOS web view path, see below). For tests, `"identDelay"` and `"crcDelay"` (ms) slow identification and its checksum step.
 
@@ -62,7 +62,9 @@ To try the app, open `dist/discpress.html` directly in a browser (`file://` work
 - `/*WORKER*/` ← Emscripten glue `build/chdman.js` + `app/worker.js`, stored as `text/plain` and turned into a Blob URL at runtime
 - `/*WASM_SIMD*/`, `/*WASM_BASE*/` ← gzip+base64 wasm; `/*GAMEDB*/` ← base64 `db/db.json.gz` (with `*_SIZE` placeholders)
 
-Consequences: app JS is plain browser script (no modules/imports, ES5-style `var`/functions), and no source may contain `</script` (asserted). `ui.js` picks the SIMD or baseline wasm at runtime via `WebAssembly.validate`.
+After `</html>` it appends `<!-- engine sources sha256 … -->` from `build/engine-sources.sha256` (see Testing workflow; without that file it warns and the page fails `check-dist.sh`).
+
+Consequences: app JS is plain browser script (no modules/imports, ES5-style `var`/functions), and no inlined script may contain `</script`, `<!--` or `<script`, nor `style.css` `</style` (asserted). `ui.js` picks the SIMD or baseline wasm at runtime via `WebAssembly.validate`.
 
 ## Runtime architecture
 
@@ -74,7 +76,7 @@ Consequences: app JS is plain browser script (no modules/imports, ES5-style `var
 - **Game identification** (`app/ident.js`, runs on the main thread): reads boot data (IP.BIN, SYSTEM.CNF, PARAM.SFO, …) via ISO 9660 from raw images, or from inside CHDs via the worker `reader` role backed by `wasm_probe_*` in `wasm_helper.cpp`; matches serial, or size + CRC-32 (computed in a worker with zlib's `crc32` exported from the wasm, JS fallbacks in the worker and on the page), against the database. Identification is two-phase: once console/serial/sizes are known, `onProvisional` lets a conversion start (`job.identKnown`); the checksum then confirms the exact release and `renameOutputs` renames finished results if it differs (not when results were already saved, named by the user, or written straight into a folder, which waits for the checksum). `db/db.json.gz` is `{version, systems: {key: "name\tserial\tsize\tcrc\ttrack\text" rows}}`; system keys in `db/mkdb.py` must match `SYSTEMS` in `ident.js`.
 - **`engine/`** (see `engine/README.md`): the chdman fork. `engine/mame` holds MAME 0.289's chdman and exactly the MAME sources it links (`engine/FILES`), at MAME's paths. Change them in place, then run `scripts/engine-diff.sh`: `engine/mame-0.289.diff` lists every change and is shown in Help → About. New code goes outside `engine/mame`. `scripts/fetch-mame.sh` fetches the unmodified release for the diff and for `build-upstream.sh`.
 - **iPhone and iPad** (`docs/ios/README.md`):
-  - **Online version.** For people who don't want to download the file, and for big games on iPhone and iPad (Safari can't open local HTML), the Release workflow also publishes the release file on GitHub Pages, together with the download (see Releases). `web/` holds its service worker (network first, a saved copy after 4 s), manifest and icons. The page registers the worker itself, only over https, and links the manifest and icons once that succeeds (`initHosted`). `tests/support/server.js`'s `/alt/` paths delay the page or drop `web/`, since browser routing can't see a service worker's requests.
+  - **Online version.** For people who don't want to download the file, and for big games on iPhone and iPad (Safari can't open local HTML), the Release workflow also publishes the release file on GitHub Pages, together with the download (see Releases). `web/` holds its service worker (network first, a saved copy after 4 s, or at once when the site answers the page with an error), manifest and icons. The page registers the worker itself, only over https, and links the manifest and icons once that succeeds (`initHosted`). `tests/support/server.js`'s `/alt/` paths delay the page, answer it with a 503, or drop `web/`, since browser routing can't see a service worker's requests.
   - **CSP.** `app/index.html`'s Content-Security-Policy has `connect-src 'none'`: nothing in the page may use the network.
   - **Saving.** The share sheet loads the whole file into memory, so on iOS results over `SHARE_MAX` (512 MB) are downloaded instead. App web views (`iosWebView`) usually can't download, so `#iosTip` points to the hosted copy.
   - **Threads.** The speed test tries at most 4 threads on iPhones (`iosThreadCap`), which report 4 cores whatever they have; a stored result that stopped at a lower limit (`cap`) is measured again.
@@ -85,12 +87,12 @@ Consequences: app JS is plain browser script (no modules/imports, ES5-style `var
 
 There are two builds of every release, and they must always be the same file: the **offline build** (the `discpress.html` download attached to the GitHub release; the README's download button points at `releases/latest/download/discpress.html`) and the **online build** (`index.html` on GitHub Pages, https://powerbeef.github.io/discpress/). Both are the committed `dist/discpress.html`, so a change reaches both only through a release. Never update one alone: no hand-uploaded release assets, no Pages deploy outside the workflow.
 
-`.github/workflows/release.yml` publishes them together. Run it with Actions → Release → Run workflow on `main` and a tag such as `v1.3.5` (Claude Code sessions can't push tags; a pushed `v*` tag or a release published by hand makes the workflow rerun itself on `main`, the only branch allowed to deploy to Pages). Its jobs, in order:
+`.github/workflows/release.yml` publishes them together. Run it with Actions → Release → Run workflow on `main` and a tag such as `v1.3.5`, always `vX.Y.Z`: there are no prereleases, since every release becomes the latest and goes online, so `prepare` refuses a tag such as `v1.4.0-rc1` (Claude Code sessions can't push tags; a pushed `v*` tag or a release published by hand makes the workflow rerun itself on `main`, the only branch allowed to deploy to Pages). Its jobs, in order:
 
-1. `prepare` picks the tag's commit (or `main`'s latest for a new tag), runs `scripts/check-dist.sh` (fails if `dist/discpress.html` isn't what `app/` and `db/` assemble to), and packs the download and the site (`web/`'s files, and `discpress.html.sha256` in both).
+1. `prepare` picks the tag's commit (or `main`'s latest for a new tag), runs `scripts/check-dist.sh` (fails if `dist/discpress.html` isn't what `app/` and `db/` assemble to, or its wasm wasn't built from the current `engine/`, `wasm/` and `build.sh`; CI has no Emscripten, so a stale wasm just fails the release; it checks `engine/mame-0.289.diff` only where `third_party/mame` exists, not in CI), and packs the download and the site (`web/`'s files, and `discpress.html.sha256` in both).
 2. `release` creates the release as a draft, or updates an existing one, replacing the download only if it differs.
-3. `pages` deploys the site, only when the tag is the newest version (`sort -V`): re-running an older tag fixes its release but leaves the site on the newest.
-4. `publish` makes the draft public only after the deploy succeeded, so a failed deploy leaves both builds on the previous release. Re-running the workflow picks the draft up, with its commit even if `main` moved on.
+3. `pages` deploys the site, only when the tag is the newest version: re-running an older tag fixes its release but leaves the site on the newest. `scripts/newest-release.sh` decides, from GitHub's `vX.Y.Z` tags and releases, drafts included (a draft has no tag until it is published), and `pages` asks it again right before deploying, so re-running an old run's failed jobs never deploys it over a newer release, nor over a newer draft (delete an abandoned one).
+4. `publish` makes the draft public only after the deploy succeeded, so a failed deploy leaves both builds on the previous release; it becomes the latest release only if `pages` deployed it and it is still the newest (asked again). Re-running the workflow picks the draft up, with its commit even if `main` moved on.
 5. `verify` runs `scripts/check-release.sh <tag> --expect <sha256>`: the download, its `.sha256`, the site and the site's `.sha256` must all be that file (it waits out Pages' 10-minute cache).
 
 `.github/workflows/release-check.yml` runs `scripts/check-release.sh latest` daily and fails if the two builds ever differ. Run `scripts/check-release.sh` locally after a release too.

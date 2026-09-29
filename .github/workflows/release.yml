@@ -2,13 +2,16 @@ name: Release
 
 # Publishes a release: dist/discpress.html as the download (the offline build) and, the same file byte
 # for byte, as the online version on GitHub Pages (web/README.md). The two change together:
-#   1. prepare: picks the release's commit (the tag's, or this branch's latest for a new tag), checks
-#      that its dist/discpress.html is what app/ and db/ assemble to (scripts/check-dist.sh), and packs
-#      the download and the site;
+#   1. prepare: checks that the tag is a version such as v1.3.5 (no prereleases), picks the release's
+#      commit (the tag's, or this branch's latest for a new tag), checks that its dist/discpress.html is
+#      what the sources make (scripts/check-dist.sh: app/ and db/, and the engine sources its wasm was
+#      built from), and packs the download and the site;
 #   2. release: creates the release as a draft (or updates an existing one) with the download attached;
-#   3. pages: deploys the site, for the newest version only (an older tag's re-run leaves it alone);
+#   3. pages: deploys the site, for the newest version only (an older tag's re-run leaves it alone). It
+#      asks again right before deploying (scripts/newest-release.sh: tags and releases, drafts too), so
+#      re-running an old run's failed jobs never deploys it over a release made since;
 #   4. publish: makes the draft public only once the site is deployed, so a failed deploy leaves both
-#      at the previous release;
+#      at the previous release; it becomes the latest release only if the site now shows it;
 #   5. verify: scripts/check-release.sh checks that the download, its .sha256, the site and the site's
 #      .sha256 are all that file (release-check.yml repeats the check daily).
 # Run it from Actions > Release > Run workflow on main, with a tag such as v1.3.5. A pushed v* tag or a
@@ -52,7 +55,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
-      contents: write # only to see a draft release (drafts need write access to read)
+      contents: write # only to see draft releases (drafts need write access to read)
     outputs:
       sha: ${{ steps.pick.outputs.sha }}
       latest: ${{ steps.pick.outputs.latest }}
@@ -67,7 +70,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
         run: |
-          case "$TAG" in v[0-9]*) ;; *) echo "::error::Tag must look like v1.0.0, got '$TAG'"; exit 1 ;; esac
+          # Every release becomes the latest and goes online, so a prerelease (v1.4.0-rc1) can't be one:
+          # it would replace the current version, and sort -V puts v1.4.0 before it.
+          if ! [[ $TAG =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The tag must be a version such as v1.3.5 (no prereleases such as v1.4.0-rc1), got '$TAG'"
+            exit 1
+          fi
+          # the site shows the newest version: an older tag's re-run updates only its release
+          # (asked with this commit's script, before checking out the release's)
+          latest=$(scripts/newest-release.sh "$TAG")
           draft=$(gh release view "$TAG" --json isDraft,targetCommitish --jq 'select(.isDraft) | .targetCommitish' 2>/dev/null || true)
           if git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null; then
             sha=$(git rev-parse "$TAG^{commit}")
@@ -79,15 +90,13 @@ jobs:
           fi
           git checkout -q "$sha"
           test -f dist/discpress.html || { echo "::error::dist/discpress.html is missing at $sha"; exit 1; }
-          # the site shows the newest version: an older tag's re-run updates only its release
-          top=$({ git tag -l 'v*'; echo "$TAG"; } | sort -V | tail -1)
           {
             echo "sha=$sha"
-            echo "latest=$([ "$top" = "$TAG" ] && echo true || echo false)"
+            echo "latest=$latest"
             echo "digest=$(sha256sum < dist/discpress.html | cut -d' ' -f1)"
           } >> "$GITHUB_OUTPUT"
-          echo "$TAG: commit $sha, newest version: $([ "$top" = "$TAG" ] && echo yes || echo "no ($top is)")"
-      - name: Check that the page matches app/ and db/
+          echo "$TAG: commit $sha, newest version: $latest"
+      - name: Check that the page matches its sources
         run: scripts/check-dist.sh
       - name: Pack the download and the site
         run: |
@@ -96,7 +105,6 @@ jobs:
           (cd files && sha256sum discpress.html > discpress.html.sha256)
           cp dist/discpress.html _site/index.html
           cp files/discpress.html.sha256 web/sw.js web/manifest.webmanifest web/*.png _site/
-          touch _site/.nojekyll
       - uses: actions/upload-artifact@v4
         with:
           name: download
@@ -142,6 +150,7 @@ jobs:
     if: needs.prepare.outputs.latest == 'true'
     runs-on: ubuntu-latest
     permissions:
+      contents: write # only to see draft releases (scripts/newest-release.sh)
       pages: write
       id-token: write
     # one deploy at a time, in order
@@ -151,9 +160,26 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
+    outputs:
+      deployed: ${{ steps.deploy.outcome == 'success' }}
     steps:
-      - uses: actions/configure-pages@v5
+      - uses: actions/checkout@v4 # main, for scripts/newest-release.sh
+        with:
+          sparse-checkout: scripts
+      # asked again here, not taken from prepare: re-running this job of an older run (Re-run failed
+      # jobs) must not deploy it over a version released, or drafted, since
+      - name: Check that this is still the newest version
+        id: newest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          latest=$(scripts/newest-release.sh "$TAG")
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+      - if: steps.newest.outputs.latest == 'true'
+        uses: actions/configure-pages@v5
       - id: deploy
+        if: steps.newest.outputs.latest == 'true'
         uses: actions/deploy-pages@v4
 
   publish:
@@ -163,15 +189,25 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      latest: ${{ steps.publish.outputs.latest }}
     steps:
+      - uses: actions/checkout@v4 # main, for scripts/newest-release.sh
+        with:
+          sparse-checkout: scripts
       - name: Make the release public
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
-          LATEST: ${{ needs.prepare.outputs.latest }}
+          DEPLOYED: ${{ needs.pages.outputs.deployed }}
         run: |
+          # the latest release only if the site now shows it and no newer version was made meanwhile
+          latest=false
+          if [ "$DEPLOYED" = true ]; then latest=$(scripts/newest-release.sh "$TAG"); fi
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
           if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true ]; then
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$LATEST"
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$latest"
           else
             echo "$TAG is already public"
           fi
@@ -185,7 +221,7 @@ jobs:
         env:
           TAG: ${{ inputs.tag }}
           DIGEST: ${{ needs.prepare.outputs.digest }}
-          LATEST: ${{ needs.prepare.outputs.latest }}
+          LATEST: ${{ needs.publish.outputs.latest }}
         # GitHub Pages caches pages for up to 10 minutes
         run: |
           if [ "$LATEST" = true ]; then site=(); else site=(--no-site); fi

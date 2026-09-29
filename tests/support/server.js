@@ -26,21 +26,25 @@ function withTestDb(html) {
 
 // For tests of the online version's service worker, whose requests the browser's routing can't see:
 // /alt/<id>/... serves the same files as /..., except that after GET /__slow/<id> the page takes
-// 60 s to answer, and under /alt/nosw-<id>/ the web/ files are missing (a copy on another site).
+// 60 s to answer, after GET /__fail/<id> it is answered with 503 Service Unavailable, and under
+// /alt/nosw-<id>/ the web/ files are missing (a copy on another site).
 const slow = new Set();
+const failing = new Set();
 
 const port = +(process.argv[2] || process.env.PORT || 4173);
 http.createServer(async (req, res) => {
   let [url, query = ''] = req.url.split('?');
-  const toggle = /^\/__slow\/([\w-]+)$/.exec(url);
-  if (toggle) { slow.add(toggle[1]); res.end('ok'); return; }
+  const toggle = /^\/__(slow|fail)\/([\w-]+)$/.exec(url);
+  if (toggle) { (toggle[1] === 'slow' ? slow : failing).add(toggle[2]); res.end('ok'); return; }
   const alt = /^\/alt\/([\w-]+)(\/.*)$/.exec(url);
   if (alt) {
     url = alt[2];
     if (slow.has(alt[1]) && (url === '/' || url === '/discpress.html')) await new Promise(r => setTimeout(r, 60_000));
+    if (failing.has(alt[1]) && (url === '/' || url === '/discpress.html')) { res.writeHead(503, { 'content-type': 'text/plain' }); res.end('down for maintenance'); return; }
     if (alt[1].startsWith('nosw-') && !(url === '/' || url === '/discpress.html')) { res.writeHead(404); res.end('not found'); return; }
   }
-  if (url === '/healthz') { res.end('ok'); return; }
+  // the page it serves, so a test run that reuses a running server can check it's the page it tests
+  if (url === '/healthz') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ page: pageUnderTest() })); return; }
   if (url === '/blank.html') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end('<!doctype html><title>blank</title>'); return; }
   if (url === '/' || url === '/discpress.html') {
     // read on every request so a rebuilt page is picked up without restarting

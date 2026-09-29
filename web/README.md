@@ -11,7 +11,8 @@ The Release workflow (`.github/workflows/release.yml`) publishes it together wit
 - `index.html`: the release's `dist/discpress.html`, byte for byte, and `discpress.html.sha256`, its SHA-256
   (the same file is attached to the release, so anyone can compare the two);
 - the files here: `sw.js` (keeps the page available offline: network first, so updates arrive on the next
-  visit, but a saved copy answers after 4 s on a slow network), `manifest.webmanifest` and the icons.
+  visit, but a saved copy answers after 4 s on a slow network, and at once when the site answers the page
+  with an error), `manifest.webmanifest` and the icons.
 
 The page registers the service worker itself, and only when it is served over https; once that succeeds it
 adds the manifest link and the PNG touch icon. So the single file stays the same everywhere, works unchanged

@@ -1,7 +1,7 @@
 // Discpress's service worker, on the online version only (see README.md here): it keeps the page available
 // offline. Network first, so a new release reaches the next visit; a page that is already open, and a
 // conversion in it, is never touched. On a slow network a saved copy answers after a few seconds, and the
-// download still refreshes it. It caches only this site's own files and makes no other requests.
+// download still refreshes it; when the site answers the page with an error, the saved copy answers. It caches only this site's own files and makes no other requests.
 var CACHE = 'discpress';
 var FILES = ['./', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png'];
 var WAIT = 4000;
@@ -35,7 +35,11 @@ self.addEventListener('fetch', function (e) {
   e.respondWith(new Promise(function (resolve) {
     var done = false;
     function answer(res) { if (!done) { done = true; resolve(res); } }
-    net.then(answer, function () {
+    net.then(function (res) {
+      // an error page (the site down, a bad deploy) is no better than being offline: the saved copy, if any
+      if (res.ok || !nav) return answer(res);
+      saved().then(function (hit) { answer(hit || res); });
+    }, function () {
       saved().then(function (hit) { answer(hit || Response.error()); });
     });
     setTimeout(function () {
