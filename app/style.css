@@ -231,7 +231,7 @@ h2, h3 { font-family: var(--display); letter-spacing: -.01em; }
 /* results of an earlier visit (renderEarlier) */
 #tab-convert:not(.has-jobs) #earlier, #tab-convert:not(.has-jobs) #iosTip { max-width: 760px; width: 100%; margin: 16px auto 0; }
 #iosTip .btn { margin-top: 6px; }
-.earlier .out + .out, .earlier .note + h2 { margin-top: 10px; }
+.earlier .out + .out, .earlier .note + h2, .earlier .note + .note { margin-top: 10px; }
 
 /* ---------- job cards ---------- */
 .jobs { display: grid; gap: 16px; }

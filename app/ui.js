@@ -477,33 +477,41 @@ async function ensureTuned(report) {
 /* ============================================================
    private browser storage (OPFS) bookkeeping
    ============================================================ */
+// the names of the Web Locks held now (open visits), or null where the browser can't tell
+async function heldLocks() {
+  try {
+    if (navigator.locks && navigator.locks.query) {
+      var q = await navigator.locks.query();
+      return new Set((q.held || []).map(function (l) { return l.name; }));
+    }
+  } catch (e) { /* unknown */ }
+  return null;
+}
 var Store = {
   available: false,
   session: 's' + Date.now().toString(36) + uid(),
   init: async function () {
+    // held while this visit lasts, so other visits can tell it is still open (Recovery)
+    if (navigator.locks && navigator.locks.request) {
+      navigator.locks.request('chdman-web-' + this.session, function () { return new Promise(function () {}); });
+      await sleep(50);
+    }
     try {
-      if (!navigator.storage || !navigator.storage.getDirectory) { this.checked = true; return; }
+      if (!navigator.storage || !navigator.storage.getDirectory) throw new Error('no private storage');
       var root = await navigator.storage.getDirectory();
       var work = await root.getDirectoryHandle('chdman-work', { create: true });
       this.available = true;
-      if (navigator.locks && navigator.locks.request) {
-        navigator.locks.request('chdman-web-' + this.session, function () { return new Promise(function () {}); });
-        await sleep(50);
-      }
       await this.cleanupStale(work);
     } catch (e) {
       this.available = false;
+      // results in memory (a page opened as a file in Chrome or Edge, older browsers): nothing to keep,
+      // but say what an ended visit lost
+      Recovery.settle(Recovery.read(), [], await heldLocks());
     }
     this.checked = true;
   },
   cleanupStale: async function (work) {
-    var held = null;
-    try {
-      if (navigator.locks && navigator.locks.query) {
-        var q = await navigator.locks.query();
-        held = new Set((q.held || []).map(function (l) { return l.name; }));
-      }
-    } catch (e) { held = null; }
+    var held = await heldLocks();
     var names = [];
     try { for await (var entry of work.keys()) names.push(entry); } catch (e) { return; }
     var records = Recovery.read();
@@ -521,7 +529,7 @@ var Store = {
       if (Recovery.adopt(n, records[n])) continue;
       try { await work.removeEntry(n, { recursive: true }); } catch (e) { /* in use */ }
     }
-    Recovery.settle(records, names);
+    Recovery.settle(records, names, held);
   },
   dirPath: function (jobId, session) { return ['chdman-work', session || this.session, jobId]; },
   // session: an earlier visit's (Recovery), else this one's
@@ -563,6 +571,7 @@ var Recovery = {
   KEY: 'chdman-web-sessions',
   earlier: [], // [{ session, jobId, title, outputs: [{ name, size, slot, kind, session }] }]
   stopped: [], // titles of jobs that were running when their visit ended
+  lost: [], // results an ended visit held only in memory: [{ title, name }]
   read: function () {
     try { var v = JSON.parse(localStorage.getItem(this.KEY) || '{}'); return v && typeof v === 'object' ? v : {}; } catch (e) { return {}; }
   },
@@ -573,7 +582,6 @@ var Recovery = {
     } catch (e) { /* ignore */ }
   },
   update: function (fn, session) {
-    if (!Store.available) return;
     var all = this.read(), key = session || Store.session;
     var rec = all[key] || { results: {} };
     rec.results = rec.results || {};
@@ -585,10 +593,11 @@ var Recovery = {
   running: function (job) {
     this.update(function (rec) { rec.running = job ? job.title : null; });
   },
+  // results in memory ('blob') are recorded too: a reload loses them, and the next visit says so
   finished: function (job) {
-    var outs = job.outputs.filter(function (o) { return o.kind === 'opfs' && !o.downloaded; });
+    var outs = job.outputs.filter(function (o) { return (o.kind === 'opfs' || o.kind === 'blob') && !o.downloaded; });
     this.update(function (rec) {
-      if (outs.length) rec.results[job.id] = { title: job.title, outputs: outs.map(function (o) { return { name: o.name, size: o.size, slot: o.slot }; }) };
+      if (outs.length) rec.results[job.id] = { title: job.title, outputs: outs.map(function (o) { return { name: o.name, size: o.size, slot: o.slot, kind: o.kind }; }) };
       else delete rec.results[job.id];
     });
   },
@@ -604,25 +613,50 @@ var Recovery = {
   forget: function (jobId, session) {
     this.update(function (rec) { delete rec.results[jobId]; }, session);
   },
+  // a record's results still in storage (records from before 1.3.4 have only those)
+  kept: function (rec) {
+    var out = {};
+    Object.keys(rec.results || {}).forEach(function (id) {
+      var r = rec.results[id], o = r.outputs.filter(function (x) { return (x.kind || 'opfs') === 'opfs'; });
+      if (o.length) out[id] = { title: r.title, outputs: o };
+    });
+    return out;
+  },
+  // an ended visit's losses: the job it was running, and the results it held in memory
+  report: function (rec) {
+    var self = this;
+    if (rec.running) this.stopped.push(rec.running);
+    Object.keys(rec.results || {}).forEach(function (id) {
+      var r = rec.results[id];
+      r.outputs.forEach(function (o) { if (o.kind === 'blob') self.lost.push({ title: r.title, name: o.name }); });
+    });
+  },
   // at start, for a visit that has ended: true if it left unsaved results (its folder is then kept)
   adopt: function (session, rec) {
     if (!rec) return false;
     if (this.earlier.some(function (e) { return e.session === session; })) return true; // listed already
-    if (rec.running) this.stopped.push(rec.running);
-    var ids = Object.keys(rec.results || {});
+    this.report(rec);
+    var res = this.kept(rec), ids = Object.keys(res);
     for (var i = 0; i < ids.length; i++) {
-      var r = rec.results[ids[i]];
+      var r = res[ids[i]];
       this.earlier.push({ session: session, jobId: ids[i], title: r.title, outputs: r.outputs.map(function (o) { return { name: o.name, size: o.size, slot: o.slot, kind: 'opfs', session: session }; }) });
     }
     return ids.length > 0;
   },
-  // records of ended visits: drop the "running" marks now reported, and records whose storage is gone
-  settle: function (records, names) {
-    var keep = {};
+  // records of other visits: keep those still open, and ended ones' results still in storage; report
+  // what ended visits without a folder lost (they kept everything in memory, or ran no job to the end)
+  settle: function (records, names, held) {
+    var keep = {}, self = this;
     Object.keys(records).forEach(function (k) {
-      if (k === Store.session || names.indexOf(k) < 0) return;
-      var rec = records[k];
-      if (rec.results && Object.keys(rec.results).length) keep[k] = { results: rec.results };
+      if (k === Store.session) return;
+      var rec = records[k], open = !!held && held.has('chdman-web-' + k);
+      if (open) { keep[k] = rec; return; }
+      if (names.indexOf(k) >= 0) {
+        var res = self.kept(rec);
+        if (Object.keys(res).length) keep[k] = { results: res };
+        return;
+      }
+      self.report(rec);
     });
     var all = this.read(); // this visit's record may have been written meanwhile
     if (all[Store.session]) keep[Store.session] = all[Store.session];
@@ -1858,7 +1892,7 @@ async function runJobNow(job) {
     return;
   }
   appendLog(job, '$ ' + spec.cmdline);
-  if (spec.outMode === 'opfs') Recovery.running(job);
+  Recovery.running(job);
   if (spec.outMode === 'opfs' && spec.expected) {
     var est = await Store.estimate();
     if (est && est.quota && est.quota - est.usage < spec.expected * 1.05) {
@@ -2032,14 +2066,28 @@ function initIosTip() {
 }
 
 // results of an earlier visit that weren't saved, and the job that didn't finish (Recovery)
+// what to do when results can only be kept in memory
+function keepResultsAdvice() {
+  var ways = ['save each result as soon as it is ready'];
+  if (window.showDirectoryPicker) ways.push('have results written into a folder (Settings \u2192 Where to keep results)');
+  if (location.protocol !== 'https:') ways.push('use Discpress online at ' + HOSTED_URL.replace(/^https:\/\/|\/$/g, '') + ', where results stay on disk until you save them');
+  var last = ways.pop();
+  return 'To keep them, ' + (ways.length ? ways.join(', ') + ', or ' : '') + last + '.';
+}
 function renderEarlier() {
   var box = $('#earlier');
   if (!box) return;
   box.replaceChildren();
-  var items = Recovery.earlier, stopped = Recovery.stopped;
-  box.hidden = !items.length && !stopped.length;
+  var items = Recovery.earlier, stopped = Recovery.stopped, lost = Recovery.lost;
+  box.hidden = !items.length && !stopped.length && !lost.length;
   if (box.hidden) return;
   var card = el('div', { class: 'card earlier' });
+  if (lost.length) {
+    var names = lost.map(function (l) { return '\u201c' + l.name + '\u201d'; }).join(', ');
+    card.append(el('div', { class: 'note warn' }, el('b', null, (lost.length > 1 ? 'Results lost when the page was closed or reloaded: ' : 'A result was lost when the page was closed or reloaded: ') + names + '. '),
+      'This page keeps results in memory, since the browser gives it no storage of its own here (for example when it is opened as a file). ' + keepResultsAdvice(),
+      el('button', { class: 'btn sm', style: 'margin-left:8px', onclick: function () { Recovery.lost = []; renderEarlier(); } }, 'OK')));
+  }
   if (stopped.length) {
     var why = isIOS ? ' iOS does this to free memory, or when the screen was locked or another app was used for a while.' : '';
     card.append(el('div', { class: 'note warn' }, el('b', null, (stopped.length > 1 ? 'Conversions that didn\u2019t finish: ' : 'A conversion didn\u2019t finish: ') + stopped.map(function (t) { return '\u201c' + t + '\u201d'; }).join(', ') + '. '),
@@ -2072,7 +2120,7 @@ function renderEarlier() {
    ============================================================ */
 function markSaved(job, out) {
   out.downloaded = true;
-  if (out.kind === 'opfs') Recovery.saved(job, out);
+  if (out.kind === 'opfs' || out.kind === 'blob') Recovery.saved(job, out);
 }
 async function outputFile(job, out) {
   if (out.kind === 'blob') return new File([out.blob], out.name, { type: 'application/octet-stream' });
@@ -2811,6 +2859,10 @@ function init() {
     pickFolder().then(updateChips);
   });
   if (!window.showDirectoryPicker) $('#memTipBtn').hidden = true;
+  var ways = [];
+  if (window.showDirectoryPicker) ways.push('have results written straight into a folder');
+  if (location.protocol !== 'https:') ways.push('use Discpress online at ' + HOSTED_URL.replace(/^https:\/\/|\/$/g, '') + ', which keeps results on disk');
+  $('#memTipWays').textContent = ways.length ? ways.join(', or ') + '.' : 'save each result as soon as it is ready.';
   $('#setRename').checked = settings.rename;
   $('#setRename').addEventListener('change', function (e) {
     settings.rename = e.target.checked; saveSettings();

@@ -74,7 +74,7 @@ Consequences: app JS is plain browser script (no modules/imports, ES5-style `var
   - **CSP.** `app/index.html`'s Content-Security-Policy has `connect-src 'none'`: nothing in the page may use the network.
   - **Saving.** The share sheet loads the whole file into memory, so on iOS results over `SHARE_MAX` (512 MB) are downloaded instead. App web views (`iosWebView`) usually can't download, so `#iosTip` points to the hosted copy.
   - **Threads.** The speed test tries at most 4 threads on iPhones (`iosThreadCap`), which report 4 cores whatever they have; a stored result that stopped at a lower limit (`cap`) is measured again.
-  - **Recovery.** `Recovery` keeps a `localStorage` record of the running job and unsaved results, so after iOS reloads the page, `Store.cleanupStale` keeps those results and `renderEarlier` lists them.
+  - **Recovery.** `Recovery` keeps a `localStorage` record of the running job and unsaved results, so after iOS reloads the page, `Store.cleanupStale` keeps those results and `renderEarlier` lists them. Where results live in memory (Chrome and Edge give a `file://` page no OPFS), the next visit reports what was lost instead (`Recovery.lost`). Each visit holds a Web Lock named after its session, so another open tab's record is left alone.
 - **`wasm/`**: `sources.mk` lists the engine sources that are compiled; `shim/SDL2/SDL.h` stubs the only SDL calls chdman needs; `version.cpp` supplies the version strings.
 
 ## Releases
