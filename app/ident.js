@@ -199,7 +199,10 @@ async function crcHere(blob, start, end, onProgress) {
 function crcOf(blob, start, end, onProgress, how) {
   // a checksum stopped for the device's speed test (pauseChecksums) starts over once the test is done
   var run = function () {
-    var w = DEBUG.stage && !how ? Promise.reject(new Error('debug')) : crcWorker(blob, start, end, onProgress, how);
+    // not while the speed test measures (one that starts meanwhile is stopped by pauseChecksums)
+    var w = Promise.resolve(Tuning.running).catch(function () {}).then(function () {
+      return DEBUG.stage && !how ? Promise.reject(new Error('debug')) : crcWorker(blob, start, end, onProgress, how);
+    });
     return w.catch(function (e) {
       if (e && e.paused) return Promise.resolve(Tuning.running).catch(function () {}).then(run);
       if (how) throw e;
@@ -388,12 +391,15 @@ function probePlan(job, images, nrg) {
   } else if (job.src === 'toc' && job.descText) {
     // where the engine finds each track (cdrdao's grammar, cdrom_file::parse_toc): a track is a run of
     // pieces, files and zeros (ZERO, SILENCE, PREGAP); INDEX 01 is at START, else at its first frame.
-    // Times are mm:ss:ff; plain numbers are bytes (DATAFILE, ZERO) or samples of 4 bytes (AUDIOFILE, SILENCE)
-    var tt = [], ends = new Map();
+    // Times are mm:ss:ff; plain numbers are bytes (DATAFILE, ZERO) or samples of 4 bytes (AUDIOFILE,
+    // SILENCE), but frames for START and PREGAP (msf_to_frames). A run ends on a whole sector (zeros pad it)
+    var tt = [];
     var units = function (w, stride, sample) {
       if (/^\d+:\d+:\d+$/.test(w)) return msfFrames(w) * stride;
       return (+w || 0) * (sample ? 4 : 1);
     };
+    var frames = function (w) { return /:/.test(w) ? msfFrames(w) : +w || 0; };
+    var sectors = function (bytes, stride) { return Math.ceil(bytes / stride) * stride; };
     job.descText.split(/\r?\n/).forEach(function (ln) {
       var a = tokenize(ln.replace(/\/\/.*$/, '')), t = tt[tt.length - 1], k = a[0];
       if (k === 'TRACK' && a[1]) {
@@ -405,21 +411,21 @@ function probePlan(job, images, nrg) {
       var num = function (w) { return /^\d/.test(w || '') || /^#\d/.test(w || ''); };
       if (/^(DATAFILE|AUDIOFILE|FILE)$/.test(k) && a[1] != null) {
         var f = byName(a[1]), i = a[2] === 'SWAP' ? 3 : 2, audio = k !== 'DATAFILE', off;
-        if (/^#\d/.test(a[i] || '')) off = +a[i++].slice(1);
-        else off = k === 'DATAFILE' ? (ends.get(a[1]) || 0) : 0; // a DATAFILE goes on where the file's last use ended
-        if (audio && num(a[i])) off += units(a[i++], t.stride, true); // AUDIOFILE/FILE: the start in the file
+        off = /^#\d/.test(a[i] || '') ? +a[i++].slice(1) : 0;
+        // AUDIOFILE/FILE: the start in the file; chdman 0.289's DATAFILE "f" start length: likewise
+        if (num(a[i]) && (audio || num(a[i + 1]))) off += units(a[i++], t.stride, audio);
         var len = num(a[i]) ? units(a[i], t.stride, audio) : f ? Math.max(0, f.size - off) : 0;
+        len = sectors(len, t.stride);
         t.runs.push({ file: f, offset: off, bytes: len });
         t.bytes += len;
-        ends.set(a[1], off + len);
       } else if ((k === 'ZERO' || k === 'SILENCE') && num(a[a.length - 1])) {
-        var z = units(a[a.length - 1], t.stride, k === 'SILENCE');
+        var z = sectors(units(a[a.length - 1], t.stride, k === 'SILENCE'), t.stride);
         t.runs.push({ file: null, bytes: z }); t.bytes += z;
       } else if (k === 'PREGAP' && a[1]) {
-        var pg = msfFrames(a[1]) * t.stride;
+        var pg = frames(a[1]) * t.stride;
         t.runs.push({ file: null, bytes: pg }); t.bytes += pg;
         t.start = t.bytes;
-      } else if (k === 'START') t.start = a[1] ? msfFrames(a[1]) * t.stride : t.bytes;
+      } else if (k === 'START') t.start = a[1] ? frames(a[1]) * t.stride : t.bytes;
     });
     var tracksOf = new Map();
     tt.forEach(function (t) { t.runs.forEach(function (r) { if (r.file) (tracksOf.get(r.file) || tracksOf.set(r.file, new Set()).get(r.file)).add(t.no); }); });
@@ -580,6 +586,9 @@ async function identifyJob(job, onStatus, onProvisional) {
       entry = exact[0];
       if (det && det.serial && exact.length > 1) entry = exact.find(function (e) { return normSerial(e.serial) === normSerial(det.serial); }) || entry;
       method = 'hash';
+      // one checksum listed under several names (the same dump released twice): the choice stays
+      var hn = exact.map(function (e) { return e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
+      if (hn.length > 1) entry = Object.assign({}, entry, { alternatives: hn });
     } else if (det && det.serial && (GameDB.serial(det.serial, det.sys).length || GameDB.serial(det.serial).length)) {
       cands = GameDB.serial(det.serial, det.sys);
       if (!cands.length) cands = GameDB.serial(det.serial);

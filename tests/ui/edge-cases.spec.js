@@ -597,3 +597,19 @@ test('a notification says when all jobs are done, if turned on', async ({ app, p
   await app.run(card);
   await expect.poll(() => page.evaluate(() => window.__notes)).toEqual(['Discpress: All jobs are done.']);
 });
+
+// a lone file from folder A counted as "picked on its own": a cue sheet in folder B, added later, took it
+// (second review)
+test('a cue sheet added later does not take a lone file of the same name from another folder', async ({ app }, testInfo) => {
+  const root = testInfo.outputPath('two');
+  fs.mkdirSync(path.join(root, 'A'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'B'), { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'tnd.iso'), path.join(root, 'A', 'disc.iso'));
+  fs.writeFileSync(path.join(root, 'B', 'disc.cue'), 'FILE "disc.iso" BINARY\r\n  TRACK 01 MODE1/2048\r\n    INDEX 01 00:00:00\r\n');
+  await app.open();
+  await addFolder(app, path.join(root, 'A'));
+  await app.settled(app.job('disc'));
+  await addFolder(app, path.join(root, 'B'));
+  await expect(app.jobs()).toHaveCount(2);
+  await expect(app.page.locator('#jobs article.job[data-state="blocked"]')).toContainText('disc.iso');
+});

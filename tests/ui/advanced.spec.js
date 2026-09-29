@@ -191,3 +191,14 @@ test('typed commands accept backslash escapes, as a shell does', async ({ app, p
   expect(await runCli(page)).toContain('[exit code 0]');
   await expect(page.locator('#cliOuts')).toContainText('the "best" game.chd');
 });
+
+test('typed commands keep an apostrophe inside a name, typed either way', async ({ app, page }) => {
+  await openCli(app, page);
+  // (as a buffer: Playwright's file chooser drops a path with \u2019 in it)
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#cliAdd')]);
+  await chooser.setFiles([{ name: 'Tony Hawk\u2019s.iso', mimeType: 'application/octet-stream', buffer: fs.readFileSync(path.join(FIXTURES, 'agent.iso')) }]);
+  await page.click('#cliEditToggle');
+  await page.locator('#cliText').fill('chdman createdvd -i “Tony Hawk’s.iso” -o “Tony Hawk’s.chd” -c none');
+  expect(await runCli(page)).toContain('[exit code 0]');
+  await expect(page.locator('#cliOuts')).toContainText('Tony Hawk’s.chd');
+});

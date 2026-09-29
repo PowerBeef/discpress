@@ -214,9 +214,16 @@ async function gunzip(bytes, size) {
 }
 
 // writes results streamed by the worker into a folder the user picked
-function makeSink(dir) {
-  var files = {}, failed = null;
-  function fail(e) { if (!failed) failed = e; }
+// opts.agreed: names the user already agreed to replace; opts.onFail(err): the first failure (a write
+// the folder refused, or a file the user chose to keep), which stops the run
+function makeSink(dir, opts) {
+  opts = opts || {};
+  var files = {}, failed = null, agreed = new Set(opts.agreed || []);
+  function fail(e) {
+    if (failed) return;
+    failed = e;
+    if (opts.onFail) opts.onFail(e);
+  }
   function q(id, fn) {
     var f = files[id];
     if (!f) return;
@@ -230,7 +237,18 @@ function makeSink(dir) {
         // only files this job created are removed
         var f = files[m.id] = { name: m.name, w: null, closed: false, size: 0, existed: false };
         f.chain = dir.getFileHandle(m.name).then(function () { f.existed = true; }, function () {})
-          .then(function () { return dir.getFileHandle(m.name, { create: true }); })
+          .then(function () {
+            // a file of the result (an extract's track file, say) that nobody asked about yet
+            if (f.existed && !agreed.has(m.name)) {
+              if (!confirm('\u201c' + m.name + '\u201d is already in the folder \u201c' + dir.name + '\u201d. Replace it?')) {
+                var e = new Error('Stopped: \u201c' + m.name + '\u201d is already in the folder, and you chose to keep it.');
+                e.kept = true;
+                throw e;
+              }
+              agreed.add(m.name);
+            }
+            return dir.getFileHandle(m.name, { create: true });
+          })
           .then(function (fh) { return fh.createWritable({ keepExistingData: false }); })
           .then(function (w) { f.w = w; }).catch(fail);
       } else if (m.type === 's-write') {
@@ -293,7 +311,18 @@ var Engine = {
   // runs one chdman command; returns {promise, cancel}
   run: function (o) {
     var self = this, worker = null, helpers = [], finished = false, saving = false, rejectFn;
-    var sink = o.outMode === 'stream' ? makeSink(o.outDir) : null;
+    var sink = o.outMode === 'stream' ? makeSink(o.outDir, {
+      agreed: o.agreed,
+      // a write into the folder failed, or the user kept a file: stop now (not after the whole conversion)
+      onFail: function (e) {
+        if (finished && !saving) return;
+        if (e.kept) { e.canceled = true; toast(e.message); } // the user said no: canceled, as for the main file
+        saving = false;
+        cleanup();
+        sink.abort();
+        rejectFn(e);
+      }
+    }) : null;
     var ackWait = null;
     // the worker could not read an input itself: read it here and send it over
     async function feedStage(m) {
@@ -358,7 +387,8 @@ var Engine = {
           sink.finish().then(function () { if (saving) { saving = false; resolve(m); } }, function (e) {
             if (!saving) return;
             saving = false;
-            reject(new Error('Could not write to the output folder: ' + (e && e.message || e)));
+            sink.abort(); // the files it created go (a failed write left an empty or partial one)
+            reject(e && e.kept ? e : new Error('Could not write to the output folder: ' + (e && e.message || e)));
           });
         }
       };
@@ -632,6 +662,7 @@ var Recovery = {
     var rec = all[key] || { results: {} };
     rec.results = rec.results || {};
     fn(rec);
+    if (key === Store.session) rec.alive = Date.now(); // for visits in browsers without Web Locks (settle)
     if (!rec.running && !Object.keys(rec.results).length) delete all[key];
     else all[key] = rec;
     this.write(all);
@@ -641,7 +672,7 @@ var Recovery = {
   },
   // results in memory ('blob') are recorded too: a reload loses them, and the next visit says so
   finished: function (job) {
-    var outs = job.outputs.filter(function (o) { return (o.kind === 'opfs' || o.kind === 'blob') && !o.downloaded; });
+    var outs = job.outputs.filter(function (o) { return (o.kind === 'opfs' || o.kind === 'blob') && !o.downloaded && !o.input; });
     this.update(function (rec) {
       if (outs.length) rec.results[job.id] = { title: job.title, outputs: outs.map(function (o) { return { name: o.name, size: o.size, slot: o.slot, kind: o.kind }; }) };
       else delete rec.results[job.id];
@@ -695,7 +726,8 @@ var Recovery = {
     var keep = {}, self = this;
     Object.keys(records).forEach(function (k) {
       if (k === Store.session) return;
-      var rec = records[k], open = !!held && held.has('chdman-web-' + k);
+      // open: holds its Web Lock; where the browser has none, wrote its record in the last few minutes
+      var rec = records[k], open = held ? held.has('chdman-web-' + k) : !!rec.alive && Date.now() - rec.alive < 5 * 60000;
       if (open) { keep[k] = rec; return; }
       if (names.indexOf(k) >= 0) {
         var res = self.kept(rec);
@@ -708,11 +740,17 @@ var Recovery = {
     // visits (or visits opened since), which keep their newest state
     var all = this.read();
     Object.keys(all).forEach(function (k) {
-      if (k === Store.session || (held && held.has('chdman-web-' + k)) || !(k in records)) keep[k] = all[k];
+      var open = held ? held.has('chdman-web-' + k) : !!all[k].alive && Date.now() - all[k].alive < 5 * 60000;
+      if (k === Store.session || open || !(k in records)) keep[k] = all[k];
     });
     this.write(keep);
   }
 };
+
+// without Web Locks, a visit with a record keeps it fresh, so other visits leave it alone (settle)
+if (!(navigator.locks && navigator.locks.query)) {
+  setInterval(function () { if (Recovery.read()[Store.session]) Recovery.update(function () {}); }, 60000);
+}
 
 /* ============================================================
    disc descriptors (.cue / .gdi / .toc)
@@ -1022,7 +1060,8 @@ function identNote(job) {
       var sel = el('select', { onchange: function () {
         id.name = job.versionPicked = sel.value;
         if (job.state === 'done') renameOutputs(job);
-        else if (job.state !== 'running' && job.state !== 'queued' && !job.outEdited && settings.rename) job.opts.out = id.name;
+        // until chdman runs (queued, or started but still waiting), the name is still to be used
+        else if (!job.run && !job.outEdited && settings.rename) job.opts.out = id.name;
         refreshJob(job, true);
       } });
       id.entry.alternatives.forEach(function (n) { sel.append(el('option', { value: n, selected: n === id.name }, n)); });
@@ -1250,6 +1289,8 @@ async function addEntriesNow(entries) {
       ignored.push(name);
       continue;
     }
+    // where the file came from (its folder): a cue sheet taking it over later needs it (pickTrack)
+    if (job2.files.length === 1 && !job2.files[0].path) job2.files[0].path = e.path;
     created.push(job2);
   }
 
@@ -1308,7 +1349,7 @@ async function descriptorJob(d, pool, claimed) {
     if (!cands.length) {
       jobs.forEach(function (other) {
         if ((other.lone || (other.src === 'iso' && other.files.length === 1)) && other.state !== 'running' && other.state !== 'queued' && other.state !== 'done' && other.files[0] && other.files[0].name.toLowerCase() === want) {
-          cands.push({ file: other.files[0].file, path: other.files[0].name, fromJob: other });
+          cands.push({ file: other.files[0].file, path: other.files[0].path || other.files[0].name, fromJob: other });
         }
       });
     }
@@ -1911,7 +1952,7 @@ function abortStart(job) {
 }
 // results not saved anywhere yet (downloaded, shared or written into a folder)
 function unsaved(job) {
-  return job.state === 'done' && job.outputs.some(function (o) { return !o.downloaded && o.kind !== 'disk'; });
+  return job.state === 'done' && job.outputs.some(function (o) { return !o.downloaded && o.kind !== 'disk' && !o.input; });
 }
 // silent: don't ask; keepFiles: its files moved to another job, so they stay known (no re-adding them)
 function removeJob(job, silent, keepFiles) {
@@ -2004,13 +2045,24 @@ async function runJobNow(job) {
     try {
       if (settings.storage === 'folder' && outDir) {
         setProgress(job, null, 'Copying to folder…');
+        var had = await outDir.getFileHandle(nm).then(function () { return true; }, function () { return false; });
         var fh = await outDir.getFileHandle(nm, { create: true });
         var w = await fh.createWritable();
-        await src.stream().pipeTo(w);
+        // Cancel or Remove stop the copy (the writable is aborted: a file that was there stays as it was)
+        var ac = new AbortController();
+        aborted.then(function () { ac.abort(); });
+        try { await src.stream().pipeTo(w, { signal: ac.signal }); }
+        catch (e) {
+          if (!job.aborted) throw e;
+          if (!had) await outDir.removeEntry(nm).catch(function () {});
+          job.state = 'canceled';
+          if (jobs.indexOf(job) >= 0) refreshJob(job, true);
+          return;
+        }
         job.folderName = outDir.name;
         job.outputs = [{ name: nm, size: src.size, kind: 'disk' }];
       } else {
-        job.outputs = [{ name: nm, size: src.size, kind: 'blob', blob: src }];
+        job.outputs = [{ name: nm, size: src.size, kind: 'blob', blob: src, input: true }]; // the user's own file, renamed
       }
       job.state = 'done';
     } catch (e) { job.state = 'error'; job.errorText = e.message; }
@@ -2030,7 +2082,7 @@ async function runJobNow(job) {
   var t0 = performance.now(), phaseStart = t0, lastPhase = '', lastPct = 0, workerError = '';
   job.run = Engine.run({
     jobId: job.id, dirPath: Store.claim(job.id), args: spec.args, inputs: spec.inputs, writable: spec.writable,
-    slots: spec.slots, helpers: spec.helpers, outMode: spec.outMode, outDir: outDir,
+    slots: spec.slots, helpers: spec.helpers, outMode: spec.outMode, outDir: outDir, agreed: main ? [main] : [],
     onLine: function (s, t) {
       appendLog(job, t);
       var fm = /final ratio = ([\d.]+)%/.exec(t);
@@ -2582,7 +2634,7 @@ function cliPreview() {
   $('#cliPreview').textContent = c.display + (c.missing.length ? '\n# still needed: ' + c.missing.join(', ') : '');
 }
 // a typed command's words as a shell splits them: "…" (where \" and \\ stand for " and \), '…' as
-// it is, and \ before any other character outside quotes (a name with a space: my\ game.cue)
+// it is, and \ before a space or a quote outside quotes (a name with a space: my\ game.cue)
 function shellWords(line) {
   var out = [], cur = null, q = null;
   for (var i = 0; i < line.length; i++) {
@@ -2597,15 +2649,20 @@ function shellWords(line) {
     if (/\s/.test(c)) { if (cur !== null) { out.push(cur); cur = null; } continue; }
     if (cur === null) cur = '';
     if (c === '"' || c === "'") q = c;
-    else if (c === '\\' && i + 1 < line.length) cur += line[++i];
+    // \ escapes a space, a quote or itself; before anything else it stays (a Windows path: C:\games\x.cue)
+    else if (c === '\\' && i + 1 < line.length && /[\s"'\\]/.test(line[i + 1])) cur += line[++i];
     else cur += c;
   }
   if (cur !== null) out.push(cur);
   return out;
 }
 function cliParseText(text) {
-  // quotes as phones type them (iOS smart punctuation) count as plain ones
-  var toks = shellWords(text.trim().replace(/[\u201c\u201d\u201e]/g, '"').replace(/[\u2018\u2019]/g, "'")), args = [];
+  // quotes as phones type them (iOS smart punctuation) count as plain ones where they open or close a
+  // word; inside one (Tony Hawk\u2019s.iso) they are part of the name
+  var plain = text.trim()
+    .replace(/(^|\s)[\u201c\u201d\u201e]/g, '$1"').replace(/[\u201c\u201d](?=\s|$)/g, '"')
+    .replace(/(^|\s)[\u2018\u2019]/g, "$1'").replace(/[\u2018\u2019](?=\s|$)/g, "'");
+  var toks = shellWords(plain), args = [];
   if (toks[0] && /^chdman(\.exe)?$/i.test(toks[0])) toks.shift();
   var cmd = toks[0];
   var writable = cmd === 'addmeta' || cmd === 'delmeta' || (cmd === 'verify' && toks.some(function (t) { return t === '-f' || t === '--fix'; }));
@@ -2613,7 +2670,9 @@ function cliParseText(text) {
     var t = toks[i], prev = toks[i - 1];
     if (i > 0 && FILE_FLAGS[prev]) {
       var name = base(t);
-      var f = cli.files.find(function (x) { return x.name === name; }) || cli.files.find(function (x) { return x.name.toLowerCase() === name.toLowerCase(); });
+      // (apostrophes typed either way: ' or \u2019)
+      var loose = function (n) { return n.toLowerCase().replace(/[\u2018\u2019]/g, "'"); };
+      var f = cli.files.find(function (x) { return x.name === name; }) || cli.files.find(function (x) { return loose(x.name) === loose(name); });
       if (!f) throw new Error('"' + t + '" is not in the file list. Add it with "Add files" first.');
       args.push((writable && (prev === '-i' || prev === '--input') ? '/out/' : '/in/') + f.name);
     } else if (i > 0 && OUT_FLAGS[prev]) args.push('/out/' + base(t));

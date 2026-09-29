@@ -194,3 +194,79 @@ test('a job worker that crashes leaves no half-written file in the folder', asyn
   await expect(card).toContainText('the worker crashed');
   await expect.poll(() => page.evaluate(() => [...window.__folder.keys()])).toEqual([]);
 });
+
+// Only the result's main file (the .cue of an extract) was asked about: its track files replaced the
+// folder's own without a word (second review)
+test('extracting into a folder asks before replacing any file already there, track files too', async ({ app, page }) => {
+  test.skip(!nativeChdman(), 'needs native chdman to make the CHD');
+  fs.mkdirSync(path.join(FIXTURES, 'gen'), { recursive: true });
+  chdman(['createcd', '-i', 'mgs disc1.cue', '-o', 'gen/mgs-x.chd', '-f']);
+  await page.addInitScript(fakeFolder);
+  await app.open({ settings: { storage: 'folder', rename: false, threads: 1 } });
+  const extractOnce = async () => {
+    await app.add(['gen/mgs-x.chd']);
+    const card = app.job('mgs-x');
+    await app.settled(card);
+    await card.locator('.job-foot button.primary').click();
+    return card;
+  };
+  let card = await extractOnce();
+  await app.waitState(card, 'done');
+  const names = await page.evaluate(() => [...window.__folder.keys()].sort());
+  const bins = names.filter(n => n.endsWith('.bin'));
+  expect(bins.length).toBeGreaterThan(0);
+  // the user's own files of those names, and no .cue
+  await page.evaluate(b => { for (const n of b) window.__folder.set(n, new TextEncoder().encode('MY OWN DUMP')); for (const n of [...window.__folder.keys()]) if (n.endsWith('.cue')) window.__folder.delete(n); }, bins);
+  await card.locator('.job-head button[aria-label="Remove"]').click();
+  const asked = [];
+  page.removeAllListeners('dialog');
+  page.on('dialog', d => { asked.push(d.message()); d.dismiss(); });
+  card = await extractOnce();
+  await app.waitState(card, 'canceled');
+  expect(asked[0]).toContain(`“${bins[0]}” is already in the folder`);
+  for (const n of bins) expect(await text(page, n)).toBe('MY OWN DUMP');
+});
+
+test('a version picked while the job waits in the queue names the result in the folder', async ({ app, page }) => {
+  await page.addInitScript(fakeFolder);
+  await app.open({ settings: { storage: 'folder', threads: 1 } });
+  await page.evaluate(() => window.__folder.clear());
+  await app.add(fixture('ps2-dvd').add);
+  const mgs = fixture('ps1-multitrack');
+  await app.add(mgs.add);
+  const first = app.jobs().first(), card = app.job('mgs disc1');
+  await app.settled(first);
+  await app.settled(card);
+  await first.locator('.job-foot button.primary').click();
+  await card.locator('.job-foot button.primary').click();
+  await app.waitState(card, 'queued');
+  await card.locator('.note.ident select').selectOption(mgs.names[1]);
+  await app.waitState(card, 'done', 60_000);
+  await expect.poll(() => page.evaluate(() => [...window.__folder.keys()])).toContain(`${mgs.names[1]}.chd`);
+});
+
+test('a write the folder refuses stops the job and leaves no empty file', async ({ app, page }) => {
+  await page.addInitScript(fakeFolder);
+  await page.addInitScript(() => { // the third write fails, as when the drive is full
+    const orig = window.showDirectoryPicker;
+    window.showDirectoryPicker = async () => {
+      const dir = await orig();
+      const get = dir.getFileHandle.bind(dir);
+      dir.getFileHandle = async (n, o) => {
+        const h = await get(n, o), cw = h.createWritable.bind(h);
+        h.createWritable = async (x) => { const w = await cw(x), wr = w.write; let k = 0; w.write = async a => { if (++k === 3) throw new DOMException('full', 'QuotaExceededError'); return wr(a); }; return w; };
+        return h;
+      };
+      return dir;
+    };
+  });
+  await app.open({ settings: { storage: 'folder', rename: false, threads: 1 } });
+  await page.evaluate(() => window.__folder.clear());
+  await app.add(fixture('ps2-dvd').add);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await card.locator('.job-foot button.primary').click();
+  await app.waitState(card, 'error', 60_000);
+  await expect(card).toContainText('full');
+  await expect.poll(() => page.evaluate(() => [...window.__folder.keys()])).toEqual([]);
+});
