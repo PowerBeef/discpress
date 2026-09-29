@@ -147,6 +147,37 @@ function damagedChd() {
   return 'chd/damaged.chd';
 }
 
+/** the codec-mix CD CHD with one byte changed inside a cdfl (FLAC) hunk, as chd/damaged-audio.chd */
+function damagedAudioChd() {
+  const good = chdInput('codec-mix-cd', 'createcd', 'codec mix cd.cue');
+  const badPath = path.join(FIXTURES, 'chd', 'damaged-audio.chd');
+  if (!fs.existsSync(badPath)) {
+    const b = fs.readFileSync(path.join(FIXTURES, good));
+    b[1777198] ^= 0x5a;
+    fs.writeFileSync(badPath + '.tmp' + process.pid, b);
+    fs.renameSync(badPath + '.tmp' + process.pid, badPath);
+  }
+  return 'chd/damaged-audio.chd';
+}
+
+// chdman 0.289's FLAC decoder looped forever once damaged data ended its stream early; the page's
+// read-ahead reached that hunk even sooner. Now it is a decompression error, and extraction ends.
+for (const threads of [1, 4]) {
+  test(`a damaged audio hunk fails verify instead of hanging (${threads} thread${threads > 1 ? 's' : ''})`, async ({ app }) => {
+    await app.open({ settings: { threads } });
+    await app.add([damagedAudioChd()]);
+    const card = app.job('damaged-audio');
+    await app.settled(card);
+    await card.locator('.seg button', { hasText: 'Verify' }).click();
+    await app.run(card, { expectState: 'error', timeout: 60_000 });
+    await expect(card).toContainText('Decompression error');
+    await card.locator('.seg button', { hasText: 'Extract' }).click();
+    await app.waitState(card, ['ready']);
+    await card.locator('.job-foot button.primary').click();
+    await app.waitState(card, ['done', 'error'], 60_000);
+  });
+}
+
 test('verify passes on a good CHD and fails on a damaged one', async ({ app }) => {
   const good = chdInput('agent', 'createdvd', 'agent.iso');
   damagedChd();

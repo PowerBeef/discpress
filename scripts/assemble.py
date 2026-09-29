@@ -4,7 +4,7 @@
 Usage: scripts/assemble.py [output.html]   (default: dist/discpress.html)
 Needs build/chdman.js, build/chdman.wasm and build/chdman-nosimd.wasm (see build.sh).
 """
-import base64, gzip, html, json, os, sys
+import base64, gzip, html, json, os, struct, sys, zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 A = os.path.join(ROOT, 'app')
@@ -18,9 +18,18 @@ def rd(p, mode='r'):
         return f.read()
 
 
+def gzip_fixed(data):
+    """gzip at level 9 with a fixed header (mtime 0, OS byte 3), so the bytes don't depend on the Python
+    version: 3.11 and 3.12 write zlib's header (OS 3 on Linux, 19 on macOS), 3.10 and 3.13+ write OS 255."""
+    c = zlib.compressobj(9, zlib.DEFLATED, -zlib.MAX_WBITS)
+    body = c.compress(data) + c.flush()
+    return (b'\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\x03' + body +
+            struct.pack('<II', zlib.crc32(data) & 0xffffffff, len(data) & 0xffffffff))
+
+
 def pack(path):
     raw = rd(path, 'rb')
-    return base64.b64encode(gzip.compress(raw, 9, mtime=0)).decode(), len(raw)
+    return base64.b64encode(gzip_fixed(raw)).decode(), len(raw)
 
 
 # The worker is the Emscripten glue followed by our worker code.

@@ -1,8 +1,12 @@
 // Identification that confirms the exact release by checksum, and conversions that
 // don't wait for it. Uses the page with extra database rows (server.js ?testdb=1),
 // since synthetic discs can't match real Redump checksums.
+import fs from 'node:fs';
+import path from 'node:path';
+import zlib from 'node:zlib';
 import { test, expect, fixture } from '../support/app.js';
-import { nativeChdman, reference, sha1File } from '../support/native.js';
+import { FIXTURES, ROOT } from '../support/paths.js';
+import { chdman, nativeChdman, reference, sha1File } from '../support/native.js';
 
 const fx = fixture('ps1-verified');
 
@@ -90,4 +94,30 @@ test('starting while identification is still running uses the game name and disc
   const [out] = await app.downloads(card);
   expect(out.name).toBe(`${iso.name}.chd`);
   if (nativeChdman()) expect(sha1File(out.path)).toBe(sha1File(reference('createcd', 'tnd.iso')));
+});
+
+// A music CD's tracks are just sizes: among 40,000 discs one often has the size of some game's. The
+// size-only match is for a recognized console's disc whose serial can't be read (audit, batch 1).
+test('an audio CD whose track has the size of a game is not named after that game', async ({ app }) => {
+  test.skip(!nativeChdman(), 'needs native chdman');
+  // a PlayStation row whose size is whole CD frames and belongs to one game only
+  const db = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(ROOT, 'db', 'db.json.gz'))));
+  const bySize = new Map();
+  for (const row of db.systems.ps1.split('\n')) {
+    const [name, , size] = row.split('\t');
+    if (+size % 2352 === 0 && +size < 4 << 20) bySize.set(+size, (bySize.get(+size) || new Set()).add(name));
+  }
+  const [size, names] = [...bySize].find(([, n]) => n.size === 1);
+  const dir = path.join(FIXTURES, 'gen');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'album.bin'), Buffer.alloc(size, 7));
+  fs.writeFileSync(path.join(dir, 'album.cue'), 'FILE "album.bin" BINARY\r\n  TRACK 01 AUDIO\r\n    INDEX 01 00:00:00\r\n');
+  chdman(['createcd', '-i', 'gen/album.cue', '-o', 'gen/album.chd', '-f']);
+
+  await app.open();
+  await app.add(['gen/album.chd']);
+  const card = app.job('album');
+  await app.settled(card);
+  await expect(card).not.toContainText([...names][0]);
+  await expect(card).not.toContainText('Matched by size');
 });

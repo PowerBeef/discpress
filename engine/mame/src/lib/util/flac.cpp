@@ -518,9 +518,11 @@ bool flac_decoder::decode_interleaved(int16_t *samples, uint32_t num_samples, bo
 	m_uncompressed_length = num_samples;
 	m_uncompressed_swap = swap_endian;
 
-	// loop until we get everything we want
+	// loop until we get everything we want (Discpress: damaged data can end the stream first, after
+	// which process_single keeps returning true without producing samples, so this looped forever)
 	while (m_uncompressed_offset < m_uncompressed_length)
-		if (!FLAC__stream_decoder_process_single(m_decoder))
+		if (!FLAC__stream_decoder_process_single(m_decoder) ||
+			(m_uncompressed_offset < m_uncompressed_length && FLAC__stream_decoder_get_state(m_decoder) == FLAC__STREAM_DECODER_END_OF_STREAM))
 			return false;
 	return true;
 }
@@ -546,9 +548,11 @@ bool flac_decoder::decode(int16_t **samples, uint32_t num_samples, bool swap_end
 	m_uncompressed_length = num_samples;
 	m_uncompressed_swap = swap_endian;
 
-	// loop until we get everything we want
+	// loop until we get everything we want (Discpress: damaged data can end the stream first, after
+	// which process_single keeps returning true without producing samples, so this looped forever)
 	while (m_uncompressed_offset < m_uncompressed_length)
-		if (!FLAC__stream_decoder_process_single(m_decoder))
+		if (!FLAC__stream_decoder_process_single(m_decoder) ||
+			(m_uncompressed_offset < m_uncompressed_length && FLAC__stream_decoder_get_state(m_decoder) == FLAC__STREAM_DECODER_END_OF_STREAM))
 			return false;
 	return true;
 }

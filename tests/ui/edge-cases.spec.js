@@ -350,6 +350,41 @@ test('a running job can be cancelled and run again', async ({ app, page }) => {
   await expect(page.locator('#dock')).toBeVisible();
 });
 
+// A started job first loads the engine, waits for identification and may measure the device; until
+// chdman runs there was nothing for Cancel to stop, and removing only hid the card (audit, batch 1).
+test('Cancel stops a job that is still identifying the game', async ({ app }) => {
+  await app.open({ debug: { identDelay: 5000 } });
+  await app.add(['tnd.iso']);
+  const card = app.job('tnd');
+  await card.locator('.job-foot button.primary').click();
+  await app.waitState(card, 'running');
+  await card.locator('.job-foot button.danger', { hasText: 'Cancel' }).click();
+  await app.waitState(card, 'canceled', 3000);
+  await app.page.waitForTimeout(6000); // past the identification: it must not start after all
+  expect(await card.getAttribute('data-state')).toBe('canceled');
+  await card.locator('.job-foot button', { hasText: 'Try again' }).click();
+  await app.waitState(card, 'ready');
+  await app.run(card);
+});
+
+test('a job removed while it waits for identification neither runs nor blocks the queue', async ({ app, page }) => {
+  await app.open({ debug: { identDelay: 3000 } });
+  await app.add(['tnd.iso', 'frwl.iso']);
+  // frwl's identification waits behind tnd's; start frwl, then remove it before its turn
+  const frwl = app.job('frwl');
+  await frwl.locator('.job-foot button.primary').click();
+  await app.waitState(frwl, 'running');
+  await frwl.locator('.job-head button[aria-label="Remove"]').click();
+  await expect(app.jobs()).toHaveCount(1);
+  const tnd = app.job('tnd');
+  await app.settled(tnd);
+  await app.run(tnd, { timeout: 30_000 }); // the queue moves on
+  await page.waitForTimeout(4000); // frwl's turn has come and gone: it didn't convert in the background
+  const rec = await page.evaluate(() => JSON.parse(localStorage.getItem('chdman-web-sessions') || '{}'));
+  const titles = Object.values(rec).flatMap(r => Object.values(r.results || {}).map(x => x.title));
+  expect(titles).not.toContain('frwl');
+});
+
 test('removing a job forgets its files', async ({ app }) => {
   await app.open();
   await app.add(fixture('ps1-single').add);
@@ -359,4 +394,51 @@ test('removing a job forgets its files', async ({ app }) => {
   await expect(app.jobs()).toHaveCount(0);
   await app.add(fixture('ps1-single').add); // accepted again, not "already in the list"
   await expect(app.jobs()).toHaveCount(1);
+});
+
+// A folder of games whose tracks share generic names (every GDI has track01.bin): each descriptor takes
+// the files in its own folder, never a same-named one from another game's (audit, batch 1).
+function gameFolders(testInfo, { missingB = false } = {}) {
+  const root = testInfo.outputPath('games');
+  const bin = fs.readFileSync(path.join(FIXTURES, 'twine.bin'));
+  for (const g of ['Game A', 'Game B']) {
+    fs.mkdirSync(path.join(root, g), { recursive: true });
+    fs.writeFileSync(path.join(root, g, 'game.cue'), 'FILE "track01.bin" BINARY\r\n  TRACK 01 MODE2/2352\r\n    INDEX 01 00:00:00\r\n');
+    if (g === 'Game B' && missingB) continue;
+    const b = Buffer.from(bin);
+    if (g === 'Game B') b[b.length - 1] ^= 1; // a different disc of the same size
+    fs.writeFileSync(path.join(root, g, 'track01.bin'), b);
+    fs.utimesSync(path.join(root, g, 'track01.bin'), 1700000000, 1700000000); // same date too
+  }
+  return root;
+}
+async function addFolder(app, dir) {
+  const [chooser] = await Promise.all([app.page.waitForEvent('filechooser'), app.page.click('#addFolder')]);
+  await chooser.setFiles(dir);
+}
+
+test('a game missing a track does not borrow the same-named track of another game in the folder', async ({ app }, testInfo) => {
+  await app.open();
+  await addFolder(app, gameFolders(testInfo, { missingB: true }));
+  await expect(app.jobs()).toHaveCount(2);
+  const cards = app.jobs();
+  const states = await cards.evaluateAll(els => els.map(e => e.getAttribute('data-state')).sort());
+  expect(states).toEqual(['blocked', 'ready']);
+  await expect(app.page.locator('#jobs article.job[data-state="blocked"]')).toContainText('track01.bin');
+});
+
+test('same-named tracks of the same size and date in two game folders are both used, each by its own game', async ({ app }, testInfo) => {
+  await app.open({ settings: { rename: false } });
+  await addFolder(app, gameFolders(testInfo));
+  await expect(app.jobs()).toHaveCount(2);
+  const sums = [];
+  for (let i = 0; i < 2; i++) {
+    const card = app.jobs().nth(i);
+    await app.settled(card);
+    await expect(card).toContainText('CUE + 1 track file');
+    await app.run(card);
+    const [out] = await app.downloads(card);
+    sums.push(fs.readFileSync(out.path).subarray(0x54, 0x68).toString('hex')); // the CHD's SHA-1
+  }
+  expect(sums[0]).not.toBe(sums[1]);
 });

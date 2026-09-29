@@ -113,3 +113,23 @@ test('a single CPU core still converts (no helper workers)', async ({ app, page 
   await expect(page.locator('#chipThreads')).toContainText('1 thread');
   await convertAgent(app);
 });
+
+test('a helper thread that fails to start stops the job with a message instead of hanging', async ({ app, page }) => {
+  // the second helper gets WebAssembly that won't compile (as when an iPhone runs out of memory for it)
+  await page.addInitScript(() => {
+    let n = 0;
+    const post = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (msg, transfer) {
+      if (msg && msg.type === 'helper' && ++n === 2) { msg = { ...msg, wasmModule: undefined, wasmBytes: new Uint8Array([0, 97, 115, 109, 9]) }; }
+      return post.call(this, msg, transfer);
+    };
+  });
+  await app.open({ settings: { threads: 4 } });
+  app.allowErrors(/WebAssembly|CompileError|helper/i);
+  await app.add(fixture('ps2-dvd').add);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await app.run(card, { expectState: 'error', timeout: 30_000 });
+  await expect(card).toContainText('A helper thread stopped');
+  await expect(card).toContainText('Try again with fewer threads');
+});

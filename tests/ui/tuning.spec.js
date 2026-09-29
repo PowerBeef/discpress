@@ -43,8 +43,10 @@ test('the speed test is not limited by the number of cores the browser reports',
   await expect.poll(() => tuning(page), { timeout: 60_000 }).not.toBeNull();
   const t = await tuning(page);
   test.info().annotations.push({ type: 'speed test', description: JSON.stringify(t.steps) });
-  expect(t.threads).toBeGreaterThanOrEqual(2);
-  await expect(page.locator('#threadsInfo')).toContainText(`Measured on this device: ${t.threads} threads`);
+  // it tried more threads than the one reported (whether a second one pays off depends on the load of
+  // the machine running the tests, not on the app)
+  expect(Math.max(...t.steps.map(([n]) => n))).toBeGreaterThanOrEqual(2);
+  await expect(page.locator('#threadsInfo')).toContainText(`Measured on this device: ${t.threads} thread${t.threads > 1 ? 's' : ''}`);
   await page.locator('#diagBox summary').click();
   await expect(page.locator('#diagText')).toContainText('speed test: 1 → ');
 });
