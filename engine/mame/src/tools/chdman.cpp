@@ -687,11 +687,13 @@ public:
 										if (filerr)
 											report_error(1, "Error opening input file (%s): %s", m_lastfile, filerr.message());
 									}
+									// the last frame may be partly in the file, and zeros after that (dest is zeroed)
+									std::size_t const want = (piece.tail != 0 && frame == piece.frames - 1) ? piece.tail : bytesperframe;
 									std::error_condition err = m_file->seek(piece.offset + frame * bytesperframe, SEEK_SET);
 									std::size_t count = 0;
 									if (!err)
-										std::tie(err, count) = read(*m_file, dest, bytesperframe);
-									if (err || (count != bytesperframe))
+										std::tie(err, count) = read(*m_file, dest, want);
+									if (err || (count != want))
 										report_error(1, "Error reading input file (%s)'", m_lastfile);
 								}
 								break;
@@ -1861,7 +1863,9 @@ void output_track_metadata(int mode, toc_writer &file, int tracknum, const cdrom
 		}
 
 		// output pregap
-		if (info.pregap > 0)
+		// Discpress: only a pregap that isn't in the file is zeros; one in the file is its data before START
+		// (0.289 wrote ZERO for both, which reads back as zeros followed by the pregap's data)
+		if (info.pregap > 0 && info.pgdatasize == 0)
 			file.printf("ZERO %s %s\n", modesubmode, msf_string_from_frames(info.pregap));
 
 		if (outputoffs == 0)

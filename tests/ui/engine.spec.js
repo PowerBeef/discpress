@@ -573,6 +573,210 @@ test('cdrdao TOCs make the CHD of the same disc as a cue sheet', () => {
   }
 });
 
+// extractcd's TOC. 0.289 writes `ZERO` before every pregap, but a pregap the CHD holds (a cue sheet's INDEX 00,
+// PGTYPE:V…) is in the file it writes: `ZERO` reads back (in cdrdao and the engine alike) as zeros followed by the
+// pregap's data, a longer disc. The engine writes `ZERO` only for a pregap that isn't in the CHD (a cue sheet's
+// PREGAP), so a CD reads back as the CHD it came from; otherwise the TOC is 0.289's.
+test('extractcd writes a TOC that reads back as the same CHD', () => {
+  const F = 2352;
+  write('rt1.bin', noise(60, 301 * F));
+  write('rt2.bin', noise(61, 350 * F));
+  write('rt3.bin', noise(62, 100 * F));
+  const one = 'FILE "rt1.bin" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n';
+  // pregaps in the files (INDEX 00), and not in any file (PREGAP), on audio and data tracks
+  const stored = write('rt stored.cue', one + 'FILE "rt2.bin" BINARY\n  TRACK 02 AUDIO\n    INDEX 00 00:00:00\n    INDEX 01 00:02:00\n' +
+    'FILE "rt3.bin" BINARY\n  TRACK 03 MODE1/2352\n    INDEX 00 00:00:00\n    INDEX 01 00:00:50\n');
+  const virtual = write('rt virtual.cue', one + 'FILE "rt2.bin" BINARY\n  TRACK 02 AUDIO\n    PREGAP 00:02:00\n    INDEX 01 00:00:00\n' +
+    'FILE "rt3.bin" BINARY\n  TRACK 03 MODE1/2352\n    PREGAP 00:01:00\n    INDEX 01 00:00:00\n');
+  const fixtures = ['mgs disc1.cue', 'mgs disc1.toc', 'mgs.nrg', 'twine.cue', 'xa.cue', 'ax101.cue', 'codec mix cd.cue', 'fidelity.cue',
+    'moto.cue', 'shared.cue', 'wavs.cue', 'piano.cue', 'cdi disc.cue'];
+  for (const input of [stored, virtual, ...fixtures]) {
+    const chd = tmp('rt.chd'), name = path.basename(input);
+    expect(run(ENGINE, ['createcd', '-i', input, '-o', chd, '-f']).code, name).toBe(0);
+    for (const split of [[], ['-sb']]) {
+      const x = {};
+      for (const [who, bin] of [['en', ENGINE], ['up', UPSTREAM]]) {
+        const dir = tmp(`rt-${who}`);
+        fs.rmSync(dir, { recursive: true, force: true });
+        fs.mkdirSync(dir);
+        expect(run(bin, ['extractcd', '-i', chd, '-o', path.join(dir, 'x.toc'), ...split]).code, `${who} ${name} ${split}`).toBe(0);
+        x[who] = { dir, toc: fs.readFileSync(path.join(dir, 'x.toc'), 'latin1') };
+      }
+      // the same track files; the TOC is 0.289's but for ZERO before a pregap in the file
+      const files = fs.readdirSync(x.en.dir).sort();
+      expect(fs.readdirSync(x.up.dir).sort(), name).toEqual(files);
+      for (const f of files.filter(f => !f.endsWith('.toc'))) expect(sha1of(path.join(x.en.dir, f)), `${name} ${f}`).toBe(sha1of(path.join(x.up.dir, f)));
+      expect(x.en.toc, `${name} ${split}`).toBe(input === virtual ? x.up.toc : x.up.toc.replace(/^ZERO .*\n/gm, ''));
+      // and it reads back as the same CHD, byte for byte
+      const back = tmp('rt-back.chd');
+      expect(run(ENGINE, ['createcd', '-i', path.join(x.en.dir, 'x.toc'), '-o', back, '-f']).code, name).toBe(0);
+      expect(sha1of(back), `${name} ${split}`).toBe(sha1of(chd));
+      // the bug: 0.289's TOC makes a longer disc
+      if (input === stored || name === 'mgs disc1.cue') {
+        expect(run(ENGINE, ['createcd', '-i', path.join(x.up.dir, 'x.toc'), '-o', back, '-f']).code, name).toBe(0);
+        expect(sha1of(back), `upstream TOC ${name}`).not.toBe(sha1of(chd));
+      }
+    }
+  }
+});
+
+// A WAVE file: RIFF, fmt (16-bit stereo 44.1 kHz PCM), optionally a LIST chunk, then the samples
+function wavOf(pcm, list = false) {
+  const fmt = Buffer.alloc(24);
+  fmt.write('fmt ', 0); fmt.writeUInt32LE(16, 4); fmt.writeUInt16LE(1, 8); fmt.writeUInt16LE(2, 10);
+  fmt.writeUInt32LE(44100, 12); fmt.writeUInt32LE(44100 * 4, 16); fmt.writeUInt16LE(4, 20); fmt.writeUInt16LE(16, 22);
+  const extra = list ? Buffer.concat([Buffer.from('LIST\x0a\0\0\0INFOabcdef', 'latin1')]) : Buffer.alloc(0);
+  const data = Buffer.alloc(8);
+  data.write('data', 0); data.writeUInt32LE(pcm.length, 4);
+  const body = Buffer.concat([Buffer.from('WAVE'), fmt, extra, data, pcm]);
+  const riff = Buffer.alloc(8);
+  riff.write('RIFF', 0); riff.writeUInt32LE(body.length, 4);
+  return Buffer.concat([riff, body]);
+}
+
+// cdrdao reads an audio file whose name ends in .wav as a WAVE file: its samples, which are little-endian, from
+// the data chunk on (SWAP: the other byte order). 0.289, and the engine before, read the header as audio and the
+// samples as big-endian, as in a raw file.
+test('a WAVE file in a TOC is read as in a cue sheet', () => {
+  const F = 2352, pcm = noise(80, 350 * F);
+  write('w1.bin', noise(81, 300 * F));
+  write('w.wav', wavOf(pcm, true));
+  write('w.raw', pcm);
+  const be = Buffer.from(pcm);
+  be.swap16();
+  write('w.be', be);
+  const cue = write('w.cue', 'FILE "w1.bin" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n' +
+    'FILE "w.wav" WAVE\n  TRACK 02 AUDIO\n    INDEX 00 00:00:00\n    INDEX 01 00:02:00\n');
+  const plain = tmp('w-cue.chd');
+  expect(run(UPSTREAM, ['createcd', '-i', cue, '-o', plain, '-f']).code).toBe(0);
+  const t = 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "w1.bin"\nTRACK AUDIO\n';
+  const tocs = [
+    t + 'AUDIOFILE "w.wav" 0\nSTART 00:02:00\n',
+    t + 'FILE "w.wav" 0 00:04:50\nSTART 00:02:00\n',
+    t + 'AUDIOFILE "w.wav" 0 0\nSTART 00:02:00\n', // a length of 0: the rest of the file, as none
+    t + 'AUDIOFILE "w.wav" 0 88200\nSTART\nAUDIOFILE "w.wav" 88200\n', // in samples
+    t + 'AUDIOFILE "w.be" 0\nSTART 00:02:00\n', // the same samples, in a raw file
+    t + 'AUDIOFILE "w.raw" SWAP 0\nSTART 00:02:00\n',
+  ];
+  tocs.forEach((toc, n) => {
+    const en = tmp(`w${n}.chd`);
+    expect(run(ENGINE, ['createcd', '-i', write(`w${n}.toc`, toc), '-o', en, '-f']).code, toc).toBe(0);
+    expect(sha1of(en), toc).toBe(sha1of(plain));
+  });
+  // the bug: 0.289 reads the header as audio, and the samples in the other byte order (with lengths, which it needs)
+  const withLengths = write('w-up.toc', 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "w1.bin" #0 00:04:00\nTRACK AUDIO\nAUDIOFILE "w.wav" 0 00:04:50\nSTART 00:02:00\n');
+  const en = tmp('w-en.chd'), up = tmp('w-up.chd');
+  expect(run(ENGINE, ['createcd', '-i', withLengths, '-o', en, '-f']).code).toBe(0);
+  expect(sha1of(en)).toBe(sha1of(plain));
+  expect(run(UPSTREAM, ['createcd', '-i', withLengths, '-o', up, '-f']).code).toBe(0);
+  expect(sha1of(up)).not.toBe(sha1of(plain));
+  // SWAP on a WAVE file: its bytes as they are, as a raw file without SWAP
+  const a = tmp('ws.chd'), b = tmp('wr.chd');
+  expect(run(ENGINE, ['createcd', '-i', write('ws.toc', t + 'AUDIOFILE "w.wav" SWAP 0\n'), '-o', a, '-f']).code).toBe(0);
+  expect(run(ENGINE, ['createcd', '-i', write('wr.toc', t + 'AUDIOFILE "w.raw" 0\n'), '-o', b, '-f']).code).toBe(0);
+  expect(sha1of(a)).toBe(sha1of(b));
+  // not a WAVE file
+  write('bad.wav', noise(82, 10 * F));
+  const r = run(ENGINE, ['createcd', '-i', write('bad.toc', t + 'AUDIOFILE "bad.wav" 0\n'), '-o', tmp('e.chd'), '-f']);
+  expect({ code: r.code, signal: r.signal }).toEqual({ code: 1, signal: null });
+  expect(r.err).toContain('not a valid .WAV');
+});
+
+// cdrdao pads a track whose data ends inside a sector with zeros; 0.289, and the engine before, dropped that last
+// sector. Cue sheets keep 0.289's reading, which drops it too (Redump's files are always whole sectors).
+test('a TOC track whose data ends inside a sector gets the rest of the sector as zeros', () => {
+  const F = 2352, d = noise(70, 300 * F + 1000), a = noise(71, 200 * F + 400); // 400 bytes: 100 samples
+  write('part.bin', d);
+  write('part.raw', a);
+  write('padded.bin', Buffer.concat([d, Buffer.alloc(F - 1000)]));
+  write('padded.raw', Buffer.concat([a, Buffer.alloc(F - 400)]));
+  const disc = (d1, a2) => `FILE "${d1}" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\nFILE "${a2}" BINARY\n  TRACK 02 AUDIO\n    INDEX 01 00:00:00\n`;
+  const plain = tmp('padded.chd');
+  expect(run(UPSTREAM, ['createcd', '-i', write('padded.cue', disc('padded.bin', 'padded.raw')), '-o', plain, '-f']).code).toBe(0);
+  for (const toc of [
+    'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "part.bin"\nTRACK AUDIO\nAUDIOFILE "part.raw" SWAP 0\n', // lengths from the files' sizes
+    'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "part.bin" 706600\nTRACK AUDIO\nAUDIOFILE "part.raw" SWAP 0 117700\n', // in bytes, and samples
+  ]) {
+    const en = tmp('part.chd');
+    expect(run(ENGINE, ['createcd', '-i', write('part.toc', toc), '-o', en, '-f']).code, toc).toBe(0);
+    expect(sha1of(en), toc).toBe(sha1of(plain));
+  }
+  // ZERO and SILENCE that end inside a sector: a sector of zeros, whatever the file holds past the length before
+  const z = tmp('z.chd'), zp = tmp('zp.chd');
+  expect(run(ENGINE, ['createcd', '-i', write('z.toc', 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "part.bin" 00:04:00\nZERO 1000\nTRACK AUDIO\nAUDIOFILE "part.raw" SWAP 0 00:02:50\nSILENCE 100\n'), '-o', z, '-f']).code).toBe(0);
+  write('p301.bin', Buffer.concat([d.subarray(0, 300 * F), Buffer.alloc(F)]));
+  write('p201.raw', Buffer.concat([a.subarray(0, 200 * F), Buffer.alloc(F)]));
+  expect(run(UPSTREAM, ['createcd', '-i', write('zp.cue', disc('p301.bin', 'p201.raw')), '-o', zp, '-f']).code).toBe(0);
+  expect(sha1of(z)).toBe(sha1of(zp));
+  // the bug: 0.289 makes another CHD, or fails
+  const up = tmp('part-up.chd');
+  expect(run(UPSTREAM, ['createcd', '-i', write('part-up.toc', 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "part.bin" #0 00:04:01\nTRACK AUDIO\nAUDIOFILE "part.raw" SWAP 0\n'), '-o', up, '-f']).code === 0 ? sha1of(up) : 'failed').not.toBe(sha1of(plain));
+  // a cue sheet of the same files: 0.289's CHD, without the last sectors
+  const cue = write('part.cue', disc('part.bin', 'part.raw')), en = tmp('part-cue.chd'), upc = tmp('part-cue-up.chd');
+  expect(run(UPSTREAM, ['createcd', '-i', cue, '-o', upc, '-f']).code).toBe(0);
+  expect(run(ENGINE, ['createcd', '-i', cue, '-o', en, '-f']).code).toBe(0);
+  expect(sha1of(en)).toBe(sha1of(upc));
+  expect(sha1of(en)).not.toBe(sha1of(plain));
+  // data after a statement that ends inside a sector would not start on a sector: an error
+  const r = run(ENGINE, ['createcd', '-i', write('mid.toc', 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "part.bin" 706600\nDATAFILE "part.bin" 00:01:00\n'), '-o', tmp('e.chd'), '-f']);
+  expect({ code: r.code, signal: r.signal }).toEqual({ code: 1, signal: null });
+  expect(r.err).toContain('ends inside a sector');
+});
+
+// The page identifies a CHD's data tracks with cdrom_file's logical reads (wasm_probe_read), which no chdman
+// command uses. 0.289 served a track's pregap from the end of the track before, shifted by that track's padding,
+// and a pregap or postgap that isn't in the CHD from the next track's data. tests/support/cdprobe.cpp reads every
+// LBA as the page does: now each is the disc's, and a gap the CHD doesn't hold is zeros.
+test('logical reads give each pregap its own data, and zeros where the CHD holds none', () => {
+  test.setTimeout(600_000);
+  const probe = path.join(ROOT, 'build', 'cdprobe-native');
+  const make = spawnSync('make', ['-s', '-C', path.join(ROOT, 'wasm'), 'T=native', `O=${path.join(ROOT, 'build', 'obj-native')}`, 'cdprobe'], { timeout: 590_000 });
+  expect(make.status, String(make.stderr)).toBe(0);
+  const F = 2352, t1 = noise(90, 301 * F), pg2 = noise(91, 150 * F), t2 = noise(92, 200 * F), t3 = noise(93, 100 * F), t4 = noise(94, 50 * F);
+  write('l1.bin', t1);
+  write('l2.bin', Buffer.concat([pg2, t2]));
+  write('l3.bin', t3);
+  write('l4.bin', t4);
+  // track 1 is padded with 3 frames in the CHD; track 2's pregap is in its file; track 3's pregap and postgap aren't
+  const cue = write('l.cue', 'FILE "l1.bin" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n' +
+    'FILE "l2.bin" BINARY\n  TRACK 02 AUDIO\n    INDEX 00 00:00:00\n    INDEX 01 00:02:00\n' +
+    'FILE "l3.bin" BINARY\n  TRACK 03 MODE1/2352\n    PREGAP 00:01:00\n    INDEX 01 00:00:00\n    POSTGAP 00:00:30\n' +
+    'FILE "l4.bin" BINARY\n  TRACK 04 AUDIO\n    INDEX 01 00:00:00\n');
+  const chd = tmp('l.chd'), out = tmp('l.raw');
+  expect(run(UPSTREAM, ['createcd', '-i', cue, '-o', chd, '-f']).code).toBe(0);
+  const r = spawnSync(probe, [chd, out]);
+  expect(r.status, String(r.stderr)).toBe(0);
+  const text = r.stdout.toString();
+  expect(text).not.toContain('fail');
+  expect(text).toContain('leadout 906');
+  // each LBA is its track's from INDEX 00 on
+  expect(text.match(/^lba \d+ track \d+$/gm)).toEqual(['lba 0 track 1', 'lba 301 track 2', 'lba 651 track 3', 'lba 856 track 4']);
+  const be = b => Buffer.from(b).swap16(); // the CHD's audio is big-endian
+  const want = Buffer.concat([t1, be(pg2), be(t2), Buffer.alloc(75 * F), t3, Buffer.alloc(30 * F), be(t4)]);
+  const got = fs.readFileSync(out);
+  expect(got.length).toBe(want.length);
+  const wrong = [];
+  for (let s = 0; s < want.length / F; s++) if (!got.subarray(s * F, (s + 1) * F).equals(want.subarray(s * F, (s + 1) * F))) wrong.push(s);
+  expect(wrong).toEqual([]);
+});
+
+// Damaged FLAC data (cdfl) can make libFLAC's LPC restore overflow 32 bits, which C leaves undefined (the build
+// wrapped, as two's complement). It computes modulo 2^32 now: the same results, so such a hunk fails as before.
+// 0.289's decoder hangs on each of these.
+test('damaged FLAC audio is an error', () => {
+  const good = makeChd('createcd', 'codec mix cd.cue');
+  for (const [at, xor] of [[1176968, 17], [1391207, 11], [1410799, 169], [1419408, 218], [1470418, 37], [1603281, 66]]) {
+    const bad = tmp('bad.chd'), b = fs.readFileSync(good);
+    b[at] ^= xor;
+    fs.writeFileSync(bad, b);
+    for (const args of [['verify', '-i', bad], ['extractcd', '-i', bad, '-o', tmp('x.cue'), '-f']]) {
+      const r = run(ENGINE, args);
+      expect({ code: r.code, signal: r.signal }, `${args[0]} ${at}`).toEqual({ code: 1, signal: null });
+      expect(r.err, `${args[0]} ${at}`).toContain('Decompression error');
+    }
+  }
+});
+
 // EAC's "gaps appended to the previous track": a track's INDEX 00 at the end of one FILE, its INDEX 01 at the
 // start of the next. 0.289 read the track from the first file at the second file's INDEX points (a pregap of
 // -300 frames). The engine reads the pregap from the end of the first file: the CHD of the disc as one file.

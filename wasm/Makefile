@@ -69,4 +69,11 @@ NATIVE ?= $(O)/../chdman-native
 native: $(OBJS)
 	$(CXX) -O2 $(OBJS) -o $(NATIVE) -lpthread
 
+# a test tool (tests/support/cdprobe.cpp): the engine's CD reads as the page's identification makes them
+CDPROBE ?= $(O)/../cdprobe-native
+cdprobe: $(OBJS) ../tests/support/cdprobe.cpp
+	$(CXX) $(CXXFLAGS) -O2 ../tests/support/cdprobe.cpp $(filter-out $(call obj,$(M)/src/tools/chdman.cpp),$(OBJS)) -o $(CDPROBE) -lpthread
+
+.PHONY: cdprobe
+
 .PHONY: objs native

@@ -61,6 +61,364 @@
  
  #if !defined(NDEBUG) || defined FLAC__OVERFLOW_DETECT || defined FLAC__OVERFLOW_DETECT_VERBOSE
  #include <stdio.h>
+@@ -977,7 +978,7 @@
+ {
+ 	FLAC__int64 sumo;
+ 	uint32_t i, j;
+-	FLAC__int32 sum;
++	FLAC__uint32 sum; /* Discpress: unsigned, so damaged data wraps as two's complement instead of overflowing (undefined) */
+ 	const FLAC__int32 *r = residual, *history;
+ 
+ #ifdef FLAC__OVERFLOW_DETECT_VERBOSE
+@@ -993,14 +994,14 @@
+ 		sum = 0;
+ 		history = data;
+ 		for(j = 0; j < order; j++) {
+-			sum += qlp_coeff[j] * (*(--history));
++			sum += (FLAC__uint32)qlp_coeff[j] * (FLAC__uint32)(*(--history));
+ 			sumo += (FLAC__int64)qlp_coeff[j] * (FLAC__int64)(*history);
+ #ifdef FLAC__OVERFLOW_DETECT
+ 			if(sumo > 2147483647ll || sumo < -2147483648ll)
+ 				fprintf(stderr,"FLAC__lpc_restore_signal: OVERFLOW, i=%u, j=%u, c=%d, d=%d, sumo=%" PRId64 "\n",i,j,qlp_coeff[j],*history,sumo);
+ #endif
+ 		}
+-		*(data++) = *(r++) + (sum >> lp_quantization);
++		*(data++) = (FLAC__int32)((FLAC__uint32)*(r++) + (FLAC__uint32)((FLAC__int32)sum >> lp_quantization));
+ 	}
+ 
+ 	/* Here's a slower but clearer version:
+@@ -1015,7 +1016,7 @@
+ #else /* fully unrolled version for normal use */
+ {
+ 	int i;
+-	FLAC__int32 sum;
++	FLAC__uint32 sum; /* Discpress: unsigned, so damaged data wraps as two's complement instead of overflowing (undefined) */
+ 
+ 	FLAC__ASSERT(order > 0);
+ 	FLAC__ASSERT(order <= 32);
+@@ -1031,36 +1032,36 @@
+ 				if(order == 12) {
+ 					for(i = 0; i < (int)data_len; i++) {
+ 						sum = 0;
+-						sum += qlp_coeff[11] * data[i-12];
+-						sum += qlp_coeff[10] * data[i-11];
+-						sum += qlp_coeff[9] * data[i-10];
+-						sum += qlp_coeff[8] * data[i-9];
+-						sum += qlp_coeff[7] * data[i-8];
+-						sum += qlp_coeff[6] * data[i-7];
+-						sum += qlp_coeff[5] * data[i-6];
+-						sum += qlp_coeff[4] * data[i-5];
+-						sum += qlp_coeff[3] * data[i-4];
+-						sum += qlp_coeff[2] * data[i-3];
+-						sum += qlp_coeff[1] * data[i-2];
+-						sum += qlp_coeff[0] * data[i-1];
+-						data[i] = residual[i] + (sum >> lp_quantization);
++						sum += (FLAC__uint32)qlp_coeff[11] * (FLAC__uint32)data[i-12];
++						sum += (FLAC__uint32)qlp_coeff[10] * (FLAC__uint32)data[i-11];
++						sum += (FLAC__uint32)qlp_coeff[9] * (FLAC__uint32)data[i-10];
++						sum += (FLAC__uint32)qlp_coeff[8] * (FLAC__uint32)data[i-9];
++						sum += (FLAC__uint32)qlp_coeff[7] * (FLAC__uint32)data[i-8];
++						sum += (FLAC__uint32)qlp_coeff[6] * (FLAC__uint32)data[i-7];
++						sum += (FLAC__uint32)qlp_coeff[5] * (FLAC__uint32)data[i-6];
++						sum += (FLAC__uint32)qlp_coeff[4] * (FLAC__uint32)data[i-5];
++						sum += (FLAC__uint32)qlp_coeff[3] * (FLAC__uint32)data[i-4];
++						sum += (FLAC__uint32)qlp_coeff[2] * (FLAC__uint32)data[i-3];
++						sum += (FLAC__uint32)qlp_coeff[1] * (FLAC__uint32)data[i-2];
++						sum += (FLAC__uint32)qlp_coeff[0] * (FLAC__uint32)data[i-1];
++						data[i] = (FLAC__int32)((FLAC__uint32)residual[i] + (FLAC__uint32)((FLAC__int32)sum >> lp_quantization));
+ 					}
+ 				}
+ 				else { /* order == 11 */
+ 					for(i = 0; i < (int)data_len; i++) {
+ 						sum = 0;
+-						sum += qlp_coeff[10] * data[i-11];
+-						sum += qlp_coeff[9] * data[i-10];
+-						sum += qlp_coeff[8] * data[i-9];
+-						sum += qlp_coeff[7] * data[i-8];
+-						sum += qlp_coeff[6] * data[i-7];
+-						sum += qlp_coeff[5] * data[i-6];
+-						sum += qlp_coeff[4] * data[i-5];
+-						sum += qlp_coeff[3] * data[i-4];
+-						sum += qlp_coeff[2] * data[i-3];
+-						sum += qlp_coeff[1] * data[i-2];
+-						sum += qlp_coeff[0] * data[i-1];
+-						data[i] = residual[i] + (sum >> lp_quantization);
++						sum += (FLAC__uint32)qlp_coeff[10] * (FLAC__uint32)data[i-11];
++						sum += (FLAC__uint32)qlp_coeff[9] * (FLAC__uint32)data[i-10];
++						sum += (FLAC__uint32)qlp_coeff[8] * (FLAC__uint32)data[i-9];
++						sum += (FLAC__uint32)qlp_coeff[7] * (FLAC__uint32)data[i-8];
++						sum += (FLAC__uint32)qlp_coeff[6] * (FLAC__uint32)data[i-7];
++						sum += (FLAC__uint32)qlp_coeff[5] * (FLAC__uint32)data[i-6];
++						sum += (FLAC__uint32)qlp_coeff[4] * (FLAC__uint32)data[i-5];
++						sum += (FLAC__uint32)qlp_coeff[3] * (FLAC__uint32)data[i-4];
++						sum += (FLAC__uint32)qlp_coeff[2] * (FLAC__uint32)data[i-3];
++						sum += (FLAC__uint32)qlp_coeff[1] * (FLAC__uint32)data[i-2];
++						sum += (FLAC__uint32)qlp_coeff[0] * (FLAC__uint32)data[i-1];
++						data[i] = (FLAC__int32)((FLAC__uint32)residual[i] + (FLAC__uint32)((FLAC__int32)sum >> lp_quantization));
+ 					}
+ 				}
+ 			}
+@@ -1068,32 +1069,32 @@
+ 				if(order == 10) {
+ 					for(i = 0; i < (int)data_len; i++) {
+ 						sum = 0;
+-						sum += qlp_coeff[9] * data[i-10];
+-						sum += qlp_coeff[8] * data[i-9];
+-						sum += qlp_coeff[7] * data[i-8];
+-						sum += qlp_coeff[6] * data[i-7];
+-						sum += qlp_coeff[5] * data[i-6];
+-						sum += qlp_coeff[4] * data[i-5];
+-						sum += qlp_coeff[3] * data[i-4];
+-						sum += qlp_coeff[2] * data[i-3];
+-						sum += qlp_coeff[1] * data[i-2];
+-						sum += qlp_coeff[0] * data[i-1];
+-						data[i] = residual[i] + (sum >> lp_quantization);
++						sum += (FLAC__uint32)qlp_coeff[9] * (FLAC__uint32)data[i-10];
++						sum += (FLAC__uint32)qlp_coeff[8] * (FLAC__uint32)data[i-9];
++						sum += (FLAC__uint32)qlp_coeff[7] * (FLAC__uint32)data[i-8];
++						sum += (FLAC__uint32)qlp_coeff[6] * (FLAC__uint32)data[i-7];
++						sum += (FLAC__uint32)qlp_coeff[5] * (FLAC__uint32)data[i-6];
++						sum += (FLAC__uint32)qlp_coeff[4] * (FLAC__uint32)data[i-5];
++						sum += (FLAC__uint32)qlp_coeff[3] * (FLAC__uint32)data[i-4];
++						sum += (FLAC__uint32)qlp_coeff[2] * (FLAC__uint32)data[i-3];
++						sum += (FLAC__uint32)qlp_coeff[1] * (FLAC__uint32)data[i-2];
++						sum += (FLAC__uint32)qlp_coeff[0] * (FLAC__uint32)data[i-1];
++						data[i] = (FLAC__int32)((FLAC__uint32)residual[i] + (FLAC__uint32)((FLAC__int32)sum >> lp_quantization));
+ 					}
+ 				}
+ 				else { /* order == 9 */
+ 					for(i = 0; i < (int)data_len; i++) {
+ 						sum = 0;
+-						sum += qlp_coeff[8] * data[i-9];
+-						sum += qlp_coeff[7] * data[i-8];
+-						sum += qlp_coeff[6] * data[i-7];
+-						sum += qlp_coeff[5] * data[i-6];
+-						sum += qlp_coeff[4] * data[i-5];
+-						sum += qlp_coeff[3] * data[i-4];
+-						sum += qlp_coeff[2] * data[i-3];
+-						sum += qlp_coeff[1] * data[i-2];
+-						sum += qlp_coeff[0] * data[i-1];
+-						data[i] = residual[i] + (sum >> lp_quantization);
++						sum += (FLAC__uint32)qlp_coeff[8] * (FLAC__uint32)data[i-9];
++						sum += (FLAC__uint32)qlp_coeff[7] * (FLAC__uint32)data[i-8];
++						sum += (FLAC__uint32)qlp_coeff[6] * (FLAC__uint32)data[i-7];
++						sum += (FLAC__uint32)qlp_coeff[5] * (FLAC__uint32)data[i-6];
++						sum += (FLAC__uint32)qlp_coeff[4] * (FLAC__uint32)data[i-5];
++						sum += (FLAC__uint32)qlp_coeff[3] * (FLAC__uint32)data[i-4];
++						sum += (FLAC__uint32)qlp_coeff[2] * (FLAC__uint32)data[i-3];
++						sum += (FLAC__uint32)qlp_coeff[1] * (FLAC__uint32)data[i-2];
++						sum += (FLAC__uint32)qlp_coeff[0] * (FLAC__uint32)data[i-1];
++						data[i] = (FLAC__int32)((FLAC__uint32)residual[i] + (FLAC__uint32)((FLAC__int32)sum >> lp_quantization));
+ 					}
+ 				}
+ 			}
+@@ -1103,28 +1104,28 @@
+ 				if(order == 8) {
+ 					for(i = 0; i < (int)data_len; i++) {
+ 						sum = 0;
+-						sum += qlp_coeff[7] * data[i-8];
+-						sum += qlp_coeff[6] * data[i-7];
+-						sum += qlp_coeff[5] * data[i-6];
+-						sum += qlp_coeff[4] * data[i-5];
+-						sum += qlp_coeff[3] * data[i-4];
+-						sum += qlp_coeff[2] * data[i-3];
+-						sum += qlp_coeff[1] * data[i-2];
+-						sum += qlp_coeff[0] * data[i-1];
+-						data[i] = residual[i] + (sum >> lp_quantization);
++						sum += (FLAC__uint32)qlp_coeff[7] * (FLAC__uint32)data[i-8];
++						sum += (FLAC__uint32)qlp_coeff[6] * (FLAC__uint32)data[i-7];
++						sum += (FLAC__uint32)qlp_coeff[5] * (FLAC__uint32)data[i-6];
++						sum += (FLAC__uint32)qlp_coeff[4] * (FLAC__uint32)data[i-5];
++						sum += (FLAC__uint32)qlp_coeff[3] * (FLAC__uint32)data[i-4];
++						sum += (FLAC__uint32)qlp_coeff[2] * (FLAC__uint32)data[i-3];
++						sum += (FLAC__uint32)qlp_coeff[1] * (FLAC__uint32)data[i-2];
++						sum += (FLAC__uint32)qlp_coeff[0] * (FLAC__uint32)data[i-1];
++						data[i] = (FLAC__int32)((FLAC__uint32)residual[i] + (FLAC__uint32)((FLAC__int32)sum >> lp_quantization));
+ 					}
+ 				}
+ 				else { /* order == 7 */
+ 					for(i = 0; i < (int)data_len; i++) {
+ 						sum = 0;
+-						sum += qlp_coeff[6] * data[i-7];
+-						sum += qlp_coeff[5] * data[i-6];
+-						sum += qlp_coeff[4] * data[i-5];
+-						sum += qlp_coeff[3] * data[i-4];
+-						sum += qlp_coeff[2] * data[i-3];
+-						sum += qlp_coeff[1] * data[i-2];
+-						sum += qlp_coeff[0] * data[i-1];
+-						data[i] = residual[i] + (sum >> lp_quantization);
++						sum += (FLAC__uint32)qlp_coeff[6] * (FLAC__uint32)data[i-7];
++						sum += (FLAC__uint32)qlp_coeff[5] * (FLAC__uint32)data[i-6];
++						sum += (FLAC__uint32)qlp_coeff[4] * (FLAC__uint32)data[i-5];
++						sum += (FLAC__uint32)qlp_coeff[3] * (FLAC__uint32)data[i-4];
++						sum += (FLAC__uint32)qlp_coeff[2] * (FLAC__uint32)data[i-3];
++						sum += (FLAC__uint32)qlp_coeff[1] * (FLAC__uint32)data[i-2];
++						sum += (FLAC__uint32)qlp_coeff[0] * (FLAC__uint32)data[i-1];
++						data[i] = (FLAC__int32)((FLAC__uint32)residual[i] + (FLAC__uint32)((FLAC__int32)sum >> lp_quantization));
+ 					}
+ 				}
+ 			}
+@@ -1132,24 +1133,24 @@
+ 				if(order == 6) {
+ 					for(i = 0; i < (int)data_len; i++) {
+ 						sum = 0;
+-						sum += qlp_coeff[5] * data[i-6];
+-						sum += qlp_coeff[4] * data[i-5];
+-						sum += qlp_coeff[3] * data[i-4];
+-						sum += qlp_coeff[2] * data[i-3];
+-						sum += qlp_coeff[1] * data[i-2];
+-						sum += qlp_coeff[0] * data[i-1];
+-						data[i] = residual[i] + (sum >> lp_quantization);
++						sum += (FLAC__uint32)qlp_coeff[5] * (FLAC__uint32)data[i-6];
++						sum += (FLAC__uint32)qlp_coeff[4] * (FLAC__uint32)data[i-5];
++						sum += (FLAC__uint32)qlp_coeff[3] * (FLAC__uint32)data[i-4];
++						sum += (FLAC__uint32)qlp_coeff[2] * (FLAC__uint32)data[i-3];
++						sum += (FLAC__uint32)qlp_coeff[1] * (FLAC__uint32)data[i-2];
++						sum += (FLAC__uint32)qlp_coeff[0] * (FLAC__uint32)data[i-1];
++						data[i] = (FLAC__int32)((FLAC__uint32)residual[i] + (FLAC__uint32)((FLAC__int32)sum >> lp_quantization));
+ 					}
+ 				}
+ 				else { /* order == 5 */
+ 					for(i = 0; i < (int)data_len; i++) {
+ 						sum = 0;
+-						sum += qlp_coeff[4] * data[i-5];
+-						sum += qlp_coeff[3] * data[i-4];
+-						sum += qlp_coeff[2] * data[i-3];
+-						sum += qlp_coeff[1] * data[i-2];
+-						sum += qlp_coeff[0] * data[i-1];
+-						data[i] = residual[i] + (sum >> lp_quantization);
++						sum += (FLAC__uint32)qlp_coeff[4] * (FLAC__uint32)data[i-5];
++						sum += (FLAC__uint32)qlp_coeff[3] * (FLAC__uint32)data[i-4];
++						sum += (FLAC__uint32)qlp_coeff[2] * (FLAC__uint32)data[i-3];
++						sum += (FLAC__uint32)qlp_coeff[1] * (FLAC__uint32)data[i-2];
++						sum += (FLAC__uint32)qlp_coeff[0] * (FLAC__uint32)data[i-1];
++						data[i] = (FLAC__int32)((FLAC__uint32)residual[i] + (FLAC__uint32)((FLAC__int32)sum >> lp_quantization));
+ 					}
+ 				}
+ 			}
+@@ -1159,20 +1160,20 @@
+ 				if(order == 4) {
+ 					for(i = 0; i < (int)data_len; i++) {
+ 						sum = 0;
+-						sum += qlp_coeff[3] * data[i-4];
+-						sum += qlp_coeff[2] * data[i-3];
+-						sum += qlp_coeff[1] * data[i-2];
+-						sum += qlp_coeff[0] * data[i-1];
+-						data[i] = residual[i] + (sum >> lp_quantization);
++						sum += (FLAC__uint32)qlp_coeff[3] * (FLAC__uint32)data[i-4];
++						sum += (FLAC__uint32)qlp_coeff[2] * (FLAC__uint32)data[i-3];
++						sum += (FLAC__uint32)qlp_coeff[1] * (FLAC__uint32)data[i-2];
++						sum += (FLAC__uint32)qlp_coeff[0] * (FLAC__uint32)data[i-1];
++						data[i] = (FLAC__int32)((FLAC__uint32)residual[i] + (FLAC__uint32)((FLAC__int32)sum >> lp_quantization));
+ 					}
+ 				}
+ 				else { /* order == 3 */
+ 					for(i = 0; i < (int)data_len; i++) {
+ 						sum = 0;
+-						sum += qlp_coeff[2] * data[i-3];
+-						sum += qlp_coeff[1] * data[i-2];
+-						sum += qlp_coeff[0] * data[i-1];
+-						data[i] = residual[i] + (sum >> lp_quantization);
++						sum += (FLAC__uint32)qlp_coeff[2] * (FLAC__uint32)data[i-3];
++						sum += (FLAC__uint32)qlp_coeff[1] * (FLAC__uint32)data[i-2];
++						sum += (FLAC__uint32)qlp_coeff[0] * (FLAC__uint32)data[i-1];
++						data[i] = (FLAC__int32)((FLAC__uint32)residual[i] + (FLAC__uint32)((FLAC__int32)sum >> lp_quantization));
+ 					}
+ 				}
+ 			}
+@@ -1180,14 +1181,14 @@
+ 				if(order == 2) {
+ 					for(i = 0; i < (int)data_len; i++) {
+ 						sum = 0;
+-						sum += qlp_coeff[1] * data[i-2];
+-						sum += qlp_coeff[0] * data[i-1];
+-						data[i] = residual[i] + (sum >> lp_quantization);
++						sum += (FLAC__uint32)qlp_coeff[1] * (FLAC__uint32)data[i-2];
++						sum += (FLAC__uint32)qlp_coeff[0] * (FLAC__uint32)data[i-1];
++						data[i] = (FLAC__int32)((FLAC__uint32)residual[i] + (FLAC__uint32)((FLAC__int32)sum >> lp_quantization));
+ 					}
+ 				}
+ 				else { /* order == 1 */
+ 					for(i = 0; i < (int)data_len; i++)
+-						data[i] = residual[i] + ((qlp_coeff[0] * data[i-1]) >> lp_quantization);
++						data[i] = (FLAC__int32)((FLAC__uint32)residual[i] + (FLAC__uint32)((FLAC__int32)((FLAC__uint32)qlp_coeff[0] * (FLAC__uint32)data[i-1]) >> lp_quantization));
+ 				}
+ 			}
+ 		}
+@@ -1196,40 +1197,40 @@
+ 		for(i = 0; i < (int)data_len; i++) {
+ 			sum = 0;
+ 			switch(order) {
+-				case 32: sum += qlp_coeff[31] * data[i-32]; /* Falls through. */
+-				case 31: sum += qlp_coeff[30] * data[i-31]; /* Falls through. */
+-				case 30: sum += qlp_coeff[29] * data[i-30]; /* Falls through. */
+-				case 29: sum += qlp_coeff[28] * data[i-29]; /* Falls through. */
+-				case 28: sum += qlp_coeff[27] * data[i-28]; /* Falls through. */
+-				case 27: sum += qlp_coeff[26] * data[i-27]; /* Falls through. */
+-				case 26: sum += qlp_coeff[25] * data[i-26]; /* Falls through. */
+-				case 25: sum += qlp_coeff[24] * data[i-25]; /* Falls through. */
+-				case 24: sum += qlp_coeff[23] * data[i-24]; /* Falls through. */
+-				case 23: sum += qlp_coeff[22] * data[i-23]; /* Falls through. */
+-				case 22: sum += qlp_coeff[21] * data[i-22]; /* Falls through. */
+-				case 21: sum += qlp_coeff[20] * data[i-21]; /* Falls through. */
+-				case 20: sum += qlp_coeff[19] * data[i-20]; /* Falls through. */
+-				case 19: sum += qlp_coeff[18] * data[i-19]; /* Falls through. */
+-				case 18: sum += qlp_coeff[17] * data[i-18]; /* Falls through. */
+-				case 17: sum += qlp_coeff[16] * data[i-17]; /* Falls through. */
+-				case 16: sum += qlp_coeff[15] * data[i-16]; /* Falls through. */
+-				case 15: sum += qlp_coeff[14] * data[i-15]; /* Falls through. */
+-				case 14: sum += qlp_coeff[13] * data[i-14]; /* Falls through. */
+-				case 13: sum += qlp_coeff[12] * data[i-13];
+-				         sum += qlp_coeff[11] * data[i-12];
+-				         sum += qlp_coeff[10] * data[i-11];
+-				         sum += qlp_coeff[ 9] * data[i-10];
+-				         sum += qlp_coeff[ 8] * data[i- 9];
+-				         sum += qlp_coeff[ 7] * data[i- 8];
+-				         sum += qlp_coeff[ 6] * data[i- 7];
+-				         sum += qlp_coeff[ 5] * data[i- 6];
+-				         sum += qlp_coeff[ 4] * data[i- 5];
+-				         sum += qlp_coeff[ 3] * data[i- 4];
+-				         sum += qlp_coeff[ 2] * data[i- 3];
+-				         sum += qlp_coeff[ 1] * data[i- 2];
+-				         sum += qlp_coeff[ 0] * data[i- 1];
++				case 32: sum += (FLAC__uint32)qlp_coeff[31] * (FLAC__uint32)data[i-32]; /* Falls through. */
++				case 31: sum += (FLAC__uint32)qlp_coeff[30] * (FLAC__uint32)data[i-31]; /* Falls through. */
++				case 30: sum += (FLAC__uint32)qlp_coeff[29] * (FLAC__uint32)data[i-30]; /* Falls through. */
++				case 29: sum += (FLAC__uint32)qlp_coeff[28] * (FLAC__uint32)data[i-29]; /* Falls through. */
++				case 28: sum += (FLAC__uint32)qlp_coeff[27] * (FLAC__uint32)data[i-28]; /* Falls through. */
++				case 27: sum += (FLAC__uint32)qlp_coeff[26] * (FLAC__uint32)data[i-27]; /* Falls through. */
++				case 26: sum += (FLAC__uint32)qlp_coeff[25] * (FLAC__uint32)data[i-26]; /* Falls through. */
++				case 25: sum += (FLAC__uint32)qlp_coeff[24] * (FLAC__uint32)data[i-25]; /* Falls through. */
++				case 24: sum += (FLAC__uint32)qlp_coeff[23] * (FLAC__uint32)data[i-24]; /* Falls through. */
++				case 23: sum += (FLAC__uint32)qlp_coeff[22] * (FLAC__uint32)data[i-23]; /* Falls through. */
++				case 22: sum += (FLAC__uint32)qlp_coeff[21] * (FLAC__uint32)data[i-22]; /* Falls through. */
++				case 21: sum += (FLAC__uint32)qlp_coeff[20] * (FLAC__uint32)data[i-21]; /* Falls through. */
++				case 20: sum += (FLAC__uint32)qlp_coeff[19] * (FLAC__uint32)data[i-20]; /* Falls through. */
++				case 19: sum += (FLAC__uint32)qlp_coeff[18] * (FLAC__uint32)data[i-19]; /* Falls through. */
++				case 18: sum += (FLAC__uint32)qlp_coeff[17] * (FLAC__uint32)data[i-18]; /* Falls through. */
++				case 17: sum += (FLAC__uint32)qlp_coeff[16] * (FLAC__uint32)data[i-17]; /* Falls through. */
++				case 16: sum += (FLAC__uint32)qlp_coeff[15] * (FLAC__uint32)data[i-16]; /* Falls through. */
++				case 15: sum += (FLAC__uint32)qlp_coeff[14] * (FLAC__uint32)data[i-15]; /* Falls through. */
++				case 14: sum += (FLAC__uint32)qlp_coeff[13] * (FLAC__uint32)data[i-14]; /* Falls through. */
++				case 13: sum += (FLAC__uint32)qlp_coeff[12] * (FLAC__uint32)data[i-13];
++				         sum += (FLAC__uint32)qlp_coeff[11] * (FLAC__uint32)data[i-12];
++				         sum += (FLAC__uint32)qlp_coeff[10] * (FLAC__uint32)data[i-11];
++				         sum += (FLAC__uint32)qlp_coeff[ 9] * (FLAC__uint32)data[i-10];
++				         sum += (FLAC__uint32)qlp_coeff[ 8] * (FLAC__uint32)data[i- 9];
++				         sum += (FLAC__uint32)qlp_coeff[ 7] * (FLAC__uint32)data[i- 8];
++				         sum += (FLAC__uint32)qlp_coeff[ 6] * (FLAC__uint32)data[i- 7];
++				         sum += (FLAC__uint32)qlp_coeff[ 5] * (FLAC__uint32)data[i- 6];
++				         sum += (FLAC__uint32)qlp_coeff[ 4] * (FLAC__uint32)data[i- 5];
++				         sum += (FLAC__uint32)qlp_coeff[ 3] * (FLAC__uint32)data[i- 4];
++				         sum += (FLAC__uint32)qlp_coeff[ 2] * (FLAC__uint32)data[i- 3];
++				         sum += (FLAC__uint32)qlp_coeff[ 1] * (FLAC__uint32)data[i- 2];
++				         sum += (FLAC__uint32)qlp_coeff[ 0] * (FLAC__uint32)data[i- 1];
+ 			}
+-			data[i] = residual[i] + (sum >> lp_quantization);
++			data[i] = (FLAC__int32)((FLAC__uint32)residual[i] + (FLAC__uint32)((FLAC__int32)sum >> lp_quantization));
+ 		}
+ 	}
+ }
 @@ -1588,7 +1589,7 @@
  double FLAC__lpc_compute_expected_bits_per_residual_sample_with_error_scale(double lpc_error, double error_scale)
  {
@@ -257,7 +615,21 @@
  
  
  /***************************************************************************
-@@ -148,6 +150,13 @@
+@@ -103,9 +105,12 @@
+ uint32_t cdrom_file::logical_to_chd_lba(uint32_t loglba, uint32_t &tracknum) const
+ {
+ 	// loop until our current LBA is less than the start LBA of the next track
++	// Discpress: where the next track's pregap starts (its INDEX 00), stored or not: 0.289 went on to its INDEX 01,
++	// so its pregap was read from this track's end, shifted by this track's padding, or for a pregap or postgap
++	// that isn't in the CHD, from the next track's data
+ 	for (int track = 0; track < cdtoc.numtrks; track++)
+ 	{
+-		if (loglba < cdtoc.tracks[track + 1].logframeofs)
++		if (loglba < cdtoc.tracks[track + 1].logframeofs - ((track + 1 < cdtoc.numtrks) ? cdtoc.tracks[track + 1].pregap : 0))
+ 		{
+ 			// convert to physical and proceed
+ 			uint32_t physlba = cdtoc.tracks[track].physframeofs + (loglba - cdtoc.tracks[track].logframeofs);
+@@ -148,6 +153,13 @@
  
  	for (int i = 0; i < cdtoc.numtrks; i++)
  	{
@@ -271,7 +643,22 @@
  		osd_file::ptr file;
  		std::uint64_t length;
  		std::error_condition const filerr = osd_file::open(cdtrack_info.track[i].fname, OPEN_FLAG_READ, file, length);
-@@ -1153,204 +1162,106 @@
+@@ -385,6 +397,14 @@
+ 			memset(dest, 0, length);
+ 			return result;
+ 		}
++
++		// Discpress: and so is a postgap, or a gap between sessions, up to the next track's pregap
++		const track_info &track = cdtoc.tracks[tracknum];
++		if ((lbasector >= track.logframeofs + track.frames - (track.pgdatasize ? track.pregap : 0)) && (lbasector < cdtoc.tracks[cdtoc.numtrks].logframeofs))
++		{
++			memset(dest, 0, length);
++			return result;
++		}
+ 	}
+ 
+ 	// if a CHD, just read
+@@ -1153,204 +1173,106 @@
  	0x50, 0xa4, 0xa5, 0x51, 0xa7, 0x53, 0x52, 0xa6, 0xa3, 0x57, 0x56, 0xa2, 0x54, 0xa0, 0xa1, 0x55
  };
  
@@ -489,12 +876,12 @@
  
  /**
 - * @fn  void ecc_compute_bytes(const uint8_t *sector, const uint16_t *row, int rowlen, uint8_t &val1, uint8_t &val2)
-+ * @fn  void ecc_parity(const uint8_t *region, bool q, uint8_t *parity)
-  *
+- *
 - * @brief   -------------------------------------------------
 - *            ecc_compute_bytes - calculate an ECC value (P or Q)
 - *          -------------------------------------------------.
-- *
++ * @fn  void ecc_parity(const uint8_t *region, bool q, uint8_t *parity)
+  *
 - * @param   sector          The sector.
 - * @param   row             The row.
 - * @param   rowlen          The rowlen.
@@ -511,7 +898,10 @@
 +	uint64_t a[11] = { }, b[11] = { };
 +	int const count = q ? ECC_Q_NUM_BYTES : ECC_P_NUM_BYTES;
 +	if (!q)
-+	{
+ 	{
+-		val1 ^= ecc_source_byte(sector, row[component]);
+-		val2 ^= ecc_source_byte(sector, row[component]);
+-		val1 = ecclow[val1];
 +		// the columns of the first 24 rows (a row's last word also reads 2 bytes of the next row, unused)
 +		for (int row = 0; row < ECC_P_COMP; row++)
 +			for (int l = 0; l < 11; l++)
@@ -522,10 +912,7 @@
 +			}
 +	}
 +	else
- 	{
--		val1 ^= ecc_source_byte(sector, row[component]);
--		val2 ^= ecc_source_byte(sector, row[component]);
--		val1 = ecclow[val1];
++	{
 +		uint8_t v[56] = { };
 +		for (int col = 0; col < ECC_Q_COMP; col++)
 +		{
@@ -559,7 +946,7 @@
  }
  
  /**
-@@ -1367,24 +1278,17 @@
+@@ -1367,24 +1289,17 @@
  
  bool cdrom_file::ecc_verify(const uint8_t *sector)
  {
@@ -592,7 +979,7 @@
  }
  
  /**
-@@ -1400,13 +1304,13 @@
+@@ -1400,13 +1315,13 @@
  
  void cdrom_file::ecc_generate(uint8_t *sector)
  {
@@ -612,7 +999,7 @@
  }
  
  /**
-@@ -1864,11 +1768,11 @@
+@@ -1864,11 +1779,11 @@
  
  	outtoc.numsessions = 1;
  
@@ -628,7 +1015,7 @@
  	{
  		osd_printf_error("ERROR: Not a Nero 5.5 or later image!\n");
  		fclose(infile);
-@@ -1888,8 +1792,13 @@
+@@ -1888,8 +1803,13 @@
  
  	while (!done)
  	{
@@ -644,7 +1031,7 @@
  
  		chunk_size = get_u32be(&buffer[4]);
  
-@@ -1901,15 +1810,20 @@
+@@ -1901,15 +1821,20 @@
  			// skip second chunk size and UPC code
  			fseek(infile, 20, SEEK_CUR);
  
@@ -667,7 +1054,7 @@
  			for (int track = start; track <= end; track++)
  			{
  				uint32_t size, mode;
-@@ -1925,7 +1839,15 @@
+@@ -1925,7 +1850,15 @@
  
  //              printf("Track %d: sector size %d mode %x index0 %llx index1 %llx track_end %llx (pregap %d sectors, length %d sectors)\n", track, size, mode, index0, index1, track_end, (uint32_t)(index1-index0)/size, (uint32_t)(track_end-index1)/size);
  				outinfo.track[track-1].fname.assign(tocfname);
@@ -684,7 +1071,7 @@
  				outinfo.track[track-1].idx[0] = outinfo.track[track-1].idx[1] = 0;
  
  				switch (mode)
-@@ -1976,21 +1898,28 @@
+@@ -1976,21 +1909,28 @@
  						return chd_file::error::UNSUPPORTED_FORMAT;
  				}
  
@@ -718,7 +1105,7 @@
  			}
  		}
  
-@@ -2000,7 +1929,15 @@
+@@ -2000,7 +1940,15 @@
  		}
  		else
  		{
@@ -735,7 +1122,7 @@
  		}
  	}
  
-@@ -2042,6 +1979,20 @@
+@@ -2042,6 +1990,20 @@
  	outinfo.reset();
  
  	uint64_t size = get_file_size(tocfname);
@@ -756,7 +1143,7 @@
  	fclose(infile);
  
  
-@@ -2052,7 +2003,15 @@
+@@ -2052,7 +2014,15 @@
  	outinfo.track[0].offset = 0;
  	outinfo.track[0].idx[0] = outinfo.track[0].idx[1] = 0;
  
@@ -773,7 +1160,7 @@
  	{
  		outtoc.tracks[0].trktype = CD_TRACK_MODE1;
  		outtoc.tracks[0].frames = size / 2048;
-@@ -2149,7 +2108,7 @@
+@@ -2149,7 +2119,7 @@
  
  	const int numtracks = atoi(token);
  
@@ -782,7 +1169,7 @@
  	{
  		osd_printf_error("GDI expects too many tracks. Expected %d tracks but only up to %zu tracks allowed\n", numtracks, std::size(outinfo.track) + 1);
  		return chd_file::error::INVALID_DATA;
-@@ -2178,7 +2137,7 @@
+@@ -2178,7 +2148,7 @@
  		paramcnt++;
  		const int trknum = atoi(token) - 1;
  
@@ -791,7 +1178,7 @@
  		{
  			osd_printf_error("Track %d is out of expected range of 1 to %d\n", trknum + 1, numtracks);
  			return chd_file::error::INVALID_DATA;
-@@ -2222,7 +2181,7 @@
+@@ -2222,7 +2192,7 @@
  			outtoc.tracks[trknum].trktype = CD_TRACK_MODE1;
  			outtoc.tracks[trknum].datasize = 2048;
  		}
@@ -800,7 +1187,7 @@
  		{
  			outtoc.tracks[trknum].trktype = CD_TRACK_AUDIO;
  			outtoc.tracks[trknum].datasize = 2352;
-@@ -2252,6 +2211,12 @@
+@@ -2252,6 +2222,12 @@
  		outinfo.track[trknum].fname.assign(path).append(token);
  
  		const uint64_t sz = get_file_size(outinfo.track[trknum].fname);
@@ -813,7 +1200,7 @@
  		outtoc.tracks[trknum].frames = sz / trksize;
  		outtoc.tracks[trknum].padframes = 0;
  
-@@ -2345,6 +2310,16 @@
+@@ -2345,6 +2321,16 @@
  	enum gdi_area current_area = SINGLE_DENSITY;
  	bool is_multibin = false;
  	int leadin = -1;
@@ -830,7 +1217,7 @@
  
  	FILE *infile = fopen(path.c_str(), "rt");
  	if (!infile)
-@@ -2371,6 +2346,14 @@
+@@ -2371,6 +2357,14 @@
  	char linebuffer[512];
  	memset(linebuffer, 0, sizeof(linebuffer));
  
@@ -845,7 +1232,7 @@
  	while (!feof(infile))
  	{
  		/* get the next line */
-@@ -2427,6 +2410,8 @@
+@@ -2427,6 +2421,8 @@
  				/* get lead-out time */
  				TOKENIZE
  				int leadout_offset = msf_to_frames(token);
@@ -854,7 +1241,7 @@
  				outinfo.track[trknum].leadout = leadout_offset;
  			}
  			else if (!strncmp(linebuffer+i, "LEAD-IN", 7))
-@@ -2472,13 +2457,18 @@
+@@ -2472,13 +2468,18 @@
  			/* get the file type */
  			TOKENIZE
  
@@ -875,7 +1262,7 @@
  			}
  			else if (!strcmp(token, "WAVE"))
  			{
-@@ -2489,6 +2479,8 @@
+@@ -2489,6 +2490,8 @@
  					osd_printf_error("ERROR: couldn't read [%s] or not a valid .WAV\n", lastfname);
  					return chd_file::error::INVALID_DATA;
  				}
@@ -884,7 +1271,7 @@
  			}
  			else
  			{
-@@ -2502,6 +2494,12 @@
+@@ -2502,6 +2505,12 @@
  			/* get the track number */
  			TOKENIZE
  			trknum = strtoul(token, nullptr, 10) - 1;
@@ -897,7 +1284,7 @@
  
  			/* next token on the line is the track type */
  			TOKENIZE
-@@ -2541,6 +2539,9 @@
+@@ -2541,6 +2550,9 @@
  				outinfo.track[trknum].offset = wavoffs;
  				wavoffs = wavlen = 0;
  			}
@@ -907,7 +1294,7 @@
  
  			outinfo.track[trknum].fname.assign(lastfname); /* default filename to the last one */
  
-@@ -2586,6 +2587,43 @@
+@@ -2586,6 +2598,43 @@
  				osd_printf_error("ERROR: encountered invalid index %d\n", idx);
  				return chd_file::error::INVALID_DATA;
  			}
@@ -951,7 +1338,7 @@
  
  			outinfo.track[trknum].idx[idx] = frames;
  
-@@ -2610,6 +2648,8 @@
+@@ -2610,6 +2659,8 @@
  			/* get index */
  			TOKENIZE
  			frames = msf_to_frames(token);
@@ -960,7 +1347,7 @@
  
  			outtoc.tracks[trknum].pregap = frames;
  		}
-@@ -2620,11 +2660,15 @@
+@@ -2620,11 +2671,15 @@
  			/* get index */
  			TOKENIZE
  			frames = msf_to_frames(token);
@@ -976,7 +1363,7 @@
  			outtoc.tracks[trknum].control_flags = 0;
  
  			/* keep looping over remaining tokens in FLAGS line until there's no more to read */
-@@ -2667,18 +2711,44 @@
+@@ -2667,18 +2722,44 @@
  		}
  
  		/* this is true for cue/bin and cue/iso, and we need it for cue/wav since .WAV is little-endian */
@@ -1023,7 +1410,7 @@
  			tlen = get_file_size(outinfo.track[trknum].fname);
  			if (tlen == 0)
  			{
-@@ -2700,11 +2770,17 @@
+@@ -2700,11 +2781,17 @@
  				return chd_file::error::INVALID_DATA;
  			}
  
@@ -1042,7 +1429,7 @@
  		}
  		else if (outtoc.tracks[trknum].frames == 0)
  		{
-@@ -2777,6 +2853,65 @@
+@@ -2777,6 +2864,65 @@
  		}
  	}
  
@@ -1108,7 +1495,7 @@
  	if (is_gdrom)
  	{
  		/*
-@@ -2965,6 +3100,36 @@
+@@ -2965,6 +3111,37 @@
  	char linebuffer[512];
  	memset(linebuffer, 0, sizeof(linebuffer));
  
@@ -1124,7 +1511,8 @@
 +	// DATAFILE) and of zeros that no file holds (ZERO, SILENCE, PREGAP), and where START puts INDEX 01. After
 +	// the last line they become the track's frames, pregap and pieces. 0.289 kept only the last file statement
 +	// of a track, ignored ZERO, SILENCE and PREGAP, and made START a pregap that isn't in the file.
-+	struct toc_run { std::string fname; uint64_t offset; uint32_t frames; bool swap; };
++	// (tail: when not 0, the statement ends this many bytes into its last frame, which zeros fill)
++	struct toc_run { std::string fname; uint64_t offset; uint32_t frames; bool swap; uint32_t tail = 0; };
 +	constexpr uint64_t max_frames = 0x7fffffff / FRAME_SIZE; // 2 GB
 +	std::vector<std::vector<toc_run> > runs(MAX_TRACKS);
 +	std::vector<int> startpos(MAX_TRACKS, -1);
@@ -1145,7 +1533,7 @@
  	while (!feof(infile))
  	{
  		/* get the next line */
-@@ -2989,6 +3154,8 @@
+@@ -2989,6 +3166,8 @@
  		*/
  		if (!strcmp(token, "NO"))
  		{
@@ -1154,7 +1542,7 @@
  			TOKENIZE
  			if (!strcmp(token, "COPY"))
  				outtoc.tracks[trknum].control_flags &= ~CD_FLAG_CONTROL_DIGITAL_COPY_PERMITTED;
-@@ -2997,100 +3164,140 @@
+@@ -2997,100 +3176,166 @@
  		}
  		else if (!strcmp(token, "COPY"))
  		{
@@ -1204,11 +1592,25 @@
 +			run.fname.assign(path).append(token);
  
 -			/* get either the offset or the length */
- 			TOKENIZE
--
+-			TOKENIZE
++			// Discpress: as cdrdao, an audio file whose name ends in .wav is a WAVE file: its samples, from the
++			// data chunk on, are little-endian (0.289 read the header as audio, and the samples unswapped)
++			uint32_t wavoffs = 0, wavlen = 0;
++			if (!datafile && run.fname.size() >= 4 && core_stricmp(std::string_view(run.fname).substr(run.fname.size() - 4), ".wav") == 0)
++			{
++				wavlen = parse_wav_sample(run.fname, &wavoffs);
++				if (!wavlen)
++				{
++					osd_printf_error("ERROR: couldn't read [%s] or not a valid .WAV\n", run.fname);
++					return fail(chd_file::error::INVALID_DATA);
++				}
++				run.swap = true;
++			}
+ 
++			TOKENIZE
  			if (!strcmp(token, "SWAP"))
  			{
-+				run.swap = true;
++				run.swap = !run.swap; // Discpress: the other byte order than the file's own (so big-endian in a WAVE file)
  				TOKENIZE
 -
 -				outinfo.track[trknum].swap = true;
@@ -1244,14 +1646,15 @@
 +			uint64_t length;
 +			if (datafile ? (ntimes == 2) : (ntimes >= 1))
 +				run.offset += times[0];
-+			if (ntimes == 2 || (datafile && ntimes == 1))
++			// Discpress: as cdrdao, an audio file's length of 0 is the rest of the file, as no length is
++			if ((ntimes == 2 && (datafile || times[1] != 0)) || (datafile && ntimes == 1))
 +			{
 +				length = times[ntimes - 1];
  			}
  			else
  			{
 -				f = 0;
-+				uint64_t const filesize = get_file_size(run.fname);
++				uint64_t const filesize = wavlen ? wavlen : get_file_size(run.fname); // Discpress: a WAVE file's samples
 +				if (filesize == 0)
 +				{
 +					osd_printf_error("ERROR: couldn't find bin file [%s]\n", run.fname);
@@ -1265,12 +1668,15 @@
 -			TOKENIZE
 -
 -			if (isdigit((uint8_t)token[0]))
-+			if (length / framesize > max_frames)
++			run.offset += wavoffs; // Discpress: a WAVE file's offsets count from its samples
++			if ((length + framesize - 1) / framesize > max_frames)
 +			{
 +				osd_printf_error("ERROR: track %d is too long\n", trknum + 1);
 +				return fail(chd_file::error::INVALID_DATA);
 +			}
-+			run.frames = uint32_t(length / framesize);
++			// Discpress: as cdrdao, a last sector that the data only partly fills is padded with zeros (0.289 dropped it)
++			run.tail = uint32_t(length % framesize);
++			run.frames = uint32_t(length / framesize) + (run.tail ? 1 : 0);
 +			runs[trknum].push_back(std::move(run));
 +		}
 +		else if (!strcmp(token, "ZERO") || !strcmp(token, "SILENCE") || !strcmp(token, "PREGAP"))
@@ -1309,21 +1715,30 @@
 +				osd_printf_error("ERROR: track %d has a ZERO, SILENCE or PREGAP without a length\n", trknum + 1);
 +				return fail(chd_file::error::INVALID_DATA);
  			}
+-			else
 +			uint64_t frames;
++			uint32_t tail = 0;
 +			if (strchr(token, ':') || pregap)
-+				frames = msf_to_frames(token);
- 			else
-+				frames = strtoull(token, nullptr, 10) * (silence ? 4 : 1) / framesize;
-+			if (frames > max_frames)
  			{
 -				/* guesstimate the track length? */
 -				f = 0;
-+				osd_printf_error("ERROR: track %d is too long\n", trknum + 1);
-+				return fail(chd_file::error::INVALID_DATA);
++				frames = msf_to_frames(token);
  			}
 -
 -			outtoc.tracks[trknum].frames = f;
-+			runs[trknum].push_back(toc_run { std::string(), 0, uint32_t(frames), false });
++			else
++			{
++				// a last sector that the zeros only partly fill is a sector of zeros
++				uint64_t const bytes = strtoull(token, nullptr, 10) * (silence ? 4 : 1);
++				tail = uint32_t(bytes % framesize);
++				frames = bytes / framesize + (tail ? 1 : 0);
++			}
++			if (frames > max_frames)
++			{
++				osd_printf_error("ERROR: track %d is too long\n", trknum + 1);
++				return fail(chd_file::error::INVALID_DATA);
++			}
++			runs[trknum].push_back(toc_run { std::string(), 0, uint32_t(frames), false, tail });
 +			if (pregap)
 +				startpos[trknum] = int(track_length(trknum));
  		}
@@ -1339,7 +1754,7 @@
  
  			/* next token on the line is the track type */
  			TOKENIZE
-@@ -3117,22 +3324,114 @@
+@@ -3117,22 +3362,126 @@
  		}
  		else if (!strcmp(token, "START"))
  		{
@@ -1384,6 +1799,15 @@
 +			return chd_file::error::INVALID_DATA;
 +		}
 +
++		// cdrdao joins a track's statements byte by byte, so what follows one that ends inside a sector would
++		// not start on a sector: only the last may end there
++		for (size_t n = 0; n + 1 < trackruns.size(); n++)
++			if (trackruns[n].tail != 0)
++			{
++				osd_printf_error("ERROR: track %d has data after a statement that ends inside a sector\n", trk + 1);
++				return chd_file::error::UNSUPPORTED_FORMAT;
++			}
++
 +		uint32_t const start = std::max(startpos[trk], 0);
 +		if (start >= total)
 +		{
@@ -1425,7 +1849,10 @@
 +		{
 +			if (!merged.empty() && run.fname == merged.back().fname && run.swap == merged.back().swap &&
 +					(run.fname.empty() || run.offset == merged.back().offset + uint64_t(merged.back().frames) * framesize))
++			{
 +				merged.back().frames += run.frames;
++				merged.back().tail = run.tail;
++			}
 +			else if (run.frames != 0)
 +				merged.push_back(std::move(run));
 +		}
@@ -1449,11 +1876,11 @@
 +			input.swap = run.swap;
 +			swapset = true;
 +		}
-+		if (merged.size() == 1 && !merged[0].fname.empty() && merged[0].offset <= UINT32_MAX)
++		if (merged.size() == 1 && !merged[0].fname.empty() && merged[0].offset <= UINT32_MAX && merged[0].tail == 0)
 +			input.offset = uint32_t(merged[0].offset);
 +		else
 +			for (const toc_run &run : merged)
-+				input.pieces.push_back(track_input_piece { run.fname, run.offset, run.frames });
++				input.pieces.push_back(track_input_piece { run.fname, run.offset, run.frames, run.fname.empty() ? 0 : run.tail });
 +	}
 +
  	return std::error_condition();
@@ -1468,7 +1895,7 @@
  
  
  class cdrom_file {
-@@ -121,16 +122,28 @@
+@@ -121,16 +122,29 @@
  		track_info tracks[MAX_TRACKS + 1];
  	};
  
@@ -1478,6 +1905,7 @@
 +		std::string fname;
 +		uint64_t offset;
 +		uint32_t frames;
++		uint32_t tail = 0; // Discpress: when not 0, the file holds only this many bytes of the last frame, the rest is zeros
 +	};
 +
  	struct track_input_entry
@@ -1498,7 +1926,7 @@
  	};
  
  	struct track_input_info
-@@ -267,8 +280,6 @@
+@@ -267,8 +281,6 @@
  	// ECC tables
  	static const uint8_t ecclow[256];
  	static const uint8_t ecchigh[256];
@@ -1507,7 +1935,7 @@
  
  	/** @brief  The chd. */
  	chd_file *           chd;                /* CHD file */
-@@ -283,8 +294,8 @@
+@@ -283,8 +295,8 @@
  	inline uint32_t logical_to_chd_lba(uint32_t physlba, uint32_t &tracknum) const;
  
  	static void get_info_from_type_string(const char *typestring, uint32_t *trktype, uint32_t *datasize);
@@ -3095,7 +3523,7 @@
  				{
  					m_file.reset();
  					m_lastfile = m_info.track[tracknum].fname;
-@@ -497,6 +666,37 @@
+@@ -497,6 +666,39 @@
  						{
  							memset(dest, 0, bytesperframe);
  						}
@@ -3120,11 +3548,13 @@
 +										if (filerr)
 +											report_error(1, "Error opening input file (%s): %s", m_lastfile, filerr.message());
 +									}
++									// the last frame may be partly in the file, and zeros after that (dest is zeroed)
++									std::size_t const want = (piece.tail != 0 && frame == piece.frames - 1) ? piece.tail : bytesperframe;
 +									std::error_condition err = m_file->seek(piece.offset + frame * bytesperframe, SEEK_SET);
 +									std::size_t count = 0;
 +									if (!err)
-+										std::tie(err, count) = read(*m_file, dest, bytesperframe);
-+									if (err || (count != bytesperframe))
++										std::tie(err, count) = read(*m_file, dest, want);
++									if (err || (count != want))
 +										report_error(1, "Error reading input file (%s)'", m_lastfile);
 +								}
 +								break;
@@ -3133,7 +3563,7 @@
  						else
  						{
  							std::error_condition err = m_file->seek(
-@@ -676,6 +876,8 @@
+@@ -676,6 +878,8 @@
  	{ OPTION_OUTPUT,                "o",    true, " <filename>: output file name" },
  	{ OPTION_OUTPUT_BIN,            "ob",   true, " <filename>: output file name for binary data" },
  	{ OPTION_OUTPUT_SPLITBIN,       "sb",   false, ": output one binary file per track" },
@@ -3142,7 +3572,7 @@
  	{ OPTION_OUTPUT_FORCE,          "f",    false, ": force overwriting an existing file" },
  	{ OPTION_OUTPUT_PARENT,         "op",   true, " <filename>: parent file name for output CHD" },
  	{ OPTION_INPUT_START_BYTE,      "isb",  true, " <offset>: starting byte offset within the input" },
-@@ -687,6 +889,8 @@
+@@ -687,6 +891,8 @@
  	{ OPTION_HUNK_SIZE,             "hs",   true, " <bytes>: size of each hunk, in bytes" },
  	{ OPTION_UNIT_SIZE,             "us",   true, " <bytes>: size of each unit, in bytes" },
  	{ OPTION_COMPRESSION,           "c",    true, " <none|type1[,type2[,...]]>: which compression codecs to use (up to 4)" },
@@ -3151,7 +3581,7 @@
  	{ OPTION_IDENT,                 "id",   true, " <filename>: name of ident file to provide CHS information" },
  	{ OPTION_CHS,                   "chs",  true, " <cylinders,heads,sectors>: specifies CHS geometry directly" },
  	{ OPTION_SECTOR_SIZE,           "ss",   true, " <bytes>: size of each hard disk sector" },
-@@ -734,7 +938,9 @@
+@@ -734,7 +940,9 @@
  			OPTION_HUNK_SIZE,
  			OPTION_UNIT_SIZE,
  			OPTION_COMPRESSION,
@@ -3162,7 +3592,7 @@
  		}
  	},
  
-@@ -755,7 +961,9 @@
+@@ -755,7 +963,9 @@
  			OPTION_CHS,
  			OPTION_SIZE,
  			OPTION_SECTOR_SIZE,
@@ -3173,7 +3603,7 @@
  		}
  	},
  
-@@ -767,7 +975,10 @@
+@@ -767,7 +977,10 @@
  			REQUIRED OPTION_INPUT,
  			OPTION_HUNK_SIZE,
  			OPTION_COMPRESSION,
@@ -3185,7 +3615,7 @@
  		}
  	},
  	{ COMMAND_CREATE_DVD, do_create_dvd, ": create a DVD CHD from the input file",
-@@ -782,7 +993,9 @@
+@@ -782,7 +995,9 @@
  			OPTION_INPUT_LENGTH_HUNKS,
  			OPTION_HUNK_SIZE,
  			OPTION_COMPRESSION,
@@ -3196,7 +3626,7 @@
  		}
  	},
  
-@@ -831,13 +1044,14 @@
+@@ -831,13 +1046,14 @@
  			REQUIRED OPTION_OUTPUT,
  			OPTION_OUTPUT_BIN,
  			OPTION_OUTPUT_SPLITBIN,
@@ -3212,7 +3642,7 @@
  		{
  			REQUIRED OPTION_OUTPUT,
  			OPTION_OUTPUT_FORCE,
-@@ -1285,6 +1499,15 @@
+@@ -1285,6 +1501,15 @@
  
  static void check_existing_output_file(const parameters_map &params, std::string_view filename)
  {
@@ -3228,7 +3658,7 @@
  	if (params.find(OPTION_OUTPUT_FORCE) == params.end())
  	{
  		util::core_file::ptr file;
-@@ -1498,7 +1721,7 @@
+@@ -1498,7 +1723,7 @@
  //  compress_common - standard compression loop
  //-------------------------------------------------
  
@@ -3237,7 +3667,7 @@
  {
  	// begin compressing
  	chd.compress_begin();
-@@ -1507,10 +1730,13 @@
+@@ -1507,10 +1732,13 @@
  	double complete, ratio;
  	std::error_condition err;
  	while ((err = chd.compress_continue(complete, ratio)) == chd_file::error::WALKING_PARENT || err == chd_file::error::COMPRESSING)
@@ -3251,7 +3681,7 @@
  
  	// handle errors
  	if (err)
-@@ -1522,11 +1748,36 @@
+@@ -1522,11 +1750,36 @@
  
  
  //-------------------------------------------------
@@ -3289,7 +3719,18 @@
  {
  	if (mode == MODE_GDI)
  	{
-@@ -1781,7 +2032,7 @@
+@@ -1610,7 +1863,9 @@
+ 		}
+ 
+ 		// output pregap
+-		if (info.pregap > 0)
++		// Discpress: only a pregap that isn't in the file is zeros; one in the file is its data before START
++		// (0.289 wrote ZERO for both, which reads back as zeros followed by the pregap's data)
++		if (info.pregap > 0 && info.pgdatasize == 0)
+ 			file.printf("ZERO %s %s\n", modesubmode, msf_string_from_frames(info.pregap));
+ 
+ 		if (outputoffs == 0)
+@@ -1781,7 +2036,7 @@
  //  do_verify - validate the SHA-1 on a CHD
  //-------------------------------------------------
  
@@ -3298,7 +3739,7 @@
  {
  	bool fix_sha1 = params.find(OPTION_FIX) != params.end();
  	// parse out input files
-@@ -1820,6 +2071,7 @@
+@@ -1820,6 +2075,7 @@
  
  		// determine how much to read
  		uint32_t bytes_to_read = (std::min<uint64_t>)(buffer.size(), input_chd.logical_bytes() - offset);
@@ -3306,7 +3747,7 @@
  		std::error_condition err = input_chd.read_bytes(offset, &buffer[0], bytes_to_read);
  		if (err)
  			report_error(1, "Error reading CHD file (%s): %s", *input_chd_str->second, err.message());
-@@ -1830,7 +2082,8 @@
+@@ -1830,7 +2086,8 @@
  	}
  	util::sha1_t computed_sha1 = rawsha1.finish();
  
@@ -3316,7 +3757,7 @@
  	if (raw_sha1 != computed_sha1)
  	{
  		util::stream_format(std::cerr, "Error: Raw SHA1 in header = %s\n", raw_sha1.as_string());
-@@ -1844,6 +2097,8 @@
+@@ -1844,6 +2101,8 @@
  				report_error(1, "Error updating SHA1: %s", err.message());
  			util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
  		}
@@ -3325,7 +3766,7 @@
  	}
  	else
  	{
-@@ -1868,9 +2123,13 @@
+@@ -1868,9 +2127,13 @@
  						report_error(1, "Error updating SHA1: %s", err.message());
  					util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
  				}
@@ -3339,7 +3780,7 @@
  }
  
  
-@@ -1879,7 +2138,7 @@
+@@ -1879,7 +2142,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -3348,7 +3789,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -1894,6 +2153,8 @@
+@@ -1894,6 +2157,8 @@
  	if (unit_size_str != params.end())
  	{
  		unit_size = parse_number(unit_size_str->second->c_str());
@@ -3357,7 +3798,7 @@
  		if (output_parent.opened() && (output_parent.unit_bytes() != unit_size))
  			report_error(1, "Specified unit size %u bytes does not match output parent CHD unit size %u bytes", unit_size, output_parent.unit_bytes());
  	}
-@@ -1937,13 +2198,15 @@
+@@ -1937,13 +2202,15 @@
  		// create the new CHD
  		auto chd = std::make_unique<chd_rawfile_compressor>(*input_file, input_start, input_end);
  		create_output_chd(*chd, *output_chd_str, input_end - input_start, hunk_size, unit_size, compression, output_parent);
@@ -3374,7 +3815,7 @@
  	}
  	catch (...)
  	{
-@@ -1959,7 +2222,7 @@
+@@ -1959,7 +2226,7 @@
  //  disk image from a raw file
  //-------------------------------------------------
  
@@ -3383,7 +3824,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2008,6 +2271,8 @@
+@@ -2008,6 +2275,8 @@
  		if (template_str != params.end())
  			report_error(1, "Sector size cannot be specified separately when a template is specified");
  		sector_size = parse_number(sectorsize_str->second->c_str());
@@ -3392,7 +3833,7 @@
  	}
  	if (output_parent.opened() && (output_parent.unit_bytes() != sector_size))
  		report_error(1, "Sector size %u bytes does not match output parent CHD sector size %u bytes", sector_size, output_parent.unit_bytes());
-@@ -2129,6 +2394,8 @@
+@@ -2129,6 +2398,8 @@
  		else
  			chd.reset(new chd_zero_compressor(input_start, input_end));
  		create_output_chd(*chd, *output_chd_str, uint64_t(totalsectors) * sector_size, hunk_size, sector_size, compression, output_parent);
@@ -3401,7 +3842,7 @@
  
  		// add the standard hard disk metadata
  		std::string metadata = string_format(HARD_DISK_METADATA_FORMAT, cylinders, heads, sectors, sector_size);
-@@ -2147,7 +2414,7 @@
+@@ -2147,7 +2418,7 @@
  
  		// compress it generically
  		if (input_file)
@@ -3410,7 +3851,7 @@
  	}
  	catch (...)
  	{
-@@ -2163,7 +2430,7 @@
+@@ -2163,7 +2434,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -3419,7 +3860,7 @@
  {
  	// process input file
  	cdrom_file::track_input_info track_info;
-@@ -2174,12 +2441,39 @@
+@@ -2174,12 +2445,39 @@
  		std::error_condition err = cdrom_file::parse_toc(*input_file_str->second, toc, track_info);
  		if (err)
  			report_error(1, "Error parsing input file (%s: %s)\n", *input_file_str->second, err.message());
@@ -3459,7 +3900,7 @@
  	// process hunk size
  	const uint32_t hunk_size = parse_hunk_size(params, output_parent, cdrom_file::FRAME_SIZE, cdrom_file::FRAMES_PER_HUNK * cdrom_file::FRAME_SIZE);
  	if (output_parent.opened() && (output_parent.unit_bytes() != cdrom_file::FRAME_SIZE))
-@@ -2203,6 +2497,9 @@
+@@ -2203,6 +2501,9 @@
  		origtotalsectors += trackinfo.frames;
  		totalsectors += trackinfo.frames + trackinfo.extraframes;
  	}
@@ -3469,7 +3910,7 @@
  
  	// print some info
  	util::stream_format(std::cout, "Output CHD:   %s\n", *output_chd_str);
-@@ -2220,14 +2517,24 @@
+@@ -2220,14 +2521,24 @@
  		// create the new CD
  		auto chd = std::make_unique<chd_cd_compressor>(toc, track_info);
  		create_output_chd(*chd, *output_chd_str, uint64_t(totalsectors) * cdrom_file::FRAME_SIZE, hunk_size, cdrom_file::FRAME_SIZE, compression, output_parent);
@@ -3495,7 +3936,7 @@
  	}
  	catch (...)
  	{
-@@ -2243,7 +2550,7 @@
+@@ -2243,7 +2554,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -3504,7 +3945,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2288,6 +2595,8 @@
+@@ -2288,6 +2599,8 @@
  		// create the new DVD
  		auto chd = std::make_unique<chd_rawfile_compressor>(*input_file, input_start, input_end);
  		create_output_chd(*chd, *output_chd_str, input_end - input_start, hunk_size, 2048, compression, output_parent);
@@ -3513,7 +3954,7 @@
  
  		// add the standard DVD type tag
  		const std::error_condition err = chd->write_metadata(DVD_METADATA_TAG, 0, "");
-@@ -2295,7 +2604,7 @@
+@@ -2295,7 +2608,7 @@
  			report_error(1, "Error adding DVD metadata: %s", err.message());
  
  		// compress it generically
@@ -3522,7 +3963,7 @@
  	}
  	catch (...)
  	{
-@@ -2311,7 +2620,7 @@
+@@ -2311,7 +2624,7 @@
  //  input AVI file and metadata
  //-------------------------------------------------
  
@@ -3531,7 +3972,7 @@
  {
  	// process input file
  	avi_file::ptr input_file;
-@@ -2399,7 +2708,7 @@
+@@ -2399,7 +2712,7 @@
  			report_error(1, "Error adding AV metadata: %s\n", err.message());
  
  		// create the compressor and then run it generically
@@ -3540,7 +3981,7 @@
  
  		// write the final LD metadata
  		if (info.height == 524/2 || info.height == 624/2)
-@@ -2456,7 +2765,7 @@
+@@ -2456,7 +2769,7 @@
  //  another CHD
  //-------------------------------------------------
  
@@ -3549,7 +3990,7 @@
  {
  	// parse out input files
  	chd_file input_parent_chd;
-@@ -2547,7 +2856,7 @@
+@@ -2547,7 +2860,7 @@
  		}
  
  		// compress it generically
@@ -3558,7 +3999,7 @@
  	}
  	catch (...)
  	{
-@@ -2563,7 +2872,7 @@
+@@ -2563,7 +2876,7 @@
  //  CHD image
  //-------------------------------------------------
  
@@ -3567,7 +4008,7 @@
  {
  	// parse out input files
  	chd_file input_parent_chd;
-@@ -2604,6 +2913,7 @@
+@@ -2604,6 +2917,7 @@
  
  			// determine how much to read
  			uint32_t bytes_to_read = (std::min<uint64_t>)(buffer.size(), input_end - offset);
@@ -3575,7 +4016,7 @@
  			std::error_condition err = input_chd.read_bytes(offset, &buffer[0], bytes_to_read);
  			if (err)
  				report_error(1, "Error reading CHD file (%s): %s", *params.find(OPTION_INPUT)->second, err.message());
-@@ -2639,14 +2949,137 @@
+@@ -2639,14 +2953,137 @@
  //  CHD image
  //-------------------------------------------------
  
@@ -3715,7 +4156,7 @@
  	cdrom_file *cdrom = new cdrom_file(&input_chd);
  	const cdrom_file::toc &toc = cdrom->get_toc();
  
-@@ -2671,8 +3104,13 @@
+@@ -2671,8 +3108,13 @@
  	if (chop != std::string::npos)
  		default_name.erase(chop, default_name.size());
  
@@ -3730,7 +4171,7 @@
  	if (!is_splitbin && cdrom->is_gdrom() && mode == MODE_CUEBIN)
  	{
  		// GD-ROM cue/bin is in Redump format which should always be split by tracks
-@@ -2730,6 +3168,7 @@
+@@ -2730,6 +3172,7 @@
  		std::error_condition filerr = util::core_file::open(*output_file_str->second, OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_NO_BOM, output_toc_file);
  		if (filerr)
  			report_error(1, "Unable to open file (%s): %s", *output_file_str->second, filerr.message());
@@ -3738,7 +4179,7 @@
  
  		uint64_t total_bytes = 0;
  		for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
-@@ -2807,10 +3246,24 @@
+@@ -2807,10 +3250,24 @@
  			track_filenames.push_back(filename_formatted);
  		}
  
@@ -3764,7 +4205,7 @@
  		}
  		else if (mode == MODE_NORMAL)
  		{
-@@ -2842,11 +3295,11 @@
+@@ -2842,11 +3299,11 @@
  			}
  
  			if (mode2)
@@ -3779,7 +4220,7 @@
  		}
  
  		if (cdrom->is_gdrom() && mode == MODE_CUEBIN)
-@@ -2920,6 +3373,7 @@
+@@ -2920,6 +3377,7 @@
  		uint64_t outputoffs = 0;
  		uint32_t discoffs = 0;
  		std::vector<uint8_t> buffer;
@@ -3787,7 +4228,7 @@
  
  		for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
  		{
-@@ -2942,17 +3396,18 @@
+@@ -2942,17 +3400,18 @@
  				output_bin_filenames.push_back(trackbin_name);
  			}
  
@@ -3811,7 +4252,7 @@
  
  			// If this is bin/cue output and the CHD contains subdata, warn the user and don't include
  			// the subdata size in the buffer calculation.
-@@ -2987,8 +3442,18 @@
+@@ -2987,8 +3446,18 @@
  					frameofs = frame - trackinfo.splitframes;
  				}
  
@@ -3832,7 +4273,7 @@
  
  				// for CDRWin and GDI audio tracks must be reversed
  				// in the case of GDI and CHD version < 5 we assuming source CHD image is GDROM so audio tracks is already reversed
-@@ -3005,7 +3470,8 @@
+@@ -3005,7 +3474,8 @@
  				// read the subcode data
  				if (toc.tracks[trk].subtype != cdrom_file::CD_SUB_NONE && (mode == MODE_NORMAL))
  				{
@@ -3842,7 +4283,7 @@
  					bufferoffs += toc.tracks[trk].subsize;
  				}
  
-@@ -3387,7 +3853,8 @@
+@@ -3387,7 +3857,8 @@
  	{
  		// delete the output file
  		output_file.reset();
@@ -3852,7 +4293,7 @@
  		throw;
  	}
  }
-@@ -3425,14 +3892,39 @@
+@@ -3425,14 +3896,39 @@
  //  main - entry point
  //-------------------------------------------------
  
@@ -3896,7 +4337,7 @@
  
  	// handle help specially
  	if (args.size() < 2)
-@@ -3459,7 +3951,7 @@
+@@ -3459,7 +3955,7 @@
  				return print_help(args[0], desc);
  
  			// otherwise, verify the parameters
@@ -3905,7 +4346,7 @@
  			while (argnum < args.size())
  			{
  				// should be an option name
-@@ -3519,30 +4011,86 @@
+@@ -3519,30 +4015,86 @@
  					return print_help(args[0], desc, "Required parameters missing");
  			}
  
