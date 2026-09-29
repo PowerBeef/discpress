@@ -367,7 +367,7 @@ function probePlan(job, images) {
 // (console, serial, sizes), so a conversion can start while the checksum confirms the release
 async function identifyJob(job, onStatus, onProvisional) {
   await GameDB.ready();
-  var det = null, sizes = [], exact = null, cands = [];
+  var det = null, sizes = [], dataSizes = [], exact = null, cands = [];
   var chd = null, ecm = null;
   try {
     if (job.kind === 'chd') {
@@ -383,10 +383,11 @@ async function identifyJob(job, onStatus, onProvisional) {
           var dt = await detectTrack({ read: (function (tt) { return function (lba) { return chd.read(tt, lba); }; })(t) });
           if (dt && (!det || !dt.weak)) det = dt;
         }
-        chd.tracks.forEach(function (tr) { sizes.push(tr.frames * 2352); });
+        chd.tracks.forEach(function (tr) { sizes.push(tr.frames * 2352); if (tr.type !== 7) dataSizes.push(tr.frames * 2352); });
       } else if (chd.kind === 2) {
         det = await detectTrack({ read: function (lba) { return chd.read(0, lba); } });
         sizes.push(chd.logical);
+        dataSizes.push(chd.logical);
       }
     } else {
       // ECM images: a worker rebuilds the images they hold
@@ -456,10 +457,12 @@ async function identifyJob(job, onStatus, onProvisional) {
         method = names.length > 1 ? 'serial-ambiguous' : bySz.length ? 'serial+size' : 'serial';
         if (names.length > 1) entry = Object.assign({}, pick[0], { alternatives: names });
       }
-    } else if (job.kind === 'chd' && sizes.length) {
-      // CHD without a readable serial: a unique size match is still a strong hint
+    } else if (job.kind === 'chd' && det && !det.weak && dataSizes.length) {
+      // CHD of a recognized console's disc without a readable serial: a unique size match of a data
+      // track is still a strong hint. Not without the console: among 40,000 discs, an audio track or a
+      // PC disc often has the size of some game's (a music CD was named after one)
       var pool = [];
-      sizes.forEach(function (s) { GameDB.size(s).forEach(function (e) { if (!det || det.weak || e.sys === det.sys) pool.push(e); }); });
+      dataSizes.forEach(function (s) { GameDB.size(s).forEach(function (e) { if (e.sys === det.sys) pool.push(e); }); });
       var uniq = pool.map(function (e) { return e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
       if (uniq.length === 1) { entry = pool[0]; method = 'size'; }
     }

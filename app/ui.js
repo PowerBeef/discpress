@@ -224,8 +224,12 @@ function makeSink(dir) {
   return {
     handle: function (m) {
       if (m.type === 's-open') {
-        var f = files[m.id] = { name: m.name, w: null, closed: false, size: 0 };
-        f.chain = dir.getFileHandle(m.name, { create: true })
+        // existed: a file of that name was already in the folder (the user agreed to replace it). The
+        // browser writes to a temporary copy until close, so on cancel or failure it stays as it was:
+        // only files this job created are removed
+        var f = files[m.id] = { name: m.name, w: null, closed: false, size: 0, existed: false };
+        f.chain = dir.getFileHandle(m.name).then(function () { f.existed = true; }, function () {})
+          .then(function () { return dir.getFileHandle(m.name, { create: true }); })
           .then(function (fh) { return fh.createWritable({ keepExistingData: false }); })
           .then(function (w) { f.w = w; }).catch(fail);
       } else if (m.type === 's-write') {
@@ -235,7 +239,7 @@ function makeSink(dir) {
       } else if (m.type === 's-close') {
         q(m.id, function (f) { f.closed = true; f.size = m.size; return f.w.close(); });
       } else if (m.type === 's-remove') {
-        q(m.id, function (f) { f.closed = true; return f.w.abort().then(function () { return dir.removeEntry(f.name); }).catch(function () {}); });
+        q(m.id, function (f) { f.closed = true; return f.w.abort().then(function () { if (!f.existed) return dir.removeEntry(f.name); }).catch(function () {}); });
       }
     },
     finish: function () {
@@ -245,7 +249,7 @@ function makeSink(dir) {
       Object.keys(files).forEach(function (k) {
         var f = files[k];
         f.chain = f.chain.then(function () {
-          if (f.w && !f.closed) return f.w.abort().catch(function () {}).then(function () { return dir.removeEntry(f.name).catch(function () {}); });
+          if (f.w && !f.closed) return f.w.abort().catch(function () {}).then(function () { if (!f.existed) return dir.removeEntry(f.name).catch(function () {}); });
         }).catch(function () {});
       });
     }
@@ -309,9 +313,19 @@ var Engine = {
       try { worker = new Worker(self.url); }
       catch (e) { reject(new Error('Could not start a background worker (' + e.message + '). If you opened this file directly, try another browser.')); return; }
       var ports = [];
+      // a helper that can't start (WebAssembly out of memory, on iPhones especially) would leave the job
+      // worker waiting for its results forever: stop the job instead
+      function helperFailed(message) {
+        if (finished) return;
+        cleanup();
+        if (sink) sink.abort();
+        reject(new Error('A helper thread stopped (' + message + '). Try again with fewer threads (Settings).'));
+      }
       for (var i = 0; i < (o.helpers || 0); i++) {
         try {
           var hw = new Worker(self.url), ch = new MessageChannel();
+          hw.onmessage = function (e) { if (e.data && e.data.type === 'fatal') helperFailed(e.data.message); };
+          hw.onerror = function (e) { helperFailed(e.message || 'failed to start'); };
           self.post(hw, { type: 'helper', port: ch.port2 }, [ch.port2]);
           helpers.push(hw);
           ports.push(ch.port1);
@@ -906,6 +920,8 @@ async function pumpIdentify() {
     if (job.state === 'done') renameOutputs(job);
     job.identKnownResolve();
     if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
+  } else if (job.identKnownResolve) {
+    job.identKnownResolve(); // removed before its turn: a start waiting on it must not wait forever
   }
   it.resolve();
   identBusy = false;
@@ -995,7 +1011,11 @@ function safeName(s) { return String(s || '').replace(/[\/:*?"<>|]+/g, '_').trim
 var jobs = [];
 var looseFiles = [];      // files not claimed by any job yet
 var seen = new Set();     // dedupe (name+size+mtime)
-function fileKey(f) { return f.name + '|' + f.size + '|' + f.lastModified; }
+// the path counts: generic track names (every GDI has track01.bin) can match in name, size and date,
+// on FAT/exFAT cards especially, across the games of one folder
+function fileKey(f, path) { return (path || f.name) + '|' + f.size + '|' + f.lastModified; }
+var seenKeys = new WeakMap(); // file -> its key in seen
+function forgetFile(f) { seen.delete(seenKeys.get(f) || fileKey(f)); }
 var KIND = {
   cd: { badge: 'CD', cmd: 'createcd', label: 'CD' },
   gdrom: { badge: 'GD', cmd: 'createcd', label: 'GD-ROM' },
@@ -1038,6 +1058,17 @@ function trackFile(file, path, ref) {
   if (/\.ecm$/i.test(name) && !/\.ecm$/i.test(ref)) name = name.slice(0, -4);
   return { file: file, name: name, ref: ref, ecm: true };
 }
+// the file a descriptor in folder `dir` names as `ref`, among candidates in order of preference: one in
+// the same folder, or in the subfolder the reference names, or picked on its own (no folder); never a
+// same-named file from another folder (another game's track01.bin) or one already claimed
+function pickTrack(cands, dir, ref, claimed) {
+  var free = cands.filter(function (e) { return !claimed.has(e); });
+  var rel = ref.replace(/\\/g, '/'), sub = rel.indexOf('/') >= 0 ? dirOf(rel) : null;
+  var want = sub === null ? null : dir ? dir + '/' + sub : sub;
+  return free.find(function (e) { return dirOf(e.path) === dir; }) ||
+    (want === null ? undefined : free.find(function (e) { return dirOf(e.path) === want; })) ||
+    free.find(function (e) { return !dir || dirOf(e.path) === ''; });
+}
 function refMatches(e, ref) {
   var n = base(e.path).toLowerCase(), want = base(ref).toLowerCase();
   return n === want || n === want + '.ecm';
@@ -1051,9 +1082,10 @@ var IGNORE = /^(txt|nfo|sbi|sub|m3u|dat|md5|sfv|sha1|jpg|jpeg|png|gif|webp|pdf|u
 async function addEntries(entries) {
   var fresh = [];
   entries.forEach(function (e) {
-    var key = fileKey(e.file);
+    var key = fileKey(e.file, e.path);
     if (seen.has(key)) return;
     seen.add(key);
+    seenKeys.set(e.file, key);
     fresh.push(e);
   });
   if (!fresh.length) { toast('Those files are already in the list.'); return; }
@@ -1065,8 +1097,10 @@ async function addEntries(entries) {
   jobs.forEach(function (job) {
     if (!job.missing.length || job.state !== 'blocked') return;
     job.missing = job.missing.filter(function (ref) {
-      var free = fresh.filter(function (e) { return !claimed.has(e) && refMatches(e, ref); });
-      var hit = free.find(function (e) { return base(e.path).toLowerCase() === base(ref).toLowerCase(); }) || free[0];
+      var want = base(ref).toLowerCase();
+      var cands = fresh.filter(function (e) { return refMatches(e, ref); });
+      cands.sort(function (a, b) { return (base(a.path).toLowerCase() === want ? 0 : 1) - (base(b.path).toLowerCase() === want ? 0 : 1); });
+      var hit = pickTrack(cands, job.descDir || '', ref, claimed);
       if (!hit) return true;
       claimed.add(hit);
       job.files.push(trackFile(hit.file, hit.path, ref));
@@ -1206,7 +1240,7 @@ async function descriptorJob(d, pool, claimed) {
     job.state = 'error';
     job.errorText = dec ? fix.problem + ' chdman can\u2019t convert it as it is.' : fix.problem;
   }
-  var dir = dirOf(d.path);
+  var dir = job.descDir = dirOf(d.path);
   refs.forEach(function (ref) {
     var want = base(ref).toLowerCase();
     var cands = pool.filter(function (e) { return e !== d && base(e.path).toLowerCase() === want; });
@@ -1220,7 +1254,7 @@ async function descriptorJob(d, pool, claimed) {
         }
       });
     }
-    var hit = cands.find(function (e) { return dirOf(e.path) === dir; }) || cands[0];
+    var hit = pickTrack(cands, dir, ref, claimed);
     if (!hit) { job.missing.push(ref); return; }
     if (hit.fromJob) removeJob(hit.fromJob, true);
     claimed.add(hit);
@@ -1805,17 +1839,25 @@ function cancelJob(job) {
     return;
   }
   if (job.run) job.run.cancel();
+  else if (job.state === 'running') abortStart(job);
+}
+// a job started but still loading the engine, waiting for identification or measuring the device:
+// there is no chdman run to cancel yet, so runJobNow's waits are cut short (see waitUnlessAborted)
+function abortStart(job) {
+  job.aborted = true;
+  if (job.abortResolve) job.abortResolve();
 }
 function removeJob(job, silent) {
   if (job.state === 'running' && !silent && !confirm('Stop and remove "' + job.title + '"?')) return;
   if (job.run) job.run.cancel();
+  else if (job.state === 'running') abortStart(job);
   queue = queue.filter(function (j) { return j !== job; });
   jobs = jobs.filter(function (j) { return j !== job; });
   if (job.el) job.el.remove();
   Store.removeJob(job.id);
   if (!silent) {
-    job.files.forEach(function (f) { seen.delete(fileKey(f.file)); });
-    if (job.descFile) seen.delete(fileKey(job.descFile));
+    job.files.forEach(function (f) { forgetFile(f.file); });
+    if (job.descFile) forgetFile(job.descFile);
   }
   jobs.forEach(function (o) { if (o.parentJob === job) { o.parentJob = null; refreshJob(o); } });
   updateDock();
@@ -1847,32 +1889,47 @@ function stalledProgress(t) { return /\bnan% complete/i.test(t); }
 
 async function runJobNow(job) {
   job.state = 'running';
+  job.aborted = false;
+  var aborted = new Promise(function (resolve) { job.abortResolve = resolve; });
+  // wait for p, or until the job is canceled or removed; true when it was
+  async function stopped(p) {
+    await Promise.race([p, aborted]);
+    if (!job.aborted) return false;
+    job.state = 'canceled';
+    if (jobs.indexOf(job) >= 0) refreshJob(job, true);
+    return true;
+  }
   job.stalled = false;
   job.log = [];
   job.outputs = [];
   job.redump = null;
   refreshJob(job, false);
   setProgress(job, null, 'Starting…');
-  try { await Engine.ready(); }
+  try { if (await stopped(Engine.ready())) return; }
   catch (e) { job.state = 'error'; job.errorText = e.message; refreshJob(job, true); return; }
   if (job.identPromise && job.identState !== 'done') {
     setProgress(job, null, 'Identifying game…');
     // start as soon as the game is known; the checksum confirming the exact release can finish
     // meanwhile (results are renamed if needed). Files written straight into a folder are named
     // when created, so that mode waits for the checksum.
-    await (settings.storage === 'folder' && outDir ? job.identPromise : job.identKnown);
+    if (await stopped(settings.storage === 'folder' && outDir ? job.identPromise : job.identKnown)) return;
     if (job.state !== 'running') return;
     applyIdent(job, true);
   }
   // automatic thread count: measure this device once, before its first compression
   if (job.kind === 'create' && job.opts.preset !== 'none' && job.disc !== 'ld' && settings.threads === 'auto' && !Tuning.result) {
     setProgress(job, null, 'Measuring this device\u2019s speed (only once)\u2026');
-    await ensureTuned(function (n, rate) {
-      setProgress(job, null, 'Measuring this device\u2019s speed (only once)\u2026', [plural(n, 'thread') + ': ' + rate.toFixed(1) + ' MB/s']);
-    });
+    if (await stopped(ensureTuned(function (n, rate) {
+      if (!job.aborted) setProgress(job, null, 'Measuring this device\u2019s speed (only once)\u2026', [plural(n, 'thread') + ': ' + rate.toFixed(1) + ' MB/s']);
+    }))) return;
     if (job.state !== 'running') return;
   }
   var spec = buildJob(job);
+  if (settings.storage === 'folder' && outDir && (spec.rename || spec.outMode === 'stream')) {
+    var oi = spec.args.indexOf('-o'), main = spec.rename ? outBase(job) + '.chd' : oi >= 0 ? spec.args[oi + 1].replace(/^.*\//, '') : '';
+    if (main && !(await confirmReplace(outDir, [main]))) { job.state = 'canceled'; refreshJob(job, true); return; }
+    if (job.aborted) { job.state = 'canceled'; if (jobs.indexOf(job) >= 0) refreshJob(job, true); return; }
+  }
   if (spec.rename) {
     var nm = outBase(job) + '.chd', src = job.files[0].file;
     try {
@@ -1900,6 +1957,7 @@ async function runJobNow(job) {
       toast('Browser storage may be too small for this job (' + fmtBytes(est.quota - est.usage) + ' free).', 'err');
     }
   }
+  if (job.aborted) { Recovery.running(null); job.state = 'canceled'; if (jobs.indexOf(job) >= 0) refreshJob(job, true); return; }
   var t0 = performance.now(), phaseStart = t0, lastPhase = '', lastPct = 0, workerError = '';
   job.run = Engine.run({
     jobId: job.id, dirPath: Store.dirPath(job.id), args: spec.args, inputs: spec.inputs, writable: spec.writable,
@@ -2200,10 +2258,25 @@ async function downloadMany(list) {
     await sleep(700);
   }
 }
+// never replace a file already in the folder without asking: an earlier run's result, another game's
+// that got the same name, or anything else the user keeps there
+async function confirmReplace(dir, names) {
+  var there = [];
+  for (var i = 0; i < names.length; i++) {
+    try { await dir.getFileHandle(names[i]); there.push(names[i]); } catch (e) { /* not there */ }
+  }
+  if (!there.length) return true;
+  return confirm(there.length === 1
+    ? '\u201c' + there[0] + '\u201d is already in the folder \u201c' + dir.name + '\u201d. Replace it?'
+    : 'These files are already in the folder \u201c' + dir.name + '\u201d: ' + there.join(', ') + '. Replace them?');
+}
 async function saveToFolder(list) {
   var dir;
   try { dir = await window.showDirectoryPicker({ mode: 'readwrite', id: 'chdman-out' }); }
   catch (e) { return; }
+  var names = [];
+  list.forEach(function (job) { job.outputs.forEach(function (o) { if (o.kind !== 'disk') names.push(o.name); }); });
+  if (!(await confirmReplace(dir, names))) return;
   var n = 0;
   for (var i = 0; i < list.length; i++) {
     var job = list[i];
