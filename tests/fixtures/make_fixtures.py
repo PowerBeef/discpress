@@ -101,6 +101,37 @@ fixture('ps1-clonecd', {
    serial='SLUS-00594', ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'],
    warning='subchannel data')
 
+# the same disc with a cdrdao TOC (each track's file, a byte offset and a length, and the audio
+# track's pregap inside its file) and as a Nero image (both tracks in one file, the track list at the end)
+def toc_text():
+    t1, t2 = g.raw_sectors(mgs_iso(), 2), g.audio(225, 5, silence=150)
+    return ('CD_ROM_XA\n\n// Track 1\nTRACK MODE2_RAW\nDATAFILE "mgs disc1 (Track 1).bin" #0 %s\n\n'
+            '// Track 2\nTRACK AUDIO\nTWO_CHANNEL_AUDIO\nDATAFILE "mgs disc1 (Track 2).bin" #0 %s\nSTART 00:02:00\n'
+            % (g.msf(len(t1) // g.RAW), g.msf(len(t2) // g.RAW))).encode()
+
+
+def nrg_image():
+    t1, t2 = g.raw_sectors(mgs_iso(), 2), g.audio(225, 5, silence=150)
+    be = lambda n, k: n.to_bytes(k, 'big')
+    ends = [len(t1), len(t1) + len(t2)]
+    tracks = [(0x600, 0, 0, ends[0]), (0x700, ends[0], ends[0] + 150 * g.RAW, ends[1])]
+    body = be(0, 4) + bytes(13) + bytes(1) + be(0x2001, 2) + bytes([1, 2])
+    for mode, i0, i1, end in tracks:
+        body += bytes(12) + be(g.RAW, 2) + be(mode, 2) + bytes(2) + be(i0, 8) + be(i1, 8) + be(end, 8)
+    chain = b'DAOX' + be(len(body), 4) + body + b'END!' + be(0, 4)
+    return t1 + t2 + chain + b'NER5' + be(ends[1], 8)
+
+
+fixture('ps1-toc', {
+    'mgs disc1.toc': toc_text,
+    'mgs disc1 (Track 1).bin': lambda: g.raw_sectors(mgs_iso(), 2),
+    'mgs disc1 (Track 2).bin': lambda: g.audio(225, 5, silence=150),
+}, add=['mgs disc1.toc', 'mgs disc1 (Track 1).bin', 'mgs disc1 (Track 2).bin'], job='create', disc='cd', command='createcd',
+   sys='ps1', serial='SLUS-00594', ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'])
+
+fixture('ps1-nrg', {'mgs.nrg': nrg_image}, add=['mgs.nrg'], job='create', disc='cd', command='createcd',
+   sys='ps1', serial='SLUS-00594', ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'])
+
 fixture('ps1-single', {
     'twine.cue': lambda: cue([('twine.bin', 'MODE2/2352', 0)]),
     'twine.bin': lambda: g.raw_sectors(ps1_iso('SLUS_012.72', 'TWINE', 1, 12), 2),
@@ -111,6 +142,12 @@ fixture('ps1-lone-bin', {
     'lone.bin': lambda: g.raw_sectors(ps1_iso('SLUS_009.75', 'TND', 1, 13), 2),
 }, add=['lone.bin'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-00975',
    ident='serial', name='007 - Tomorrow Never Dies (USA)', warning='No .cue file was added')
+
+# a serial Redump lists only with a release suffix (SLES-04107/GER): the disc itself says SLES-04107
+fixture('ps1-slash-serial', {
+    'allstar.iso': lambda: ps1_iso('SLES_041.07', 'ALLSTAR', 1, 40),
+}, add=['allstar.iso'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLES-04107',
+   ident='serial', name='All Star Action (Europe) (Disc 1)')
 
 # a PlayStation CD game stored as a plain 2048-byte .iso: must become a CD CHD, not a DVD one
 fixture('ps1-as-iso', {
@@ -430,8 +467,11 @@ def row(name, serial, data, ext):
 vb = open(os.path.join(OUT, 'verified.bin'), 'rb').read()
 ui = open(os.path.join(OUT, 'umd.iso'), 'rb').read()  # the ISO inside the umd.* compressed ISOs
 xb = open(os.path.join(OUT, 'xa.bin'), 'rb').read()   # the image inside xa.bin.ecm
+mb = open(os.path.join(OUT, 'mgs disc1 (Track 1).bin'), 'rb').read()
+mb = mb[:-1] + bytes([mb[-1] ^ 1])  # a game of the same size as mgs disc1's data track, not the same data
 with open(os.path.join(OUT, 'testdb.json'), 'w') as f:
-    json.dump({'ps1': [row('Checksum Verified Game (USA)', 'SLUS-99999', vb, 'bin'), row('Checksum Verified ECM Game (USA)', 'SLUS-99998', xb, 'bin')],
+    json.dump({'ps1': [row('Checksum Verified Game (USA)', 'SLUS-99999', vb, 'bin'), row('Checksum Verified ECM Game (USA)', 'SLUS-99998', xb, 'bin'),
+                       row('Same Size Game (USA)', 'SLUS-99997', mb, 'bin')],
                'psp': [row('Checksum Verified PSP Game (USA)', 'ULUS-99999', ui, 'iso')]}, f)
 
 with open(os.path.join(OUT, 'manifest.json'), 'w') as f:

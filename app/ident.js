@@ -52,6 +52,8 @@ var GameDB = {
           add(self.bySerial, normSerial(e.serial));
           var parts = e.serial.split(/[-\s]/);
           if (parts.length > 2) add(self.bySerialBase, normSerial(parts[0] + parts[1]));
+          // Redump's release suffixes (SCES-53449/ANZ, UCES-00786/E): the disc itself says SCES-53449
+          if (e.serial.indexOf('/') > 0) add(self.bySerialBase, normSerial(e.serial.split('/')[0]));
         }
         var s = self.bySize.get(e.size);
         if (!s) self.bySize.set(e.size, s = []);
@@ -84,10 +86,12 @@ function u32le(b, o) { return (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o 
 function u32be(b, o) { return ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0; }
 
 // reads 2048-byte user data sectors from a file region with 2048/2336/2352-byte sectors
-function fileReader(file, start, sectorSize) {
+// (stride: bytes from one sector to the next, when subchannel data follows each)
+function fileReader(file, start, sectorSize, stride) {
+  stride = stride || sectorSize;
   return {
     read: async function (lba) {
-      var off = start + lba * sectorSize;
+      var off = start + lba * stride;
       if (off + sectorSize > file.size) return null;
       var b = new Uint8Array(await file.slice(off, off + sectorSize).arrayBuffer());
       if (sectorSize === 2048) return b;
@@ -98,29 +102,45 @@ function fileReader(file, start, sectorSize) {
   };
 }
 
-// a worker that opens images for reading (the reader role) as msg says; request(q) asks it for data
+// a worker that opens images for reading (the reader role) as msg says; request(q) asks it for data.
+// If the worker dies or stops answering (a read taking over a minute), every request waiting on it
+// and every later one fails, so identification reports an error instead of waiting forever
 function readerWorker(msg, timeout) {
   return Engine.ready().then(function () {
     return new Promise(function (resolve, reject) {
-      var w = new Worker(Engine.url), seq = 0, waiting = {};
-      var timer = setTimeout(function () { w.terminate(); reject(new Error('timeout')); }, timeout || 30000);
+      var w = new Worker(Engine.url), seq = 0, waiting = {}, dead = null, ready = false;
+      var timer = setTimeout(function () { fail(new Error('timeout')); }, timeout || 30000);
+      function fail(err) {
+        clearTimeout(timer);
+        if (dead) return;
+        dead = err;
+        w.terminate();
+        if (!ready) reject(err);
+        Object.keys(waiting).forEach(function (id) { var q = waiting[id]; delete waiting[id]; clearTimeout(q.timer); q.reject(err); });
+      }
       w.onmessage = function (e) {
         var m = e.data;
         if (m.type === 'reader-ready') {
           clearTimeout(timer);
+          ready = true;
           resolve({
             info: m,
             request: function (q) {
-              return new Promise(function (res) { var id = ++seq; waiting[id] = res; q.type = 'read'; q.id = id; w.postMessage(q); });
+              return new Promise(function (res, rej) {
+                if (dead) return rej(dead);
+                var id = ++seq;
+                waiting[id] = { resolve: res, reject: rej, timer: setTimeout(function () { fail(new Error('The reader stopped responding.')); }, 60000) };
+                q.type = 'read'; q.id = id; w.postMessage(q);
+              });
             },
-            close: function () { w.terminate(); }
+            close: function () { fail(new Error('closed')); }
           });
         } else if (m.type === 'sector') {
           var r = waiting[m.id]; delete waiting[m.id];
-          if (r) r(m.data);
-        } else if (m.type === 'fatal') { clearTimeout(timer); w.terminate(); reject(new Error(m.message)); }
+          if (r) { clearTimeout(r.timer); r.resolve(m.data); }
+        } else if (m.type === 'fatal') fail(new Error(m.message));
       };
-      w.onerror = function (e) { clearTimeout(timer); w.terminate(); reject(new Error(e.message || 'worker error')); };
+      w.onerror = function (e) { e.preventDefault && e.preventDefault(); fail(new Error(e.message || 'worker error')); };
       Engine.post(w, msg);
     });
   });
@@ -312,8 +332,9 @@ function msfFrames(s) {
   var m = /(\d+):(\d+):(\d+)/.exec(s || '');
   return m ? (+m[1] * 60 + +m[2]) * 75 + +m[3] : 0;
 }
-// data tracks + hashable files of a "create" job; images: the stand-ins for its ECM files (ecmImages)
-function probePlan(job, images) {
+// data tracks + hashable files of a "create" job; images: the stand-ins for its ECM files (ecmImages);
+// nrg: the tracks of a Nero image (nrgTracks)
+function probePlan(job, images, nrg) {
   var readers = [], hashes = [];
   var fileOf = function (f) { return f && (f.ecm ? images && images.get(f) : f.file); };
   var byName = function (n) {
@@ -323,8 +344,8 @@ function probePlan(job, images) {
   if (job.src === 'cue' && job.descText) {
     var cur = null, curMode = null, fileTracks = [];
     job.descText.split(/\r?\n/).forEach(function (ln) {
-      var m;
-      if ((m = /^\s*FILE\s+(?:"([^"]*)"|(\S+))/i.exec(ln))) { cur = byName(m[1] != null ? m[1] : m[2]); fileTracks.push({ file: cur, tracks: [] }); }
+      var m, fw = refWord('cue', ln);
+      if (fw) { cur = byName(fw.text); fileTracks.push({ file: cur, tracks: [] }); }
       else if ((m = /^\s*TRACK\s+(\d+)\s+(\S+)/i.exec(ln))) { curMode = m[2].toUpperCase(); fileTracks.length && fileTracks[fileTracks.length - 1].tracks.push({ no: +m[1], mode: curMode, index: 0 }); }
       else if ((m = /^\s*INDEX\s+01\s+(\S+)/i.exec(ln))) { var ft = fileTracks[fileTracks.length - 1]; if (ft && ft.tracks.length) ft.tracks[ft.tracks.length - 1].index = msfFrames(m[1]); }
     });
@@ -336,6 +357,39 @@ function probePlan(job, images) {
         var ss = /2048/.test(t.mode) ? 2048 : /2336/.test(t.mode) ? 2336 : 2352;
         readers.push(fileReader(ft.file, t.index * ss, ss));
       });
+    });
+  } else if (job.src === 'toc' && job.descText) {
+    // where chdman 0.289 finds each track (cdrom_file::parse_toc): `#bytes` or an MSF offset after the
+    // file name, a second MSF adding to it, START inside the file before index 1
+    var tt = [], cnt = new Map();
+    job.descText.split(/\r?\n/).forEach(function (ln) {
+      var a = tokenize(ln.replace(/\/\/.*$/, '')), t = tt[tt.length - 1];
+      if (a[0] === 'TRACK' && a[1]) {
+        var ss = { MODE1: 2048, MODE2_FORM1: 2048, MODE2: 2336, MODE2_FORM_MIX: 2336, MODE1_RAW: 2352, MODE2_RAW: 2352 }[a[1]] || 0;
+        tt.push({ no: tt.length + 1, size: ss, stride: ss + (/^RW(_RAW)?$/.test(a[2] || '') ? 96 : 0), file: null, offset: 0, start: 0 });
+      } else if (t && !t.file && /^(DATAFILE|AUDIOFILE|FILE)$/.test(a[0]) && a[1] != null) {
+        t.file = byName(a[1]);
+        var i = a[2] === 'SWAP' ? 3 : 2, off = 0;
+        if (/^#\d/.test(a[i] || '')) off = +a[i].slice(1);
+        else if (/^\d/.test(a[i] || '')) off = msfFrames(a[i]) * t.stride;
+        if (/^\d/.test(a[i + 1] || '') && /^\d/.test(a[i + 2] || '')) off += msfFrames(a[i + 1]) * t.stride;
+        else if (!/^\d/.test(a[i + 1] || '') && t.no === 1 && !/^#/.test(a[i] || '')) off = 0; // a lone length
+        t.offset = off;
+        if (t.file) cnt.set(t.file, (cnt.get(t.file) || 0) + 1);
+      } else if (t && a[0] === 'START' && a[1]) t.start = msfFrames(a[1]);
+    });
+    var hashed = new Set();
+    tt.forEach(function (t) {
+      if (!t.file) return;
+      if (!hashed.has(t.file)) { hashed.add(t.file); hashes.push({ file: t.file, track: cnt.get(t.file) === 1 ? t.no : 0 }); }
+      if (t.size) readers.push(fileReader(t.file, t.offset + t.start * t.stride, t.size, t.stride));
+    });
+  } else if (job.src === 'nrg' && nrg) {
+    // a Nero image: one file, its track list at the end (read by nrgTracks)
+    var nf = fileOf(job.files[0]);
+    nrg.forEach(function (t) {
+      if (t.size === 2352) hashes.push({ file: nf.slice(t.no === 1 ? t.index1 : t.index0, t.end), track: t.no });
+      if (t.mode === 0 || t.mode === 0x600) readers.push(fileReader(nf, t.index1, t.size));
     });
   } else if (job.src === 'gdi' && job.descText) {
     job.descText.split(/\r?\n/).slice(1).forEach(function (ln) {
@@ -360,6 +414,32 @@ function probePlan(job, images) {
     job.files.forEach(function (f) { if (fileOf(f)) hashes.push({ file: fileOf(f), track: 0 }); });
   }
   return { readers: readers, hashes: hashes };
+}
+
+// the tracks of a Nero 5.5 or later image (.nrg), as chdman 0.289 reads them (cdrom_file::parse_nero):
+// the file ends with "NER5" and the offset of a chain of chunks, DAOX lists the tracks. null if not one
+async function nrgTracks(file) {
+  var bytes = async function (at, n) { return new Uint8Array(await file.slice(at, at + n).arrayBuffer()); };
+  if (file.size < 12) return null;
+  var b = await bytes(file.size - 12, 12);
+  if (asc(b, 0, 4) !== 'NER5' || u32be(b, 4)) return null;
+  for (var at = u32be(b, 8), n = 0; at + 8 <= file.size && n < 64; n++) {
+    var h = await bytes(at, 8), id = asc(h, 0, 4), len = u32be(h, 4);
+    if (id === 'END!') break;
+    if (id === 'DAOX') {
+      var c = await bytes(at + 8, Math.min(len, 22 + 99 * 42)), first = c[20], last = c[21], out = [];
+      if (last < first || last > 99) return null;
+      for (var t = first; t <= last; t++) {
+        var o = 22 + (t - first) * 42;
+        if (o + 42 > c.length) break;
+        var u64 = function (p) { return u32be(c, p) * 4294967296 + u32be(c, p + 4); };
+        out.push({ no: t, size: (c[o + 12] << 8) | c[o + 13], mode: (c[o + 14] << 8) | c[o + 15], index0: u64(o + 18), index1: u64(o + 26), end: u64(o + 34) });
+      }
+      return out;
+    }
+    at += len + 8;
+  }
+  return null;
 }
 
 /* ---------- the identification itself ---------- */
@@ -399,7 +479,7 @@ async function identifyJob(job, onStatus, onProvisional) {
         images = new Map();
         ecms.forEach(function (f, i) { if (ei.views[i]) images.set(f, ei.views[i]); });
       }
-      var plan = probePlan(job, images);
+      var plan = probePlan(job, images, job.src === 'nrg' ? await nrgTracks(job.files[0].file) : null);
       if (job.src === 'cso') {
         chd = await chdReader(job.files[0].file, true);
         plan.readers.push({ read: function (lba) { return chd.read(0, lba); } });
@@ -446,7 +526,7 @@ async function identifyJob(job, onStatus, onProvisional) {
       entry = exact[0];
       if (det && det.serial && exact.length > 1) entry = exact.find(function (e) { return normSerial(e.serial) === normSerial(det.serial); }) || entry;
       method = 'hash';
-    } else if (det && det.serial) {
+    } else if (det && det.serial && (GameDB.serial(det.serial, det.sys).length || GameDB.serial(det.serial).length)) {
       cands = GameDB.serial(det.serial, det.sys);
       if (!cands.length) cands = GameDB.serial(det.serial);
       var bySz = cands.filter(function (e) { return sizes.indexOf(e.size) >= 0; });

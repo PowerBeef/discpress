@@ -392,7 +392,12 @@ public:
 		else
 			put_u16be(&dest[ecc_bytes], complen);
 
-		// encode the subcode
+		// encode the subcode (Discpress: into what is left of the hunk-sized buffer; 0.289 let it write
+		// up to frames * 96 bytes past it. A result that doesn't fit reaches the limit, so it never wins)
+		uint32_t const limit = std::min(m_limit, hunkbytes());
+		if (header_bytes + complen >= limit)
+			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+		m_subcode_compressor.set_limit(limit - header_bytes - complen);
 		return header_bytes + complen + m_subcode_compressor.compress(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA], frames * cdrom_file::MAX_SUBCODE_DATA, &dest[header_bytes + complen]);
 	}
 

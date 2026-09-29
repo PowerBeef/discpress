@@ -49,6 +49,7 @@
 #include <emscripten.h>
 
 extern "C" int wasm_par_active(void); // browser build: hunks are being compressed by helper workers
+extern "C" int wasm_out_full(void); // Discpress: browser build: results written into a folder are waiting to be written
 #endif
 
 using util::string_format;
@@ -127,7 +128,7 @@ struct compression_pause
 	bool await_ready() const noexcept
 	{
 #ifdef __EMSCRIPTEN__
-		return !wasm_par_active();
+		return !wasm_par_active() && !wasm_out_full(); // Discpress: also waits for a slow output folder
 #else
 		return true;
 #endif
@@ -150,7 +151,8 @@ static chdman_task read_ahead(chd_file &chd, uint64_t offset, uint64_t length)
 #ifdef __EMSCRIPTEN__
 	uint32_t const first = offset / chd.hunk_bytes();
 	uint32_t const count = (offset + length + chd.hunk_bytes() - 1) / chd.hunk_bytes() - first;
-	while (!chd.wasm_read_ahead(first, count))
+	// Discpress: also waits while the output folder is behind (results streamed into it pile up otherwise)
+	while (wasm_out_full() || !chd.wasm_read_ahead(first, count))
 		co_await read_pause();
 #endif
 	co_return;
@@ -2428,6 +2430,14 @@ static chdman_task do_create_cd(parameters_map &params)
 	chd_file output_parent;
 	const auto output_chd_str = parse_output_chd_parameters(params, output_parent);
 
+	// Discpress: nor over a track file the descriptor names (0.289 truncated it, then deleted it)
+	for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
+	{
+		std::error_code ec;
+		if (std::filesystem::equivalent(std::filesystem::path(*output_chd_str), std::filesystem::path(track_info.track[tracknum].fname), ec))
+			report_error(1, "Error: output file (%s) is also an input file", *output_chd_str);
+	}
+
 	// process hunk size
 	const uint32_t hunk_size = parse_hunk_size(params, output_parent, cdrom_file::FRAME_SIZE, cdrom_file::FRAMES_PER_HUNK * cdrom_file::FRAME_SIZE);
 	if (output_parent.opened() && (output_parent.unit_bytes() != cdrom_file::FRAME_SIZE))
@@ -2996,6 +3006,15 @@ static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::
 }
 
 
+// Discpress: a frame of a CD that can't be read; cdrom_file only says that it failed, so the frame
+// is read again for the reason (such as a damaged hunk), as the other extract commands report it
+[[noreturn]] static void report_cd_read_error(chd_file &input_chd, const std::string &input_name, uint64_t offset)
+{
+	std::vector<uint8_t> frame(cdrom_file::FRAME_SIZE);
+	std::error_condition const err = input_chd.read_bytes(offset, &frame[0], cdrom_file::FRAME_SIZE);
+	report_error(1, "Error reading CHD file (%s) at offset %d: %s", input_name, offset, err ? err.message() : std::string("read error"));
+}
+
 static chdman_task do_extract_cd(parameters_map &params)
 {
 	// parse out input files
@@ -3377,8 +3396,9 @@ static chdman_task do_extract_cd(parameters_map &params)
 					ahead_end = chdoffs + TEMP_BUFFER_SIZE;
 				}
 
-				// read the data
-				cdrom->read_data(cdrom->get_track_start_phys(trk) + frameofs, &buffer[bufferoffs], toc.tracks[trk].trktype, true);
+				// read the data (Discpress: a read error is an error; 0.289 wrote whatever the buffer held and exited 0)
+				if (!cdrom->read_data(cdrom->get_track_start_phys(trk) + frameofs, &buffer[bufferoffs], toc.tracks[trk].trktype, true))
+					report_cd_read_error(input_chd, *params.find(OPTION_INPUT)->second, chdoffs);
 
 				// for CDRWin and GDI audio tracks must be reversed
 				// in the case of GDI and CHD version < 5 we assuming source CHD image is GDROM so audio tracks is already reversed
@@ -3395,7 +3415,8 @@ static chdman_task do_extract_cd(parameters_map &params)
 				// read the subcode data
 				if (toc.tracks[trk].subtype != cdrom_file::CD_SUB_NONE && (mode == MODE_NORMAL))
 				{
-					cdrom->read_subcode(cdrom->get_track_start_phys(trk) + frameofs, &buffer[bufferoffs], true);
+					if (!cdrom->read_subcode(cdrom->get_track_start_phys(trk) + frameofs, &buffer[bufferoffs], true)) // Discpress: likewise
+						report_cd_read_error(input_chd, *params.find(OPTION_INPUT)->second, chdoffs);
 					bufferoffs += toc.tracks[trk].subsize;
 				}
 

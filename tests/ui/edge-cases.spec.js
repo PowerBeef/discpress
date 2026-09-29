@@ -160,6 +160,7 @@ test('a TOC with one file per track, as chdman writes it, keeps every track', as
   await app.add(x.files);
   const card = app.job('mgs split');
   await app.settled(card);
+  await expect(card.locator('.note.ident')).toContainText('SLUS-00594'); // the console is read from the TOC's tracks
   await app.run(card);
   const [out] = await app.downloads(card);
   expect(info(out.path).dataSha1).toBe(info(original).dataSha1);
@@ -441,4 +442,122 @@ test('same-named tracks of the same size and date in two game folders are both u
     sums.push(fs.readFileSync(out.path).subarray(0x54, 0x68).toString('hex')); // the CHD's SHA-1
   }
   expect(sums[0]).not.toBe(sums[1]);
+});
+
+// the files in the page's private storage (OPFS), as session/job/slot paths
+const workFiles = page => page.evaluate(async () => {
+  const out = [];
+  async function walk(d, p) { for await (const [n, h] of d.entries()) { if (h.kind === 'directory') await walk(h, p + n + '/'); else out.push(p + n); } }
+  try { await walk(await (await navigator.storage.getDirectory()).getDirectoryHandle('chdman-work'), ''); } catch (e) { /* none */ }
+  return out;
+});
+
+// audit, batch 3
+test('a hunk size picked for a DVD is dropped when identification makes the ISO a CD', async ({ app }) => {
+  await app.open({ debug: { identDelay: 3000 } });
+  await app.add(['tnd.iso']);
+  const card = app.job('tnd');
+  await expect(card).toContainText('Identifying game');
+  await card.locator('details.opts summary').click();
+  await card.locator('label.field', { hasText: 'Hunk size' }).locator('select').selectOption('2048');
+  await expect(card.locator('code.cmd')).toContainText('chdman createdvd -i tnd.iso -o tnd.chd -hs 2048');
+  await app.settled(card);
+  await expect(card.locator('code.cmd')).toContainText('chdman createcd');
+  await expect(card.locator('code.cmd')).not.toContainText('-hs');
+  await app.run(card);
+});
+
+test('Clear finished asks before deleting unsaved results, and forgets the files', async ({ app, page }) => {
+  await app.open();
+  const asked = [];
+  page.removeAllListeners('dialog');
+  page.on('dialog', d => { asked.push(d.message()); asked.length === 1 ? d.dismiss() : d.accept(); });
+  await app.add(['tnd.iso']);
+  const card = app.job('tnd');
+  await app.settled(card);
+  await app.run(card);
+  await page.click('#clearDone');
+  expect(asked[0]).toContain('1 finished job has results that haven’t been saved');
+  await expect(app.jobs()).toHaveCount(1); // not removed: the user said no
+  await page.click('#clearDone');
+  await expect(app.jobs()).toHaveCount(0);
+  await app.add(['tnd.iso']); // accepted again, not "already in the list"
+  await expect(app.jobs()).toHaveCount(1);
+});
+
+test('removing a job with unsaved results asks first', async ({ app, page }) => {
+  await app.open();
+  const asked = [];
+  page.removeAllListeners('dialog');
+  page.on('dialog', d => { asked.push(d.message()); d.dismiss(); });
+  await app.add(['tnd.iso']);
+  const card = app.job('tnd');
+  await app.settled(card);
+  await app.run(card);
+  await card.locator('.job-head button[aria-label="Remove"]').click();
+  expect(asked).toEqual(['Remove "tnd"? Its results haven’t been saved and will be deleted.']);
+  await expect(app.jobs()).toHaveCount(1);
+  await app.downloads(card);
+  await card.locator('.job-head button[aria-label="Remove"]').click(); // saved: removed without asking
+  await expect(app.jobs()).toHaveCount(0);
+  expect(asked).toHaveLength(1);
+});
+
+test('macOS "._" companion files are not games', async ({ app, page }) => {
+  const dir = path.join(FIXTURES, 'gen');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '._tnd.iso'), Buffer.alloc(4096));
+  await app.open();
+  await app.add(['gen/._tnd.iso']);
+  await expect(page.locator('#toasts')).toContainText('Nothing to convert in 1 file');
+  await expect(app.jobs()).toHaveCount(0);
+  await app.add(['tnd.iso', 'gen/._tnd.iso']);
+  await expect(page.locator('#toasts')).toContainText('ignored 1 file (._tnd.iso)');
+  await expect(app.jobs()).toHaveCount(1);
+});
+
+test('a cue added after the .iso it lists takes it over', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'tnd game.cue'), 'FILE "tnd.iso" BINARY\r\n  TRACK 01 MODE1/2048\r\n    INDEX 01 00:00:00\r\n');
+  await app.open();
+  await app.add(['tnd.iso']);
+  await app.settled(app.job('tnd'));
+  await app.add(['gen/tnd game.cue']);
+  const card = app.job('tnd game');
+  await app.settled(card);
+  await expect(card.locator('.sub')).toContainText('CUE + 1 track file');
+  await expect(app.jobs()).toHaveCount(1);
+});
+
+test('a cue sheet may name its file in single quotes, as chdman reads it', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'twine.bin'), path.join(dir, 'twine q.bin'));
+  fs.writeFileSync(path.join(dir, 'quoted.cue'), "FILE 'twine q.bin' BINARY\r\n  TRACK 01 MODE2/2352\r\n    INDEX 01 00:00:00\r\n");
+  await app.open({ settings: { rename: false } });
+  await app.add(['gen/quoted.cue', 'gen/twine q.bin']);
+  const card = app.job('quoted');
+  await app.settled(card);
+  await expect(card.locator('.sub')).toContainText('CUE + 1 track file');
+  await expect(card.locator('.note.ident')).toContainText('SLUS-01272');
+  await app.run(card);
+  const [out] = await app.downloads(card);
+  if (nativeChdman()) {
+    const ref = reference('createcd', 'gen/quoted.cue');
+    if (sameVersion()) expect(sha1File(out.path)).toBe(sha1File(ref));
+    else expect(info(out.path).dataSha1).toBe(info(ref).dataSha1);
+  }
+});
+
+test('a cancelled conversion leaves nothing in private storage', async ({ app, page }) => {
+  await app.open({ settings: { threads: 1 } });
+  await app.add(fixture('ps2-dvd').add);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await card.locator('.job-foot button.primary').click();
+  await expect.poll(async () => (await workFiles(page)).length, { timeout: 60_000, intervals: [20] }).toBeGreaterThan(0); // the CHD is being written
+  await card.locator('.job-foot button.danger', { hasText: 'Cancel' }).click();
+  await app.waitState(card, 'canceled');
+  await expect.poll(() => workFiles(page), { timeout: 15_000 }).toEqual([]);
 });

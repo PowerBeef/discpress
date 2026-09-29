@@ -22,7 +22,7 @@ does all of this when a session starts.
 | Command | What it does |
 |---|---|
 | `npm test` | all UI tests against `dist/discpress.html` (about 4 minutes on 4 cores) |
-| `npm run test:dev` | the same against a page assembled from the current `app/` and `db/` |
+| `npm run test:dev` | the same against a page assembled from the current `app/` and `db/` (with `build/`'s wasm, taken first from `dist/discpress.html` when that is newer and differs) |
 | `npx playwright test ui/convert.spec.js` | one file; add `-g "ps2"` to filter by test name |
 | `npx playwright test --project=iphone` | one project: `desktop`, `file-url`, `iphone`, `android`, `layout` |
 | `npm run report` | open the HTML report of the last run (traces and screenshots of failures) |
@@ -32,6 +32,8 @@ does all of this when a session starts.
 
 Environment: `DISCPRESS_HTML` picks the page (relative to the repo root), `WORKERS` the number of
 parallel test workers (default 2), `CHDMAN` a native chdman binary, `REGEN_FIXTURES=1` rebuilds fixtures.
+Outside CI a test server already running on `PORT` (default 4173) is reused; its `/healthz` names the page
+it serves, and the run stops if that isn't the page `DISCPRESS_HTML` picks (stop it, or use another `PORT`).
 
 ## How correctness is checked
 
@@ -52,7 +54,7 @@ parallel test workers (default 2), `CHDMAN` a native chdman binary, `REGEN_FIXTU
 
 `fixtures/make_fixtures.py` generates synthetic discs into `.cache/fixtures/` (deterministic,
 about a second): ISO 9660 file systems, raw CD sectors with valid EDC/ECC (Mode 1 and Mode 2),
-CD audio, a CloneCD image, compressed ISOs (CSO v1 and v2, ZSO; the generator has its own LZ4 encoder), ECM images (the generator's encoder writes the same bytes as the ecm tools' `bin2ecm`, including Mode 2 Form 2 sectors and silence stored as sectors), cue sheets chdman 0.289 misreads (each with a plain twin), cue sheets with more than a CHD's tracks hold (CATALOG, FLAGS, ISRC, INDEX 02, `CDI/2352`), and console boot headers for PlayStation, PS2, PSP, Saturn, Sega CD and Dreamcast (GDI).
+CD audio, a CloneCD image, a cdrdao TOC and a Nero image, compressed ISOs (CSO v1 and v2, ZSO; the generator has its own LZ4 encoder), ECM images (the generator's encoder writes the same bytes as the ecm tools' `bin2ecm`, including Mode 2 Form 2 sectors and silence stored as sectors), cue sheets chdman 0.289 misreads (each with a plain twin), cue sheets with more than a CHD's tracks hold (CATALOG, FLAGS, ISRC, INDEX 02, `CDI/2352`), and console boot headers for PlayStation, PS2, PSP, Saturn, Sega CD and Dreamcast (GDI).
 They carry serial numbers of real games, so identification can be tested against the built-in
 Redump database, but contain no game data. `manifest.json` lists each fixture with the job and
 identification the app should produce. `--bench` adds large, realistic images for benchmarks.
@@ -73,7 +75,7 @@ game database when it is requested as `/discpress.html?testdb=1` (`app.open({ te
 | `smoke` | loading, tabs, help, settings persistence, one conversion (also from `file://` and on phones) |
 | `convert` | every input type and console, identification, output naming, version choice, presets, thread counts, Start all / Download all |
 | `chd` | CHD inputs: identification from inside the CHD, extract (Redump's layout, which gives back the fixtures' own files; cue, split bins, toc, gdi, iso, img), verify (good and damaged, and compared with Redump), both with and without helper workers, info, rename, parent CHDs |
-| `identify` | checksum-verified identification (via extra database rows, below), also of the ISO inside a compressed ISO, conversions that start before the checksum finishes and are renamed after it, starting while identification is still running |
+| `identify` | checksum-verified identification (via extra database rows, below), also of the ISO inside a compressed ISO, conversions that start before the checksum finishes and are renamed after it, a version picked meanwhile is kept, starting while identification is still running, audio CDs not named after a game, CHDs matched by size or with Mode 2 data tracks, a reader worker that dies |
 | `tuning` | the automatic thread count: one-off speed test on the first conversion, reuse, not capped by the reported core count, manual override, Measure again |
 | `gdrom` | Dreamcast GD-ROM layout from a `.gdi` and a Redump cue: no pregaps, track 3 at LBA 45000 |
 | `engine` | the engine's own command line against unmodified chdman 0.289: the 0.289 defects it fixes, identical CHDs when codec trials stop early, and the checksums and codecs of the codec plan |
@@ -83,7 +85,7 @@ game database when it is requested as `/discpress.html?testdb=1` (`app.open({ te
 | `mobile` | phone layout, thread defaults (the iPhone speed test tries up to 4, and one stored at 1.3.1's limit of 2 is measured again), the fixed-header scrolling used inside iOS app web views, saving through the share sheet (its failure falls back to a download, results too large for it download), the Safari tip in iOS app web views, the Safari fallback for big results in a Home Screen web app |
 | `recovery` | results kept from an earlier visit (listed after a reload, saved, deleted) and a conversion stopped by a reload; where results live in memory (also from `file://`, where Chrome gives no private storage), which results a reload lost |
 | `folder` | writing results into a folder (a fake File System Access folder): a file already there is replaced only if the user agrees, and never deleted by a cancel; a cancel leaves no new file |
-| `hosted` | the online version (`web/`), on desktop and emulated phones: manifest, icons, service worker, working offline, opening from its saved copy on a slow network, a copy without `web/`'s files; the Content Security Policy blocks network requests |
+| `hosted` | the online version (`web/`), on desktop and emulated phones: manifest, icons, service worker, working offline, opening from its saved copy on a slow network or when the site answers with an error, a copy without `web/`'s files; the Content Security Policy blocks network requests |
 | `layout` | 7 screen sizes × light/dark × 5 screens: no horizontal overflow; screenshots in `.cache/screens/` |
 | `a11y` | axe-core audit of every screen in both themes; serious problems fail |
 

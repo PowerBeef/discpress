@@ -116,7 +116,7 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
 
    | | **[⬇ Download the file](https://github.com/PowerBeef/discpress/releases/latest/download/discpress.html)** | **[🌐 Use it online](https://powerbeef.github.io/discpress/)** |
    |---|---|---|
-   | **What it is** | `discpress.html`, the whole app in one file you keep | The same file on [powerbeef.github.io/discpress](https://powerbeef.github.io/discpress/), updated with each release |
+   | **What it is** | `discpress.html`, the whole app in one file you keep | The same file on [powerbeef.github.io/discpress/](https://powerbeef.github.io/discpress/), updated with each release |
    | **Best for** | Computers and Android, and using it without any internet | Nothing to download, and **big games on iPhone and iPad** |
    | **How to open it** | Double-click it on a computer; on Android, open it with Chrome or another browser | Open the link. On iPhone and iPad, use Safari |
    | **Offline** | Always | Once opened; you can also install it (Share → **Add to Home Screen**, or the install button in Chrome and Edge) |
@@ -133,7 +133,7 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
 <details>
 <summary><b>Are my games uploaded anywhere?</b></summary>
 <br>
-No. Discpress is a single file that runs entirely on your device, downloaded or online. It makes no network requests and works in airplane mode: its Content-Security-Policy (`connect-src 'none'`) forbids the page any connection, in the downloaded file and on [powerbeef.github.io/discpress](https://powerbeef.github.io/discpress/) alike. The online version is the release file byte for byte; each release lists its SHA-256 (`discpress.html.sha256`), and the site has the same file, so you can compare them. Opening it online is an ordinary visit to a GitHub Pages site: GitHub sees the request for the page, as for any website, never your files. It sets no cookies and has no analytics. The downloaded file doesn't contact anything at all.
+No. Discpress is a single file that runs entirely on your device, downloaded or online. It makes no network requests and works in airplane mode: its Content-Security-Policy (`connect-src 'none'`) forbids the page any connection, in the downloaded file and on [powerbeef.github.io/discpress/](https://powerbeef.github.io/discpress/) alike. The online version is the release file byte for byte; each release lists its SHA-256 (`discpress.html.sha256`), and the site has the same file, so you can compare them. Opening it online is an ordinary visit to a GitHub Pages site: GitHub sees the request for the page, as for any website, never your files. It sets no cookies and has no analytics. The downloaded file doesn't contact anything at all.
 </details>
 
 <details>
@@ -201,11 +201,11 @@ source ~/emsdk/emsdk_env.sh
 ./build.sh                      # -> dist/discpress.html
 ```
 
-- If you only change files in `app/`, run `python3 scripts/assemble.py` instead of the full build. Without Emscripten, run `python3 scripts/extract-build.py` once first: it recovers the WebAssembly build from `dist/discpress.html`.
+- If you only change files in `app/`, run `python3 scripts/assemble.py` instead of the full build. Without Emscripten, run `python3 scripts/extract-build.py` once first: it recovers the WebAssembly build from `dist/discpress.html`. A change to `engine/`, `wasm/` or `build.sh` needs the full build: the page records the sources its WebAssembly was built from, and `scripts/check-dist.sh` (run by every release) refuses a page built from older ones.
 - `tests/` has end-to-end UI tests (Playwright) that check every conversion against native chdman, plus conversion benchmarks. See [`tests/README.md`](tests/README.md).
 - To refresh the game database with the latest Redump data, run `./scripts/update-db.sh`, then `python3 scripts/assemble.py`.
 - The README graphics are rendered from `scripts/brand/brand.html` with `python3 scripts/brand/render.py` (needs Playwright).
-- Running **Actions → Release → Run workflow** on `main` with a tag such as `v1.3.5` publishes a release: `discpress.html` and its SHA-256 as the download, and the same file on GitHub Pages as the online version. The download goes public only once the site is deployed, so both always carry the same version; a daily check (`scripts/check-release.sh`) confirms it. See `.github/workflows/release.yml` and [`web/README.md`](web/README.md). Release notes come from `.github/release-notes/<tag>.md` when that file exists.
+- Running **Actions → Release → Run workflow** on `main` with a tag such as `v1.3.5` (always `vX.Y.Z`: there are no prereleases) publishes a release: `discpress.html` and its SHA-256 as the download, and the same file on GitHub Pages as the online version. The download goes public only once the site is deployed, so both always carry the same version; a daily check (`scripts/check-release.sh`) confirms it. See `.github/workflows/release.yml` and [`web/README.md`](web/README.md). Release notes come from `.github/release-notes/<tag>.md` when that file exists.
 
 </details>
 

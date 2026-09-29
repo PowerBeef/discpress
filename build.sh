@@ -15,6 +15,10 @@ if ! command -v em++ >/dev/null; then
 fi
 JOBS="${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)}"
 mkdir -p "$OUT"
+# The sources this wasm is built from, which the page records for scripts/check-dist.sh: hashed before
+# compiling, written to build/ only once the build succeeded.
+SOURCES="$(python3 "$ROOT/scripts/engine-sources.py")"
+rm -f "$OUT/engine-sources.sha256"
 
 echo "==> Compiling (SIMD)"
 make -s -C "$ROOT/wasm" -j"$JOBS" T=wasm O="$OUT/obj-wasm" objs
@@ -33,6 +37,7 @@ if ! diff <(sed 's/nosimd-tmp/chdman/g' nosimd-tmp.js) chdman.js >/dev/null; the
   exit 1
 fi
 rm -f nosimd-tmp.js
+echo "$SOURCES" > engine-sources.sha256
 
 echo "==> Assembling"
 python3 "$ROOT/scripts/assemble.py"

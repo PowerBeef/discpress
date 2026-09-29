@@ -139,7 +139,7 @@ test('opened from the Home Screen, a large result downloads and says to use Safa
   await app.run(card);
   const out = card.locator('.result .out');
   await expect(out.locator('button')).toHaveText(/^\s*Download\s*$/);
-  await expect(out).toContainText('if nothing happens, open powerbeef.github.io/discpress in Safari itself');
+  await expect(out).toContainText('if nothing happens, open powerbeef.github.io/discpress/ in Safari itself');
 });
 
 test('inside an iOS app web view, a notice points big games to Discpress online in Safari', async ({ browser }, testInfo) => {

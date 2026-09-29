@@ -491,11 +491,11 @@ The repros live under `$SP/exp`.
 | B2 | A GD cue mounted directly in MAME is not placed at 45000 | `cdprobe-head gd/dc-type1/redump/DC.cue` | no |
 | B3 | 0 tracks → createcd loops forever (`-nan%`) | `cuequirks/empty.cue`, `lower.cue`, `limits/t0.cue`, `limits/lone.bin`, `x.ccd`, `toc/*.toc` without lengths | yes |
 | B4 | A 100-track cue segfaults; a 100-track GDI aborts | `cd/limits` | yes |
-| B5 | MOTOROLA audio is double-swapped | `cd/motorola` | yes |
-| B6 | A shared FILE after a different first FILE gets wrong offsets and lengths | `cd/mixed-files` | yes |
+| B5 | MOTOROLA audio is double-swapped (and a data track that opens a MOTOROLA file is swapped). *Fixed in the engine.* | `cd/motorola` | yes |
+| B6 | A shared FILE after a different first FILE gets wrong offsets and lengths; the last track of a shared FILE that another FILE follows gets the whole file. *Fixed in the engine.* | `cd/mixed-files` | yes |
 | B7 | Several tracks in one WAVE | `cd/wave/Game2.cue` | yes |
 | B8 | Several FILEs per track (EAC) | `cuequirks/eac.cue` | yes |
-| B9 | NRG: offset wrong after a track with a pregap; NRG pregap data dropped | `nrg/t1pg.nrg` | yes |
+| B9 | NRG: offset wrong after a track with a pregap; NRG pregap data dropped. (The engine now refuses a first track of 0, a sector size of 0 and a chunk chain without `END!`, which crashed or hung 0.289; the pregap offset remains.) | `nrg/t1pg.nrg` | yes |
 | B10 | `parse_iso` mis-types raw images (N%128, N%146) | `xiso/raw128.iso`, `raw146.iso` | yes |
 | B11 | TOC: START treated as virtual, PREGAP/SILENCE/multi-FILE ignored, no length gives 0 frames | `toc/*.toc` | yes |
 | B12 | CHD → toc → CHD changes V to virtual, so the logical layout grows (1480 → 1855 LBAs) | `cd/rm-toc.chd` | yes |
@@ -504,7 +504,7 @@ The repros live under `$SP/exp`.
 | B15 | `dvdrom_file` rejects 4096-byte hunks (the createdvd default) | `tools/dvdprobe` | yes |
 | B16 | `extractcd` on a DVD CHD aborts (`throw nullptr`); `extractdvd` on a CD CHD writes a bogus ISO | `exp/xmis` | yes |
 | B17 | BOM or lowercase cue keywords | `cuequirks` | yes |
-| B18 | *Incidental, for A/B:* compressed CHDs with 1-3 compressed hunks fail to open ("Decompression error"), for example a 1-frame CD or a 1-hunk raw of text | `exp/tiny` | yes |
+| B18 | *Incidental, for A/B:* compressed CHDs with 1-3 compressed hunks fail to open ("Decompression error"), for example a 1-frame CD or a 1-hunk raw of text. **Cause:** a writer bug. `compress_v5_map` sizes the map's buffer without the Huffman tree that opens the map, so for a few hunks the bitstream overflows, the map is cut short and its last bytes are whatever lay past the buffer. *Fixed in the engine* (the buffer includes the tree, and an overflow is an error); the map is unchanged wherever 0.289's fit. | `exp/tiny` | yes |
 
 ---
 
@@ -565,7 +565,7 @@ Ranked by value to users and risk.
 3. Whether MAME upstream will revert or fix #15870 and #15808 before 0.290, and whether its GD/Naomi CHD SHA-1s were made with the TOSEC layout. (E.)
 4. The byte order and layout of CloneCD `.sub`, redumper `.subcode` and Nero audio (MAME assumes LE). These need real samples; none are allowed in the repo.
 5. *(Resolved for the tested fixtures.)* LZMA 26.02 at level 8 reproduces 0.289 byte for byte on 4 fixtures. It is still worth confirming on large and odd inputs, including non-default hunk sizes. (A/G.)
-6. The root cause of B18 (small CHDs that fail to open), and whether libchdr is affected. (A/B.)
+6. *(Resolved.)* The root cause of B18 (small CHDs that fail to open) is chdman's map writer, not the readers: the CHD itself is broken (its map is cut short), so libchdr has nothing valid to read either. chdman 0.289 reads the CHDs the engine makes.
 7. Whether the v4 CHGT-to-GDI extraction path (`version() > 4` swap) emits big-endian audio. It is untested for lack of a v4 sample.
 8. Whether any emulator relies on track FLAGS (pre-emphasis) or CATALOG/ISRC. That determines whether they belong in checksummed track metadata or only in non-checksummed fidelity tags.
 

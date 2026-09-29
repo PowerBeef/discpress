@@ -1761,11 +1761,11 @@ std::error_condition cdrom_file::parse_nero(std::string_view tocfname, toc &outt
 
 	outtoc.numsessions = 1;
 
-	// seek to 12 bytes before the end
+	// seek to 12 bytes before the end (Discpress: a file shorter than that isn't one either)
+	fseek(infile, 0, SEEK_END);
+	uint64_t const filesize = ftell(infile);
 	fseek(infile, -12, SEEK_END);
-	fread(buffer, 12, 1, infile);
-
-	if (memcmp(buffer, "NER5", 4))
+	if (filesize < 12 || fread(buffer, 12, 1, infile) != 1 || memcmp(buffer, "NER5", 4))
 	{
 		osd_printf_error("ERROR: Not a Nero 5.5 or later image!\n");
 		fclose(infile);
@@ -1785,8 +1785,13 @@ std::error_condition cdrom_file::parse_nero(std::string_view tocfname, toc &outt
 
 	while (!done)
 	{
-		fseek(infile, chain_offs, SEEK_SET);
-		fread(buffer, 8, 1, infile);
+		// Discpress: a chain of chunks without END!, or one that leaves the file, made 0.289 loop forever
+		if (uint64_t(chain_offs) + 8 > filesize || fseek(infile, chain_offs, SEEK_SET) || fread(buffer, 8, 1, infile) != 1)
+		{
+			osd_printf_error("ERROR: NRG image's chunks end without an END! chunk\n");
+			fclose(infile);
+			return chd_file::error::INVALID_DATA;
+		}
 
 		chunk_size = get_u32be(&buffer[4]);
 
@@ -1798,14 +1803,14 @@ std::error_condition cdrom_file::parse_nero(std::string_view tocfname, toc &outt
 			// skip second chunk size and UPC code
 			fseek(infile, 20, SEEK_CUR);
 
-			uint8_t start, end;
+			uint8_t start = 0, end = 0; // Discpress: 0 (refused below) if the file ends here
 			fread(&start, 1, 1, infile);
 			fread(&end, 1, 1, infile);
 
 //          printf("Start track %d  End track: %d\n", start, end);
 
 			outtoc.numtrks = (end-start) + 1;
-			if (end < start || outtoc.numtrks > MAX_TRACKS || end > MAX_TRACKS) // Discpress: 0.289 wrote past its track table
+			if (start < 1 || end < start || outtoc.numtrks > MAX_TRACKS || end > MAX_TRACKS) // Discpress: 0.289 wrote outside its track table
 			{
 				fclose(infile);
 				osd_printf_error("ERROR: NRG image has tracks %d to %d, only 1 to %d are possible\n", start, end, MAX_TRACKS);
@@ -1879,6 +1884,13 @@ std::error_condition cdrom_file::parse_nero(std::string_view tocfname, toc &outt
 						return chd_file::error::UNSUPPORTED_FORMAT;
 				}
 
+				// Discpress: 0.289 divided by it
+				if (size == 0)
+				{
+					osd_printf_error("ERROR: NRG image's track %d has a sector size of 0\n", track);
+					fclose(infile);
+					return chd_file::error::INVALID_DATA;
+				}
 				outtoc.tracks[track-1].datasize = size;
 
 				outtoc.tracks[track-1].subtype = CD_SUB_NONE;
@@ -1903,7 +1915,15 @@ std::error_condition cdrom_file::parse_nero(std::string_view tocfname, toc &outt
 		}
 		else
 		{
-			chain_offs += chunk_size + 8;
+			// Discpress: each chunk must lead further into the file
+			uint64_t const next = uint64_t(chain_offs) + chunk_size + 8;
+			if (next + 8 > filesize || next > UINT32_MAX)
+			{
+				osd_printf_error("ERROR: NRG image's chunks end without an END! chunk\n");
+				fclose(infile);
+				return chd_file::error::INVALID_DATA;
+			}
+			chain_offs = uint32_t(next);
 		}
 	}
 
@@ -2125,7 +2145,7 @@ std::error_condition cdrom_file::parse_gdi(std::string_view tocfname, toc &outto
 			outtoc.tracks[trknum].trktype = CD_TRACK_MODE1;
 			outtoc.tracks[trknum].datasize = 2048;
 		}
-		else if (trktype == 0)
+		else if (trktype == 0 && trksize > 0) // Discpress: 0.289 divided by a size of 0
 		{
 			outtoc.tracks[trknum].trktype = CD_TRACK_AUDIO;
 			outtoc.tracks[trknum].datasize = 2352;
@@ -2155,6 +2175,12 @@ std::error_condition cdrom_file::parse_gdi(std::string_view tocfname, toc &outto
 		outinfo.track[trknum].fname.assign(path).append(token);
 
 		const uint64_t sz = get_file_size(outinfo.track[trknum].fname);
+		if (sz == 0) // Discpress: as a cue sheet does (0.289 made the track empty and went on)
+		{
+			fclose(infile);
+			osd_printf_error("ERROR: couldn't find bin file [%s]\n", outinfo.track[trknum].fname);
+			return std::errc::no_such_file_or_directory;
+		}
 		outtoc.tracks[trknum].frames = sz / trksize;
 		outtoc.tracks[trknum].padframes = 0;
 
@@ -2280,6 +2306,14 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 	char linebuffer[512];
 	memset(linebuffer, 0, sizeof(linebuffer));
 
+	// Discpress: a line that belongs to a track, before the first TRACK, wrote before the track table
+	auto const before_track = [&infile] (const char *what)
+	{
+		fclose(infile);
+		osd_printf_error("ERROR: %s before the first TRACK\n", what);
+		return std::error_condition(chd_file::error::INVALID_DATA);
+	};
+
 	while (!feof(infile))
 	{
 		/* get the next line */
@@ -2336,6 +2370,8 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 				/* get lead-out time */
 				TOKENIZE
 				int leadout_offset = msf_to_frames(token);
+				if (trknum < 0)
+					return before_track("REM LEAD-OUT");
 				outinfo.track[trknum].leadout = leadout_offset;
 			}
 			else if (!strncmp(linebuffer+i, "LEAD-IN", 7))
@@ -2510,6 +2546,8 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 				osd_printf_error("ERROR: encountered invalid index %d\n", idx);
 				return chd_file::error::INVALID_DATA;
 			}
+			if (trknum < 0)
+				return before_track("INDEX");
 
 			outinfo.track[trknum].idx[idx] = frames;
 
@@ -2534,6 +2572,8 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 			/* get index */
 			TOKENIZE
 			frames = msf_to_frames(token);
+			if (trknum < 0)
+				return before_track("PREGAP");
 
 			outtoc.tracks[trknum].pregap = frames;
 		}
@@ -2544,11 +2584,15 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 			/* get index */
 			TOKENIZE
 			frames = msf_to_frames(token);
+			if (trknum < 0)
+				return before_track("POSTGAP");
 
 			outtoc.tracks[trknum].postgap = frames;
 		}
 		else if (!strcmp(token, "FLAGS"))
 		{
+			if (trknum < 0)
+				return before_track("FLAGS");
 			outtoc.tracks[trknum].control_flags = 0;
 
 			/* keep looping over remaining tokens in FLAGS line until there's no more to read */
@@ -2596,6 +2640,11 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 		{
 			outinfo.track[trknum].swap = !motorola[trknum];
 		}
+		else
+		{
+			/* Discpress: and never data, which isn't samples (0.289 swapped a data track that opens a MOTOROLA file) */
+			outinfo.track[trknum].swap = false;
+		}
 
 		const bool sameasprev = trknum > 0 && outinfo.track[trknum].fname.compare(outinfo.track[trknum-1].fname) == 0;
 		const bool sameasnext = trknum + 1 < outtoc.numtrks && outinfo.track[trknum].fname.compare(outinfo.track[trknum+1].fname) == 0;
@@ -2620,9 +2669,10 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 		if (outinfo.track[trknum].offset != 0)
 			continue;
 
-		if (trknum+1 >= outtoc.numtrks && trknum > 0 && (outinfo.track[trknum].fname.compare(outinfo.track[trknum-1].fname) == 0))
+		if (sameasprev && !sameasnext)
 		{
 			/* if the last track's filename is the same as the previous track */
+			/* Discpress: or the last track in a file that another file follows (0.289 gave it the whole file) */
 			tlen = get_file_size(outinfo.track[trknum].fname);
 			if (tlen == 0)
 			{
@@ -2915,6 +2965,14 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 	char linebuffer[512];
 	memset(linebuffer, 0, sizeof(linebuffer));
 
+	// Discpress: a line that belongs to a track, before the first TRACK, wrote before the track table
+	auto const before_track = [&infile] (const char *what)
+	{
+		fclose(infile);
+		osd_printf_error("ERROR: %s before the first TRACK\n", what);
+		return std::error_condition(chd_file::error::INVALID_DATA);
+	};
+
 	while (!feof(infile))
 	{
 		/* get the next line */
@@ -2939,6 +2997,8 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 		*/
 		if (!strcmp(token, "NO"))
 		{
+			if (trknum < 0)
+				return before_track("NO");
 			TOKENIZE
 			if (!strcmp(token, "COPY"))
 				outtoc.tracks[trknum].control_flags &= ~CD_FLAG_CONTROL_DIGITAL_COPY_PERMITTED;
@@ -2947,23 +3007,33 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 		}
 		else if (!strcmp(token, "COPY"))
 		{
+			if (trknum < 0)
+				return before_track("COPY");
 			outtoc.tracks[trknum].control_flags |= CD_FLAG_CONTROL_DIGITAL_COPY_PERMITTED;
 		}
 		else if (!strcmp(token, "PRE_EMPHASIS"))
 		{
+			if (trknum < 0)
+				return before_track("PRE_EMPHASIS");
 			outtoc.tracks[trknum].control_flags |= CD_FLAG_CONTROL_PREEMPHASIS;
 		}
 		else if (!strcmp(token, "TWO_CHANNEL_AUDIO"))
 		{
+			if (trknum < 0)
+				return before_track("TWO_CHANNEL_AUDIO");
 			outtoc.tracks[trknum].control_flags &= ~CD_FLAG_CONTROL_4CH;
 		}
 		else if (!strcmp(token, "FOUR_CHANNEL_AUDIO"))
 		{
+			if (trknum < 0)
+				return before_track("FOUR_CHANNEL_AUDIO");
 			outtoc.tracks[trknum].control_flags |= CD_FLAG_CONTROL_4CH;
 		}
 		else if ((!strcmp(token, "DATAFILE")) || (!strcmp(token, "AUDIOFILE")) || (!strcmp(token, "FILE")))
 		{
 			int f;
+			if (trknum < 0)
+				return before_track(token);
 
 			/* found the data file for a track */
 			TOKENIZE
@@ -3073,6 +3143,8 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 		}
 		else if (!strcmp(token, "START"))
 		{
+			if (trknum < 0)
+				return before_track("START");
 			int frames;
 
 			/* get index */

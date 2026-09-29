@@ -48,6 +48,25 @@ test('on a slow network, the online version opens from its saved copy within sec
   expect(app.unexpectedErrors()).toEqual([]);
 });
 
+test('when the site answers with an error, the online version opens from its saved copy', async ({ page }, testInfo) => {
+  const app = new App(page, testInfo, false);
+  const id = 'fail-' + testInfo.project.name;
+  await app.open({ debug: { hosted: true } });
+  await page.goto(`/alt/${id}/discpress.html`);
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.reload(); // now under the service worker, which saves the page
+  await expect(page.locator('#chipEngine')).toContainText(/ready/i, { timeout: 60_000 });
+  expect(await page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
+  // from now on the server answers the page with 503 Service Unavailable
+  await page.request.get(`/__fail/${id}`);
+  const t0 = Date.now();
+  const res = await page.reload();
+  await expect(page.locator('#chipEngine')).toContainText(/ready/i, { timeout: 30_000 });
+  expect(res.status()).toBe(200);
+  expect(Date.now() - t0).toBeLessThan(3500); // at once, not after the slow network's wait
+  expect(app.unexpectedErrors()).toEqual([]);
+});
+
 test('a copy on another site without the service worker keeps its built-in icon and links no manifest', async ({ page }, testInfo) => {
   const app = new App(page, testInfo, false);
   await app.open({ debug: { hosted: true } });

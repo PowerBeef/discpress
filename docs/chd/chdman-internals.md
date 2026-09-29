@@ -187,7 +187,8 @@ Exit codes (all verified unless noted):
 | `verify` on an uncompressed CHD, or on a CHD with a null raw SHA-1 (e.g. an **interrupted `create*`**): `report_error(0, …)` → "Fatal error occurred: 0" | **0** |
 | `help`, no arguments, unknown command, bad option (`print_help` returns 1) | 1 |
 | `report_error(1, …)` (`fatal_error`), `std::error_condition` escaping ("CHD error occurred (main)"), `std::exception` ("Unhandled exception") | 1 |
-| Decompression error during verify/extract (hunk CRC-16 mismatch) | 1 |
+| Decompression error during verify/extract (hunk CRC-16 mismatch), except `extractcd` | 1 |
+| `extractcd` of a damaged hunk: `cdrom_file::read_data` returns false, which `do_extract_cd` ignores; the frame gets whatever the buffer held (0.289 too; the Discpress engine exits 1) | **0** |
 | `extractcd`/`copy` of a non-CD CHD: the `cdrom_file` constructor does `throw nullptr` (`cdrom.cpp:253-261`), which main does not catch → `std::terminate` | **134 (SIGABRT)** |
 | `createraw -us 0`, `createhd -ss 0` | **136 (SIGFPE)** |
 | Killed by signal (SIGTERM, or Ctrl-C in a terminal): partial file left behind, no cleanup | 128+n |

@@ -15,6 +15,11 @@ addToLibrary({
   wasm_par_active: function () {
     return Module['parActive'] ? 1 : 0;
   },
+  // results streamed into a folder the page hasn't written yet are over the limit: chdman pauses
+  // (at the same points) until the page catches up
+  wasm_out_full: function () {
+    return Module['outFull'] && Module['outFull']() ? 1 : 0;
+  },
   // extract and verify: helper workers decompress the hunks chdman is about to read
   // (chd_file::wasm_read_ahead); results come back through _wasm_rd_slot/_wasm_rd_done
   wasm_rd_enabled: function (chd, hunkbytes, unitbytes, comp) {

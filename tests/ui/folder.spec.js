@@ -1,10 +1,15 @@
 // Writing results straight into a folder (Settings → Where to keep results → a folder), with a fake
 // folder standing in for the File System Access API: like the browser's, writes go to a temporary
 // copy that close() makes the file and abort() throws away.
+import fs from 'node:fs';
+import path from 'node:path';
 import { test, expect, fixture } from '../support/app.js';
+import { FIXTURES } from '../support/paths.js';
+import { chdman, nativeChdman } from '../support/native.js';
 
-function fakeFolder() {
+function fakeFolder(delay = 0) {
   const files = new Map(); // name -> Uint8Array
+  window.__written = 0;
   const bytes = d => d instanceof Uint8Array ? d : d instanceof ArrayBuffer ? new Uint8Array(d) : new Uint8Array(d.buffer, d.byteOffset, d.byteLength);
   function fileHandle(name) {
     return {
@@ -22,7 +27,10 @@ function fakeFolder() {
           write(chunk) { put(at, chunk); at += bytes(chunk).length; },
           close() { files.set(name, buf); }
         });
-        ws.write = async a => { if (a && a.type === 'write') put(a.position, a.data); else { put(at, a); at += bytes(a).length; } };
+        ws.write = async a => {
+          if (delay) await new Promise(r => setTimeout(r, delay)); // a slow drive
+          if (a && a.type === 'write') { put(a.position, a.data); window.__written += bytes(a.data).length; } else { put(at, a); at += bytes(a).length; }
+        };
         ws.truncate = async size => { const n = new Uint8Array(size); n.set(buf.subarray(0, size)); buf = n; };
         ws.close = async () => { files.set(name, buf); };
         ws.abort = async () => { buf = null; };
@@ -99,3 +107,48 @@ test('a cancelled conversion leaves no new file behind', async ({ app, page }) =
   await app.waitState(card, 'canceled');
   await expect.poll(() => page.evaluate(() => [...window.__folder.keys()])).toEqual([]);
 });
+
+// A slow drive (a USB stick, a network share) used to leave everything chdman produced waiting in the
+// page's memory: a whole DVD's worth. The worker now pauses chdman while too much is unwritten (audit, batch 3).
+for (const threads of [1, 4]) {
+  test(`writing into a slow folder keeps little waiting in memory (${threads} thread${threads > 1 ? 's' : ''})`, async ({ app, page }) => {
+    test.skip(!nativeChdman(), 'needs native chdman to make the CHD');
+    // a 64 MB DVD image, stored uncompressed (quick to make and to read)
+    const dir = path.join(FIXTURES, 'gen');
+    fs.mkdirSync(dir, { recursive: true });
+    const size = 64 << 20;
+    if (!fs.existsSync(path.join(dir, 'big.chd'))) {
+      const iso = Buffer.alloc(size);
+      for (let i = 0; i < size; i += 2048) iso.writeUInt32LE(i, i); // no two sectors alike
+      fs.writeFileSync(path.join(dir, 'big.iso'), iso);
+      chdman(['createdvd', '-i', 'gen/big.iso', '-o', 'gen/big.chd', '-c', 'none', '-f']);
+    }
+    await page.addInitScript(fakeFolder, 25); // 25 ms per 1 MiB write: about 40 MB/s
+    // the bytes the page has received to write but not written yet, at most
+    await page.addInitScript(() => {
+      window.__received = 0; window.__maxWaiting = 0;
+      const W = window.Worker;
+      window.Worker = class extends W {
+        constructor(...a) {
+          super(...a);
+          this.addEventListener('message', e => {
+            if (e.data && e.data.type === 's-write') {
+              window.__received += e.data.data.byteLength;
+              window.__maxWaiting = Math.max(window.__maxWaiting, window.__received - window.__written);
+            }
+          });
+        }
+      };
+    });
+    await app.open({ settings: { storage: 'folder', rename: false, threads }, debug: { sinkMax: 2 << 20 } });
+    await app.add(['gen/big.chd']);
+    const card = app.job('big');
+    await app.settled(card);
+    await card.locator('.seg button', { hasText: 'Extract' }).click();
+    await app.run(card, { timeout: 60_000 });
+    expect(await page.evaluate(() => window.__folder.get('big.iso').length)).toBe(size);
+    // at most the 2 MiB limit, one 8 MiB step of chdman's, and what the worker sends when chdman ends
+    // (the file's first 8 MiB, kept for rewrites, and its last step): not the whole 64 MiB
+    expect(await page.evaluate(() => window.__maxWaiting)).toBeLessThan(32 << 20);
+  });
+}
