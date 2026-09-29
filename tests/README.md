@@ -25,6 +25,7 @@ does all of this when a session starts.
 | `npm run test:dev` | the same against a page assembled from the current `app/` and `db/` (with `build/`'s wasm, taken first from `dist/discpress.html` when that is newer and differs) |
 | `npx playwright test ui/convert.spec.js` | one file; add `-g "ps2"` to filter by test name |
 | `npx playwright test --project=iphone` | one project: `desktop`, `file-url`, `iphone`, `android`, `layout` |
+| `EXTRA_BROWSERS=1 npx playwright test --project=webkit` | real WebKit and Firefox too (`webkit`, `iphone-webkit`, `firefox`), once installed: `PLAYWRIGHT_BROWSERS_PATH=<dir> npx playwright install webkit firefox` and `npx playwright install-deps webkit firefox`, with Chromium linked into `<dir>` |
 | `npm run report` | open the HTML report of the last run (traces and screenshots of failures) |
 | `npm run bench -- --quick` | quick benchmark on the small fixtures (about 1.5 minutes) |
 | `npm run bench` | full benchmark on large generated images (300 MB CD, 1 GB DVD) |

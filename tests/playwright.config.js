@@ -38,5 +38,11 @@ export default defineConfig({
     { name: 'iphone', use: iPhone, testMatch: /(smoke|mobile|hosted)\.spec/ },
     { name: 'android', use: pixel, testMatch: /(smoke|mobile|hosted)\.spec/ },
     { name: 'layout', use: { ...devices['Desktop Chrome'] }, testMatch: /layout\.spec/ },
+    // Real WebKit (Safari's engine) and Firefox, when installed: EXTRA_BROWSERS=1 (tests/README.md)
+    ...(process.env.EXTRA_BROWSERS ? [
+      { name: 'webkit', use: { ...devices['Desktop Safari'] }, testIgnore: /(layout|mobile)\.spec/ },
+      { name: 'iphone-webkit', use: { ...devices['iPhone 13'] }, testMatch: /(smoke|mobile|hosted)\.spec/ },
+      { name: 'firefox', use: { ...devices['Desktop Firefox'] }, testIgnore: /(layout|mobile)\.spec/ },
+    ] : []),
   ],
 });
