@@ -1,18 +1,22 @@
-# The hosted copy (GitHub Pages)
+# The online version (GitHub Pages)
 
-iOS Safari can't run a local HTML file, so iPhone and iPad users run Discpress from
-https://powerbeef.github.io/discpress/ (see `docs/ios/README.md`). There, results of any size download
-into Files → Downloads, and the page can be added to the Home Screen and used offline.
+https://powerbeef.github.io/discpress/ is Discpress for people who don't want to download the HTML file,
+and the way to convert big games on iPhone and iPad: iOS Safari can't run a local HTML file, and apps that
+can usually can't save results over 512 MB (see `docs/ios/README.md`). In Safari, results of any size
+download into Files → Downloads. In any browser, the page can be installed (Add to Home Screen, or Chrome
+and Edge's install button) and used offline.
 
 The Release workflow (`.github/workflows/release.yml`, job `pages`) publishes, for each release:
 
 - `index.html`: the release's `dist/discpress.html`, byte for byte, and `discpress.html.sha256`, its SHA-256
   (the same file is attached to the release, so anyone can compare the two);
 - the files here: `sw.js` (keeps the page available offline: network first, so updates arrive on the next
-  visit), `manifest.webmanifest` and the icons.
+  visit, but a saved copy answers after 4 s on a slow network), `manifest.webmanifest` and the icons.
 
-The page adds the manifest link, the PNG touch icon and the service worker itself, and only when it is served
-over https, so the single file stays the same everywhere and works unchanged from disk. Its
+The page registers the service worker itself, and only when it is served over https; once that succeeds it
+adds the manifest link and the PNG touch icon. So the single file stays the same everywhere, works unchanged
+from disk, and a copy put on another site without these files keeps its built-in icon. Browsers without
+service workers (private windows in some, app web views) simply get the page without offline use. Its
 Content-Security-Policy (`connect-src 'none'`) still forbids it any network connection; the service worker
 fetches only this site's own files.
 

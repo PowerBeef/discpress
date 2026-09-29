@@ -109,7 +109,27 @@ test('on iPhone, a result too large for the share sheet is downloaded without it
   expect(await page.evaluate(() => window.__shared)).toBe(0);
 });
 
-test('inside an iOS app web view, a notice points big games to Discpress in Safari', async ({ browser }, testInfo) => {
+test('opened from the Home Screen, a large result downloads and says to use Safari if nothing happens', async ({ page }, testInfo) => {
+  test.skip(!/iphone/.test(testInfo.project.name), 'iOS only');
+  // iOS may not start downloads in a home-screen web app (docs/ios/hosting.md)
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'standalone', { get: () => true });
+    navigator.canShare = () => true;
+    navigator.share = () => Promise.resolve();
+  });
+  const app = new App(page, testInfo, false);
+  await app.open({ debug: { shareMax: 64 << 10 } });
+  await expect(page.locator('#iosTip')).toBeHidden();
+  await app.add(fixture('ps1-single').add);
+  const card = app.job('twine');
+  await app.settled(card);
+  await app.run(card);
+  const out = card.locator('.result .out');
+  await expect(out.locator('button')).toHaveText(/^\s*Download\s*$/);
+  await expect(out).toContainText('if nothing happens, open powerbeef.github.io/discpress in Safari itself');
+});
+
+test('inside an iOS app web view, a notice points big games to Discpress online in Safari', async ({ browser }, testInfo) => {
   test.skip(!/iphone/.test(testInfo.project.name), 'iOS only');
   const base = testInfo.project.use;
   const ctx = await browser.newContext({ ...base, userAgent: base.userAgent.replace(/ Safari\/[\d.]+/, '') });

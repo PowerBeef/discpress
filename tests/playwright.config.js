@@ -35,8 +35,8 @@ export default defineConfig({
   projects: [
     { name: 'desktop', use: { ...devices['Desktop Chrome'] }, testIgnore: /(layout|mobile)\.spec/ },
     { name: 'file-url', use: { ...devices['Desktop Chrome'], fileUrl: true }, testMatch: /smoke\.spec/ },
-    { name: 'iphone', use: iPhone, testMatch: /(smoke|mobile)\.spec/ },
-    { name: 'android', use: pixel, testMatch: /(smoke|mobile)\.spec/ },
+    { name: 'iphone', use: iPhone, testMatch: /(smoke|mobile|hosted)\.spec/ },
+    { name: 'android', use: pixel, testMatch: /(smoke|mobile|hosted)\.spec/ },
     { name: 'layout', use: { ...devices['Desktop Chrome'] }, testMatch: /layout\.spec/ },
   ],
 });

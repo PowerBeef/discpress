@@ -74,7 +74,7 @@ A page can't tell in advance whether downloads work; the best hint is an iOS use
 - `release.yml` has a `pages` job that publishes the release file as `index.html` at https://powerbeef.github.io/discpress/, next to `web/` (`sw.js`, `manifest.webmanifest`, icons) and `discpress.html.sha256`, which the release also carries.
 - The page adds the manifest, the PNG touch icon and the service worker only when served over https, so the file stays the same everywhere.
 - The Content-Security-Policy with `connect-src 'none'` is in `app/index.html`.
-- In an iPhone/iPad app's web view, a notice (`#iosTip`) points big games to the hosted copy.
+- In an iPhone/iPad app's web view, a notice (`#iosTip`) points big games to the online version.
 - README and Help send iPhone users to Safari.
 - Tests: `tests/ui/hosted.spec.js`, `tests/ui/mobile.spec.js`.
 - **One-time setup left:** Settings → Pages → Source: GitHub Actions.

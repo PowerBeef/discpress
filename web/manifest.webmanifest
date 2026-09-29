@@ -1,7 +1,7 @@
 {
   "name": "Discpress",
   "short_name": "Discpress",
-  "description": "Turns your game disc images into compact CHD files and back, entirely on your device.",
+  "description": "Turns your game disc images into compact CHD files and back, entirely on your device. Nothing to download, and big files on iPhone and iPad.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
