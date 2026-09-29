@@ -8,14 +8,16 @@ var SYSTEMS = {
   '3do': ['3DO', '3DO Interactive Multiplayer'], cdi: ['CD-i', 'Philips CD-i'], cd32: ['CD32', 'Amiga CD32'],
   cdtv: ['CDTV', 'Commodore CDTV'], jagcd: ['JAG', 'Atari Jaguar CD'], naomi: ['NAOMI', 'Sega NAOMI (GD-ROM)'],
   naomi2: ['NAOMI2', 'Sega NAOMI 2 (GD-ROM)'], pc98: ['PC-98', 'NEC PC-98'], gc: ['GC', 'Nintendo GameCube'],
-  wii: ['Wii', 'Nintendo Wii'], pc: ['DATA', 'Data disc (PC or unknown system)']
+  wii: ['Wii', 'Nintendo Wii'], xbox: ['XBOX', 'Microsoft Xbox or Xbox 360'], ps3: ['PS3', 'Sony PlayStation 3'],
+  pc: ['DATA', 'Data disc (PC or unknown system)']
 };
 var SYS_COLORS = {
   ps1: ['#c8c8d4', '#1c1733'], ps2: ['#2f5bd3', '#ffffff'], psp: ['#26262e', '#ffffff'], saturn: ['#4a4f63', '#ffffff'],
   segacd: ['#1f4ea8', '#ffffff'], dc: ['#ff7a1a', '#1c1733'], pcecd: ['#f1ead6', '#1c1733'], pcfx: ['#3a3a44', '#ffffff'],
   ngcd: ['#d9b23a', '#1c1733'], '3do': ['#b01e2f', '#ffffff'], cdi: ['#1c6fb8', '#ffffff'], cd32: ['#e11d48', '#ffffff'],
   cdtv: ['#33333d', '#ffffff'], jagcd: ['#d62828', '#ffffff'], naomi: ['#6a4fb8', '#ffffff'], naomi2: ['#6a4fb8', '#ffffff'],
-  pc98: ['#5b6b7a', '#ffffff'], gc: ['#6a4fb8', '#ffffff'], wii: ['#dfe6ea', '#1c1733']
+  pc98: ['#5b6b7a', '#ffffff'], gc: ['#6a4fb8', '#ffffff'], wii: ['#dfe6ea', '#1c1733'], xbox: ['#107c10', '#ffffff'],
+  ps3: ['#26262e', '#ffffff']
 };
 function sysColor(s) { return SYS_COLORS[s] || null; }
 function sysShort(s) { return SYSTEMS[s] ? SYSTEMS[s][0] : ''; }
@@ -291,6 +293,18 @@ function psSerial(path) {
 function sameSys(a, b) { return a === b || (/^naomi2?$/.test(a) && /^naomi2?$/.test(b)); }
 
 /* ---------- console detection from the first sectors of a data track ---------- */
+// Xbox and Xbox 360 game partitions (XDVDFS): the volume descriptor is sector 32 of the partition,
+// which starts at the image's beginning (an extracted "XISO") or, in a full dump, after the
+// disc's video partition: at 0x18300000 (XGD1, Xbox), 0xFD90000 (XGD2) or 0x2080000 (XGD3)
+var XDVDFS_AT = [0, 0x18300000 / 2048, 0xFD90000 / 2048, 0x2080000 / 2048];
+async function detectXbox(rd) {
+  for (var i = 0; i < XDVDFS_AT.length; i++) {
+    var b = null;
+    try { b = await rd.read(XDVDFS_AT[i] + 32); } catch (e) { /* past the end */ }
+    if (b && asc(b, 0, 20) === 'MICROSOFT*XBOX*MEDIA' && asc(b, 0x7EC, 20) === 'MICROSOFT*XBOX*MEDIA') return { sys: 'xbox' };
+  }
+  return null;
+}
 async function detectTrack(rd) {
   var s0 = await rd.read(0);
   if (!s0) return null;
@@ -342,10 +356,23 @@ async function detectTrack(rd) {
       if (b1) return { sys: 'ps1', serial: psSerial(b1[1].trim()) || (exe ? psSerial(exe) : ''), title: volId };
     }
     if (/PLAYSTATION/i.test(sysId)) return { sys: 'ps1', serial: exe ? psSerial(exe) : '', title: volId };
+    if (files.has('PS3_DISC.SFB') || files.has('PS3_GAME')) {
+      var r3 = { sys: 'ps3', title: volId };
+      try {
+        var g3 = files.get('PS3_GAME'), sub3 = g3 ? await isoDir(rd, g3.lba, g3.size) : new Map();
+        if (sub3.has('PARAM.SFO')) {
+          var sfo3 = parseSfo(await isoFile(rd, sub3.get('PARAM.SFO'), 8192));
+          if (sfo3.TITLE) r3.title = sfo3.TITLE;
+          if (sfo3.TITLE_ID) r3.serial = sfo3.TITLE_ID.slice(0, 4) + '-' + sfo3.TITLE_ID.slice(4);
+        }
+      } catch (e) { /* ignore */ }
+      return r3;
+    }
     if (files.has('IPL.TXT')) return { sys: 'ngcd', title: volId };
     if (/CDTV/i.test(sysId)) return { sys: 'cdtv', title: volId };
     if (files.has('CD32.TM') || /CD32/i.test(sysId)) return { sys: 'cd32', title: volId };
-    return { sys: 'pc', title: volId, weak: true };
+    // a full Xbox dump starts with a video partition, which reads as ISO 9660
+    return (await detectXbox(rd)) || { sys: 'pc', title: volId, weak: true };
   }
   // PC Engine / PC-FX boot sectors
   for (var l = 0; l < 16; l++) {
@@ -354,7 +381,7 @@ async function detectTrack(rd) {
     if (asc(b, 0x20, 23) === 'PC Engine CD-ROM SYSTEM') return { sys: 'pcecd' };
     if (asc(b, 0, 15) === 'PC-FX:Hu_CD-ROM') return { sys: 'pcfx' };
   }
-  return null;
+  return detectXbox(rd);
 }
 
 /* ---------- describing what to look at for each job ---------- */

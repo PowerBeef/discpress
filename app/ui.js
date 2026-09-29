@@ -83,7 +83,7 @@ var HOSTED_URL = 'https://powerbeef.github.io/discpress/';
 var iosThreadCap = isIOS && !(/iPad/.test(navigator.userAgent) || navigator.platform === 'MacIntel') ? 4 : 0;
 var maxThreads = Math.min(cores, 16);
 // threads: 'auto' (measured per device, see Tuning) or a fixed number of compression threads
-var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false, notify: false };
+var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false, notify: false, ps2dvd: 'dvd' };
 var outDir = null; // folder picked for direct writing (not persisted)
 try {
   var saved = JSON.parse(localStorage.getItem('chdman-web-settings') || '{}');
@@ -1008,13 +1008,17 @@ function applyIdent(job, starting) {
   // pick the right CHD flavour for the system
   if ((job.src === 'iso' || job.src === 'cso' || (job.src === 'bin' && job.choices)) && !job.discEdited) {
     // the system settles the type (unless the user picked one) (the "Create as" choice then moves into Options)
-    var bySystem = true;
-    if (id.sys === 'psp') { job.disc = 'dvd'; if (!job.hunkEdited) job.opts.hunk = '2048'; }
-    else if (id.sys === 'ps2') {
+    var bySystem = true, pf = profile(id.sys);
+    if (id.sys === 'ps2') {
       var cdGame = id.entry ? id.entry.ext === 'bin' : (job.isoSize || job.files[0].file.size) < 800 * 1048576;
-      job.disc = cdGame ? 'cd' : 'dvd';
-    } else if (id.sys === 'gc' || id.sys === 'wii' || id.sys === 'pc') bySystem = false;
-    else job.disc = 'cd';
+      job.ps2dvd = !cdGame;
+      // AetherSX2 and NetherSX2 (Android) read CD CHDs only (Settings)
+      job.disc = cdGame || settings.ps2dvd === 'cd' ? 'cd' : 'dvd';
+    } else if (pf.keep) bySystem = false;
+    else {
+      job.disc = pf.disc || 'cd';
+      if (pf.hunk && !job.hunkEdited) job.opts.hunk = pf.hunk;
+    }
     if (job.choices && job.choices.indexOf(job.disc) < 0) { job.disc = job.choices[0]; bySystem = false; }
     if (!(HUNKS[job.disc] || []).some(function (h) { return h[0] === job.opts.hunk; })) job.opts.hunk = '';
     job.discBySystem = bySystem;
@@ -1032,7 +1036,7 @@ function renameOutputs(job) {
   var to = outBase(job);
   if (from === to) return;
   job.outputs.forEach(function (o) { if (o.name.indexOf(from + '.') === 0) o.name = to + o.name.slice(from.length); });
-  if (job.state === 'done') Recovery.finished(job);
+  if (job.state === 'done') { Recovery.finished(job); refreshDiscSets(); }
 }
 function identNote(job) {
   if (job.identState === 'pending' || job.identState === 'running') {
@@ -1082,7 +1086,7 @@ function identNote(job) {
     box.append(chk);
   }
   if (damage) box.append(el('div', { class: 'small ident-damaged', style: 'margin-top:4px;color:var(--warn)' }, damage));
-  if (id.sys === 'gc' || id.sys === 'wii') box.append(el('div', { class: 'small', style: 'margin-top:4px' }, 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.'));
+  if (profile(id.sys).note) box.append(el('div', { class: 'small ident-note', style: 'margin-top:4px' }, profile(id.sys).note));
   return box;
 }
 function safeName(s) { return String(s || '').replace(/[\/:*?"<>|]+/g, '_').trim(); }
@@ -1092,6 +1096,7 @@ function safeName(s) { return String(s || '').replace(/[\/:*?"<>|]+/g, '_').trim
    ============================================================ */
 var jobs = [];
 var looseFiles = [];      // files not claimed by any job yet
+var looseSbi = [];        // .sbi files (PS1 LibCrypt data) waiting for their game's job
 var seen = new Set();     // dedupe (name+size+mtime)
 // the path counts: generic track names (every GDI has track01.bin) can match in name, size and date,
 // on FAT/exFAT cards especially, across the games of one folder
@@ -1120,6 +1125,27 @@ var HUNKS = {
   raw: [['4096', '4,096 bytes'], ['2048', '2,048 bytes'], ['8192', '8,192 bytes'], ['16384', '16,384 bytes']],
   ld: [['', 'Automatic']]
 };
+// what the emulators of each system need (docs/chd/ecosystem-*.md). The type and hunk size are set
+// from it when a game is identified (applyIdent); compression never changes by itself.
+// disc/hunk: the CHD to make from an .iso; why: shown under "Create as"; noZstd: its readers that
+// can't decode Zstandard (the Zstd preset warns); hint: added to the compression hint;
+// note: shown with the game (emulators that won't load it)
+var PROFILES = {
+  psp: { disc: 'dvd', hunk: '2048', why: 'PPSSPP recommends DVD CHDs with 2,048-byte hunks.' },
+  saturn: { noZstd: 'Kronos and Yabause' },
+  segacd: { noZstd: 'BlastEm (RetroArch)' },
+  pcecd: { noZstd: 'Beetle SuperGrafx' },
+  '3do': { noZstd: 'Opera (RetroArch)' },
+  cd32: { noZstd: 'WinUAE' },
+  cdtv: { noZstd: 'WinUAE' },
+  jagcd: { note: 'Jaguar CD emulators may not load this CHD: BigPEmu doesn\u2019t take CHDs, and Virtual Jaguar (RetroArch) needs session data that chdman 0.289 doesn\u2019t write. Keep the original files too.' },
+  pc: { keep: true, hint: 'DOSBox Pure opens only uncompressed CHDs (No compression).' },
+  gc: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },
+  wii: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },
+  xbox: { keep: true, note: 'Xbox emulators (xemu, Xenia) do not load CHDs. They use the ISO itself.' },
+  ps3: { keep: true, note: 'RPCS3 does not load CHDs. It uses the ISO or the game\u2019s folder.' }
+};
+function profile(sys) { return PROFILES[sys] || {}; }
 
 function newJob(props) {
   var job = Object.assign({
@@ -1159,7 +1185,7 @@ function refMatches(e, ref) {
 function fileKind(f) { return f.ecm ? (ext(f.name) ? ext(f.name) + '.' : '') + 'ecm' : ext(f.name); }
 
 /* ---------- grouping new files into jobs ---------- */
-var IGNORE = /^(txt|nfo|sbi|sub|m3u|dat|md5|sfv|sha1|jpg|jpeg|png|gif|webp|pdf|url|ini|cfg|xml|json|html|htm|db|ds_store|zip|7z|rar)$/;
+var IGNORE = /^(txt|nfo|sub|m3u|dat|md5|sfv|sha1|jpg|jpeg|png|gif|webp|pdf|url|ini|cfg|xml|json|html|htm|db|ds_store|zip|7z|rar)$/;
 
 // adds run one after another: a second pick or drop while the first still reads its files (slow
 // cloud files) would otherwise work from a list of jobs that is about to change
@@ -1281,6 +1307,9 @@ async function addEntriesNow(entries) {
       } else {
         job2 = newJob({ kind: 'create', src: 'img', lone: true, title: t, files: [{ file: file, name: name }], disc: x === 'raw' || x === 'bin' ? 'raw' : 'hd', choices: ['hd', 'raw', 'dvd'] });
       }
+    } else if (x === 'sbi') {
+      looseSbi.push(e); // paired with its game below
+      continue;
     } else if (IGNORE.test(x) || name.charAt(0) === '.') {
       ignored.push(name);
       continue;
@@ -1294,6 +1323,14 @@ async function addEntriesNow(entries) {
     created.push(job2);
   }
 
+  // a PS1 disc's LibCrypt data (.sbi) goes next to its CHD, named after it: emulators look for
+  // it by name (DuckStation, Beetle PSX, SwanStation, PCSX ReARMed, MiSTer)
+  looseSbi = looseSbi.filter(function (e) {
+    var job = sbiJob(e, created.concat(jobs));
+    if (job) { job.sbi = { file: e.file, name: base(e.path) }; if (job.el && created.indexOf(job) < 0) refreshJob(job, true); return false; }
+    if (fresh.indexOf(e) >= 0) ignored.push(base(e.path));
+    return true;
+  });
   created.forEach(function (job) {
     if (job.kind === 'create' && !job.missing.length) finalizeCreateJob(job);
     renderJob(job, true);
@@ -1312,6 +1349,21 @@ async function addEntriesNow(entries) {
   } else if (ignored.length) {
     toast('Nothing to convert in ' + plural(ignored.length, 'file') + '. Add .cue/.bin, .gdi, .iso or .chd files.', 'err');
   }
+}
+
+// the job an .sbi file belongs to: a CD job not started yet whose cue sheet, image or title has its
+// name ("Game (Europe).sbi" beside "Game (Europe).cue"), in the same folder if one is
+function sbiJob(e, list) {
+  var want = stem(e.path).toLowerCase(), dir = dirOf(e.path);
+  var cands = list.filter(function (j) {
+    if (j.kind !== 'create' || j.sbi || j.disc === 'dvd' || (j.state !== 'ready' && j.state !== 'blocked' && j.state !== 'probing')) return false;
+    var names = [j.title, j.descName ? stem(j.descName) : ''].concat(j.files.map(function (f) { return stem(f.name); }));
+    return names.some(function (n) { return n && n.toLowerCase() === want; });
+  });
+  var same = cands.filter(function (j) {
+    return (j.descDir != null ? j.descDir : dirOf((j.files[0] && j.files[0].path) || '')) === dir;
+  });
+  return (same.length ? same : cands)[0] || null;
 }
 
 async function descriptorJob(d, pool, claimed) {
@@ -1711,12 +1763,20 @@ function renderControls(job) {
     var presets = PRESETS[disc === 'cd' || disc === 'gdrom' ? 'cd' : disc === 'ld' ? 'ld' : 'other'];
     var fields = el('div', { class: 'fields' });
     if (discChoices && job.discBySystem) {
-      fields.append(selectField('Create as', discChoices, job.disc, pickDisc,
-        (job.ident.sys === 'ps2' ? 'This ' + sysName('ps2') + ' game is on a ' + KIND[job.disc].label + ', so it becomes a ' + KIND[job.disc].label + ' CHD.'
-          : sysName(job.ident.sys) + ' games become ' + KIND[job.disc].label + ' CHDs.') + ' Change this only if you know you need the other type.', busy));
+      var sys = job.ident.sys, why;
+      if (sys === 'ps2' && job.ps2dvd && job.disc === 'cd' && settings.ps2dvd === 'cd') why = 'This ' + sysName('ps2') + ' game is on a DVD. It becomes a CD CHD, for AetherSX2 and NetherSX2 (Settings).';
+      else if (sys === 'ps2') why = 'This ' + sysName('ps2') + ' game is on a ' + KIND[job.ps2dvd ? 'dvd' : 'cd'].label + ', so it becomes a ' + KIND[job.disc].label + ' CHD.';
+      else why = profile(sys).why || sysName(sys) + ' games become ' + KIND[job.disc].label + ' CHDs.';
+      fields.append(selectField('Create as', discChoices, job.disc, pickDisc, why + ' Change this only if you know you need the other type.', busy));
     }
     var cur = presets.find(function (p) { return p[0] === o.preset; }) || presets[0];
-    fields.append(selectField('Compression', presets.map(function (p) { return [p[0], p[1]]; }), o.preset, function (v) { o.preset = v; refresh(); }, cur[3], busy));
+    var pfc = profile(job.ident && job.ident.sys), chint = cur[3];
+    if (cur[0] === 'zstd' && pfc.noZstd) chint += ' ' + pfc.noZstd + ' can\u2019t read Zstd CHDs of ' + sysName(job.ident.sys) + ' games.';
+    if (pfc.hint && cur[0] !== 'none') chint += ' ' + pfc.hint;
+    var zwarn = cur[0] === 'zstd' && pfc.noZstd;
+    var cfield = selectField('Compression', presets.map(function (p) { return [p[0], p[1]]; }), o.preset, function (v) { o.preset = v; refresh(); }, chint, busy);
+    if (zwarn) cfield.lastChild.style.color = 'var(--warn)';
+    fields.append(cfield);
     var hunks = HUNKS[disc] || [['', 'Automatic']];
     if (hunks.length > 1) fields.append(selectField('Hunk size', hunks, o.hunk || hunks[0][0], function (v) { o.hunk = v; job.hunkEdited = true; soft(); }, disc === 'dvd' ? 'Use 2,048 for PSP games.' : null, busy));
     if (disc === 'raw') fields.append(textField('Unit size (bytes)', o.unit, function (v) { o.unit = v.replace(/[^0-9]/g, ''); soft(); }, { inputmode: 'numeric', disabled: busy }));
@@ -1725,6 +1785,7 @@ function renderControls(job) {
     if (job.ui.optsOpen) det.open = true;
     det.addEventListener('toggle', function () { job.ui.optsOpen = det.open; });
     box.append(det);
+    if (job.sbi) box.append(el('p', { class: 'small muted sbi-note', style: 'margin:0' }, 'Its LibCrypt data (' + job.sbi.name + ') is saved with the CHD, under the CHD\u2019s name.'));
     if (job.disc === 'dvd' && (job.src === 'iso' || job.src === 'cso') && !(job.ident && job.ident.sys && job.ident.sys !== 'pc')) {
       box.append(el('p', { class: 'small muted', style: 'margin:0' }, 'Use DVD for PS2 DVD games and PSP. Choose CD for CD-based games stored as .iso.'));
     }
@@ -1819,7 +1880,63 @@ function renderResult(job) {
       if (window.showDirectoryPicker) row.append(el('button', { class: 'btn sm', onclick: function () { saveToFolder([job]); } }, icon('i-folder'), 'Save to folder'));
       box.append(row);
     }
+    var set = discSet(job);
+    if (set && set.discs[0].job === job) box.append(playlistRow(set));
   }
+}
+
+/* ---------- playlists for multi-disc games ---------- */
+// Redump names a game's discs "Name (Region) (Disc 1)": when two or more of them are converted, the
+// first disc's card offers an .m3u listing the CHDs, which RetroArch, DuckStation, ES-DE and
+// Batocera use to swap discs. It is made when saved, from the names the CHDs have then.
+var DISC_RE = /^(.*?) \((?:Disc|Disk) (\d+)(?: of \d+)?\)(.*)\.chd$/i;
+function discOf(job) {
+  if (job.kind !== 'create' || job.state !== 'done' || !job.outputs[0]) return null;
+  var m = DISC_RE.exec(job.outputs[0].name);
+  return m ? { key: (m[1] + m[3]).toLowerCase(), name: (m[1] + m[3]).trim(), n: +m[2], job: job } : null;
+}
+function discSet(job) {
+  var me = discOf(job);
+  if (!me) return null;
+  var discs = [], nums = new Set();
+  jobs.forEach(function (j) {
+    var d = discOf(j);
+    if (d && d.key === me.key && !nums.has(d.n)) { nums.add(d.n); discs.push(d); }
+  });
+  if (discs.length < 2) return null;
+  discs.sort(function (a, b) { return a.n - b.n; });
+  return { name: me.name, discs: discs };
+}
+function playlistRow(set) {
+  var name = set.name + '.m3u', inFolder = set.discs.every(function (d) { return d.job.outputs[0].kind === 'disk'; });
+  var text = function () { return set.discs.map(function (d) { return d.job.outputs[0].name; }).join('\n') + '\n'; };
+  var btn = el('button', { class: 'btn sm', onclick: async function () {
+    var blob = new Blob([text()], { type: 'audio/x-mpegurl' });
+    if (inFolder && outDir) {
+      try {
+        if (!(await confirmReplace(outDir, [name]))) return;
+        var w = await (await outDir.getFileHandle(name, { create: true })).createWritable();
+        await w.write(blob); await w.close();
+        toast('Saved ' + name + ' in ' + outDir.name + '.');
+      } catch (e) { toast('Could not save the playlist: ' + e.message, 'err'); }
+      return;
+    }
+    var f = new File([blob], name, { type: blob.type });
+    if (useShareSheet && navigator.canShare({ files: [f] })) {
+      try { await navigator.share({ files: [f] }); } catch (e) { /* closed */ }
+      return;
+    }
+    var url = URL.createObjectURL(f), a = el('a', { href: url, download: name, style: 'display:none' });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+  } }, icon(useShareSheet ? 'i-share' : inFolder ? 'i-folder' : 'i-download'), 'Playlist (.m3u)');
+  return el('div', { class: 'note playlist' }, el('div', null, el('b', null, 'A game on ' + set.discs.length + ' discs. '),
+    'Emulators swap discs through a playlist: keep ' + name + ' in the same folder as the CHDs, and open it instead of Disc 1.'),
+    el('div', { class: 'row end', style: 'margin-top:6px' }, btn));
+}
+// a disc finishing, renamed or removed changes its game's playlist, shown on the first disc's card
+function refreshDiscSets() {
+  jobs.forEach(function (j) { if (j.kind === 'create' && j.state === 'done' && j.ui) renderResult(j); });
 }
 
 function outputRow(job, out) {
@@ -1967,8 +2084,10 @@ function removeJob(job, silent, keepFiles) {
   if (!keepFiles) {
     job.files.forEach(function (f) { forgetFile(f.file); });
     if (job.descFile) forgetFile(job.descFile);
+    if (job.sbi) forgetFile(job.sbi.file);
   }
   jobs.forEach(function (o) { if (o.parentJob === job) { o.parentJob = null; refreshJob(o); } });
+  if (job.state === 'done') refreshDiscSets();
   updateDock();
   updateTabCount();
 }
@@ -1982,6 +2101,7 @@ async function pump() {
   finally {
     current = null;
     job.run = null;
+    if (job.state === 'done') refreshDiscSets();
     if (!queue.length) {
       releaseWake();
       document.title = 'Discpress';
@@ -2037,7 +2157,8 @@ async function runJobNow(job) {
   var spec = buildJob(job);
   if (settings.storage === 'folder' && outDir && (spec.rename || spec.outMode === 'stream')) {
     var oi = spec.args.indexOf('-o'), main = spec.rename ? outBase(job) + '.chd' : oi >= 0 ? spec.args[oi + 1].replace(/^.*\//, '') : '';
-    if (main && !(await confirmReplace(outDir, [main]))) { job.state = 'canceled'; refreshJob(job, true); return; }
+    var sideNames = !spec.rename && job.kind === 'create' && job.sbi ? [outBase(job) + '.sbi'] : [];
+    if (main && !(await confirmReplace(outDir, [main].concat(sideNames)))) { job.state = 'canceled'; refreshJob(job, true); return; }
     if (job.aborted) { job.state = 'canceled'; if (jobs.indexOf(job) >= 0) refreshJob(job, true); return; }
   }
   if (spec.rename) {
@@ -2127,6 +2248,7 @@ async function runJobNow(job) {
         return ea - eb || a.name.localeCompare(b.name, undefined, { numeric: true });
       });
       if (job.kind === 'chd' && job.action === 'info') job.lastInfo = parseInfo(job.log);
+      if (job.kind === 'create' && job.sbi) await addSbi(job, spec);
       if (job.identState === 'done') renameOutputs(job); // the checksum finished while converting
       Recovery.finished(job);
     } else {
@@ -2147,6 +2269,21 @@ async function runJobNow(job) {
     Store.removeJob(job.id);
   }
   refreshJob(job, true);
+}
+
+// the job's .sbi file, as a result named after its CHD: written into the folder with the CHD, or
+// given as the user's own file (nothing to store)
+async function addSbi(job, spec) {
+  var nm = outBase(job) + '.sbi', f = job.sbi.file;
+  if (spec.outMode === 'stream' && outDir) {
+    try {
+      var w = await (await outDir.getFileHandle(nm, { create: true })).createWritable();
+      await f.stream().pipeTo(w);
+      job.outputs.push({ name: nm, size: f.size, kind: 'disk' });
+    } catch (e) { appendLog(job, 'The .sbi file could not be written into the folder: ' + e.message); toast('The .sbi file could not be written into the folder.', 'err'); }
+  } else {
+    job.outputs.push({ name: nm, size: f.size, kind: 'blob', blob: f, input: true });
+  }
 }
 
 /* ---------- comparing a CHD with Redump ---------- */
@@ -3115,6 +3252,17 @@ function init() {
     jobs.forEach(function (j) {
       if (j.state === 'running' || j.state === 'queued' || j.state === 'done' || j.outEdited) return;
       j.opts.out = settings.rename && j.ident && j.ident.name ? j.ident.name : j.title;
+      refreshJob(j, true);
+    });
+  });
+  $('#setPs2Dvd').value = settings.ps2dvd === 'cd' ? 'cd' : 'dvd';
+  $('#setPs2Dvd').addEventListener('change', function (e) {
+    settings.ps2dvd = e.target.value; saveSettings();
+    // jobs not started yet follow it (unless their type was picked by hand)
+    jobs.forEach(function (j) {
+      if (j.kind !== 'create' || !j.ident || j.ident.sys !== 'ps2' || !j.ps2dvd || j.discEdited) return;
+      if (j.state !== 'ready') return;
+      applyIdent(j);
       refreshJob(j, true);
     });
   });

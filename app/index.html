@@ -173,6 +173,10 @@
     <div class="field"><label class="check"><input type="checkbox" id="setKeepCue"> Keep the cue sheet in CD CHDs</label>
       <span class="hint">Extracting as Redump then gives back the very same cue sheet, with what CHDs don't otherwise keep (CATALOG, FLAGS, ISRC, extra indexes). The CHD's checksums stay the same and emulators ignore the sheet, but the file is no longer byte for byte desktop chdman's.</span>
     </div>
+    <label class="field"><span>PlayStation 2 DVD games</span>
+      <select id="setPs2Dvd"><option value="dvd">DVD CHDs (PCSX2 and most emulators)</option><option value="cd">CD CHDs (for AetherSX2 and NetherSX2 on Android)</option></select>
+      <span class="hint">AetherSX2 and NetherSX2 can’t read DVD CHDs. Games on CD always become CD CHDs.</span>
+    </label>
     <label class="check"><input type="checkbox" id="setWake"> Keep the screen awake while working</label>
     <label class="check" id="notifyRow" hidden><input type="checkbox" id="setNotify"> Notify me when all jobs are done while this page is in the background</label>
     <label class="field"><span>Appearance</span>
