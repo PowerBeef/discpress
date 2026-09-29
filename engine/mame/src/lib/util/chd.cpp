@@ -2209,6 +2209,10 @@ std::error_condition chd_file::compress_v5_map()
 		// for COMPRESSION_PARENT: parentbits
 		// the overall size is clamped later with bitbuf.flush()
 		int nbits_needed = (8*16) + (12 + std::max<int>({lengthbits+16, selfbits, parentbits}))*m_hunkcount;
+		// Discpress: plus the tree, at most 8 bits for each of the 16 codes. 0.289 left it out, which only
+		// matters for a few hunks: then the map overflowed, was cut short, and the CHD couldn't be read.
+		// Where 0.289's map fit, it is the same; the size of the buffer doesn't change what goes into it.
+		nbits_needed += 16 * 8;
 		std::vector<uint8_t> compressed(nbits_needed / 8 + 1);
 		bitstream_out bitbuf(&compressed[16], compressed.size() - 16);
 
@@ -2291,7 +2295,8 @@ std::error_condition chd_file::compress_v5_map()
 
 		// write the map header
 		uint32_t complen = bitbuf.flush();
-		assert(!bitbuf.overflow());
+		if (bitbuf.overflow()) // Discpress: an error, not a truncated map (and a read past the buffer)
+			throw std::error_condition(error::COMPRESSION_ERROR);
 		put_u32be(&compressed[0], complen);
 		put_u48be(&compressed[4], firstoffs);
 		put_u16be(&compressed[10], mapcrc);
