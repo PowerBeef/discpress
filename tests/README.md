@@ -52,7 +52,7 @@ parallel test workers (default 2), `CHDMAN` a native chdman binary, `REGEN_FIXTU
 
 `fixtures/make_fixtures.py` generates synthetic discs into `.cache/fixtures/` (deterministic,
 about a second): ISO 9660 file systems, raw CD sectors with valid EDC/ECC (Mode 1 and Mode 2),
-CD audio, a CloneCD image, compressed ISOs (CSO v1 and v2, ZSO; the generator has its own LZ4 encoder), ECM images (the generator's encoder writes the same bytes as the ecm tools' `bin2ecm`, including Mode 2 Form 2 sectors and silence stored as sectors), cue sheets chdman 0.289 misreads (each with a plain twin), cue sheets with more than a CHD's tracks hold (CATALOG, FLAGS, ISRC, INDEX 02, `CDI/2352`), and console boot headers for PlayStation, PS2, PSP, Saturn, Sega CD and Dreamcast (GDI).
+CD audio, a CloneCD image, a cdrdao TOC and a Nero image, compressed ISOs (CSO v1 and v2, ZSO; the generator has its own LZ4 encoder), ECM images (the generator's encoder writes the same bytes as the ecm tools' `bin2ecm`, including Mode 2 Form 2 sectors and silence stored as sectors), cue sheets chdman 0.289 misreads (each with a plain twin), cue sheets with more than a CHD's tracks hold (CATALOG, FLAGS, ISRC, INDEX 02, `CDI/2352`), and console boot headers for PlayStation, PS2, PSP, Saturn, Sega CD and Dreamcast (GDI).
 They carry serial numbers of real games, so identification can be tested against the built-in
 Redump database, but contain no game data. `manifest.json` lists each fixture with the job and
 identification the app should produce. `--bench` adds large, realistic images for benchmarks.
@@ -73,7 +73,7 @@ game database when it is requested as `/discpress.html?testdb=1` (`app.open({ te
 | `smoke` | loading, tabs, help, settings persistence, one conversion (also from `file://` and on phones) |
 | `convert` | every input type and console, identification, output naming, version choice, presets, thread counts, Start all / Download all |
 | `chd` | CHD inputs: identification from inside the CHD, extract (Redump's layout, which gives back the fixtures' own files; cue, split bins, toc, gdi, iso, img), verify (good and damaged, and compared with Redump), both with and without helper workers, info, rename, parent CHDs |
-| `identify` | checksum-verified identification (via extra database rows, below), also of the ISO inside a compressed ISO, conversions that start before the checksum finishes and are renamed after it, starting while identification is still running |
+| `identify` | checksum-verified identification (via extra database rows, below), also of the ISO inside a compressed ISO, conversions that start before the checksum finishes and are renamed after it, a version picked meanwhile is kept, starting while identification is still running, audio CDs not named after a game, CHDs matched by size or with Mode 2 data tracks, a reader worker that dies |
 | `tuning` | the automatic thread count: one-off speed test on the first conversion, reuse, not capped by the reported core count, manual override, Measure again |
 | `gdrom` | Dreamcast GD-ROM layout from a `.gdi` and a Redump cue: no pregaps, track 3 at LBA 45000 |
 | `engine` | the engine's own command line against unmodified chdman 0.289: the 0.289 defects it fixes, identical CHDs when codec trials stop early, and the checksums and codecs of the codec plan |

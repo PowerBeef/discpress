@@ -249,9 +249,17 @@ extern "C" EMSCRIPTEN_KEEPALIVE int wasm_probe_read(int track, uint32_t lba, uin
 		{
 			if (track < 0 || track >= p_cd->get_last_track())
 				return -1;
-			if (p_cd->get_track_type(track) == cdrom_file::CD_TRACK_AUDIO)
+			// the sector as stored, then its 2048 bytes of user data: asking read_data for MODE1 only
+			// converts from Mode 1 tracks, and gave shifted bytes or nothing for MODE2/2048 and MODE2/2336
+			static const int skip[] = { 0, 16, 8, 0, 0, 8, 24 }; // by CD_TRACK_* type, up to MODE2_RAW
+			uint32_t type = p_cd->get_track_type(track);
+			if (type > cdrom_file::CD_TRACK_MODE2_RAW || type == cdrom_file::CD_TRACK_MODE2_FORM2)
 				return -1;
-			return p_cd->read_data(p_cd->get_track_start(track) + lba, out, cdrom_file::CD_TRACK_MODE1) ? 0 : -1;
+			uint8_t sector[2352];
+			if (!p_cd->read_data(p_cd->get_track_start(track) + lba, sector, cdrom_file::CD_TRACK_RAW_DONTCARE))
+				return -1;
+			memcpy(out, sector + skip[type], 2048);
+			return 0;
 		}
 		if (!p_chd)
 			return -1;

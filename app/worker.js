@@ -1254,7 +1254,8 @@ async function runReader(msg) {
   self.onmessage = function (e) {
     var m = e.data;
     if (m.type !== 'read') return;
-    var r = M._wasm_probe_read(m.track | 0, m.lba >>> 0, buf);
+    var r = -1;
+    try { r = M._wasm_probe_read(m.track | 0, m.lba >>> 0, buf); } catch (err) { /* unreadable: null */ }
     postMessage({ type: 'sector', id: m.id, data: r === 0 ? M.HEAPU8.slice(buf, buf + 2048) : null });
   };
 }

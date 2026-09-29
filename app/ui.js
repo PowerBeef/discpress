@@ -893,39 +893,51 @@ async function pumpIdentify() {
   var it = identQueue.shift();
   if (!it) return;
   identBusy = true;
-  var job = it.job;
-  if (jobs.indexOf(job) >= 0) {
-    job.identState = 'running';
-    job.identStatus = 'Identifying game…';
-    if (job.ui && job.state !== 'running') renderNotes(job);
-    if (DEBUG.identDelay) await sleep(DEBUG.identDelay); // testing: a slow identification
-    try {
-      job.ident = await identifyJob(job, function (msg, p) {
-        job.identStatus = msg + (p ? ' ' + Math.round(p * 100) + '%' : '');
-        var n = job.ui && job.ui.identLine;
-        if (n) n.textContent = job.identStatus;
-      }, function (provisional) {
-        job.ident = provisional;
-        job.identState = 'checking';
-        applyIdent(job);
-        job.identKnownResolve();
-        if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
-      });
-    } catch (e) {
-      job.ident = { error: e.message, readFail: /I\/O read|NotReadable/i.test(e.message || '') };
+  // whatever happens to this job, the queue moves on
+  try {
+    var job = it.job;
+    if (jobs.indexOf(job) >= 0) {
+      job.identState = 'running';
+      job.identStatus = 'Identifying game…';
+      if (job.ui && job.state !== 'running') renderNotes(job);
+      if (DEBUG.identDelay) await sleep(DEBUG.identDelay); // testing: a slow identification
+      try {
+        job.ident = await identifyJob(job, function (msg, p) {
+          job.identStatus = msg + (p ? ' ' + Math.round(p * 100) + '%' : '');
+          var n = job.ui && job.ui.identLine;
+          if (n) n.textContent = job.identStatus;
+        }, function (provisional) {
+          job.ident = keepPick(job, provisional);
+          job.identState = 'checking';
+          applyIdent(job);
+          job.identKnownResolve();
+          if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
+        });
+      } catch (e) {
+        job.ident = { error: e.message, readFail: /I\/O read|NotReadable/i.test(e.message || '') };
+      }
+      keepPick(job, job.ident);
+      job.identState = 'done';
+      applyIdent(job);
+      // the checksum finished after the conversion started: name the results after the confirmed release
+      if (job.state === 'done') renameOutputs(job);
+      job.identKnownResolve();
+      if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
+    } else if (job.identKnownResolve) {
+      job.identKnownResolve(); // removed before its turn: a start waiting on it must not wait forever
     }
-    job.identState = 'done';
-    applyIdent(job);
-    // the checksum finished after the conversion started: name the results after the confirmed release
-    if (job.state === 'done') renameOutputs(job);
-    job.identKnownResolve();
-    if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
-  } else if (job.identKnownResolve) {
-    job.identKnownResolve(); // removed before its turn: a start waiting on it must not wait forever
+  } finally {
+    it.resolve();
+    identBusy = false;
+    pumpIdentify();
   }
-  it.resolve();
-  identBusy = false;
-  pumpIdentify();
+}
+// a version picked under "Which version?" while the checksum ran stays picked, unless the checksum
+// proved another release
+function keepPick(job, id) {
+  var alt = id && id.entry && id.entry.alternatives;
+  if (job.versionPicked && alt && alt.indexOf(job.versionPicked) >= 0) id.name = job.versionPicked;
+  return id;
 }
 // starting: the job is about to run (state is already 'running') and may still take the name and type
 function applyIdent(job, starting) {
@@ -982,7 +994,13 @@ function identNote(job) {
     var how = { hash: 'Exact match in the Redump database (checksum verified)', 'serial+size': 'Matched by serial number and size', serial: 'Matched by serial number', 'serial-ambiguous': 'Matched by serial number; several versions share it', size: 'Matched by size' }[id.method] || '';
     box.append(el('div', { class: 'small ident-how' }, (id.method === 'hash' ? '✓ ' : '') + how));
     if (id.entry && id.entry.alternatives && id.entry.alternatives.length > 1) {
-      var sel = el('select', { onchange: function () { id.name = sel.value; if (!job.outEdited && settings.rename) job.opts.out = id.name; refreshJob(job, true); } });
+      // a running job keeps its name until it finishes, then its results are renamed (renameOutputs)
+      var sel = el('select', { onchange: function () {
+        id.name = job.versionPicked = sel.value;
+        if (job.state === 'done') renameOutputs(job);
+        else if (job.state !== 'running' && job.state !== 'queued' && !job.outEdited && settings.rename) job.opts.out = id.name;
+        refreshJob(job, true);
+      } });
       id.entry.alternatives.forEach(function (n) { sel.append(el('option', { value: n, selected: n === id.name }, n)); });
       box.append(el('label', { class: 'field', style: 'margin-top:6px' }, el('span', null, 'Which version?'), sel));
     }

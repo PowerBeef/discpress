@@ -160,6 +160,7 @@ test('a TOC with one file per track, as chdman writes it, keeps every track', as
   await app.add(x.files);
   const card = app.job('mgs split');
   await app.settled(card);
+  await expect(card.locator('.note.ident')).toContainText('SLUS-00594'); // the console is read from the TOC's tracks
   await app.run(card);
   const [out] = await app.downloads(card);
   expect(info(out.path).dataSha1).toBe(info(original).dataSha1);
