@@ -128,6 +128,7 @@ public:
 		std::string fname;
 		uint64_t offset;
 		uint32_t frames;
+		uint32_t tail = 0; // Discpress: when not 0, the file holds only this many bytes of the last frame, the rest is zeros
 	};
 
 	struct track_input_entry

@@ -105,9 +105,12 @@ uint32_t cdrom_file::physical_to_chd_lba(uint32_t physlba, uint32_t &tracknum) c
 uint32_t cdrom_file::logical_to_chd_lba(uint32_t loglba, uint32_t &tracknum) const
 {
 	// loop until our current LBA is less than the start LBA of the next track
+	// Discpress: where the next track's pregap starts (its INDEX 00), stored or not: 0.289 went on to its INDEX 01,
+	// so its pregap was read from this track's end, shifted by this track's padding, or for a pregap or postgap
+	// that isn't in the CHD, from the next track's data
 	for (int track = 0; track < cdtoc.numtrks; track++)
 	{
-		if (loglba < cdtoc.tracks[track + 1].logframeofs)
+		if (loglba < cdtoc.tracks[track + 1].logframeofs - ((track + 1 < cdtoc.numtrks) ? cdtoc.tracks[track + 1].pregap : 0))
 		{
 			// convert to physical and proceed
 			uint32_t physlba = cdtoc.tracks[track].physframeofs + (loglba - cdtoc.tracks[track].logframeofs);
@@ -391,6 +394,14 @@ std::error_condition cdrom_file::read_partial_sector(void *dest, uint32_t lbasec
 		{
 			if (EXTRA_VERBOSE)
 				osd_printf_verbose("PG missing sector: LBA %d, trklog %d\n", lbasector, cdtoc.tracks[tracknum].logframeofs);
+			memset(dest, 0, length);
+			return result;
+		}
+
+		// Discpress: and so is a postgap, or a gap between sessions, up to the next track's pregap
+		const track_info &track = cdtoc.tracks[tracknum];
+		if ((lbasector >= track.logframeofs + track.frames - (track.pgdatasize ? track.pregap : 0)) && (lbasector < cdtoc.tracks[cdtoc.numtrks].logframeofs))
+		{
 			memset(dest, 0, length);
 			return result;
 		}
@@ -3112,7 +3123,8 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 	// DATAFILE) and of zeros that no file holds (ZERO, SILENCE, PREGAP), and where START puts INDEX 01. After
 	// the last line they become the track's frames, pregap and pieces. 0.289 kept only the last file statement
 	// of a track, ignored ZERO, SILENCE and PREGAP, and made START a pregap that isn't in the file.
-	struct toc_run { std::string fname; uint64_t offset; uint32_t frames; bool swap; };
+	// (tail: when not 0, the statement ends this many bytes into its last frame, which zeros fill)
+	struct toc_run { std::string fname; uint64_t offset; uint32_t frames; bool swap; uint32_t tail = 0; };
 	constexpr uint64_t max_frames = 0x7fffffff / FRAME_SIZE; // 2 GB
 	std::vector<std::vector<toc_run> > runs(MAX_TRACKS);
 	std::vector<int> startpos(MAX_TRACKS, -1);
@@ -3207,10 +3219,24 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 			/* keep the filename */
 			run.fname.assign(path).append(token);
 
+			// Discpress: as cdrdao, an audio file whose name ends in .wav is a WAVE file: its samples, from the
+			// data chunk on, are little-endian (0.289 read the header as audio, and the samples unswapped)
+			uint32_t wavoffs = 0, wavlen = 0;
+			if (!datafile && run.fname.size() >= 4 && core_stricmp(std::string_view(run.fname).substr(run.fname.size() - 4), ".wav") == 0)
+			{
+				wavlen = parse_wav_sample(run.fname, &wavoffs);
+				if (!wavlen)
+				{
+					osd_printf_error("ERROR: couldn't read [%s] or not a valid .WAV\n", run.fname);
+					return fail(chd_file::error::INVALID_DATA);
+				}
+				run.swap = true;
+			}
+
 			TOKENIZE
 			if (!strcmp(token, "SWAP"))
 			{
-				run.swap = true;
+				run.swap = !run.swap; // Discpress: the other byte order than the file's own (so big-endian in a WAVE file)
 				TOKENIZE
 			}
 
@@ -3235,13 +3261,14 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 			uint64_t length;
 			if (datafile ? (ntimes == 2) : (ntimes >= 1))
 				run.offset += times[0];
-			if (ntimes == 2 || (datafile && ntimes == 1))
+			// Discpress: as cdrdao, an audio file's length of 0 is the rest of the file, as no length is
+			if ((ntimes == 2 && (datafile || times[1] != 0)) || (datafile && ntimes == 1))
 			{
 				length = times[ntimes - 1];
 			}
 			else
 			{
-				uint64_t const filesize = get_file_size(run.fname);
+				uint64_t const filesize = wavlen ? wavlen : get_file_size(run.fname); // Discpress: a WAVE file's samples
 				if (filesize == 0)
 				{
 					osd_printf_error("ERROR: couldn't find bin file [%s]\n", run.fname);
@@ -3249,12 +3276,15 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 				}
 				length = (filesize > run.offset) ? filesize - run.offset : 0;
 			}
-			if (length / framesize > max_frames)
+			run.offset += wavoffs; // Discpress: a WAVE file's offsets count from its samples
+			if ((length + framesize - 1) / framesize > max_frames)
 			{
 				osd_printf_error("ERROR: track %d is too long\n", trknum + 1);
 				return fail(chd_file::error::INVALID_DATA);
 			}
-			run.frames = uint32_t(length / framesize);
+			// Discpress: as cdrdao, a last sector that the data only partly fills is padded with zeros (0.289 dropped it)
+			run.tail = uint32_t(length % framesize);
+			run.frames = uint32_t(length / framesize) + (run.tail ? 1 : 0);
 			runs[trknum].push_back(std::move(run));
 		}
 		else if (!strcmp(token, "ZERO") || !strcmp(token, "SILENCE") || !strcmp(token, "PREGAP"))
@@ -3276,16 +3306,24 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 				return fail(chd_file::error::INVALID_DATA);
 			}
 			uint64_t frames;
+			uint32_t tail = 0;
 			if (strchr(token, ':') || pregap)
+			{
 				frames = msf_to_frames(token);
+			}
 			else
-				frames = strtoull(token, nullptr, 10) * (silence ? 4 : 1) / framesize;
+			{
+				// a last sector that the zeros only partly fill is a sector of zeros
+				uint64_t const bytes = strtoull(token, nullptr, 10) * (silence ? 4 : 1);
+				tail = uint32_t(bytes % framesize);
+				frames = bytes / framesize + (tail ? 1 : 0);
+			}
 			if (frames > max_frames)
 			{
 				osd_printf_error("ERROR: track %d is too long\n", trknum + 1);
 				return fail(chd_file::error::INVALID_DATA);
 			}
-			runs[trknum].push_back(toc_run { std::string(), 0, uint32_t(frames), false });
+			runs[trknum].push_back(toc_run { std::string(), 0, uint32_t(frames), false, tail });
 			if (pregap)
 				startpos[trknum] = int(track_length(trknum));
 		}
@@ -3361,6 +3399,15 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 			return chd_file::error::INVALID_DATA;
 		}
 
+		// cdrdao joins a track's statements byte by byte, so what follows one that ends inside a sector would
+		// not start on a sector: only the last may end there
+		for (size_t n = 0; n + 1 < trackruns.size(); n++)
+			if (trackruns[n].tail != 0)
+			{
+				osd_printf_error("ERROR: track %d has data after a statement that ends inside a sector\n", trk + 1);
+				return chd_file::error::UNSUPPORTED_FORMAT;
+			}
+
 		uint32_t const start = std::max(startpos[trk], 0);
 		if (start >= total)
 		{
@@ -3402,7 +3449,10 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 		{
 			if (!merged.empty() && run.fname == merged.back().fname && run.swap == merged.back().swap &&
 					(run.fname.empty() || run.offset == merged.back().offset + uint64_t(merged.back().frames) * framesize))
+			{
 				merged.back().frames += run.frames;
+				merged.back().tail = run.tail;
+			}
 			else if (run.frames != 0)
 				merged.push_back(std::move(run));
 		}
@@ -3426,11 +3476,11 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 			input.swap = run.swap;
 			swapset = true;
 		}
-		if (merged.size() == 1 && !merged[0].fname.empty() && merged[0].offset <= UINT32_MAX)
+		if (merged.size() == 1 && !merged[0].fname.empty() && merged[0].offset <= UINT32_MAX && merged[0].tail == 0)
 			input.offset = uint32_t(merged[0].offset);
 		else
 			for (const toc_run &run : merged)
-				input.pieces.push_back(track_input_piece { run.fname, run.offset, run.frames });
+				input.pieces.push_back(track_input_piece { run.fname, run.offset, run.frames, run.fname.empty() ? 0 : run.tail });
 	}
 
 	return std::error_condition();
