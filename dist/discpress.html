@@ -9605,11 +9605,11 @@ var HUNKS = {
 };
 // what the emulators of each system need (docs/chd/ecosystem-*.md). The type and hunk size are set
 // from it when a game is identified (applyIdent); compression never changes by itself.
-// disc/hunk: the CHD to make from an .iso; why: shown under "Create as"; noZstd: its readers that
+// disc/hunk: the CHD to make from an .iso; why: its reason, shown under "Create as"; noZstd: its readers that
 // can't decode Zstandard (the Zstd preset warns); hint: added to the compression hint;
 // note: shown with the game (emulators that won't load it)
 var PROFILES = {
-  psp: { disc: 'dvd', hunk: '2048', why: 'PPSSPP recommends DVD CHDs with 2,048-byte hunks.' },
+  psp: { disc: 'dvd', hunk: '2048', why: 'with 2,048-byte hunks, as PPSSPP recommends' },
   saturn: { noZstd: 'Kronos and Yabause' },
   segacd: { noZstd: 'BlastEm (RetroArch)' },
   pcecd: { noZstd: 'Beetle SuperGrafx' },
@@ -10244,7 +10244,7 @@ function renderControls(job) {
       var sys = job.ident.sys, why;
       if (sys === 'ps2' && job.ps2dvd && job.disc === 'cd' && settings.ps2dvd === 'cd') why = 'This ' + sysName('ps2') + ' game is on a DVD. It becomes a CD CHD, for AetherSX2 and NetherSX2 (Settings).';
       else if (sys === 'ps2') why = 'This ' + sysName('ps2') + ' game is on a ' + KIND[job.ps2dvd ? 'dvd' : 'cd'].label + ', so it becomes a ' + KIND[job.disc].label + ' CHD.';
-      else why = profile(sys).why || sysName(sys) + ' games become ' + KIND[job.disc].label + ' CHDs.';
+      else why = sysName(sys) + ' games become ' + KIND[job.disc].label + ' CHDs' + (profile(sys).why && job.disc === profile(sys).disc ? ' ' + profile(sys).why : '') + '.';
       fields.append(selectField('Create as', discChoices, job.disc, pickDisc, why + ' Change this only if you know you need the other type.', busy));
     }
     var cur = presets.find(function (p) { return p[0] === o.preset; }) || presets[0];

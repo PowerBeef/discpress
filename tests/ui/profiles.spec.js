@@ -36,7 +36,7 @@ test('PSP games become DVD CHDs with 2,048-byte hunks, and the card says why', a
   await app.settled(card);
   await expect(card.locator('code.cmd')).toContainText('-hs 2048');
   await card.locator('details.opts summary').click();
-  await expect(card.locator('label.field', { hasText: 'Create as' })).toContainText('PPSSPP recommends DVD CHDs with 2,048-byte hunks.');
+  await expect(card.locator('label.field', { hasText: 'Create as' })).toContainText('Sony PlayStation Portable games become DVD CHDs with 2,048-byte hunks, as PPSSPP recommends.');
 });
 
 test('the Zstd preset warns where the system’s emulators can’t read it', async ({ app }) => {
