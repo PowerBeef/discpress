@@ -1893,7 +1893,9 @@ var DISC_RE = /^(.*?) \((?:Disc|Disk) (\d+)(?: of \d+)?\)(.*)\.chd$/i;
 function discOf(job) {
   if (job.kind !== 'create' || job.state !== 'done' || !job.outputs[0]) return null;
   var m = DISC_RE.exec(job.outputs[0].name);
-  return m ? { key: (m[1] + m[3]).toLowerCase(), name: (m[1] + m[3]).trim(), n: +m[2], job: job } : null;
+  // the same name on another console (or one identified and one not) is another game
+  var sys = job.ident && job.ident.sys || '';
+  return m ? { key: sys + '|' + (m[1] + m[3]).toLowerCase(), name: (m[1] + m[3]).trim(), n: +m[2], job: job } : null;
 }
 function discSet(job) {
   var me = discOf(job);

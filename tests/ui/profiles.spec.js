@@ -111,3 +111,21 @@ test('a game on several discs gets an .m3u playlist of its CHDs', async ({ app, 
   await dl.saveAs(p);
   expect(fs.readFileSync(p, 'utf8')).toBe('Game (USA) (Disc 1).chd\nGame (USA) (Disc 2).chd\n');
 });
+
+test('discs of the same name from different consoles don\u2019t share a playlist', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'multi2');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'homebrew.iso'), path.join(dir, 'Game (USA) (Disc 1).iso')); // a data disc
+  fs.copyFileSync(path.join(FIXTURES, 'tnd.iso'), path.join(dir, 'Game (USA) (Disc 2).iso')); // a PS1 disc
+  await app.open({ settings: { rename: false } });
+  await app.add(['gen/multi2/Game (USA) (Disc 1).iso', 'gen/multi2/Game (USA) (Disc 2).iso']);
+  const one = app.job('Game (USA) (Disc 1)'), two = app.job('Game (USA) (Disc 2)');
+  await app.settled(one);
+  await app.settled(two);
+  await expect(two.locator('.sysbadge')).toHaveText('PS1');
+  await app.run(one);
+  await app.run(two);
+  await expect(two.locator('.result .out')).toContainText('Game (USA) (Disc 2).chd');
+  await expect(one.locator('.playlist')).toHaveCount(0);
+  await expect(two.locator('.playlist')).toHaveCount(0);
+});
