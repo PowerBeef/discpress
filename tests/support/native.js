@@ -127,6 +127,15 @@ export function extract(command, chd, outName, extra = []) {
   return { dir, files: fs.readdirSync(dir).sort() };
 }
 
+/** The same with the engine's native build, for output chdman 0.289 writes wrongly; null without it. */
+export function engineExtract(command, chd, outName, extra = []) {
+  const bin = engineChdman();
+  if (!bin) return null;
+  const dir = fs.mkdtempSync(path.join(CACHE, 'native-x-'));
+  execFileSync(bin, [command, '-i', chd, '-o', path.join(dir, outName), ...extra], { cwd: FIXTURES, stdio: ['ignore', 'pipe', 'pipe'] });
+  return { dir, files: fs.readdirSync(dir).sort() };
+}
+
 export function sha1File(p) {
   return crypto.createHash('sha1').update(fs.readFileSync(p)).digest('hex');
 }
