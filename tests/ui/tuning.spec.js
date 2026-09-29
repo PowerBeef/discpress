@@ -81,3 +81,28 @@ test('switching back to Automatic uses the measured count', async ({ app, page }
   await expect(page.locator('#chipThreads')).toHaveText(/^Auto · /);
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('chdman-web-settings')).threads)).toBe('auto');
 });
+
+// A game's checksum running during the speed test took a core from it, which could make the test
+// settle on fewer threads; the checksum now stops, and starts over once the test is done (audit)
+test('a checksum running when the device is measured starts over after the test', async ({ app, page }) => {
+  await page.addInitScript(() => {
+    window.__crc = { started: 0, stopped: 0 };
+    const W = window.Worker;
+    window.Worker = class extends W {
+      postMessage(m, t) { if (m && m.type === 'crc') { this.crc = true; window.__crc.started++; } return super.postMessage(m, t); }
+      terminate() { if (this.crc && !this.done) window.__crc.stopped++; return super.terminate(); }
+      constructor(...a) { super(...a); this.addEventListener('message', e => { if (e.data && e.data.type === 'crc') this.done = true; }); }
+    };
+  });
+  await app.open({ testdb: true, debug: { crcSlow: 3000 } });
+  await app.add(fixture('ps1-verified').add);
+  const card = app.job('verified');
+  await expect(card.locator('.ident-check')).toBeVisible(); // the checksum is running
+  await page.click('#settingsBtn');
+  await page.click('#retune');
+  await page.click('#settingsClose');
+  await expect.poll(() => page.evaluate(() => window.__crc.stopped)).toBe(1);
+  await app.settled(card);
+  await expect(card.locator('.ident-name')).toHaveText(fixture('ps1-verified').name);
+  expect(await page.evaluate(() => window.__crc.started)).toBe(2);
+});

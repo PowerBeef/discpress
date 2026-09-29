@@ -424,8 +424,8 @@ var Tuning = {
   },
   _measure: async function (onStep) {
     await Engine.ready();
-    // a game being identified (its checksum takes a core) finishes first, up to 10 s
-    for (var wait = 0; identActive && wait < 50; wait++) await sleep(200);
+    // a game's checksum (a core busy) stops now and starts over after the test (crcOf)
+    pauseChecksums();
     var HB = 4096, BATCH = 16, WARM = 250, WINDOW = 500, seq = 0;
     // the default DVD codecs (lzma, zlib, huff, flac): the same work as a real conversion
     var comps = [0x6c7a6d61, 0x7a6c6962, 0x68756666, 0x666c6163];
@@ -893,7 +893,7 @@ async function sniffSync(file) {
 /*IDENT*/
 
 /* ---------- identification scheduling ---------- */
-var identQueue = [], identBusy = false, identActive = false;
+var identQueue = [], identBusy = false;
 function scheduleIdentify(job) {
   if (job.identPromise || (job.kind === 'create' && (job.missing.length || job.needCue || job.invalid))) return;
   job.identState = 'pending';
@@ -914,7 +914,6 @@ async function pumpIdentify() {
   var it = identQueue.shift();
   if (!it) return;
   identBusy = true;
-  identActive = true;
   // whatever happens to this job, the queue moves on
   try {
     var job = it.job;
@@ -950,7 +949,7 @@ async function pumpIdentify() {
     }
   } finally {
     it.resolve();
-    identBusy = identActive = false;
+    identBusy = false;
     pumpIdentify();
   }
 }

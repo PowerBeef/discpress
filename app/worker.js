@@ -1361,6 +1361,7 @@ function crcUpdate(crc, b) {
   return crc;
 }
 async function runCrc(msg) {
+  if (msg.debugSlow) await new Promise(function (r) { setTimeout(r, msg.debugSlow); }); // testing: a long checksum
   var blob = msg.blob, start = msg.start || 0, end = msg.end != null ? msg.end : blob.size;
   var step = 8 << 20, r = getReader(), last = 0;
   // zlib's crc32 in WebAssembly is several times faster than the JavaScript loop below it

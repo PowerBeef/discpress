@@ -7314,6 +7314,7 @@ function crcUpdate(crc, b) {
   return crc;
 }
 async function runCrc(msg) {
+  if (msg.debugSlow) await new Promise(function (r) { setTimeout(r, msg.debugSlow); }); // testing: a long checksum
   var blob = msg.blob, start = msg.start || 0, end = msg.end != null ? msg.end : blob.size;
   var step = 8 << 20, r = getReader(), last = 0;
   // zlib's crc32 in WebAssembly is several times faster than the JavaScript loop below it
@@ -7806,8 +7807,8 @@ var Tuning = {
   },
   _measure: async function (onStep) {
     await Engine.ready();
-    // a game being identified (its checksum takes a core) finishes first, up to 10 s
-    for (var wait = 0; identActive && wait < 50; wait++) await sleep(200);
+    // a game's checksum (a core busy) stops now and starts over after the test (crcOf)
+    pauseChecksums();
     var HB = 4096, BATCH = 16, WARM = 250, WINDOW = 500, seq = 0;
     // the default DVD codecs (lzma, zlib, huff, flac): the same work as a real conversion
     var comps = [0x6c7a6d61, 0x7a6c6962, 0x68756666, 0x666c6163];
@@ -8463,6 +8464,7 @@ async function crcHere(blob, start, end, onProgress) {
     for (var i = 0, l = b.length; i < l; i++) crc = T[(crc ^ b[i]) & 255] ^ (crc >>> 8);
     onProgress && onProgress((pos - (start || 0)) / (end - (start || 0)));
     await sleep(0);
+    if (Tuning.running) { try { await Tuning.running; } catch (e) { /* measured or not, go on */ } }
   }
   crc = (crc ^ -1) >>> 0;
   return ('00000000' + crc.toString(16).toUpperCase()).slice(-8);
@@ -8470,15 +8472,32 @@ async function crcHere(blob, start, end, onProgress) {
 // how: 'ciso', the checksum of the ISO inside a CSO/ZSO image, or 'ecm', of the image inside an ECM
 // file, which only a worker can unpack
 function crcOf(blob, start, end, onProgress, how) {
-  var w = DEBUG.stage && !how ? Promise.reject(new Error('debug')) : crcWorker(blob, start, end, onProgress, how);
-  var p = how ? w : w.catch(function () { return crcHere(blob, start, end, onProgress); });
+  // a checksum stopped for the device's speed test (pauseChecksums) starts over once the test is done
+  var run = function () {
+    var w = DEBUG.stage && !how ? Promise.reject(new Error('debug')) : crcWorker(blob, start, end, onProgress, how);
+    return w.catch(function (e) {
+      if (e && e.paused) return Promise.resolve(Tuning.running).catch(function () {}).then(run);
+      if (how) throw e;
+      return crcHere(blob, start, end, onProgress);
+    });
+  };
+  var p = run();
   // DEBUG.crcDelay (ms): a slow checksum, for testing that conversions don't wait for it
   return DEBUG.crcDelay ? p.then(function (c) { return sleep(DEBUG.crcDelay).then(function () { return c; }); }) : p;
 }
+// checksum workers running now, which the speed test stops so that it measures an idle device
+var crcRunning = new Set();
+function pauseChecksums() {
+  crcRunning.forEach(function (c) { c.stop(); });
+}
 function crcWorker(blob, start, end, onProgress, how) {
   return Engine.ready().then(function () {
-    return new Promise(function (resolve, reject) {
+    return new Promise(function (resolveRaw, rejectRaw) {
       var w = new Worker(Engine.url);
+      var entry = { stop: function () { w.terminate(); var e = new Error('paused'); e.paused = true; reject(e); } };
+      var resolve = function (v) { crcRunning.delete(entry); resolveRaw(v); };
+      var reject = function (e) { crcRunning.delete(entry); rejectRaw(e); };
+      crcRunning.add(entry);
       var why = null; // what the worker said was wrong (a damaged compressed ISO or ECM image)
       w.onmessage = function (e) {
         var m = e.data;
@@ -8488,7 +8507,7 @@ function crcWorker(blob, start, end, onProgress, how) {
         else if (m.type === 'fatal') { w.terminate(); reject(new Error(why || m.message)); }
       };
       w.onerror = function (e) { w.terminate(); reject(new Error(e.message || 'worker error')); };
-      Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end, ciso: how === 'ciso', ecm: how === 'ecm' }); // with the compiled module, for zlib's crc32
+      Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end, ciso: how === 'ciso', ecm: how === 'ecm', debugSlow: DEBUG.crcSlow }); // with the compiled module, for zlib's crc32
     });
   });
 }
@@ -8867,7 +8886,7 @@ async function identifyJob(job, onStatus, onProvisional) {
 
 
 /* ---------- identification scheduling ---------- */
-var identQueue = [], identBusy = false, identActive = false;
+var identQueue = [], identBusy = false;
 function scheduleIdentify(job) {
   if (job.identPromise || (job.kind === 'create' && (job.missing.length || job.needCue || job.invalid))) return;
   job.identState = 'pending';
@@ -8888,7 +8907,6 @@ async function pumpIdentify() {
   var it = identQueue.shift();
   if (!it) return;
   identBusy = true;
-  identActive = true;
   // whatever happens to this job, the queue moves on
   try {
     var job = it.job;
@@ -8924,7 +8942,7 @@ async function pumpIdentify() {
     }
   } finally {
     it.resolve();
-    identBusy = identActive = false;
+    identBusy = false;
     pumpIdentify();
   }
 }
