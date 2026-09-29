@@ -17,7 +17,7 @@
   <a href="https://powerbeef.github.io/discpress/">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/brand/open-dark.png">
-      <img src="docs/brand/open-light.png" width="392" alt="Use Discpress online: best on iPhone and iPad, works offline">
+      <img src="docs/brand/open-light.png" width="406" alt="Use Discpress online: nothing to download, big files on iPhone">
     </picture>
   </a>
 </p>
@@ -40,6 +40,8 @@
 A single PlayStation or Saturn game can be a dozen `.bin` files plus a `.cue`. **CHD** packs the whole disc into one compressed file that takes much less space, loses nothing, and loads directly in MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast and more.
 
 The standard tool for making CHDs is **chdman**, a command-line program from the MAME project. **Discpress** puts the real chdman inside a friendly app that runs in your web browser, on your phone or your computer. There's no terminal and nothing to install, and your files never leave your device. It also recognizes your games and names each file after its official title.
+
+Use it the way that suits you: **download it** as one HTML file that works anywhere, even without internet, or **use it online** with nothing to download. The online version is also the way to convert big games on iPhone and iPad.
 
 ## How it works
 
@@ -74,7 +76,7 @@ The standard tool for making CHDs is **chdman**, a command-line program from the
 - **Fast.** Compression is spread over all your CPU cores, with WebAssembly SIMD when your browser supports it.
 - **Big files.** Results are written to the browser's private disk storage, so multi-gigabyte DVD images work. On desktop Chrome and Edge, results can go straight into a folder you choose.
 - **Made for phones.** It adapts to any screen, notch, rotation and text size, in light or dark mode. On iPhone and iPad, **Save to Files** uses the share sheet; results over 512 MB are downloaded instead, since the share sheet loads the whole file into memory. If iOS reloads the page before you save, finished results are still there, under **From your last visit**.
-- **Private and offline.** It's one self-contained HTML file with nothing to load from the internet. The online copy is that same file: once opened, it works offline too, and you can add it to your Home Screen.
+- **Private and offline.** It's one self-contained HTML file with nothing to load from the internet. The online version is that same file: it runs on your device too, and once opened it works offline.
 
 </details>
 
@@ -110,14 +112,18 @@ The standard tool for making CHDs is **chdman**, a command-line program from the
 
 ## Get started
 
-1. **[Download `discpress.html`](https://github.com/PowerBeef/discpress/releases/latest/download/discpress.html).** It's the whole app in one file.
-   On **iPhone and iPad**, open **[powerbeef.github.io/discpress](https://powerbeef.github.io/discpress/)** in Safari instead: the same file, published with each release. Safari can't open a local HTML file, and apps that can, such as Sitecase, can't save results over about 512 MB (most DVD, PSP and PS2 games). In Safari, results of any size download to Files → Downloads. Tap Share → **Add to Home Screen** to keep it as an app that works offline.
-2. **Open it.**
-   - **Computer:** double-click it, and it opens in your browser.
-   - **Android:** open it with Chrome or another browser.
-   - **iPhone and iPad:** the link above, in Safari.
-3. **Add your games.** Pick every file of a game together (the `.cue` *and* its `.bin` files), or drag them onto the page.
-4. **Press Start all**, then **Save** or **Download** each CHD when it's ready. Keep the page open while it works.
+1. **Pick a way to run it.** Both are the same app, both work in every modern browser, and both keep your files on your device.
+
+   | | **[⬇ Download the file](https://github.com/PowerBeef/discpress/releases/latest/download/discpress.html)** | **[🌐 Use it online](https://powerbeef.github.io/discpress/)** |
+   |---|---|---|
+   | **What it is** | `discpress.html`, the whole app in one file you keep | The same file on [powerbeef.github.io/discpress](https://powerbeef.github.io/discpress/), updated with each release |
+   | **Best for** | Computers and Android, and using it without any internet | Nothing to download, and **big games on iPhone and iPad** |
+   | **How to open it** | Double-click it on a computer; on Android, open it with Chrome or another browser | Open the link. On iPhone and iPad, use Safari |
+   | **Offline** | Always | Once opened; you can also install it (Share → **Add to Home Screen**, or the install button in Chrome and Edge) |
+
+   **On iPhone and iPad, use it online, in Safari.** Safari can't open a downloaded HTML file, and apps that can, such as Sitecase, can't save results over about 512 MB (most DVD, PSP and PS2 games). In Safari, results of any size download to Files → Downloads. If a big download doesn't start from the Home Screen icon, open the page in Safari itself.
+2. **Add your games.** Pick every file of a game together (the `.cue` *and* its `.bin` files), or drag them onto the page.
+3. **Press Start all**, then **Save** or **Download** each CHD when it's ready. Keep the page open while it works; on a phone, keep the screen on too, since iOS and Android pause pages in the background.
 
 <img src="docs/brand/divider.png" width="100%" alt="">
 
@@ -126,7 +132,7 @@ The standard tool for making CHDs is **chdman**, a command-line program from the
 <details>
 <summary><b>Are my games uploaded anywhere?</b></summary>
 <br>
-No. Discpress is a single file that runs entirely on your device. It makes no network requests and works in airplane mode: its Content-Security-Policy (`connect-src 'none'`) forbids the page any connection, in the downloaded file and in the copy on [powerbeef.github.io/discpress](https://powerbeef.github.io/discpress/) alike. That copy is the release file byte for byte; each release lists its SHA-256 (`discpress.html.sha256`), and the site has the same file, so you can compare them.
+No. Discpress is a single file that runs entirely on your device, downloaded or online. It makes no network requests and works in airplane mode: its Content-Security-Policy (`connect-src 'none'`) forbids the page any connection, in the downloaded file and on [powerbeef.github.io/discpress](https://powerbeef.github.io/discpress/) alike. The online version is the release file byte for byte; each release lists its SHA-256 (`discpress.html.sha256`), and the site has the same file, so you can compare them. Opening it online is an ordinary visit to a GitHub Pages site: GitHub sees the request for the page, as for any website, never your files. It sets no cookies and has no analytics. The downloaded file doesn't contact anything at all.
 </details>
 
 <details>
@@ -147,7 +153,7 @@ Yes. Discpress runs chdman from the official MAME 0.289 release, so the files ar
 
 Older browsers keep results in memory instead of on disk, which limits how big a disc can be.
 
-On iPhone and iPad, use the [online copy](https://powerbeef.github.io/discpress/) in Safari. Apps that open HTML files, such as Sitecase, run it too, but they can't save results over about 512 MB (most DVD, PSP and PS2 games): the page tells you when that's the case. Lockdown Mode turns off WebAssembly, which Discpress needs.
+The downloaded file and the online version work the same in each of them. On iPhone and iPad, use the [online version](https://powerbeef.github.io/discpress/) in Safari. Apps that open HTML files, such as Sitecase, run it too, but they can't save results over about 512 MB (most DVD, PSP and PS2 games): the page tells you when that's the case. Lockdown Mode turns off WebAssembly, which Discpress needs.
 </details>
 
 <details>
@@ -198,7 +204,7 @@ source ~/emsdk/emsdk_env.sh
 - `tests/` has end-to-end UI tests (Playwright) that check every conversion against native chdman, plus conversion benchmarks. See [`tests/README.md`](tests/README.md).
 - To refresh the game database with the latest Redump data, run `./scripts/update-db.sh`, then `python3 scripts/assemble.py`.
 - The README graphics are rendered from `scripts/brand/brand.html` with `python3 scripts/brand/render.py` (needs Playwright).
-- Pushing a tag like `v1.0.0`, or running **Actions → Release → Run workflow**, publishes a GitHub release with `discpress.html` and its SHA-256 attached, and deploys the same file to GitHub Pages as the online copy (see `.github/workflows/release.yml` and [`web/README.md`](web/README.md)). Release notes come from `.github/release-notes/<tag>.md` when that file exists.
+- Pushing a tag like `v1.0.0`, or running **Actions → Release → Run workflow**, publishes a GitHub release with `discpress.html` and its SHA-256 attached, and deploys the same file to GitHub Pages as the online version (see `.github/workflows/release.yml` and [`web/README.md`](web/README.md)). Release notes come from `.github/release-notes/<tag>.md` when that file exists.
 
 </details>
 
@@ -212,7 +218,7 @@ source ~/emsdk/emsdk_env.sh
 | `engine/` | Discpress's chdman: MAME 0.289's chdman and the sources it links, with every change listed in `mame-0.289.diff`, plus libdeflate and the math FLAC needs |
 | `wasm/` | WebAssembly build: Makefile, link flags, the parallel-compression helper, ECM decoding, and a small SDL stub |
 | `db/` | Game database (`db.json.gz`) and the script that builds it from libretro-database |
-| `web/` | What the online copy adds to `discpress.html`: offline service worker, web app manifest and icons |
+| `web/` | What the online version adds to `discpress.html`: offline service worker, web app manifest and icons |
 | `scripts/` | Fetch MAME, build native chdman, update the database, assemble the single HTML file, and render the brand graphics |
 | `dist/` | The ready-to-use `discpress.html` |
 | `tests/` | End-to-end UI tests and benchmarks (Playwright) with synthetic disc images |

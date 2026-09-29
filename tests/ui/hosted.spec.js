@@ -27,6 +27,41 @@ test('served as the hosted copy, it installs a service worker and opens offline'
   expect(app.unexpectedErrors()).toEqual([]);
 });
 
+test('on a slow network, the online version opens from its saved copy within seconds', async ({ page }, testInfo) => {
+  const app = new App(page, testInfo, false);
+  const id = 'slow-' + testInfo.project.name;
+  await app.open({ debug: { hosted: true } });
+  await page.goto(`/alt/${id}/discpress.html`);
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await page.reload(); // now under the service worker, which saves the page
+  await expect(page.locator('#chipEngine')).toContainText(/ready/i, { timeout: 60_000 });
+  expect(await page.evaluate(() => !!navigator.serviceWorker.controller)).toBe(true);
+  // from now on the server takes 60 s to answer the page
+  await page.request.get(`/__slow/${id}`);
+  const t0 = Date.now();
+  await page.reload({ timeout: 30_000 });
+  await expect(page.locator('#chipEngine')).toContainText(/ready/i, { timeout: 30_000 });
+  const secs = (Date.now() - t0) / 1000;
+  test.info().annotations.push({ type: 'opened in', description: secs.toFixed(1) + ' s' });
+  expect(secs).toBeGreaterThan(3.5); // the service worker waited for the network first
+  expect(secs).toBeLessThan(20);
+  expect(app.unexpectedErrors()).toEqual([]);
+});
+
+test('a copy on another site without the service worker keeps its built-in icon and links no manifest', async ({ page }, testInfo) => {
+  const app = new App(page, testInfo, false);
+  await app.open({ debug: { hosted: true } });
+  // the harness opened the page at / first, whose service worker would control /alt/ too
+  await page.evaluate(() => navigator.serviceWorker.getRegistrations().then(rs => Promise.all(rs.map(r => r.unregister()))));
+  await page.goto(`/alt/nosw-${testInfo.project.name}/discpress.html`);
+  await expect(page.locator('#chipEngine')).toContainText(/ready/i, { timeout: 60_000 });
+  expect(await page.evaluate(() => navigator.serviceWorker.getRegistrations().then(r => r.length))).toBe(0);
+  await expect(page.locator('link[rel="manifest"]')).toHaveCount(0);
+  await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute('href', /^data:/);
+  app.allowErrors(/sw\.js|ServiceWorker|service worker|404/i);
+  expect(app.unexpectedErrors()).toEqual([]);
+});
+
 test('the page may not connect anywhere, even to its own site', async ({ page }, testInfo) => {
   const app = new App(page, testInfo, false);
   await app.open();

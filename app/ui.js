@@ -72,13 +72,11 @@ function toast(msg, kind, ms) {
 var isMobile = (window.matchMedia && matchMedia('(pointer: coarse)').matches) || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 var cores = Math.max(1, navigator.hardwareConcurrency || 4);
-// iPhone and iPad (docs/ios/limits.md): the page and all its workers share one process that iOS stops
-// at about 1.5 GB on iPhones, and iOS 18+ gives fast wasm memory to only 3 instances per process, so
-// automatic mode uses at most the job worker plus 2 helpers on iPhones (2 performance cores; every
-// iPhone reports 4) and plus 4 on iPads
 // an iPhone/iPad app's web view (not Safari, not a home-screen web app): usually no downloads (docs/ios)
 var iosWebView = isIOS && !/Safari\//.test(navigator.userAgent) && navigator.standalone !== true && !(window.matchMedia && matchMedia('(display-mode: standalone)').matches);
-// the hosted copy, for Safari on iPhone and iPad (web/README.md)
+// opened from the Home Screen as a web app, where iOS may not start downloads (docs/ios/hosting.md)
+var iosHomeApp = isIOS && !iosWebView && (navigator.standalone === true || !!(window.matchMedia && matchMedia('(display-mode: standalone)').matches));
+// the online version: nothing to download, and big results on iPhone and iPad in Safari (web/README.md)
 var HOSTED_URL = 'https://powerbeef.github.io/discpress/';
 // iPhones report 4 cores whatever they have (docs/ios): the speed test tries at most that many there
 var iosThreadCap = isIOS && !(/iPad/.test(navigator.userAgent) || navigator.platform === 'MacIntel') ? 4 : 0;
@@ -1660,7 +1658,9 @@ function outputRow(job, out) {
   var btns = el('div', { class: 'row' });
   btns.append(saveButton([out], function () { saveOutput(job, out); }));
   var tooBig = useShareSheet && !viaShare([out]);
-  var note = out.downloaded ? ' · downloaded' : !tooBig ? '' : iosWebView ? ' · too large for the share sheet; if this app can\u2019t download it, use Discpress in Safari: ' + HOSTED_URL.replace(/^https:\/\/|\/$/g, '') : ' · too large for the share sheet, so it downloads';
+  var host = HOSTED_URL.replace(/^https:\/\/|\/$/g, '');
+  var note = out.downloaded ? ' · downloaded' : !tooBig ? '' : iosWebView ? ' · too large for the share sheet; if this app can\u2019t download it, use Discpress online in Safari: ' + host
+    : iosHomeApp ? ' · too large for the share sheet, so it downloads; if nothing happens, open ' + host + ' in Safari itself' : ' · too large for the share sheet, so it downloads';
   return el('div', { class: 'out' }, el('div', { class: 'nm' }, out.name, el('small', null, fmtBytes(out.size) + note)), btns);
 }
 
@@ -2007,10 +2007,13 @@ function notifyDone() {
 // bytes as the release, so it adds the manifest, the PNG touch icon and the service worker itself.
 function initHosted() {
   if (!(location.protocol === 'https:' || DEBUG.hosted) || !('serviceWorker' in navigator)) return;
-  document.head.append(el('link', { rel: 'manifest', href: 'manifest.webmanifest' }));
-  var icon = document.querySelector('link[rel="apple-touch-icon"]');
-  if (icon) icon.setAttribute('href', 'apple-touch-icon.png');
-  navigator.serviceWorker.register('sw.js').catch(function () { /* not the hosted copy */ });
+  // the manifest and icons are the online version's files: link them only where its service worker is
+  // (a copy of the file on another site keeps its built-in icon); private windows may refuse workers
+  navigator.serviceWorker.register('sw.js').then(function () {
+    document.head.append(el('link', { rel: 'manifest', href: 'manifest.webmanifest' }));
+    var icon = document.querySelector('link[rel="apple-touch-icon"]');
+    if (icon) icon.setAttribute('href', 'apple-touch-icon.png');
+  }, function () { /* not the online version */ });
 }
 // in an iPhone/iPad app's web view: big results can't leave it, so point to Safari
 function initIosTip() {

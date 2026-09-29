@@ -625,7 +625,7 @@ body { overflow-x: clip; }
       <p class="drop-foot"><svg><use href="#i-lock"/></svg>Runs entirely on your device. Nothing is uploaded.</p>
     </div>
     <div class="note warn" id="memTip" hidden>This page cannot use the browser's private storage here (for example when it is opened as a local file), so results are kept in memory. That is fine for CDs; for large DVD images <button class="btn sm" id="memTipBtn" style="margin-left:4px">write results directly into a folder</button></div>
-    <div class="note warn" id="iosTip" hidden><b>Big games: use Safari.</b> Apps like this one usually can't download files, and the share sheet can't take files over 512 MB, so most DVD, PSP and PS2 results can't be saved here. Open Discpress in Safari at <a id="hostedLink" href="https://powerbeef.github.io/discpress/" target="_blank" rel="noopener">powerbeef.github.io/discpress</a>: results of any size download to Files there, and it works offline once added to the Home Screen. <button class="btn sm" id="copyHosted">Copy link</button> <button class="btn sm" id="iosTipOk">OK</button></div>
+    <div class="note warn" id="iosTip" hidden><b>Big games: use Discpress online, in Safari.</b> Apps like this one usually can't download files, and the share sheet can't take files over 512 MB, so most DVD, PSP and PS2 results can't be saved here. Open <a id="hostedLink" href="https://powerbeef.github.io/discpress/" target="_blank" rel="noopener">powerbeef.github.io/discpress</a> in Safari: it's the same app with nothing to download, results of any size download to Files there, and it works offline once opened. <button class="btn sm" id="copyHosted">Copy link</button> <button class="btn sm" id="iosTipOk">OK</button></div>
     <div id="earlier" hidden></div>
     <div class="jobs" id="jobs"></div>
   </section>
@@ -706,13 +706,14 @@ body { overflow-x: clip; }
   <h3>Privacy</h3>
   <p>Nothing is uploaded. The real chdman from MAME runs inside your browser as WebAssembly; files are read directly from your device.</p>
   <h3>Big files</h3>
-  <p>Results are written to the browser's private storage on disk (not to memory), so multi-gigabyte DVD images work if your device has the free space. Download results when they are ready; the storage is cleared when you use <i>Free temporary storage</i> or reopen the page. On desktop Chrome and Edge you can instead have results written straight into a folder of your choice (Settings → Where to keep results).</p>
+  <p>Results are written to the browser's private storage on disk (not to memory), so multi-gigabyte DVD images work if your device has the free space. Download results when they are ready; the storage is cleared when you use <i>Free temporary storage</i> or reopen the page, except results not saved yet, which the page lists under <i>From your last visit</i>. On desktop Chrome and Edge you can instead have results written straight into a folder of your choice (Settings → Where to keep results).</p>
   <h3>Speed</h3>
   <p>Creating a CHD is CPU-heavy. This page spreads compression over several CPU threads (see Settings). Expect a few minutes for a CD on a computer and longer on a phone. <i>Nearly as small, faster</i> in Options tries each track with only the codec that suits it: about 1.7 times as fast for CDs and 1.5 for DVDs, with files at most 0.3% bigger. <i>Faster to create</i> trades more size for more speed.</p>
   <h3>On phones and tablets</h3>
   <p>The layout adapts to your screen, text size, notch, rotation and keyboard. In a normal browser the whole page scrolls; inside apps that preview files (and when installed on the home screen) the header stays fixed and only the content scrolls. If scrolling ever feels wrong, change it in Settings → Scrolling; Settings → Screen info shows what your device reports. </p>
   <p>Keep this page open and in the foreground while it works; the screen is kept awake automatically. If the browser suspends the tab, the job may stop and need to be restarted. On iPhone and iPad, iOS pauses a page within seconds of locking the phone or switching apps, and may reload it to free memory. A result that was finished but not yet saved is then kept, and listed under <i>From your last visit</i> the next time the page opens.</p>
-  <p><b>iPhone and iPad:</b> use Discpress in Safari at <b>powerbeef.github.io/discpress</b>, the same file published with each release. Safari can't open a local HTML file, and apps that can, such as Sitecase, usually can't save results over 512 MB. Share → <i>Add to Home Screen</i> keeps it as an app that works offline.</p>
+  <p><b>Two ways to run it.</b> Discpress is one HTML file you can download and keep, or use online at <b>powerbeef.github.io/discpress</b> with nothing to download. It's the same file, published with each release, and it works on your device in both cases: the page may not connect anywhere. Once opened, the online version works offline too.</p>
+  <p><b>iPhone and iPad:</b> use Discpress online, in Safari. Safari can't open a downloaded HTML file, and apps that can, such as Sitecase, usually can't save results over 512 MB. In Safari, results of any size download to Files → Downloads. Share → <i>Add to Home Screen</i> keeps it one tap away; if a big download doesn't start from there, open the page in Safari itself.</p>
   <h3>Compatibility of the results</h3>
   <p>The CHDs are standard CHD v5 files made by chdman from the official MAME 0.289 release, with the same checksums as desktop chdman 0.289 and the very same bytes as chdman 0.289 on Linux (unless you choose <i>Nearly as small, faster</i> or <i>Faster to create</i>, or keep cue sheets in CD CHDs, which change the bytes but not the checksums), so they work in MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast and other emulators. The <i>Zstandard</i> option needs a recent emulator build.</p>
   <h3>Everything else</h3>
@@ -6469,13 +6470,11 @@ function toast(msg, kind, ms) {
 var isMobile = (window.matchMedia && matchMedia('(pointer: coarse)').matches) || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 var cores = Math.max(1, navigator.hardwareConcurrency || 4);
-// iPhone and iPad (docs/ios/limits.md): the page and all its workers share one process that iOS stops
-// at about 1.5 GB on iPhones, and iOS 18+ gives fast wasm memory to only 3 instances per process, so
-// automatic mode uses at most the job worker plus 2 helpers on iPhones (2 performance cores; every
-// iPhone reports 4) and plus 4 on iPads
 // an iPhone/iPad app's web view (not Safari, not a home-screen web app): usually no downloads (docs/ios)
 var iosWebView = isIOS && !/Safari\//.test(navigator.userAgent) && navigator.standalone !== true && !(window.matchMedia && matchMedia('(display-mode: standalone)').matches);
-// the hosted copy, for Safari on iPhone and iPad (web/README.md)
+// opened from the Home Screen as a web app, where iOS may not start downloads (docs/ios/hosting.md)
+var iosHomeApp = isIOS && !iosWebView && (navigator.standalone === true || !!(window.matchMedia && matchMedia('(display-mode: standalone)').matches));
+// the online version: nothing to download, and big results on iPhone and iPad in Safari (web/README.md)
 var HOSTED_URL = 'https://powerbeef.github.io/discpress/';
 // iPhones report 4 cores whatever they have (docs/ios): the speed test tries at most that many there
 var iosThreadCap = isIOS && !(/iPad/.test(navigator.userAgent) || navigator.platform === 'MacIntel') ? 4 : 0;
@@ -8530,7 +8529,9 @@ function outputRow(job, out) {
   var btns = el('div', { class: 'row' });
   btns.append(saveButton([out], function () { saveOutput(job, out); }));
   var tooBig = useShareSheet && !viaShare([out]);
-  var note = out.downloaded ? ' · downloaded' : !tooBig ? '' : iosWebView ? ' · too large for the share sheet; if this app can\u2019t download it, use Discpress in Safari: ' + HOSTED_URL.replace(/^https:\/\/|\/$/g, '') : ' · too large for the share sheet, so it downloads';
+  var host = HOSTED_URL.replace(/^https:\/\/|\/$/g, '');
+  var note = out.downloaded ? ' · downloaded' : !tooBig ? '' : iosWebView ? ' · too large for the share sheet; if this app can\u2019t download it, use Discpress online in Safari: ' + host
+    : iosHomeApp ? ' · too large for the share sheet, so it downloads; if nothing happens, open ' + host + ' in Safari itself' : ' · too large for the share sheet, so it downloads';
   return el('div', { class: 'out' }, el('div', { class: 'nm' }, out.name, el('small', null, fmtBytes(out.size) + note)), btns);
 }
 
@@ -8877,10 +8878,13 @@ function notifyDone() {
 // bytes as the release, so it adds the manifest, the PNG touch icon and the service worker itself.
 function initHosted() {
   if (!(location.protocol === 'https:' || DEBUG.hosted) || !('serviceWorker' in navigator)) return;
-  document.head.append(el('link', { rel: 'manifest', href: 'manifest.webmanifest' }));
-  var icon = document.querySelector('link[rel="apple-touch-icon"]');
-  if (icon) icon.setAttribute('href', 'apple-touch-icon.png');
-  navigator.serviceWorker.register('sw.js').catch(function () { /* not the hosted copy */ });
+  // the manifest and icons are the online version's files: link them only where its service worker is
+  // (a copy of the file on another site keeps its built-in icon); private windows may refuse workers
+  navigator.serviceWorker.register('sw.js').then(function () {
+    document.head.append(el('link', { rel: 'manifest', href: 'manifest.webmanifest' }));
+    var icon = document.querySelector('link[rel="apple-touch-icon"]');
+    if (icon) icon.setAttribute('href', 'apple-touch-icon.png');
+  }, function () { /* not the online version */ });
 }
 // in an iPhone/iPad app's web view: big results can't leave it, so point to Safari
 function initIosTip() {
