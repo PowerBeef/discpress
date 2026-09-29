@@ -122,7 +122,9 @@ html.mode-doc body.has-dock .scroller { padding-bottom: calc(120px + var(--sa-bo
    window.innerHeight), so a host that insets the web view has nothing to scroll. */
 html.mode-shell, html.mode-shell body { height: 100%; overflow: hidden; overscroll-behavior: none; }
 html.mode-shell body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; height: var(--app-h, 100dvh); }
-html.mode-shell .top { position: relative; flex: none; }
+/* nothing scrolls under this header, so no frosted glass: iOS WebKit draws an element with a backdrop
+   filter, text included, out of focus in Home Screen web apps and app web views */
+html.mode-shell .top { position: relative; flex: none; background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; }
 html.mode-shell .scroller {
   flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
   -webkit-overflow-scrolling: touch; overscroll-behavior: contain; scrollbar-gutter: stable;
