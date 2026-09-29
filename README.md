@@ -74,7 +74,7 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
 - **Game recognition.** Discpress reads the disc's own boot files to find the console and serial number, then looks the game up in a built-in copy of the [Redump](http://redump.org) database (about 42,000 discs). When the size and CRC-32 match, the dump is marked as verified. When several releases share a serial number, you choose which one. Verifying a CHD also compares it with Redump, without extracting it.
 - **Official names.** For example `Metal Gear Solid (USA) (Disc 1).chd`. You can also type your own name, turn renaming off, or use **Rename** to fix the name of a CHD you already have.
 - **Fast.** Compression is spread over all your CPU cores, with WebAssembly SIMD when your browser supports it.
-- **Big files.** Results are written to the browser's private disk storage, so multi-gigabyte DVD images work. On desktop Chrome and Edge, results can go straight into a folder you choose.
+- **Big files.** Results are written to the browser's private disk storage, so multi-gigabyte DVD images work, and results not saved yet are still there after a reload. On desktop Chrome and Edge, results can go straight into a folder you choose. (Chrome and Edge give a page opened as a downloaded file no disk storage, so there it keeps results in memory: for big DVD images, choose a folder or use it online.)
 - **Made for phones.** It adapts to any screen, notch, rotation and text size, in light or dark mode. On iPhone and iPad, **Save to Files** uses the share sheet; results over 512 MB are downloaded instead, since the share sheet loads the whole file into memory. If iOS reloads the page before you save, finished results are still there, under **From your last visit**.
 - **Private and offline.** It's one self-contained HTML file with nothing to load from the internet. The online version is that same file: it runs on your device too, and once opened it works offline.
 
@@ -120,6 +120,7 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
    | **Best for** | Computers and Android, and using it without any internet | Nothing to download, and **big games on iPhone and iPad** |
    | **How to open it** | Double-click it on a computer; on Android, open it with Chrome or another browser | Open the link. On iPhone and iPad, use Safari |
    | **Offline** | Always | Once opened; you can also install it (Share → **Add to Home Screen**, or the install button in Chrome and Edge) |
+   | **Big DVD images** | In Chrome and Edge, choose a folder for the results (Settings): opened as a file, the page keeps them in memory | Results go to disk in every modern browser |
 
    **On iPhone and iPad, use it online, in Safari.** Safari can't open a downloaded HTML file, and apps that can, such as Sitecase, can't save results over about 512 MB (most DVD, PSP and PS2 games). In Safari, results of any size download to Files → Downloads. If a big download doesn't start from the Home Screen icon, open the page in Safari itself.
 2. **Add your games.** Pick every file of a game together (the `.cue` *and* its `.bin` files), or drag them onto the page.
@@ -151,7 +152,7 @@ Yes. Discpress runs chdman from the official MAME 0.289 release, so the files ar
 | Chrome and Edge 102+ (desktop, Android) | Full, plus saving straight into a folder |
 | Firefox 111+ | Full |
 
-Older browsers keep results in memory instead of on disk, which limits how big a disc can be.
+Older browsers keep results in memory instead of on disk, and so do Chrome and Edge when Discpress is opened as a downloaded file. That limits how big a disc can be, and a reload loses the results not saved yet (the page then says which). Choose a folder for results in Chrome and Edge, or use the online version.
 
 The downloaded file and the online version work the same in each of them. On iPhone and iPad, use the [online version](https://powerbeef.github.io/discpress/) in Safari. Apps that open HTML files, such as Sitecase, run it too, but they can't save results over about 512 MB (most DVD, PSP and PS2 games): the page tells you when that's the case. Lockdown Mode turns off WebAssembly, which Discpress needs.
 </details>
