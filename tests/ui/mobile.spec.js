@@ -52,6 +52,8 @@ test('inside an iOS app web view the header stays fixed and the content scrolls'
   const app = new App(page, testInfo, false);
   await app.open();
   await expect(page.locator('html')).toHaveClass(/mode-shell/);
+  // no frosted glass on the fixed header: iOS draws it out of focus there
+  expect(await page.locator('header.top').evaluate(h => getComputedStyle(h).backdropFilter)).toBe('none');
   await app.add([...fixture('ps1-single').add, ...fixture('saturn').add, ...fixture('segacd').add, ...fixture('ps2-dvd').add]);
   await expect(app.jobs()).toHaveCount(4);
   const scroller = page.locator('#scroller');
@@ -107,6 +109,17 @@ test('on iPhone, a result too large for the share sheet is downloaded without it
   await out.locator('button').click();
   expect((await download).suggestedFilename()).toMatch(/\.chd$/);
   expect(await page.evaluate(() => window.__shared)).toBe(0);
+});
+
+test('opened from the Home Screen, the fixed header is sharp: no frosted glass', async ({ page }, testInfo) => {
+  test.skip(!/iphone/.test(testInfo.project.name), 'iOS only');
+  await page.addInitScript(() => Object.defineProperty(navigator, 'standalone', { get: () => true }));
+  const app = new App(page, testInfo, false);
+  await app.open();
+  await expect(page.locator('html')).toHaveClass(/mode-shell/);
+  const style = await page.locator('header.top').evaluate(h => { const c = getComputedStyle(h); return [c.backdropFilter, c.backgroundColor]; });
+  expect(style[0]).toBe('none');
+  expect(style[1]).not.toMatch(/rgba\(.*, 0(\.\d+)?\)$/); // opaque
 });
 
 test('opened from the Home Screen, a large result downloads and says to use Safari if nothing happens', async ({ page }, testInfo) => {
