@@ -6,7 +6,7 @@ can usually can't save results over 512 MB (see `docs/ios/README.md`). In Safari
 download into Files → Downloads. In any browser, the page can be installed (Add to Home Screen, or Chrome
 and Edge's install button) and used offline.
 
-The Release workflow (`.github/workflows/release.yml`, job `pages`) publishes, for each release:
+The Release workflow (`.github/workflows/release.yml`) publishes it together with the download: the release stays a draft until the site is deployed, and `scripts/check-release.sh` then checks that both are the same file (also daily, `release-check.yml`). For each release it publishes:
 
 - `index.html`: the release's `dist/discpress.html`, byte for byte, and `discpress.html.sha256`, its SHA-256
   (the same file is attached to the release, so anyone can compare the two);

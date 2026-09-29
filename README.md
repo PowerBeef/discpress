@@ -39,7 +39,7 @@
 
 A single PlayStation or Saturn game can be a dozen `.bin` files plus a `.cue`. **CHD** packs the whole disc into one compressed file that takes much less space, loses nothing, and loads directly in MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast and more.
 
-The standard tool for making CHDs is **chdman**, a command-line program from the MAME project. **Discpress** puts the real chdman inside a friendly app that runs in your web browser, on your phone or your computer. There's no terminal and nothing to install, and your files never leave your device. It also recognizes your games and names each file after its official title.
+The standard tool for making CHDs is **chdman**, a command-line program from the MAME project. **Discpress** puts its own fork of chdman, built from MAME 0.289 and made faster with its bugs fixed, inside a friendly app that runs in your web browser, on your phone or your computer. By default it makes the very same CHD files as chdman 0.289. There's no terminal and nothing to install, and your files never leave your device. It also recognizes your games and names each file after its official title.
 
 Use it the way that suits you: **download it** as one HTML file that works anywhere, even without internet, or **use it online** with nothing to download. The online version is also the way to convert big games on iPhone and iPad.
 
@@ -50,7 +50,7 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
     <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/steps-mobile-dark.png">
     <source media="(max-width: 600px)" srcset="docs/brand/steps-mobile-light.png">
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/steps-dark.png">
-    <img src="docs/brand/steps-light.png" width="100%" alt="1. Add your games: pick the cue and bin files, a gdi set or an iso; Discpress spots the console and the exact game. 2. Press Start: the real chdman compresses every disc using all your CPU cores. 3. Save the CHDs, named after the official title and ready for your emulator.">
+    <img src="docs/brand/steps-light.png" width="100%" alt="1. Add your games: pick the cue and bin files, a gdi set or an iso; Discpress spots the console and the exact game. 2. Press Start: Discpress’s chdman compresses every disc using all your CPU cores. 3. Save the CHDs, named after the official title and ready for your emulator.">
   </picture>
 </p>
 
@@ -61,7 +61,7 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
     <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/features-mobile-dark.png">
     <source media="(max-width: 600px)" srcset="docs/brand/features-mobile-light.png">
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/features-dark.png">
-    <img src="docs/brand/features-light.png" width="100%" alt="The real chdman. Knows your games. Multi-core fast. Made for phones. Big discs welcome. Totally private.">
+    <img src="docs/brand/features-light.png" width="100%" alt="chdman, improved. Knows your games. Multi-core fast. Made for phones. Big discs welcome. Totally private.">
   </picture>
 </p>
 
@@ -205,7 +205,7 @@ source ~/emsdk/emsdk_env.sh
 - `tests/` has end-to-end UI tests (Playwright) that check every conversion against native chdman, plus conversion benchmarks. See [`tests/README.md`](tests/README.md).
 - To refresh the game database with the latest Redump data, run `./scripts/update-db.sh`, then `python3 scripts/assemble.py`.
 - The README graphics are rendered from `scripts/brand/brand.html` with `python3 scripts/brand/render.py` (needs Playwright).
-- Pushing a tag like `v1.0.0`, or running **Actions → Release → Run workflow**, publishes a GitHub release with `discpress.html` and its SHA-256 attached, and deploys the same file to GitHub Pages as the online version (see `.github/workflows/release.yml` and [`web/README.md`](web/README.md)). Release notes come from `.github/release-notes/<tag>.md` when that file exists.
+- Running **Actions → Release → Run workflow** on `main` with a tag such as `v1.3.5` publishes a release: `discpress.html` and its SHA-256 as the download, and the same file on GitHub Pages as the online version. The download goes public only once the site is deployed, so both always carry the same version; a daily check (`scripts/check-release.sh`) confirms it. See `.github/workflows/release.yml` and [`web/README.md`](web/README.md). Release notes come from `.github/release-notes/<tag>.md` when that file exists.
 
 </details>
 

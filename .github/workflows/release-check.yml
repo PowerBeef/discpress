@@ -1,0 +1,20 @@
+name: Release check
+
+# Checks daily that the latest release's download and the online version on GitHub Pages are the same
+# file, with matching .sha256 files (scripts/check-release.sh). A failure shows here, and GitHub emails
+# the repository's owner about failed scheduled runs.
+on:
+  schedule:
+    - cron: '37 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare the download and the online version
+        run: scripts/check-release.sh latest --wait 600

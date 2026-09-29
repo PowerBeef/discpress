@@ -1,79 +1,192 @@
 name: Release
 
-# Publishes dist/discpress.html as a release download.
-# Any of these works:
-#   - Actions > Release > Run workflow, enter a tag such as v1.0.0
-#   - push a tag (git tag v1.0.0 && git push origin v1.0.0)
-#   - publish a release on GitHub
-# If .github/release-notes/<tag>.md exists, it becomes the release notes
-# (replacing what's there on every run); otherwise GitHub generates them.
-# The same file, byte for byte, is then published on GitHub Pages as the hosted copy for
-# iPhone and iPad (web/README.md); both carry discpress.html.sha256 so they can be compared.
+# Publishes a release: dist/discpress.html as the download (the offline build) and, the same file byte
+# for byte, as the online version on GitHub Pages (web/README.md). The two change together:
+#   1. prepare: picks the release's commit (the tag's, or this branch's latest for a new tag), checks
+#      that its dist/discpress.html is what app/ and db/ assemble to (scripts/check-dist.sh), and packs
+#      the download and the site;
+#   2. release: creates the release as a draft (or updates an existing one) with the download attached;
+#   3. pages: deploys the site, for the newest version only (an older tag's re-run leaves it alone);
+#   4. publish: makes the draft public only once the site is deployed, so a failed deploy leaves both
+#      at the previous release;
+#   5. verify: scripts/check-release.sh checks that the download, its .sha256, the site and the site's
+#      .sha256 are all that file (release-check.yml repeats the check daily).
+# Run it from Actions > Release > Run workflow on main, with a tag such as v1.3.5. A pushed v* tag or a
+# release published by hand starts it too: it reruns itself on main for that tag, since only main may
+# deploy to GitHub Pages.
+# If .github/release-notes/<tag>.md exists on main, it becomes the release notes (replacing what's there
+# on every run); otherwise GitHub generates them.
 # The deploy needs Pages turned on once: Settings > Pages > Source: GitHub Actions.
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag, such as v1.3.5 (created on the latest commit of the branch run from, if missing)'
+        required: true
   push:
     tags: ['v*']
   release:
     types: [published]
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag (created on the selected branch if missing)'
-        required: true
-        default: 'v1.0.0'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
 
 jobs:
-  publish:
+  # A tag pushed or a release published by hand: run this workflow on main for that tag.
+  forward:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
     steps:
-      - uses: actions/checkout@v4
-      - name: Attach discpress.html to the release
+      - name: Run the release on main
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+          TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "${{ github.event.repository.default_branch }}" -f tag="$TAG"
+
+  prepare:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # only to see a draft release (drafts need write access to read)
+    outputs:
+      sha: ${{ steps.pick.outputs.sha }}
+      latest: ${{ steps.pick.outputs.latest }}
+      digest: ${{ steps.pick.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Pick the release's commit
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
         run: |
           case "$TAG" in v[0-9]*) ;; *) echo "::error::Tag must look like v1.0.0, got '$TAG'"; exit 1 ;; esac
-          test -f dist/discpress.html || { echo "::error::dist/discpress.html is missing"; exit 1; }
+          draft=$(gh release view "$TAG" --json isDraft,targetCommitish --jq 'select(.isDraft) | .targetCommitish' 2>/dev/null || true)
+          if git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null; then
+            sha=$(git rev-parse "$TAG^{commit}")
+          elif [ -n "$draft" ]; then
+            # a draft left by a run whose deploy failed: the same commit again, even if main moved on
+            sha=$(git rev-parse "$draft^{commit}")
+          else
+            sha=$GITHUB_SHA
+          fi
+          git checkout -q "$sha"
+          test -f dist/discpress.html || { echo "::error::dist/discpress.html is missing at $sha"; exit 1; }
+          # the site shows the newest version: an older tag's re-run updates only its release
+          top=$({ git tag -l 'v*'; echo "$TAG"; } | sort -V | tail -1)
+          {
+            echo "sha=$sha"
+            echo "latest=$([ "$top" = "$TAG" ] && echo true || echo false)"
+            echo "digest=$(sha256sum < dist/discpress.html | cut -d' ' -f1)"
+          } >> "$GITHUB_OUTPUT"
+          echo "$TAG: commit $sha, newest version: $([ "$top" = "$TAG" ] && echo yes || echo "no ($top is)")"
+      - name: Check that the page matches app/ and db/
+        run: scripts/check-dist.sh
+      - name: Pack the download and the site
+        run: |
+          mkdir -p files _site
+          cp dist/discpress.html files/
+          (cd files && sha256sum discpress.html > discpress.html.sha256)
+          cp dist/discpress.html _site/index.html
+          cp files/discpress.html.sha256 web/sw.js web/manifest.webmanifest web/*.png _site/
+          touch _site/.nojekyll
+      - uses: actions/upload-artifact@v4
+        with:
+          name: download
+          path: files
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  release:
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4 # main, for the release notes
+      - uses: actions/download-artifact@v4
+        with:
+          name: download
+          path: files
+      - name: Create or update the release, with the download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+          LATEST: ${{ needs.prepare.outputs.latest }}
+          DIGEST: ${{ needs.prepare.outputs.digest }}
+        run: |
           NOTES=".github/release-notes/$TAG.md"
           if gh release view "$TAG" >/dev/null 2>&1; then
             if [ -f "$NOTES" ]; then gh release edit "$TAG" --notes-file "$NOTES"; fi
-          elif [ -f "$NOTES" ]; then
-            gh release create "$TAG" --target "$GITHUB_SHA" --title "Discpress $TAG" --notes-file "$NOTES"
+            # replace the download only if it differs: replacing removes it for a moment
+            have=$(gh release download "$TAG" -p discpress.html.sha256 -O - 2>/dev/null | awk '{print $1}' || true)
+            if [ "$have" = "$DIGEST" ]; then echo "$TAG already has this download"; exit 0; fi
           else
-            gh release create "$TAG" --target "$GITHUB_SHA" --title "Discpress $TAG" --generate-notes
+            # a draft until the site is deployed (publish job); the tag is made when it is published
+            if [ -f "$NOTES" ]; then notes=(--notes-file "$NOTES"); else notes=(--generate-notes); fi
+            gh release create "$TAG" --draft --target "$SHA" --title "Discpress $TAG" --latest="$LATEST" "${notes[@]}"
           fi
-          gh release upload "$TAG" dist/discpress.html --clobber
-          (cd dist && sha256sum discpress.html > ../discpress.html.sha256)
-          gh release upload "$TAG" discpress.html.sha256 --clobber
+          gh release upload "$TAG" files/discpress.html files/discpress.html.sha256 --clobber
 
   pages:
-    needs: publish
+    needs: [prepare, release]
+    if: needs.prepare.outputs.latest == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
       pages: write
       id-token: write
+    # one deploy at a time, in order
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Assemble the site
-        run: |
-          mkdir _site
-          cp dist/discpress.html _site/index.html
-          cp web/sw.js web/manifest.webmanifest web/*.png _site/
-          (cd dist && sha256sum discpress.html) > _site/discpress.html.sha256
-          touch _site/.nojekyll
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v4
-        with:
-          path: _site
       - id: deploy
         uses: actions/deploy-pages@v4
+
+  publish:
+    needs: [prepare, release, pages]
+    # after the site (or without it, for an older tag), never after a failed deploy
+    if: ${{ !cancelled() && needs.release.result == 'success' && (needs.pages.result == 'success' || needs.pages.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Make the release public
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          LATEST: ${{ needs.prepare.outputs.latest }}
+        run: |
+          if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true ]; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$LATEST"
+          else
+            echo "$TAG is already public"
+          fi
+
+  verify:
+    needs: [prepare, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the download and the online version
+        env:
+          TAG: ${{ inputs.tag }}
+          DIGEST: ${{ needs.prepare.outputs.digest }}
+          LATEST: ${{ needs.prepare.outputs.latest }}
+        # GitHub Pages caches pages for up to 10 minutes
+        run: |
+          if [ "$LATEST" = true ]; then site=(); else site=(--no-site); fi
+          scripts/check-release.sh "$TAG" --expect "$DIGEST" --wait 900 "${site[@]}"
