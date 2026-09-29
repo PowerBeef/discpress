@@ -150,6 +150,13 @@ cdrom_file::cdrom_file(std::string_view inputfile)
 
 	for (int i = 0; i < cdtoc.numtrks; i++)
 	{
+		// Discpress: only chdman reads a track in pieces
+		if (!cdtrack_info.track[i].pieces.empty())
+		{
+			osd_printf_error("Track %d is in several files, or holds zeros that no file does: convert it with chdman\n", i + 1);
+			throw nullptr;
+		}
+
 		osd_file::ptr file;
 		std::uint64_t length;
 		std::error_condition const filerr = osd_file::open(cdtrack_info.track[i].fname, OPEN_FLAG_READ, file, length);
@@ -1817,7 +1824,6 @@ std::error_condition cdrom_file::parse_nero(std::string_view tocfname, toc &outt
 				return chd_file::error::INVALID_DATA;
 			}
 
-			uint32_t offset = 0;
 			for (int track = start; track <= end; track++)
 			{
 				uint32_t size, mode;
@@ -1833,7 +1839,15 @@ std::error_condition cdrom_file::parse_nero(std::string_view tocfname, toc &outt
 
 //              printf("Track %d: sector size %d mode %x index0 %llx index1 %llx track_end %llx (pregap %d sectors, length %d sectors)\n", track, size, mode, index0, index1, track_end, (uint32_t)(index1-index0)/size, (uint32_t)(track_end-index1)/size);
 				outinfo.track[track-1].fname.assign(tocfname);
-				outinfo.track[track-1].offset = offset + (uint32_t)(index1-index0);
+				// Discpress: the track starts at its INDEX 00, where the image holds it (0.289 added up the
+				// lengths of the tracks before it without their pregaps, wrong after a track with one)
+				if (index0 > index1 || index1 > track_end || track_end > filesize)
+				{
+					osd_printf_error("ERROR: NRG image's track %d isn't in the file\n", track);
+					fclose(infile);
+					return chd_file::error::INVALID_DATA;
+				}
+				outinfo.track[track-1].offset = (uint32_t)index0;
 				outinfo.track[track-1].idx[0] = outinfo.track[track-1].idx[1] = 0;
 
 				switch (mode)
@@ -1897,15 +1911,15 @@ std::error_condition cdrom_file::parse_nero(std::string_view tocfname, toc &outt
 				outtoc.tracks[track-1].subsize = 0;
 
 				outtoc.tracks[track-1].pregap = (uint32_t)(index1-index0)/size;
-				outtoc.tracks[track-1].frames = (uint32_t)(track_end-index1)/size;
+				// Discpress: the pregap's frames (INDEX 00 to 01) are the image's, stored with the track as a cue
+				// sheet's INDEX 00 in the same file is (0.289 dropped them and made the pregap virtual)
+				outtoc.tracks[track-1].frames = (uint32_t)(track_end-index0)/size;
 				outtoc.tracks[track-1].postgap = 0;
-				outtoc.tracks[track-1].pgtype = 0;
+				outtoc.tracks[track-1].pgtype = outtoc.tracks[track-1].pregap ? outtoc.tracks[track-1].trktype : 0;
 				outtoc.tracks[track-1].pgsub = CD_SUB_NONE;
-				outtoc.tracks[track-1].pgdatasize = 0;
+				outtoc.tracks[track-1].pgdatasize = outtoc.tracks[track-1].pregap ? size : 0;
 				outtoc.tracks[track-1].pgsubsize = 0;
 				outtoc.tracks[track-1].padframes = 0;
-
-				offset += (uint32_t)track_end-index1;
 			}
 		}
 
@@ -1965,6 +1979,20 @@ std::error_condition cdrom_file::parse_iso(std::string_view tocfname, toc &outto
 	outinfo.reset();
 
 	uint64_t size = get_file_size(tocfname);
+
+	// Discpress: an image of 2352-byte sectors opens with a sector's sync pattern and a mode byte of 1 or 2, and so
+	// does its second sector. 0.289 typed it by its size alone, so one of 128 sectors times any number (a size
+	// that is also a multiple of 2048) came out as 2048-byte sectors, and one of 146 (a multiple of 2336) as
+	// 2336-byte sectors.
+	bool raw = false;
+	if ((size % 2352) == 0 && size >= 2 * 2352)
+	{
+		static const uint8_t sync[12] = { 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00 };
+		uint8_t sector[2 * 2352];
+		raw = fread(sector, sizeof(sector), 1, infile) == 1;
+		for (int s = 0; raw && s < 2; s++)
+			raw = !memcmp(&sector[s * 2352], sync, sizeof(sync)) && (sector[s * 2352 + 15] == 1 || sector[s * 2352 + 15] == 2);
+	}
 	fclose(infile);
 
 
@@ -1975,7 +2003,15 @@ std::error_condition cdrom_file::parse_iso(std::string_view tocfname, toc &outto
 	outinfo.track[0].offset = 0;
 	outinfo.track[0].idx[0] = outinfo.track[0].idx[1] = 0;
 
-	if ((size % 2048) == 0)
+	if (raw)
+	{
+		// 2352 byte mode 2 raw, as 0.289 types every other image of 2352-byte sectors
+		outtoc.tracks[0].trktype = CD_TRACK_MODE2_RAW;
+		outtoc.tracks[0].frames = size / 2352;
+		outtoc.tracks[0].datasize = 2352;
+		outinfo.track[0].swap = false;
+	}
+	else if ((size % 2048) == 0)
 	{
 		outtoc.tracks[0].trktype = CD_TRACK_MODE1;
 		outtoc.tracks[0].frames = size / 2048;
@@ -2280,6 +2316,10 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 	uint32_t curwavoffs = 0, curwavlen = 0;
 	std::vector<bool> motorola(MAX_TRACKS + 1);
 	std::vector<std::pair<uint32_t, uint32_t> > wavdata(MAX_TRACKS + 1);
+	// Discpress: for a track whose INDEX 01 is in a later FILE than its TRACK, the FILE it started in: where its
+	// INDEX 00 is in it (-1: none), that file's .WAV samples and byte order, and the pregap's frames in it
+	struct pregap_file { std::string fname; int32_t idx0 = -1; std::pair<uint32_t, uint32_t> wavdata; bool motorola = false; uint64_t start = 0; uint32_t frames = 0; };
+	std::vector<pregap_file> pgfile(MAX_TRACKS + 1);
 
 	FILE *infile = fopen(path.c_str(), "rt");
 	if (!infile)
@@ -2501,6 +2541,7 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 			}
 			motorola[trknum] = curmotorola;
 			wavdata[trknum] = std::make_pair(curwavoffs, curwavlen);
+			pgfile[trknum] = pregap_file();
 
 			outinfo.track[trknum].fname.assign(lastfname); /* default filename to the last one */
 
@@ -2548,6 +2589,41 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 			}
 			if (trknum < 0)
 				return before_track("INDEX");
+
+			// Discpress: INDEX 01 in a later FILE than the track's TRACK: the track is in that file, and its
+			// pregap starts at its INDEX 00 in the previous one (EAC's "gaps appended to the previous track").
+			// 0.289 read the track from the previous file at the new file's INDEX points.
+			if (idx == 0)
+			{
+				pgfile[trknum].fname.assign(lastfname);
+				pgfile[trknum].wavdata = std::make_pair(curwavoffs, curwavlen);
+				pgfile[trknum].motorola = curmotorola;
+			}
+			if (idx == 1 && outinfo.track[trknum].fname != lastfname)
+			{
+				if (outinfo.track[trknum].idx[0] != -1 && pgfile[trknum].fname != lastfname)
+				{
+					if (is_gdrom || outtoc.tracks[trknum].pregap != 0)
+					{
+						fclose(infile);
+						osd_printf_error("ERROR: track %d's INDEX 00 and INDEX 01 are in different FILEs, which isn't supported %s\n", trknum + 1, is_gdrom ? "for a GD-ROM" : "with PREGAP");
+						return chd_file::error::UNSUPPORTED_FORMAT;
+					}
+					pgfile[trknum].idx0 = outinfo.track[trknum].idx[0];
+					// the rest of the pregap is at the start of the new file
+					outinfo.track[trknum].idx[0] = 0;
+				}
+				outinfo.track[trknum].fname.assign(lastfname);
+				motorola[trknum] = curmotorola;
+				wavdata[trknum] = std::make_pair(curwavoffs, curwavlen);
+				if (wavlen != 0)
+				{
+					// the new file's samples, as TRACK takes them after a WAVE file
+					outtoc.tracks[trknum].frames = wavlen/2352;
+					outinfo.track[trknum].offset = wavoffs;
+					wavoffs = wavlen = 0;
+				}
+			}
 
 			outinfo.track[trknum].idx[idx] = frames;
 
@@ -2777,6 +2853,65 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 		}
 	}
 
+	/* Discpress: a track whose INDEX 00 is in the FILE before its INDEX 01's: its pregap runs from there to the end
+	   of that file, which the track before it no longer takes; the track is then read in two pieces, as one file of
+	   both would give it */
+	for (trknum = 0; trknum < outtoc.numtrks; trknum++)
+	{
+		pregap_file &pg = pgfile[trknum];
+		if (pg.idx0 == -1)
+			continue;
+		const uint32_t framesize = outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize;
+		uint64_t end;
+		if (pg.wavdata.second != 0)
+		{
+			pg.start = pg.wavdata.first + uint64_t(pg.idx0) * framesize;
+			end = uint64_t(pg.wavdata.first) + pg.wavdata.second;
+		}
+		else
+		{
+			pg.start = uint64_t(pg.idx0) * framesize;
+			end = get_file_size(pg.fname);
+			if (end == 0)
+			{
+				osd_printf_error("ERROR: couldn't find bin file [%s]\n", pg.fname);
+				return std::errc::no_such_file_or_directory;
+			}
+		}
+		pg.frames = end > pg.start ? (end - pg.start) / framesize : 0;
+		if (trknum > 0 && outinfo.track[trknum-1].fname == pg.fname)
+		{
+			track_info &prev = outtoc.tracks[trknum-1];
+			const uint32_t prevsize = prev.datasize + prev.subsize;
+			if (pg.start < outinfo.track[trknum-1].offset)
+			{
+				osd_printf_error("ERROR: track %d's INDEX 00 is before track %d\n", trknum+1, trknum);
+				return chd_file::error::INVALID_DATA;
+			}
+			prev.frames = (pg.start - outinfo.track[trknum-1].offset) / prevsize;
+		}
+	}
+	for (trknum = 0; trknum < outtoc.numtrks; trknum++)
+	{
+		const pregap_file &pg = pgfile[trknum];
+		if (pg.idx0 == -1)
+			continue;
+		track_info &track = outtoc.tracks[trknum];
+		if (track.trktype == CD_TRACK_AUDIO && pg.motorola != motorola[trknum])
+		{
+			osd_printf_error("ERROR: track %d is in a MOTOROLA file and another that isn't\n", trknum+1);
+			return chd_file::error::UNSUPPORTED_FORMAT;
+		}
+		if (pg.frames == 0)
+			continue;
+		outinfo.track[trknum].pieces.push_back(track_input_piece { pg.fname, pg.start, pg.frames });
+		outinfo.track[trknum].pieces.push_back(track_input_piece { outinfo.track[trknum].fname, outinfo.track[trknum].offset, track.frames });
+		track.frames += pg.frames;
+		track.pregap += pg.frames;
+		track.pgtype = track.trktype;
+		track.pgdatasize = track.datasize;
+	}
+
 	if (is_gdrom)
 	{
 		/*
@@ -2973,6 +3108,28 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 		return std::error_condition(chd_file::error::INVALID_DATA);
 	};
 
+	// Discpress: what each track holds, in order, as cdrdao reads it: runs of a file's bytes (FILE, AUDIOFILE,
+	// DATAFILE) and of zeros that no file holds (ZERO, SILENCE, PREGAP), and where START puts INDEX 01. After
+	// the last line they become the track's frames, pregap and pieces. 0.289 kept only the last file statement
+	// of a track, ignored ZERO, SILENCE and PREGAP, and made START a pregap that isn't in the file.
+	struct toc_run { std::string fname; uint64_t offset; uint32_t frames; bool swap; };
+	constexpr uint64_t max_frames = 0x7fffffff / FRAME_SIZE; // 2 GB
+	std::vector<std::vector<toc_run> > runs(MAX_TRACKS);
+	std::vector<int> startpos(MAX_TRACKS, -1);
+	auto const track_length = [&runs] (int trk)
+	{
+		uint64_t frames = 0;
+		for (const toc_run &run : runs[trk])
+			frames += run.frames;
+		return frames;
+	};
+	auto const fail = [&infile] (std::error_condition err)
+	{
+		if (infile)
+			fclose(infile);
+		return err;
+	};
+
 	while (!feof(infile))
 	{
 		/* get the next line */
@@ -3031,82 +3188,106 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 		}
 		else if ((!strcmp(token, "DATAFILE")) || (!strcmp(token, "AUDIOFILE")) || (!strcmp(token, "FILE")))
 		{
-			int f;
 			if (trknum < 0)
 				return before_track(token);
+
+			// Discpress: as cdrdao reads them, DATAFILE "file" [#offset] [length] and AUDIOFILE (or FILE) "file"
+			// [SWAP] [#offset] start [length], where a time is MM:SS:FF or a number of bytes (DATAFILE) or
+			// samples (AUDIOFILE), and without a length the rest of the file is the track's. Also, as 0.289
+			// read it, DATAFILE "file" [#offset] start length. 0.289 read a lone time after track 1 as an
+			// offset (DATAFILE) or as a length (AUDIOFILE on track 1), a number as frames, and gave a
+			// statement without a length no data.
+			const bool datafile = !strcmp(token, "DATAFILE");
+			const uint32_t framesize = outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize;
+			toc_run run { std::string(), 0, 0, false };
 
 			/* found the data file for a track */
 			TOKENIZE
 
 			/* keep the filename */
-			outinfo.track[trknum].fname.assign(path).append(token);
+			run.fname.assign(path).append(token);
 
-			/* get either the offset or the length */
 			TOKENIZE
-
 			if (!strcmp(token, "SWAP"))
 			{
+				run.swap = true;
 				TOKENIZE
-
-				outinfo.track[trknum].swap = true;
-			}
-			else
-			{
-				outinfo.track[trknum].swap = false;
 			}
 
 			if (token[0] == '#')
 			{
 				/* it's a decimal offset, use it */
-				f = strtoul(&token[1], nullptr, 10);
-			}
-			else if (isdigit((uint8_t)token[0]))
-			{
-				/* convert the time to an offset */
-				f = msf_to_frames(token);
-
-				f *= (outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize);
-			}
-			else
-			{
-				f = 0;
-			}
-
-			outinfo.track[trknum].offset = f;
-
-			TOKENIZE
-
-			if (isdigit((uint8_t)token[0]))
-			{
-				// this could be the length or an offset from the previous field.
-				f = msf_to_frames(token);
-
+				run.offset = strtoull(&token[1], nullptr, 10);
 				TOKENIZE
-
-				if (isdigit((uint8_t)token[0]))
-				{
-					// it was an offset.
-					f *= (outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize);
-
-					outinfo.track[trknum].offset += f;
-
-					// this is the length.
-					f = msf_to_frames(token);
-				}
 			}
-			else if (trknum == 0 && outinfo.track[trknum].offset != 0)
+
+			uint64_t times[2];
+			int ntimes = 0;
+			while (ntimes < 2 && isdigit((uint8_t)token[0]))
 			{
-				/* the 1st track might have a length with no offset */
-				f = outinfo.track[trknum].offset / (outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize);
-				outinfo.track[trknum].offset = 0;
+				if (strchr(token, ':'))
+					times[ntimes++] = uint64_t(msf_to_frames(token)) * framesize;
+				else
+					times[ntimes++] = strtoull(token, nullptr, 10) * (datafile ? 1 : 4);
+				TOKENIZE
+			}
+
+			uint64_t length;
+			if (datafile ? (ntimes == 2) : (ntimes >= 1))
+				run.offset += times[0];
+			if (ntimes == 2 || (datafile && ntimes == 1))
+			{
+				length = times[ntimes - 1];
 			}
 			else
 			{
-				/* guesstimate the track length? */
-				f = 0;
+				uint64_t const filesize = get_file_size(run.fname);
+				if (filesize == 0)
+				{
+					osd_printf_error("ERROR: couldn't find bin file [%s]\n", run.fname);
+					return fail(std::errc::no_such_file_or_directory);
+				}
+				length = (filesize > run.offset) ? filesize - run.offset : 0;
 			}
-
-			outtoc.tracks[trknum].frames = f;
+			if (length / framesize > max_frames)
+			{
+				osd_printf_error("ERROR: track %d is too long\n", trknum + 1);
+				return fail(chd_file::error::INVALID_DATA);
+			}
+			run.frames = uint32_t(length / framesize);
+			runs[trknum].push_back(std::move(run));
+		}
+		else if (!strcmp(token, "ZERO") || !strcmp(token, "SILENCE") || !strcmp(token, "PREGAP"))
+		{
+			// Discpress: ZERO [mode] [sub-channel mode] length, SILENCE length: zeros that no file holds;
+			// PREGAP length: as much silence, then START (0.289 ignored the three)
+			if (trknum < 0)
+				return before_track(token);
+			const bool pregap = !strcmp(token, "PREGAP"), silence = !strcmp(token, "SILENCE");
+			const uint32_t framesize = outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize;
+			do
+			{
+				TOKENIZE
+			}
+			while (token[0] && !isdigit((uint8_t)token[0]));
+			if (!token[0])
+			{
+				osd_printf_error("ERROR: track %d has a ZERO, SILENCE or PREGAP without a length\n", trknum + 1);
+				return fail(chd_file::error::INVALID_DATA);
+			}
+			uint64_t frames;
+			if (strchr(token, ':') || pregap)
+				frames = msf_to_frames(token);
+			else
+				frames = strtoull(token, nullptr, 10) * (silence ? 4 : 1) / framesize;
+			if (frames > max_frames)
+			{
+				osd_printf_error("ERROR: track %d is too long\n", trknum + 1);
+				return fail(chd_file::error::INVALID_DATA);
+			}
+			runs[trknum].push_back(toc_run { std::string(), 0, uint32_t(frames), false });
+			if (pregap)
+				startpos[trknum] = int(track_length(trknum));
 		}
 		else if (!strcmp(token, "TRACK"))
 		{
@@ -3145,22 +3326,112 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 		{
 			if (trknum < 0)
 				return before_track("START");
-			int frames;
-
 			/* get index */
 			TOKENIZE
-			frames = msf_to_frames(token);
 
-			outtoc.tracks[trknum].pregap = frames;
+			// Discpress: where INDEX 01 is, from the start of the track's data (START alone: where the
+			// statements so far end)
+			startpos[trknum] = isdigit((uint8_t)token[0]) ? msf_to_frames(token) : int(track_length(trknum));
 		}
 	}
 
 	/* close the input TOC */
 	fclose(infile);
+	infile = nullptr;
 
 	/* store the number of tracks found */
 	outtoc.numtrks = trknum + 1;
 	outtoc.numsessions = 1;
+
+	// Discpress: each track's frames, pregap and where they are
+	for (int trk = 0; trk < int(outtoc.numtrks); trk++)
+	{
+		track_info &info = outtoc.tracks[trk];
+		track_input_entry &input = outinfo.track[trk];
+		std::vector<toc_run> &trackruns = runs[trk];
+		uint64_t const total = track_length(trk);
+		if (total == 0)
+		{
+			osd_printf_error("ERROR: track %d holds no data\n", trk + 1);
+			return chd_file::error::INVALID_DATA;
+		}
+		if (total > max_frames)
+		{
+			osd_printf_error("ERROR: track %d is too long\n", trk + 1);
+			return chd_file::error::INVALID_DATA;
+		}
+
+		uint32_t const start = std::max(startpos[trk], 0);
+		if (start >= total)
+		{
+			osd_printf_error("ERROR: track %d's START is at or past its end\n", trk + 1);
+			return chd_file::error::INVALID_DATA;
+		}
+		uint64_t zeros = 0;
+		for (const toc_run &run : trackruns)
+		{
+			if (!run.fname.empty())
+				break;
+			zeros += run.frames;
+		}
+		if (start > 0 && start <= zeros)
+		{
+			// zeros before START that no file holds: a pregap that isn't in the file, as a cue sheet's PREGAP
+			info.pregap = start;
+			for (uint32_t drop = start; drop > 0; )
+			{
+				uint32_t const n = std::min(drop, trackruns.front().frames);
+				trackruns.front().frames -= n;
+				drop -= n;
+				if (trackruns.front().frames == 0)
+					trackruns.erase(trackruns.begin());
+			}
+		}
+		else if (start > 0)
+		{
+			// frames before START that the track holds: a pregap in the file, as a cue sheet's INDEX 00
+			info.pregap = start;
+			info.pgtype = info.trktype;
+			info.pgdatasize = info.datasize;
+		}
+
+		// runs of a file that follow each other are one
+		uint32_t const framesize = info.datasize + info.subsize;
+		std::vector<toc_run> merged;
+		for (toc_run &run : trackruns)
+		{
+			if (!merged.empty() && run.fname == merged.back().fname && run.swap == merged.back().swap &&
+					(run.fname.empty() || run.offset == merged.back().offset + uint64_t(merged.back().frames) * framesize))
+				merged.back().frames += run.frames;
+			else if (run.frames != 0)
+				merged.push_back(std::move(run));
+		}
+
+		info.frames = uint32_t(total - (info.pgdatasize ? 0 : info.pregap));
+		input.fname.clear();
+		input.offset = 0;
+		input.swap = false;
+		bool swapset = false;
+		for (const toc_run &run : merged)
+		{
+			if (run.fname.empty())
+				continue;
+			if (swapset && run.swap != input.swap)
+			{
+				osd_printf_error("ERROR: track %d's files are not all SWAP, or all not\n", trk + 1);
+				return chd_file::error::UNSUPPORTED_FORMAT;
+			}
+			if (!swapset)
+				input.fname = run.fname;
+			input.swap = run.swap;
+			swapset = true;
+		}
+		if (merged.size() == 1 && !merged[0].fname.empty() && merged[0].offset <= UINT32_MAX)
+			input.offset = uint32_t(merged[0].offset);
+		else
+			for (const toc_run &run : merged)
+				input.pieces.push_back(track_input_piece { run.fname, run.offset, run.frames });
+	}
 
 	return std::error_condition();
 }

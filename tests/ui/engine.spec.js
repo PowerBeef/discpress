@@ -78,6 +78,22 @@ test('bad input is an error, not a crash', () => {
   }
 });
 
+// extractdvd is extractraw under another name: of a CD CHD, 0.289 writes its frames, subcode and all, as an .iso
+test('extractdvd of a CD is an error, and of a DVD upstream\'s', () => {
+  const cd = makeChd('createcd', 'twine.cue'), dvd = makeChd('createdvd', 'agent.iso');
+  expect(run(UPSTREAM, ['extractdvd', '-i', cd, '-o', tmp('up.iso'), '-f']).code).toBe(0); // the bug
+  const r = run(ENGINE, ['extractdvd', '-i', cd, '-o', tmp('cd.iso'), '-f']);
+  expect({ code: r.code, signal: r.signal }).toEqual({ code: 1, signal: null });
+  expect(r.err).toContain('Input CHD is a CD-ROM or GD-ROM');
+  expect(fs.existsSync(tmp('cd.iso'))).toBe(false);
+  // its frames are still there with extractraw, and a DVD extracts as before
+  for (const [command, chd] of [['extractraw', cd], ['extractdvd', dvd]]) {
+    expect(run(UPSTREAM, [command, '-i', chd, '-o', tmp('up.out'), '-f']).code, command).toBe(0);
+    expect(run(ENGINE, [command, '-i', chd, '-o', tmp('en.out'), '-f']).code, command).toBe(0);
+    expect(fs.readFileSync(tmp('en.out')).equals(fs.readFileSync(tmp('up.out'))), command).toBe(true);
+  }
+});
+
 test('an input that cannot be read is an error, not a broken CHD', () => {
   const dir = tmp('a directory'); // opens, but reading it fails
   fs.mkdirSync(dir, { recursive: true });
@@ -104,7 +120,7 @@ test('no tracks, no data or too many tracks is an error', () => {
   for (const [name, text, upstream, message] of [
     ['none.cue', 'REM nothing here\n', null, 'no tracks found'], // upstream: never finishes
     ['t00.cue', 'FILE "t.bin" BINARY\n  TRACK 00 MODE1/2352\n    INDEX 01 00:00:00\n', null, 'track number 00 is not between 1 and 99'],
-    ['nolength.toc', 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "t.bin"\n', null, 'the tracks hold no data'], // upstream: -nan% forever
+    ['nolength.toc', 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "t.bin" #0 0\n', null, 'track 1 holds no data'], // upstream: -nan% forever
     ['t100.cue', cue(100), 'crash', 'track number 100 is not between 1 and 99'],
     ['t100.gdi', gdi(100), 'crash', 'GDI expects too many tracks'],
   ]) {
@@ -424,6 +440,211 @@ test('a broken NRG image is an error, not a crash or a hang', () => {
     const r = run(ENGINE, ['createcd', '-i', input, '-o', tmp('e.chd'), '-f']);
     expect({ code: r.code, signal: r.signal }, name).toEqual({ code: 1, signal: null });
     expect(r.err, name).toContain(message);
+  }
+});
+
+// A Nero image of `data` and its tracks, [mode, INDEX 00, INDEX 01, end] (byte positions), 2352-byte sectors
+function nrgOf(data, tracks) {
+  const daox = Buffer.alloc(30 + 42 * tracks.length);
+  daox.write('DAOX', 0);
+  daox.writeUInt32BE(daox.length - 8, 4);
+  daox[28] = 1;
+  daox[29] = tracks.length;
+  tracks.forEach(([mode, i0, i1, end], n) => {
+    const at = 30 + 42 * n;
+    daox.writeUInt16BE(2352, at + 12);
+    daox.writeUInt16BE(mode, at + 14);
+    daox.writeBigUInt64BE(BigInt(i0), at + 18);
+    daox.writeBigUInt64BE(BigInt(i1), at + 26);
+    daox.writeBigUInt64BE(BigInt(end), at + 34);
+  });
+  const footer = Buffer.alloc(12);
+  footer.write('NER5', 0);
+  footer.writeBigUInt64BE(BigInt(data.length), 4);
+  return Buffer.concat([data, daox, Buffer.from('END!\0\0\0\0', 'latin1'), footer]);
+}
+
+// 0.289 reads a Nero image's track at the sum of the earlier tracks' lengths without their pregaps, so after a
+// track whose pregap the image holds it reads the wrong bytes; and it drops the pregap's data (a virtual pregap).
+// The engine takes each track from its INDEX 00 and stores the pregap, as for a cue sheet's INDEX 00 in the file.
+test('an NRG image with pregaps makes the CHD of the same disc as a cue sheet', () => {
+  const F = 2352, disc = noise(12, 900 * F);
+  write('pg.bin', disc);
+  // track 1: 150 frames of pregap, then 300; track 2 (audio) the same
+  const nrgImage = write('pg.nrg', nrgOf(disc, [[0x600, 0, 150 * F, 450 * F], [0x700, 450 * F, 600 * F, 900 * F]]));
+  const cue = write('pg.cue', 'FILE "pg.bin" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 00 00:00:00\n    INDEX 01 00:02:00\n' +
+    '  TRACK 02 AUDIO\n    INDEX 00 00:06:00\n    INDEX 01 00:08:00\n');
+  // the fixture ps1-nrg: a pregap in track 2 only
+  for (const [image, twin] of [[nrgImage, cue], ['mgs.nrg', 'mgs ccd-ref.cue']]) {
+    const en = tmp('en.chd'), up = tmp('up.chd'), plain = tmp('plain.chd');
+    expect(run(UPSTREAM, ['createcd', '-i', twin, '-o', plain, '-f']).code).toBe(0);
+    expect(run(UPSTREAM, ['createcd', '-i', image, '-o', up, '-f']).code).toBe(0);
+    expect(run(ENGINE, ['createcd', '-i', image, '-o', en, '-f']).code).toBe(0);
+    expect(sha1of(en), image).toBe(sha1of(plain));
+    expect(sha1of(up), `upstream ${image}`).not.toBe(sha1of(plain)); // the bug
+  }
+  // without pregaps, 0.289's CHD
+  const plain = write('nopg.nrg', nrgOf(disc, [[0x600, 0, 0, 450 * F], [0x700, 450 * F, 450 * F, 900 * F]]));
+  const en = tmp('nopg-en.chd'), up = tmp('nopg-up.chd');
+  expect(run(UPSTREAM, ['createcd', '-i', plain, '-o', up, '-f']).code).toBe(0);
+  expect(run(ENGINE, ['createcd', '-i', plain, '-o', en, '-f']).code).toBe(0);
+  expect(sha1of(en)).toBe(sha1of(up));
+  // a track that isn't in the file is an error
+  const r = run(ENGINE, ['createcd', '-i', write('out.nrg', nrgOf(disc, [[0x600, 0, 0, 901 * F]])), '-o', tmp('e.chd'), '-f']);
+  expect({ code: r.code, signal: r.signal }).toEqual({ code: 1, signal: null });
+  expect(r.err).toContain('isn\'t in the file');
+});
+
+// cdrdao TOCs as cdrdao reads them (engine/README.md). 0.289 made START a pregap that isn't in the file although
+// the file holds it, ignored PREGAP, SILENCE and ZERO, kept only a track's last file statement, read a lone
+// DATAFILE length after track 1 as an offset and a plain number as frames, and gave a statement without a
+// length no data. Each TOC here makes the CHD of a cue sheet of the same disc, which 0.289 reads right.
+test('cdrdao TOCs make the CHD of the same disc as a cue sheet', () => {
+  const F = 2352, d1 = noise(20, 300 * F), pg = noise(21, 150 * F), a2 = noise(22, 200 * F);
+  write('d1.bin', d1);
+  write('d2.bin', noise(23, 150 * F));
+  write('pg.raw', pg);
+  write('a2.raw', a2);
+  write('a2pg.raw', Buffer.concat([pg, a2]));
+  const t1 = 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "d1.bin" 00:04:00\n';
+  const c1 = 'FILE "d1.bin" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n';
+  // the audio's pregap in its file, or not in any file (SWAP: the cue sheets' BINARY audio is little-endian)
+  const stored = c1 + 'FILE "a2pg.raw" BINARY\n  TRACK 02 AUDIO\n    INDEX 00 00:00:00\n    INDEX 01 00:02:00\n';
+  const virtual = c1 + 'FILE "a2.raw" BINARY\n  TRACK 02 AUDIO\n    PREGAP 00:02:00\n    INDEX 01 00:00:00\n';
+  const cases = [
+    // [TOC, the cue sheet of the same disc, whether 0.289 finishes]
+    [t1 + 'TRACK AUDIO\nFILE "a2pg.raw" SWAP 0 00:04:50\nSTART 00:02:00\n', stored, true], // the pregap in the file
+    [t1 + 'TRACK AUDIO\nFILE "a2pg.raw" SWAP 0\nSTART 00:02:00\n', stored, true], // no length: the rest of the file
+    [t1 + 'TRACK AUDIO\nFILE "pg.raw" SWAP 0 00:02:00\nSTART\nFILE "a2.raw" SWAP 0 00:02:50\n', stored, true], // two files
+    [t1 + 'TRACK AUDIO\nFILE "a2pg.raw" SWAP 0 00:02:00\nSTART\nFILE "a2pg.raw" SWAP 00:02:00 00:02:50\n', stored, true], // cdrdao's own
+    [t1 + 'TRACK AUDIO\nPREGAP 00:02:00\nFILE "a2.raw" SWAP 0 00:02:50\n', virtual, true],
+    [t1 + 'TRACK AUDIO\nSILENCE 00:02:00\nSTART\nFILE "a2.raw" SWAP 0 00:02:50\n', virtual, true],
+    [t1 + 'TRACK AUDIO\nZERO AUDIO 00:02:00\nFILE "a2.raw" SWAP 0\nSTART 00:02:00\n', virtual, false], // as extractcd writes it
+    // a plain number: bytes for DATAFILE, samples for AUDIOFILE
+    ['CD_ROM\nTRACK MODE1_RAW\nDATAFILE "d1.bin" #0 705600\nTRACK AUDIO\nAUDIOFILE "a2.raw" SWAP 0 117600\n',
+      c1 + 'FILE "a2.raw" BINARY\n  TRACK 02 AUDIO\n    INDEX 01 00:00:00\n', true],
+    // a lone DATAFILE length after track 1, as extractcd -sb writes it; DATAFILE without a length
+    [t1 + 'TRACK MODE1_RAW\nDATAFILE "d2.bin" 00:02:00\n', c1 + 'FILE "d2.bin" BINARY\n  TRACK 02 MODE1/2352\n    INDEX 01 00:00:00\n', true],
+    ['CD_ROM\nTRACK MODE1_RAW\nDATAFILE "d1.bin"\nTRACK MODE1_RAW\nDATAFILE "d2.bin"\n',
+      c1 + 'FILE "d2.bin" BINARY\n  TRACK 02 MODE1/2352\n    INDEX 01 00:00:00\n', false],
+  ];
+  cases.forEach(([toc, cue, finishes], n) => {
+    const input = write(`t${n}.toc`, toc), twin = write(`t${n}.cue`, cue);
+    const en = tmp(`t${n}.chd`), up = tmp(`t${n}-up.chd`), plain = tmp(`t${n}-cue.chd`);
+    expect(run(UPSTREAM, ['createcd', '-i', twin, '-o', plain, '-f']).code, `cue ${n}`).toBe(0);
+    expect(run(ENGINE, ['createcd', '-i', input, '-o', en, '-f']).code, toc).toBe(0);
+    expect(sha1of(en), toc).toBe(sha1of(plain));
+    // the bug: 0.289 makes another CHD, or fails reading past the end of a file
+    if (finishes) expect(run(UPSTREAM, ['createcd', '-i', input, '-o', up, '-f']).code === 0 ? sha1of(up) : 'failed', `upstream ${toc}`).not.toBe(sha1of(plain));
+  });
+  // the fixture ps1-toc: START on an audio track whose file holds the pregap, as mgs disc1.cue's INDEX 00 (the
+  // TOC's audio is big-endian: the same sheet with MOTOROLA files, which the engine reads right)
+  const en = tmp('mgs.chd'), up = tmp('mgs-up.chd'), plain = tmp('mgs-cue.chd');
+  for (const n of [1, 2]) fs.copyFileSync(path.join(FIXTURES, `mgs disc1 (Track ${n}).bin`), tmp(`mgs disc1 (Track ${n}).bin`));
+  const moto = write('mgs moto.cue', fs.readFileSync(path.join(FIXTURES, 'mgs disc1.cue'), 'latin1').replaceAll('BINARY', 'MOTOROLA'));
+  expect(run(ENGINE, ['createcd', '-i', moto, '-o', plain, '-f']).code).toBe(0);
+  expect(run(UPSTREAM, ['createcd', '-i', 'mgs disc1.toc', '-o', up, '-f']).code).toBe(0);
+  expect(run(ENGINE, ['createcd', '-i', 'mgs disc1.toc', '-o', en, '-f']).code).toBe(0);
+  expect(sha1of(en)).toBe(sha1of(plain));
+  expect(sha1of(up)).not.toBe(sha1of(plain));
+  // the TOCs extractcd writes, which 0.289 reads (with #0 for a track in its own file): 0.289's CHD
+  const chd = makeChd('createcd', 'mgs disc1.cue');
+  for (const split of [false, true]) {
+    const dir = tmp(`x-${split}`);
+    fs.mkdirSync(dir, { recursive: true });
+    expect(run(UPSTREAM, ['extractcd', '-i', chd, '-o', path.join(dir, 'x.toc'), ...(split ? ['-sb'] : [])]).code).toBe(0);
+    const toc = path.join(dir, 'x.toc');
+    fs.writeFileSync(toc, fs.readFileSync(toc, 'utf8').replace(/^(DATAFILE "[^"]*" )(\d)/gm, '$1#0 $2'));
+    const a = tmp(`x-${split}-en.chd`), b = tmp(`x-${split}-up.chd`);
+    expect(run(UPSTREAM, ['createcd', '-i', toc, '-o', b, '-f']).code).toBe(0);
+    expect(run(ENGINE, ['createcd', '-i', toc, '-o', a, '-f']).code).toBe(0);
+    expect(sha1of(a), `extractcd ${split ? '-sb' : ''}`).toBe(sha1of(b));
+  }
+  // what the engine refuses
+  for (const [toc, message] of [
+    [t1 + 'TRACK AUDIO\nFILE "pg.raw" 0\nFILE "a2.raw" SWAP 0\n', 'are not all SWAP'],
+    [t1 + 'TRACK AUDIO\nFILE "pg.raw" 0\nSTART 00:02:00\n', 'START is at or past its end'],
+    [t1 + 'TRACK AUDIO\nFILE "gone.raw" 0\n', 'couldn\'t find bin file'],
+    [t1 + 'TRACK AUDIO\nSILENCE\n', 'without a length'],
+  ]) {
+    const r = run(ENGINE, ['createcd', '-i', write('bad.toc', toc), '-o', tmp('e.chd'), '-f']);
+    expect({ code: r.code, signal: r.signal }, toc).toEqual({ code: 1, signal: null });
+    expect(r.err, toc).toContain(message);
+  }
+});
+
+// EAC's "gaps appended to the previous track": a track's INDEX 00 at the end of one FILE, its INDEX 01 at the
+// start of the next. 0.289 read the track from the first file at the second file's INDEX points (a pregap of
+// -300 frames). The engine reads the pregap from the end of the first file: the CHD of the disc as one file.
+test('a cue sheet with pregaps at the end of the previous FILE makes the CHD of the disc as one file', () => {
+  const F = 2352, t1 = noise(30, 300 * F), pg2 = noise(31, 150 * F), t2 = noise(32, 200 * F), pg3 = noise(33, 75 * F), t3 = noise(34, 100 * F);
+  const wav = pcm => {
+    const h = Buffer.alloc(44);
+    h.write('RIFF', 0); h.writeUInt32LE(36 + pcm.length, 4); h.write('WAVEfmt ', 8); h.writeUInt32LE(16, 16);
+    h.writeUInt16LE(1, 20); h.writeUInt16LE(2, 22); h.writeUInt32LE(44100, 24); h.writeUInt32LE(44100 * 4, 28);
+    h.writeUInt16LE(4, 32); h.writeUInt16LE(16, 34); h.write('data', 36); h.writeUInt32LE(pcm.length, 40);
+    return Buffer.concat([h, pcm]);
+  };
+  const files = [Buffer.concat([t1, pg2]), Buffer.concat([t2, pg3]), t3];
+  files.forEach((f, n) => { write(`eac${n}.bin`, f); write(`eac${n}.wav`, wav(f)); });
+  write('eac all.bin', Buffer.concat(files));
+  const eac = (ext, type) => `FILE "eac0.${ext}" ${type}\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    INDEX 00 00:04:00\n` +
+    `FILE "eac1.${ext}" ${type}\n    INDEX 01 00:00:00\n  TRACK 03 AUDIO\n    INDEX 00 00:02:50\nFILE "eac2.${ext}" ${type}\n    INDEX 01 00:00:00\n`;
+  const one = write('eac all.cue', 'FILE "eac all.bin" BINARY\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    INDEX 00 00:04:00\n' +
+    '    INDEX 01 00:06:00\n  TRACK 03 AUDIO\n    INDEX 00 00:08:50\n    INDEX 01 00:09:50\n');
+  const plain = tmp('all.chd');
+  expect(run(UPSTREAM, ['createcd', '-i', one, '-o', plain, '-f']).code).toBe(0);
+  for (const [ext, type] of [['bin', 'BINARY'], ['wav', 'WAVE']]) {
+    const cue = write(`eac ${ext}.cue`, eac(ext, type)), en = tmp(`eac-${ext}.chd`), up = tmp(`eac-${ext}-up.chd`);
+    expect(run(ENGINE, ['createcd', '-i', cue, '-o', en, '-f']).code, type).toBe(0);
+    expect(sha1of(en), type).toBe(sha1of(plain));
+    // the bug: 0.289 makes another CHD, or fails
+    expect(run(UPSTREAM, ['createcd', '-i', cue, '-o', up, '-f']).code === 0 ? sha1of(up) : 'failed', `upstream ${type}`).not.toBe(sha1of(plain));
+  }
+  // EAC's other layouts are 0.289's: gaps left out (PREGAP), and gaps appended to the next track (INDEX 00 in the track's file)
+  for (const [name, text] of [
+    ['eac left out.cue', 'FILE "eac0.bin" BINARY\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\nFILE "eac1.bin" BINARY\n  TRACK 02 AUDIO\n' +
+      '    PREGAP 00:02:00\n    INDEX 01 00:00:00\nFILE "eac2.bin" BINARY\n  TRACK 03 AUDIO\n    PREGAP 00:01:00\n    INDEX 01 00:00:00\n'],
+    ['eac next.cue', 'FILE "eac0.bin" BINARY\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\nFILE "eac1.wav" WAVE\n  TRACK 02 AUDIO\n' +
+      '    INDEX 00 00:00:00\n    INDEX 01 00:02:00\nFILE "eac2.bin" BINARY\n  TRACK 03 AUDIO\n    INDEX 00 00:00:00\n    INDEX 01 00:00:30\n'],
+  ]) {
+    const cue = write(name, text), en = tmp('en.chd'), up = tmp('up.chd');
+    expect(run(UPSTREAM, ['createcd', '-i', cue, '-o', up, '-f']).code, name).toBe(0);
+    expect(run(ENGINE, ['createcd', '-i', cue, '-o', en, '-f']).code, name).toBe(0);
+    expect(sha1of(en), name).toBe(sha1of(up));
+  }
+});
+
+// 0.289 types an .iso by its size: an image of 2352-byte sectors whose size is also a multiple of 2048 (128 sectors
+// times any number) or of 2336 (146 sectors times any number) came out as 2048- or 2336-byte sectors. The engine
+// also looks for the first two sectors' sync pattern and mode byte.
+test('an .iso of 2352-byte sectors is one, whatever its size', () => {
+  const raw = (sectors, seed) => {
+    const b = noise(seed, sectors * 2352);
+    for (let s = 0; s < sectors; s++) {
+      const at = s * 2352;
+      b.fill(0xff, at, at + 12);
+      b[at] = b[at + 11] = 0;
+      b[at + 15] = 1; // mode 1
+    }
+    return b;
+  };
+  for (const [sectors, fixed] of [[128, true], [256, true], [146, true], [100, false], [129, false]]) {
+    const iso = write(`raw${sectors}.iso`, raw(sectors, 40 + sectors));
+    const twin = write(`raw${sectors}.cue`, `FILE "raw${sectors}.iso" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n`);
+    const en = tmp(`${sectors}.chd`), up = tmp(`${sectors}-up.chd`), plain = tmp(`${sectors}-cue.chd`);
+    expect(run(UPSTREAM, ['createcd', '-i', twin, '-o', plain, '-f']).code).toBe(0);
+    expect(run(UPSTREAM, ['createcd', '-i', iso, '-o', up, '-f']).code).toBe(0);
+    expect(run(ENGINE, ['createcd', '-i', iso, '-o', en, '-f']).code).toBe(0);
+    expect(sha1of(en), `${sectors} sectors`).toBe(sha1of(plain));
+    expect(sha1of(up) === sha1of(plain), `upstream, ${sectors} sectors`).toBe(!fixed); // the bug
+  }
+  // images of 2048-byte sectors, and of 2336, are 0.289's
+  for (const [name, data] of [['cooked.iso', noise(50, 147 * 2048)], ['mode2.iso', noise(51, 147 * 2336)], ['zeros.iso', Buffer.alloc(128 * 2352)]]) {
+    const iso = write(name, data), en = tmp('en.chd'), up = tmp('up.chd');
+    expect(run(UPSTREAM, ['createcd', '-i', iso, '-o', up, '-f']).code, name).toBe(0);
+    expect(run(ENGINE, ['createcd', '-i', iso, '-o', en, '-f']).code, name).toBe(0);
+    expect(sha1of(en), name).toBe(sha1of(up));
   }
 });
 
