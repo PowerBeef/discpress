@@ -403,7 +403,9 @@ var Tuning = {
     if (!this.running) {
       this.running = this._measure(onStep).then(function (t) {
         self.result = t;
-        try { localStorage.setItem('chdman-web-tuning', JSON.stringify(t)); } catch (e) { /* ignore */ }
+        // measured while the page was hidden (iOS pauses its workers) or nothing got done: used now,
+        // but not kept for later visits
+        if (!t.skewed) { try { localStorage.setItem('chdman-web-tuning', JSON.stringify(t)); } catch (e) { /* ignore */ } }
         self.running = null;
         updateChips();
         return t;
@@ -430,7 +432,9 @@ var Tuning = {
       }
       return d;
     }
-    var pool = [], steps = [], best = 0, bestN = 1, misses = 0;
+    var pool = [], steps = [], best = 0, bestN = 1, misses = 0, hidden = document.hidden;
+    function onVisibility() { if (document.hidden) hidden = true; }
+    document.addEventListener('visibilitychange', onVisibility);
     function spawn() {
       var w = new Worker(Engine.url), ch = new MessageChannel();
       Engine.post(w, { type: 'helper', port: ch.port2 }, [ch.port2]);
@@ -468,8 +472,11 @@ var Tuning = {
       }
     } finally {
       pool.forEach(function (h) { h.w.terminate(); });
+      document.removeEventListener('visibilitychange', onVisibility);
     }
-    return { key: this.key(), threads: bestN, rate: +best.toFixed(2), steps: steps, cores: cores, cap: Tuning.cap, date: Date.now() };
+    var t = { key: this.key(), threads: bestN, rate: +best.toFixed(2), steps: steps, cores: cores, cap: Tuning.cap, date: Date.now() };
+    if (hidden || !(best > 0)) t.skewed = true;
+    return t;
   }
 };
 Tuning.load();
@@ -1787,7 +1794,7 @@ function outputRow(job, out) {
   var btns = el('div', { class: 'row' });
   btns.append(saveButton([out], function () { saveOutput(job, out); }));
   var tooBig = useShareSheet && !viaShare([out]);
-  var host = HOSTED_URL.replace(/^https:\/\/|\/$/g, '');
+  var host = HOSTED_URL.replace(/^https:\/\//, '');
   var note = out.downloaded ? ' · downloaded' : !tooBig ? '' : iosWebView ? ' · too large for the share sheet; if this app can\u2019t download it, use Discpress online in Safari: ' + host
     : iosHomeApp ? ' · too large for the share sheet, so it downloads; if nothing happens, open ' + host + ' in Safari itself' : ' · too large for the share sheet, so it downloads';
   return el('div', { class: 'out' }, el('div', { class: 'nm' }, out.name, el('small', null, fmtBytes(out.size) + note)), btns);
@@ -1957,6 +1964,7 @@ function stalledProgress(t) { return /\bnan% complete/i.test(t); }
 async function runJobNow(job) {
   job.state = 'running';
   job.aborted = false;
+  job.progressPct = null; // the dock's bar: not the last run's until this one reports
   var aborted = new Promise(function (resolve) { job.abortResolve = resolve; });
   // wait for p, or until the job is canceled or removed; true when it was
   async function stopped(p) {
@@ -2195,7 +2203,7 @@ function initIosTip() {
 function keepResultsAdvice() {
   var ways = ['save each result as soon as it is ready'];
   if (window.showDirectoryPicker) ways.push('have results written into a folder (Settings \u2192 Where to keep results)');
-  if (location.protocol !== 'https:') ways.push('use Discpress online at ' + HOSTED_URL.replace(/^https:\/\/|\/$/g, '') + ', where results stay on disk until you save them');
+  if (location.protocol !== 'https:') ways.push('use Discpress online at ' + HOSTED_URL.replace(/^https:\/\//, '') + ', where results stay on disk until you save them');
   var last = ways.pop();
   return 'To keep them, ' + (ways.length ? ways.join(', ') + ', or ' : '') + last + '.';
 }
@@ -2391,7 +2399,7 @@ function updateDock() {
   parts.forEach(function (p, i) { if (i) t.append(' · '); t.append(p); });
   var bar = $('#dockBar');
   bar.hidden = !current;
-  if (current && current.progressPct) bar.querySelector('i').style.width = current.progressPct() + '%';
+  if (current) bar.querySelector('i').style.width = (current.progressPct ? current.progressPct() : 0) + '%';
   // with a single job the card's own button is enough
   $('#startAll').hidden = counts.ready < 2;
   $('#startAll').lastChild.textContent = 'Start all (' + counts.ready + ')';
@@ -3016,7 +3024,7 @@ function init() {
   if (!window.showDirectoryPicker) $('#memTipBtn').hidden = true;
   var ways = [];
   if (window.showDirectoryPicker) ways.push('have results written straight into a folder');
-  if (location.protocol !== 'https:') ways.push('use Discpress online at ' + HOSTED_URL.replace(/^https:\/\/|\/$/g, '') + ', which keeps results on disk');
+  if (location.protocol !== 'https:') ways.push('use Discpress online at ' + HOSTED_URL.replace(/^https:\/\//, '') + ', which keeps results on disk');
   $('#memTipWays').textContent = ways.length ? ways.join(', or ') + '.' : 'save each result as soon as it is ready.';
   $('#setRename').checked = settings.rename;
   $('#setRename').addEventListener('change', function (e) {

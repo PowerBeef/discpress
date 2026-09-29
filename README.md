@@ -116,7 +116,7 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
 
    | | **[⬇ Download the file](https://github.com/PowerBeef/discpress/releases/latest/download/discpress.html)** | **[🌐 Use it online](https://powerbeef.github.io/discpress/)** |
    |---|---|---|
-   | **What it is** | `discpress.html`, the whole app in one file you keep | The same file on [powerbeef.github.io/discpress](https://powerbeef.github.io/discpress/), updated with each release |
+   | **What it is** | `discpress.html`, the whole app in one file you keep | The same file on [powerbeef.github.io/discpress/](https://powerbeef.github.io/discpress/), updated with each release |
    | **Best for** | Computers and Android, and using it without any internet | Nothing to download, and **big games on iPhone and iPad** |
    | **How to open it** | Double-click it on a computer; on Android, open it with Chrome or another browser | Open the link. On iPhone and iPad, use Safari |
    | **Offline** | Always | Once opened; you can also install it (Share → **Add to Home Screen**, or the install button in Chrome and Edge) |
@@ -133,7 +133,7 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
 <details>
 <summary><b>Are my games uploaded anywhere?</b></summary>
 <br>
-No. Discpress is a single file that runs entirely on your device, downloaded or online. It makes no network requests and works in airplane mode: its Content-Security-Policy (`connect-src 'none'`) forbids the page any connection, in the downloaded file and on [powerbeef.github.io/discpress](https://powerbeef.github.io/discpress/) alike. The online version is the release file byte for byte; each release lists its SHA-256 (`discpress.html.sha256`), and the site has the same file, so you can compare them. Opening it online is an ordinary visit to a GitHub Pages site: GitHub sees the request for the page, as for any website, never your files. It sets no cookies and has no analytics. The downloaded file doesn't contact anything at all.
+No. Discpress is a single file that runs entirely on your device, downloaded or online. It makes no network requests and works in airplane mode: its Content-Security-Policy (`connect-src 'none'`) forbids the page any connection, in the downloaded file and on [powerbeef.github.io/discpress/](https://powerbeef.github.io/discpress/) alike. The online version is the release file byte for byte; each release lists its SHA-256 (`discpress.html.sha256`), and the site has the same file, so you can compare them. Opening it online is an ordinary visit to a GitHub Pages site: GitHub sees the request for the page, as for any website, never your files. It sets no cookies and has no analytics. The downloaded file doesn't contact anything at all.
 </details>
 
 <details>

@@ -17,7 +17,7 @@ cd "$ROOT"
 python3 -c 'import numpy' 2>/dev/null || pip install -q numpy
 
 # WebAssembly build outputs recovered from dist/, so app/ changes can be re-assembled
-[ -f build/chdman.wasm ] || python3 scripts/extract-build.py
+python3 scripts/extract-build.py --if-stale
 
 # unmodified chdman 0.289 built from the MAME release (needs to fetch MAME): the reference for
 # byte-for-byte checks
