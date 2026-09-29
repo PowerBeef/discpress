@@ -3070,7 +3070,12 @@ SRes LzmaEnc_WriteProperties(CLzmaEncHandle p, Byte *props, SizeT *size)
       while (v < dictSize);
     }
 
-    SetUi32(props + 1, v)
+    /* Discpress: props + 1 is not 4-byte aligned, and SetUi32 stores there through a UInt32 pointer where the CPU
+       allows unaligned accesses, which C leaves undefined; memcpy of the little-endian bytes is the same store */
+    {
+      const Byte le[4] = { (Byte)v, (Byte)(v >> 8), (Byte)(v >> 16), (Byte)(v >> 24) };
+      memcpy(props + 1, le, 4);
+    }
     return SZ_OK;
   }
 }

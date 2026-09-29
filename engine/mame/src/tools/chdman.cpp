@@ -3084,7 +3084,7 @@ static chdman_task do_extract_cd(parameters_map &params)
 	// further process input file (Discpress: cdrom_file throws nullptr for a CHD that is not a CD)
 	if (input_chd.check_is_cd() && input_chd.check_is_gd())
 		report_error(1, "Input CHD is not a CD-ROM or GD-ROM; extract it with extractdvd, extracthd or extractraw");
-	cdrom_file *cdrom = new cdrom_file(&input_chd);
+	const auto cdrom = std::make_unique<cdrom_file>(&input_chd); // Discpress: freed (0.289: new, never deleted)
 	const cdrom_file::toc &toc = cdrom->get_toc();
 
 	// verify output file doesn't exist
@@ -3112,6 +3112,12 @@ static chdman_task do_extract_cd(parameters_map &params)
 	const bool redump = params.find(OPTION_REDUMP) != params.end();
 	if (redump && mode != MODE_CUEBIN)
 		report_error(1, "--%s needs a .cue output file", OPTION_REDUMP);
+
+	// Discpress: a cdrdao TOC can't describe a GD-ROM: it has no high-density area, and the padding before LBA 45000
+	// is in no file. 0.289 wrote a TOC whose lengths its files don't hold, which reads back as an error (or, from
+	// -sb, as a CD of other data).
+	if (cdrom->is_gdrom() && mode == MODE_NORMAL)
+		report_error(1, "A GD-ROM can't be written as a TOC (it has no high-density area); extract it to a .gdi, or a .cue");
 
 	// GDIs will always output as split bin
 	bool is_splitbin = mode == MODE_GDI || params.find(OPTION_OUTPUT_SPLITBIN) != params.end() || (redump && toc.numtrks > 1);
@@ -3312,7 +3318,9 @@ static chdman_task do_extract_cd(parameters_map &params)
 			cdrom_file::toc *trackinfo = (cdrom_file::toc*)&toc;
 
 			// TOSEC GDI-based CHDs have the padframes field set to non-0 where the pregaps for the next track would be
-			const bool has_physical_pregap = trackinfo->tracks[0].padframes == 0;
+			// Discpress: --redump writes Redump's layout, each track's pregap in its own file, whatever the CHD was made
+			// from; the CHD made from it then holds the same data, the gaps of a GDI as data of the tracks before them
+			const bool has_physical_pregap = trackinfo->tracks[0].padframes == 0 || redump;
 
 			for (int tracknum = 1; tracknum < toc.numtrks; tracknum++)
 			{
@@ -3337,6 +3345,10 @@ static chdman_task do_extract_cd(parameters_map &params)
 							// "type 3" where the high-density area is just two data tracks
 							// there shouldn't be any pregap in the padframes from the previous track in this case, and the full 3s pregap is baked into the previous track
 							// Only known to be used by Shenmue II JP's discs 2, 3, 4 and Virtua Fighter History & VF4
+							// Discpress: only then; otherwise the padding is the pregap, as for other tracks (0.289 put
+							// INDEX 01 the padding's length past the frames it wrote before it)
+							if (toc.tracks[tracknum-1].padframes != 0 || toc.tracks[tracknum-1].frames < 225)
+								continue;
 							trackinfo->tracks[tracknum-1].padframes += 225;
 
 							trackinfo->tracks[tracknum].pregap += 225;
@@ -3351,8 +3363,9 @@ static chdman_task do_extract_cd(parameters_map &params)
 							// It's currently not possible to format it as expected without hacky code because the 150 pregap for the last track
 							// is sandwiched between these 75 frames and the actual track data.
 							// The 75 frames seems to normally be 0s so this should be ok for now until a use case is found.
-							trackinfo->tracks[tracknum-1].frames -= 75;
-							trackinfo->tracks[tracknum].pregap += 75;
+							// Discpress: they stay at the end of the previous track's file, and the pregap is the padding
+							// after them, so createcd makes the same CHD again. 0.289 left them out of every file, and
+							// read them back as padding.
 						}
 					}
 				}
@@ -3361,6 +3374,14 @@ static chdman_task do_extract_cd(parameters_map &params)
 					int curextra = 150; // 00:02:00
 					if (tracknum + 1 >= toc.numtrks && toc.tracks[tracknum].trktype != cdrom_file::CD_TRACK_AUDIO)
 						curextra += 75; // 00:01:00, special case when last track is data
+
+					// Discpress: a previous track too short to hold the pregap keeps its frames, padding and all, in its
+					// own file (0.289 read the pregap from before the track's start)
+					if (toc.tracks[tracknum-1].frames < uint32_t(curextra))
+					{
+						trackinfo->tracks[tracknum-1].padframes = 0;
+						continue;
+					}
 
 					trackinfo->tracks[tracknum-1].padframes = curextra;
 
@@ -3904,6 +3925,10 @@ struct chdman_run
 	chdman_osd_output osdoutput;
 	parameters_map parameters;
 	chdman_task task;
+
+	// Discpress: the options' values are allocated as the command line is read (0.289 never freed them); the
+	// command, which refers to them, goes first
+	~chdman_run() { task.reset(); for (auto &param : parameters) delete param.second; }
 };
 
 std::unique_ptr<chdman_run> s_run;

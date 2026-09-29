@@ -572,6 +572,9 @@ __attribute__((no_sanitize("signed-integer-overflow")))
 void FLAC__fixed_restore_signal(const FLAC__int32 residual[], uint32_t data_len, uint32_t order, FLAC__int32 data[])
 {
 	int i, idata_len = (int)data_len;
+	/* Discpress: in unsigned arithmetic, so damaged data wraps as two's complement instead of overflowing
+	   (undefined), as in lpc.c */
+#define U(x) ((FLAC__uint32)(x))
 
 	switch(order) {
 		case 0:
@@ -580,23 +583,24 @@ void FLAC__fixed_restore_signal(const FLAC__int32 residual[], uint32_t data_len,
 			break;
 		case 1:
 			for(i = 0; i < idata_len; i++)
-				data[i] = residual[i] + data[i-1];
+				data[i] = (FLAC__int32)(U(residual[i]) + U(data[i-1]));
 			break;
 		case 2:
 			for(i = 0; i < idata_len; i++)
-				data[i] = residual[i] + 2*data[i-1] - data[i-2];
+				data[i] = (FLAC__int32)(U(residual[i]) + 2*U(data[i-1]) - U(data[i-2]));
 			break;
 		case 3:
 			for(i = 0; i < idata_len; i++)
-				data[i] = residual[i] + 3*data[i-1] - 3*data[i-2] + data[i-3];
+				data[i] = (FLAC__int32)(U(residual[i]) + 3*U(data[i-1]) - 3*U(data[i-2]) + U(data[i-3]));
 			break;
 		case 4:
 			for(i = 0; i < idata_len; i++)
-				data[i] = residual[i] + 4*data[i-1] - 6*data[i-2] + 4*data[i-3] - data[i-4];
+				data[i] = (FLAC__int32)(U(residual[i]) + 4*U(data[i-1]) - 6*U(data[i-2]) + 4*U(data[i-3]) - U(data[i-4]));
 			break;
 		default:
 			FLAC__ASSERT(0);
 	}
+#undef U
 }
 
 void FLAC__fixed_restore_signal_wide(const FLAC__int32 residual[], uint32_t data_len, uint32_t order, FLAC__int32 data[])
