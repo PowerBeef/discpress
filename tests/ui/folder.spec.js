@@ -217,7 +217,7 @@ test('extracting into a folder asks before replacing any file already there, tra
   expect(bins.length).toBeGreaterThan(0);
   // the user's own files of those names, and no .cue
   await page.evaluate(b => { for (const n of b) window.__folder.set(n, new TextEncoder().encode('MY OWN DUMP')); for (const n of [...window.__folder.keys()]) if (n.endsWith('.cue')) window.__folder.delete(n); }, bins);
-  await card.locator('.job-head button[aria-label="Remove"]').click();
+  await card.locator('.job-head button[aria-label^="Remove "]').click();
   const asked = [];
   page.removeAllListeners('dialog');
   page.on('dialog', d => { asked.push(d.message()); d.dismiss(); });

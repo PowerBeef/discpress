@@ -48,6 +48,7 @@
   --surface: #fffdf6;
   --surface-2: #f2ead7;
   --ink: #1c1733;
+  --edge: var(--ink); /* outlines; dark mode lifts them off the dark surfaces */
   --text: #1c1733;
   --muted: #676180;
   --line: #ddd2ba;
@@ -76,14 +77,14 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #15122b; --dots: rgba(255, 255, 255, .055); --surface: #1f1a3c; --surface-2: #29234d; --ink: #07060f;
+    --bg: #15122b; --dots: rgba(255, 255, 255, .055); --surface: #1f1a3c; --surface-2: #29234d; --ink: #07060f; --edge: #7468b8;
     --text: #f5f2ff; --muted: #aaa3d2; --line: #3b346a; --accent: #ff6fa3; --accent-hi: #ff8db6; --accent-2: #ffc24f;
     --accent-3: #ffe266; --cyan: #3fe0d0; --on-accent: #1a1030; --ok: #5fe39c; --ok-soft: #173a2b; --link: #ff6fa3; --warn: #ffcf5c;
     --warn-soft: #3a2e12; --err: #ff7d95; --err-soft: #3e1626; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #15122b; --dots: rgba(255, 255, 255, .055); --surface: #1f1a3c; --surface-2: #29234d; --ink: #07060f;
+  --bg: #15122b; --dots: rgba(255, 255, 255, .055); --surface: #1f1a3c; --surface-2: #29234d; --ink: #07060f; --edge: #7468b8;
   --text: #f5f2ff; --muted: #aaa3d2; --line: #3b346a; --accent: #ff6fa3; --accent-hi: #ff8db6; --accent-2: #ffc24f;
   --accent-3: #ffe266; --cyan: #3fe0d0; --on-accent: #1a1030; --ok: #5fe39c; --ok-soft: #173a2b; --link: #ff6fa3; --warn: #ffcf5c;
   --warn-soft: #3a2e12; --err: #ff7d95; --err-soft: #3e1626; color-scheme: dark;
@@ -118,6 +119,9 @@ html.mode-doc { scroll-padding-top: calc(var(--top-h-real, 120px) + 12px); scrol
 html.mode-doc .top { position: sticky; top: 0; }
 html.mode-doc .scroller { padding-bottom: calc(8px + var(--sa-bottom)); }
 html.mode-doc body.has-dock .scroller { padding-bottom: calc(120px + var(--sa-bottom)); }
+/* keyboard focus and scrolled-to cards stop above the floating dock */
+html.mode-doc.has-dock { scroll-padding-bottom: calc(110px + var(--sa-bottom)); }
+html.mode-shell.has-dock .scroller { scroll-padding-bottom: 110px; }
 
 /* ---- scrolling model: "shell" (fixed header, inner scroll area) ----
    The page is exactly as tall as the measured visible area (--app-h, set from
@@ -135,12 +139,15 @@ html.mode-shell .scroller {
 html.mode-shell body.has-dock .scroller { padding-bottom: calc(120px + var(--sa-bottom)); }
 @media (max-width: 560px) {
   html.mode-doc body.has-dock .scroller, html.mode-shell body.has-dock .scroller { padding-bottom: calc(150px + var(--sa-bottom)); }
+  html.mode-doc.has-dock { scroll-padding-bottom: calc(140px + var(--sa-bottom)); }
+  html.mode-shell.has-dock .scroller { scroll-padding-bottom: 140px; }
 }
 /* retro-tinted scrollbars where supported */
 html, .scroller { scrollbar-color: var(--line) transparent; }
 button, input, select, textarea { font: inherit; color: inherit; }
 a { color: var(--link); text-underline-offset: 2px; }
 [hidden] { display: none !important; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .wrap { width: 100%; max-width: 1180px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
 .muted { color: var(--muted); }
 .small { font-size: 0.8125rem; }
@@ -158,14 +165,13 @@ code { font-family: var(--mono); font-size: .92em; background: var(--surface-2);
 .top-row { display: flex; align-items: center; gap: 12px; min-height: var(--top-h); flex-wrap: wrap; }
 .brand, .brand:visited { display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--text); flex: 0 0 auto; }
 .logo { width: 38px; height: 38px; flex: none; filter: drop-shadow(2px 2px 0 var(--ink)); }
-.wordmark { font: 900 1.4375rem/1 var(--display); letter-spacing: -.02em; }
+.wordmark { margin: 0; font: 900 1.4375rem/1 var(--display); letter-spacing: -.02em; }
 .wordmark b { color: var(--accent); font-weight: 900; }
-.ver { font: 700 0.6562rem/1 var(--mono); text-transform: uppercase; letter-spacing: .08em; color: var(--muted); border: 1.5px solid var(--line); border-radius: 6px; padding: 3px 6px; margin-left: 2px; white-space: nowrap; }
 .top-actions { margin-left: auto; display: flex; gap: 6px; align-items: center; }
 .stripes { height: 5px; background: linear-gradient(90deg, var(--accent) 0 25%, var(--accent-2) 25% 50%, var(--accent-3) 50% 75%, var(--cyan) 75% 100%); }
 
 /* tabs: a chunky segmented control */
-.tabs { display: flex; gap: 4px; padding: 4px; background: var(--surface-2); border: 2px solid var(--ink); border-radius: 14px; box-shadow: var(--shadow); }
+.tabs { display: flex; gap: 4px; padding: 4px; background: var(--surface-2); border: 2px solid var(--edge); border-radius: 14px; box-shadow: var(--shadow); }
 .tab { appearance: none; border: 0; background: transparent; padding: 7px 14px; min-height: 36px; border-radius: 10px; font: 800 0.9062rem/1 var(--display); color: var(--muted); cursor: pointer; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
 @media (hover: hover) { .tab:hover { color: var(--text); } }
 .tab[aria-selected="true"] { background: var(--accent); color: var(--on-accent); }
@@ -175,7 +181,6 @@ code { font-family: var(--mono); font-size: .92em; background: var(--surface-2);
   .top-row { padding-top: 6px; padding-bottom: 10px; gap: 10px; }
   .tabs { order: 3; width: 100%; }
   .tab { flex: 1; justify-content: center; padding: 8px 6px; }
-  .ver { display: none; }
 }
 @media (min-width: 720px) {
   .tabs { margin-left: 18px; }
@@ -188,6 +193,8 @@ code { font-family: var(--mono); font-size: .92em; background: var(--surface-2);
 .chip.ok i { background: var(--ok); }
 .chip.warn i { background: var(--warn); }
 .chip.err i { background: var(--err); }
+/* only what needs attention shows: loading, problems, results kept in memory (the rest is in Settings) */
+.chip.ok, .chip.quiet { display: none; }
 
 main { padding: 10px 0 16px; }
 section.panel > * + * { margin-top: 16px; }
@@ -196,7 +203,7 @@ h2, h3 { font-family: var(--display); letter-spacing: -.01em; }
 /* ---------- buttons ---------- */
 .btn {
   appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  min-height: 44px; padding: 8px 18px; border-radius: 12px; border: 2px solid var(--ink);
+  min-height: 44px; padding: 8px 18px; border-radius: 12px; border: 2px solid var(--edge);
   background: var(--surface); color: var(--text); font: 800 0.9375rem/1.1 var(--display);
   cursor: pointer; text-decoration: none; box-shadow: 0 3px 0 var(--ink);
   transition: transform .06s, box-shadow .06s, background .15s; user-select: none; -webkit-user-select: none;
@@ -216,18 +223,18 @@ h2, h3 { font-family: var(--display); letter-spacing: -.01em; }
 .icon-btn { appearance: none; border: 2px solid transparent; background: none; width: 40px; height: 40px; border-radius: 11px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); cursor: pointer; flex: none; }
 @media (hover: hover) { .icon-btn:hover { background: var(--surface-2); color: var(--text); } }
 .icon-btn svg { width: 21px; height: 21px; }
-.top .icon-btn { border-color: var(--ink); background: var(--surface); color: var(--text); box-shadow: 0 2px 0 var(--ink); }
+.top .icon-btn { border-color: var(--edge); background: var(--surface); color: var(--text); box-shadow: 0 2px 0 var(--ink); }
 .top .icon-btn:active { transform: translateY(2px); box-shadow: none; }
 
 /* ---------- cards ---------- */
-.card { background: var(--surface); border: 2px solid var(--ink); border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 18px; }
+.card { background: var(--surface); border: 2px solid var(--edge); border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 18px; }
 .card h2 { margin: 0 0 8px; font-size: 1.1875rem; }
 
 /* ---------- convert: drop zone ---------- */
 #tab-convert { display: grid; gap: 16px; align-items: start; }
 #tab-convert > * + * { margin-top: 0; }
 .drop {
-  position: relative; background: var(--surface); border: 2px solid var(--ink); border-radius: 22px; box-shadow: var(--shadow-lg);
+  position: relative; background: var(--surface); border: 2px solid var(--edge); border-radius: 22px; box-shadow: var(--shadow-lg);
   padding: 28px 22px 22px; text-align: center; overflow: hidden; transition: background .15s, transform .15s;
 }
 .drop::before { content: ""; position: absolute; inset: 10px; border: 2px dashed var(--line); border-radius: 15px; pointer-events: none; transition: border-color .15s; }
@@ -240,7 +247,7 @@ h2, h3 { font-family: var(--display); letter-spacing: -.01em; }
 .drop .row { justify-content: center; margin-top: 18px; }
 .drop .btn { min-width: 170px; }
 .systems { list-style: none; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin: 20px auto 0; padding: 0; max-width: 620px; }
-.systems li { font: 800 0.6875rem/1 var(--mono); letter-spacing: .04em; padding: 6px 8px; border-radius: 7px; border: 1.5px solid var(--ink); background: var(--sys, var(--surface-2)); color: var(--sys-fg, var(--text)); box-shadow: 0 2px 0 var(--ink); }
+.systems li { font: 800 0.6875rem/1 var(--mono); letter-spacing: .04em; padding: 6px 8px; border-radius: 7px; border: 1.5px solid var(--edge); background: var(--sys, var(--surface-2)); color: var(--sys-fg, var(--text)); cursor: default; }
 .drop-foot { margin: 16px 0 0; font-size: 0.8125rem; color: var(--muted); }
 .drop-foot svg { width: 14px; height: 14px; vertical-align: -2px; margin-right: 5px; }
 /* compact drop zone once games are added */
@@ -252,6 +259,7 @@ h2, h3 { font-family: var(--display); letter-spacing: -.01em; }
 .drop.compact::before { inset: 6px; border-radius: 16px; }
 .drop .drop-hint { display: none; margin: 8px 0 0; font-size: 0.8125rem; color: var(--muted); }
 .drop.compact .drop-hint { display: block; }
+@media (hover: none) and (pointer: coarse) { .drop.compact .drop-hint { display: none; } }
 
 @media (min-width: 1040px) {
   #tab-convert.has-jobs { grid-template-columns: 330px minmax(0, 1fr); }
@@ -278,7 +286,7 @@ h2, h3 { font-family: var(--display); letter-spacing: -.01em; }
 
 /* ---------- job cards ---------- */
 .jobs { display: grid; gap: 16px; }
-.job { position: relative; background: var(--surface); border: 2px solid var(--ink); border-radius: var(--radius); box-shadow: var(--shadow-lg); overflow: hidden; animation: pop .22s ease-out; }
+.job { position: relative; background: var(--surface); border: 2px solid var(--edge); border-radius: var(--radius); box-shadow: var(--shadow-lg); overflow: hidden; animation: pop .22s ease-out; }
 @keyframes pop { from { opacity: 0; transform: translateY(6px); } }
 .job::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 6px; background: var(--line); }
 .job[data-state="running"]::before, .job[data-state="queued"]::before { background: linear-gradient(var(--accent), var(--accent-2), var(--accent-3)); }
@@ -289,16 +297,16 @@ h2, h3 { font-family: var(--display); letter-spacing: -.01em; }
 .badge {
   flex: none; width: 58px; height: 58px; border-radius: 13px; display: flex; flex-direction: column; align-items: center; justify-content: center;
   font: 900 0.875rem/1 var(--display); letter-spacing: .01em; background: var(--sys, var(--surface-2)); color: var(--sys-fg, var(--text));
-  border: 2px solid var(--ink); box-shadow: 0 3px 0 var(--ink); text-align: center; padding: 0 3px; position: relative; overflow: hidden;
+  border: 2px solid var(--edge); box-shadow: 0 3px 0 var(--ink); text-align: center; padding: 0 3px; position: relative; overflow: hidden;
 }
 .badge::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 13px; background: rgba(0, 0, 0, .14); }
-.badge small { position: relative; z-index: 1; margin-top: 6px; font: 800 0.5312rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; opacity: .9; }
+.badge small { position: relative; z-index: 1; margin-top: 6px; font: 800 0.6875rem/1 var(--mono); letter-spacing: .03em; text-transform: uppercase; opacity: .9; }
 .job-title { flex: 1; min-width: 0; padding-top: 3px; }
 .job-title h3 { margin: 0; font-size: 1.0625rem; line-height: 1.25; font-weight: 800; overflow-wrap: anywhere; }
 .job-title .sub { margin: 4px 0 0; font-size: 0.8125rem; color: var(--muted); overflow-wrap: anywhere; }
 .job-body { padding: 14px 18px 16px 20px; display: grid; gap: 12px; }
 
-.seg { display: inline-flex; flex-wrap: wrap; background: var(--surface-2); border: 2px solid var(--ink); border-radius: 12px; padding: 3px; gap: 3px; }
+.seg { display: inline-flex; flex-wrap: wrap; background: var(--surface-2); border: 2px solid var(--edge); border-radius: 12px; padding: 3px; gap: 3px; }
 .seg button { appearance: none; border: 0; background: transparent; border-radius: 8px; padding: 7px 13px; min-height: 34px; font: 800 0.8438rem/1 var(--display); color: var(--muted); cursor: pointer; }
 .seg button[aria-pressed="true"] { background: var(--text); color: var(--surface); }
 .seg button:disabled { cursor: not-allowed; }
@@ -307,12 +315,14 @@ h2, h3 { font-family: var(--display); letter-spacing: -.01em; }
 .spacer { flex: 1; }
 
 /* forms */
-.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px 14px; }
+.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px 14px; align-items: start; }
+.fields > .field.wide { grid-column: 1 / -1; }
+.fields > .check { align-self: end; }
 .field { display: grid; gap: 5px; min-width: 0; }
 .field > span { font: 700 0.6875rem/1.3 var(--mono); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
 .field > span.hint, .field .hint { font: 400 0.7812rem/1.4 var(--body); text-transform: none; letter-spacing: 0; color: var(--muted); }
 input[type="text"], input[type="number"], select, textarea {
-  width: 100%; min-height: 44px; padding: 9px 12px; border-radius: 11px; border: 2px solid var(--ink); background: var(--surface); outline: none;
+  width: 100%; min-height: 44px; padding: 9px 12px; border-radius: 11px; border: 2px solid var(--edge); background: var(--surface); outline: none;
   font-size: max(1rem, 16px); /* prevents zoom on iOS */
 }
 select { appearance: none; -webkit-appearance: none; padding-right: 36px; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: calc(100% - 18px) 55%, calc(100% - 13px) 55%; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }
@@ -337,12 +347,12 @@ details.opts[open] > .fields { margin-top: 10px; }
 .note ul { margin: 4px 0 0; padding-left: 20px; }
 
 /* identification ribbon */
-.note.ident { display: grid; gap: 3px; background: var(--surface-2); color: var(--text); border: 2px solid var(--ink); }
-.note.ident.ok { background: var(--surface-2); color: var(--text); }
+.note.ident { display: grid; gap: 4px; background: none; color: var(--text); border: 0; border-radius: 0; padding: 0; }
+.note.ident.ok { background: none; color: var(--text); }
 .ident-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 0.8125rem; }
 .ident-head b { font: 800 0.8125rem/1.2 var(--display); }
-.sysbadge { font: 800 0.6562rem/1 var(--mono); letter-spacing: .05em; padding: 4px 7px; border-radius: 6px; background: var(--sys, var(--accent)); color: var(--sys-fg, var(--on-accent)); border: 1.5px solid var(--ink); }
-.ident-name { font: 900 1.0625rem/1.3 var(--display); overflow-wrap: anywhere; margin-top: 3px; }
+.sysbadge { font: 800 0.6875rem/1 var(--mono); letter-spacing: .05em; padding: 4px 7px; border-radius: 6px; background: var(--sys, var(--accent)); color: var(--sys-fg, var(--on-accent)); border: 1.5px solid var(--edge); }
+.job-title h3.ident-name { font-weight: 900; }
 .ident-how { color: var(--ok); font-weight: 600; }
 .note.ident:not(.ok) .ident-how { color: var(--muted); }
 .ident-check { color: var(--muted); margin-top: 4px; }
@@ -350,32 +360,34 @@ details.opts[open] > .fields { margin-top: 10px; }
 
 /* progress: arcade block meter */
 .prog { display: grid; gap: 8px; }
-.bar { height: 16px; border-radius: 6px; background: var(--surface-2); border: 2px solid var(--ink); overflow: hidden; position: relative; }
+.bar { height: 16px; border-radius: 6px; background: var(--surface-2); border: 2px solid var(--edge); overflow: hidden; position: relative; }
 .bar i {
   position: absolute; left: 2px; top: 2px; bottom: 2px; width: 0; max-width: calc(100% - 4px); border-radius: 2px;
   background: linear-gradient(90deg, var(--accent), var(--accent-2), var(--accent-3));
   -webkit-mask: repeating-linear-gradient(90deg, #000 0 9px, transparent 9px 12px); mask: repeating-linear-gradient(90deg, #000 0 9px, transparent 9px 12px);
   transition: width .35s steps(6, end);
 }
-.bar.indet i { width: 30%; animation: indet 1.3s infinite linear; }
-@keyframes indet { 0% { left: -30%; } 100% { left: 100%; } }
+.bar.indet i { left: 0; width: 30%; animation: indet 1.3s infinite linear; }
+/* moved, not re-laid out: a transform runs off the main thread */
+@keyframes indet { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
 .ptext { display: flex; flex-wrap: wrap; gap: 4px 14px; font: 600 0.7812rem/1.4 var(--mono); color: var(--muted); }
 .ptext b { color: var(--text); font-weight: 800; }
 
 /* results */
 .result { display: grid; gap: 8px; }
 .outs { display: grid; gap: 8px; }
-.out { display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 14px; border: 2px solid var(--ink); border-radius: 12px; background: var(--surface-2); }
+.out { display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 14px; border: 2px solid var(--edge); border-radius: 12px; background: var(--surface-2); }
 .out .nm { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 700; font-size: 0.9062rem; }
 .out .nm small { display: block; font: 600 0.75rem/1.4 var(--mono); color: var(--muted); margin-top: 2px; }
 .out .row { flex-wrap: nowrap; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: 0.8438rem; margin: 0; }
 .kv dt { color: var(--muted); font: 700 0.6875rem/1.7 var(--mono); text-transform: uppercase; letter-spacing: .05em; }
 .kv dd { margin: 0; overflow-wrap: anywhere; font-family: var(--mono); font-size: 0.7812rem; }
-pre.logtext, pre.console { margin: 8px 0 0; background: #0f0c22; color: #c9f7d8; border: 2px solid var(--ink); border-radius: 12px; padding: 12px 14px; font: 0.75rem/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow: auto; }
+pre.logtext, pre.console { margin: 8px 0 0; background: #0f0c22; color: #c9f7d8; border: 2px solid var(--edge); border-radius: 12px; padding: 12px 14px; font: 0.75rem/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 340px; overflow: auto; }
 pre.console { min-height: 110px; }
 code.cmd { display: block; font: 0.7812rem/1.55 var(--mono); background: var(--surface-2); padding: 9px 12px; border-radius: 10px; border: 1.5px dashed var(--line); overflow-wrap: anywhere; white-space: pre-wrap; }
 .job-foot { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: flex-end; padding: 12px 18px 16px 20px; border-top: 2px dashed var(--line); }
+.job-foot .btn.fit { flex: 0 0 auto; }
 .job-foot .state { margin-right: auto; font: 700 0.75rem/1 var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; }
 .dot { width: 9px; height: 9px; border-radius: 2px; background: var(--muted); display: inline-block; }
 .dot.run { background: var(--accent); animation: blink 1s steps(2, start) infinite; }
@@ -388,22 +400,26 @@ code.cmd { display: block; font: 0.7812rem/1.55 var(--mono); background: var(--s
 .dock {
   position: fixed; z-index: 15; left: 50%; transform: translateX(-50%);
   bottom: calc(14px + var(--sa-bottom)); width: min(760px, calc(100vw - 24px));
-  background: var(--surface); border: 2px solid var(--ink); border-radius: 18px; box-shadow: var(--shadow-lg); padding: 10px 10px 10px 16px;
+  background: var(--surface); border: 2px solid var(--edge); border-radius: 18px; box-shadow: var(--shadow-lg); padding: 10px 10px 10px 16px;
 }
 .dock .wrap { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0; max-width: none; }
 .dock .summary { flex: 1 1 150px; min-width: 0; font: 700 0.75rem/1.4 var(--mono); text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .dock .summary b { color: var(--text); text-transform: none; font: 800 0.875rem/1.3 var(--display); letter-spacing: 0; display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .dock .bar { margin-top: 6px; height: 12px; }
 @media (max-width: 560px) {
-  .dock .btn { flex: 1 1 auto; }
-  .dock .summary { flex-basis: 100%; }
+  /* one compact row on phones: the summary beside the one action that matters now */
+  .dock { padding: 8px 8px 8px 12px; border-radius: 16px; }
+  .dock .summary { flex: 1 1 110px; }
+  .dock .btn.primary { flex: 0 1 auto; }
+  .dock .btn.ghost { padding-inline: 8px; }
 }
 
 /* ---------- help ---------- */
 .help { max-width: 860px; margin: 0 auto; overflow-wrap: break-word; }
 .help h2 { font-size: 1.25rem; margin: 0 0 10px; }
 .help h3 { font-size: 0.9688rem; margin: 16px 0 4px; }
-.help p { margin: 6px 0; }
+.help p { margin: 6px 0; max-width: 70ch; }
+.help details.log > summary { text-transform: none; letter-spacing: 0; line-height: 1.3; font-size: 0.875rem; }
 .help ol { padding-left: 22px; }
 .help li { margin: 4px 0; }
 .tbl { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
@@ -420,7 +436,7 @@ code.cmd { display: block; font: 0.7812rem/1.55 var(--mono); background: var(--s
 .files-list li small { color: var(--muted); white-space: nowrap; font-family: var(--mono); }
 
 /* ---------- settings dialog / sheet ---------- */
-dialog { border: 2px solid var(--ink); border-radius: 20px; background: var(--surface); color: var(--text); padding: 0; width: min(540px, calc(100vw - 32px)); max-height: min(86vh, 760px); box-shadow: 6px 6px 0 var(--ink); }
+dialog { border: 2px solid var(--edge); border-radius: 20px; background: var(--surface); color: var(--text); padding: 0; width: min(540px, calc(100vw - 32px)); max-height: min(86vh, 760px); box-shadow: 6px 6px 0 var(--ink); }
 dialog::backdrop { background: rgba(12, 9, 28, .55); backdrop-filter: blur(3px); }
 dialog .dhead { display: flex; align-items: center; padding: 16px 12px 8px 20px; position: sticky; top: 0; background: var(--surface); z-index: 1; }
 dialog .dhead h2 { margin: 0; font-size: 1.25rem; flex: 1; font-weight: 900; }
@@ -432,7 +448,7 @@ dialog .dbody { padding: 6px 20px 22px; display: grid; gap: 16px; }
 
 /* ---------- toasts ---------- */
 .toasts { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(100px + var(--sa-bottom)); z-index: 30; display: grid; gap: 8px; width: min(520px, calc(100vw - 32px)); pointer-events: none; }
-.toast { background: var(--ink); color: #fff; border: 2px solid var(--ink); padding: 11px 15px; border-radius: 12px; font-size: 0.875rem; font-weight: 600; box-shadow: 3px 3px 0 var(--accent); animation: tin .2s ease; pointer-events: auto; }
+.toast { background: var(--ink); color: #fff; border: 2px solid var(--edge); padding: 11px 15px; border-radius: 12px; font-size: 0.875rem; font-weight: 600; box-shadow: 3px 3px 0 var(--accent); animation: tin .2s ease; pointer-events: auto; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .toast { background: var(--surface-2); } }
 :root[data-theme="dark"] .toast { background: var(--surface-2); }
 .toast.err { background: var(--err); color: #fff; box-shadow: 3px 3px 0 var(--ink); }
@@ -491,9 +507,9 @@ dialog .dbody { padding: 6px 20px 22px; display: grid; gap: 16px; }
 /* touch screens get roomier targets, mouse/trackpad a little denser UI */
 @media (pointer: coarse) {
   .btn.sm { min-height: 42px; }
-  .seg button { min-height: 40px; }
+  .seg button { min-height: 44px; }
   .icon-btn { width: 44px; height: 44px; }
-  details.opts > summary, details.log > summary { min-height: 40px; }
+  details.opts > summary, details.log > summary { min-height: 44px; }
 }
 /* very narrow phones (iPhone SE 1st gen, small Androids, split screen) */
 @media (max-width: 360px) {
@@ -503,7 +519,7 @@ dialog .dbody { padding: 6px 20px 22px; display: grid; gap: 16px; }
   .job-head { padding-left: 14px; }
   .job-body, .job-foot { padding-left: 14px; padding-right: 12px; }
   .badge { width: 46px; height: 46px; font-size: 0.8rem; }
-  .systems li { font-size: 0.625rem; padding: 5px 6px; }
+  .systems li { padding: 5px 6px; }
 }
 /* big screens */
 @media (min-width: 1600px) { .wrap { max-width: 1320px; } }
@@ -522,7 +538,7 @@ dialog .dbody { padding: 6px 20px 22px; display: grid; gap: 16px; }
   .logo { width: 32px; height: 32px; }
   .wordmark { font-size: 1.25rem; }
   .top .icon-btn { width: 40px; height: 40px; }
-  .tab { min-height: 32px; padding-top: 6px; padding-bottom: 6px; }
+  .tab { min-height: 36px; padding-top: 6px; padding-bottom: 6px; }
   .tabs { padding: 3px; border-radius: 12px; }
   .stripes { height: 4px; }
   .chips { padding-top: 8px; }
@@ -569,7 +585,7 @@ body { overflow-x: clip; }
 .tab { font-size: max(0.75rem, min(0.9063rem, 3.6vw)); }
 .tab .count { font-size: min(0.6875rem, 12px); }
 .badge { width: clamp(52px, 3.6rem, 84px); height: clamp(52px, 3.6rem, 84px); font-size: min(0.875rem, 20px); }
-.badge small { font-size: min(0.5313rem, 12px); }
+.badge small { font-size: min(0.6875rem, 14px); }
 .sysbadge { font-size: min(0.6563rem, 14px); }
 
 </style>
@@ -590,11 +606,11 @@ body { overflow-x: clip; }
 
 <header class="top">
   <div class="wrap top-row">
-    <a class="brand" href="#" id="brandLink" aria-label="Discpress home"><svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><rect x="2" y="2" width="44" height="44" rx="12" fill="#1c1733"/><clipPath id="lgc"><circle cx="24" cy="24" r="15"/></clipPath><circle cx="24" cy="24" r="15" fill="#fff7e6"/><g clip-path="url(#lgc)"><rect x="6" y="26" width="36" height="3.3" fill="#ff5c93"/><rect x="6" y="29.3" width="36" height="3.3" fill="#ffb23f"/><rect x="6" y="32.6" width="36" height="3.3" fill="#ffe14d"/><rect x="6" y="35.9" width="36" height="4" fill="#13a9ba"/></g><circle cx="24" cy="24" r="4.6" fill="#1c1733"/><circle cx="24" cy="24" r="1.8" fill="#fff7e6"/></svg><span class="wordmark">Disc<b>press</b></span><span class="ver" title="Discpress’s own fork of chdman 0.289 (Help → About)">chdman 0.289 fork</span></a>
+    <a class="brand" href="#" id="brandLink" aria-label="Discpress home"><svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><rect x="2" y="2" width="44" height="44" rx="12" fill="#1c1733"/><clipPath id="lgc"><circle cx="24" cy="24" r="15"/></clipPath><circle cx="24" cy="24" r="15" fill="#fff7e6"/><g clip-path="url(#lgc)"><rect x="6" y="26" width="36" height="3.3" fill="#ff5c93"/><rect x="6" y="29.3" width="36" height="3.3" fill="#ffb23f"/><rect x="6" y="32.6" width="36" height="3.3" fill="#ffe14d"/><rect x="6" y="35.9" width="36" height="4" fill="#13a9ba"/></g><circle cx="24" cy="24" r="4.6" fill="#1c1733"/><circle cx="24" cy="24" r="1.8" fill="#fff7e6"/></svg><h1 class="wordmark">Disc<b>press</b></h1></a>
     <nav class="tabs" role="tablist" aria-label="Sections">
-      <button class="tab" role="tab" aria-selected="true" data-tab="convert">Convert<span class="count" id="jobCount" hidden>0</span></button>
-      <button class="tab" role="tab" aria-selected="false" data-tab="cli">Advanced</button>
-      <button class="tab" role="tab" aria-selected="false" data-tab="help">Help</button>
+      <button class="tab" role="tab" aria-selected="true" data-tab="convert" id="tabbtn-convert" aria-controls="tab-convert">Convert<span class="count" id="jobCount" hidden>0</span></button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="cli" id="tabbtn-cli" aria-controls="tab-cli" tabindex="-1">Advanced</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="help" id="tabbtn-help" aria-controls="tab-help" tabindex="-1">Help</button>
     </nav>
     <div class="top-actions"><button class="icon-btn" id="settingsBtn" aria-label="Settings" title="Settings"><svg><use href="#i-gear"/></svg></button></div>
   </div>
@@ -606,7 +622,7 @@ body { overflow-x: clip; }
   <div class="chips" id="chips" aria-live="polite"><span class="chip" id="chipEngine"><i></i>Loading engine…</span></div>
   <div id="fatal"></div>
 
-  <section class="panel" id="tab-convert" role="tabpanel">
+  <section class="panel" id="tab-convert" role="tabpanel" aria-labelledby="tabbtn-convert">
     <div class="drop" id="drop">
       <svg class="drop-art" viewBox="0 0 132 132" aria-hidden="true">
         <rect x="14" y="10" width="8" height="8" style="fill:var(--accent-3)"/><rect x="108" y="30" width="7" height="7" style="fill:var(--cyan)"/><rect x="104" y="112" width="6" height="6" style="fill:var(--accent)"/><rect x="18" y="104" width="5" height="5" style="fill:var(--accent-2)"/>
@@ -634,12 +650,11 @@ body { overflow-x: clip; }
     <div class="jobs" id="jobs"></div>
   </section>
 
-  <section class="panel" id="tab-cli" role="tabpanel" hidden>
+  <section class="panel" id="tab-cli" role="tabpanel" aria-labelledby="tabbtn-cli" hidden>
     <div class="card">
       <h2>Advanced: any chdman command</h2>
       <p class="muted small" style="margin:0 0 12px">Every chdman command and option is available here. Add the files the command needs, fill in the options, then run.</p>
       <label class="field"><span>Command</span><select id="cliCmd"></select></label>
-      <p class="small muted" id="cliDesc" style="margin:6px 0 0"></p>
     </div>
     <div class="card">
       <div class="row"><h2 style="margin:0">Files</h2><span class="spacer"></span><button class="btn sm" id="cliAdd"><svg><use href="#i-upload"/></svg>Add files</button></div>
@@ -661,20 +676,21 @@ body { overflow-x: clip; }
       </div>
     </div>
     <div class="card" id="cliResult" hidden>
-      <div class="prog" id="cliProg" hidden><div class="bar"><i></i></div><div class="ptext"></div></div>
+      <div class="prog" id="cliProg" hidden><div class="bar" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100"><i></i></div><div class="ptext"></div></div>
       <pre class="console" id="cliConsole"></pre>
       <div class="outs" id="cliOuts" style="margin-top:10px"></div>
     </div>
   </section>
 
-  <section class="panel help" id="tab-help" role="tabpanel" hidden>
+  <section class="panel help" id="tab-help" role="tabpanel" aria-labelledby="tabbtn-help" hidden>
     <div class="card">
   <h2>How to use</h2>
   <ol style="margin:6px 0 0;padding-left:20px">
     <li>On the <b>Convert</b> tab, choose or drop your disc files. Pick the <code>.cue</code> (or <code>.gdi</code>, or CloneCD <code>.ccd</code>) <i>together with</i> all of its <code>.bin</code>/track files (for CloneCD, the <code>.img</code>).</li>
     <li>Each game appears as a card. The right chdman command is chosen automatically; open <b>Options</b> to change compression, hunk size or the output name.</li>
     <li>Press <b>Create CHD</b> on a card, or <b>Start all</b> at the bottom. Jobs run one after another.</li>
-    <li>When a job finishes, press <b>Download</b> (on iPhone and iPad the button is called <b>Save to Files</b> and opens the share sheet, which also works inside apps that cannot download; results over 512 MB, such as most DVD games, are downloaded instead, because the share sheet loads the whole file into memory and iOS can close the app: in Safari they go to Files → Downloads, but apps like Sitecase usually can't download them, so on iPhone and iPad use Discpress in Safari at <b>powerbeef.github.io/discpress/</b>). On desktop Chrome/Edge you can <b>Save all to folder</b>.</li>
+    <li>When a job finishes, press <b>Download</b>. On desktop Chrome and Edge you can also <b>Save all to folder</b>.</li>
+    <li>On iPhone and iPad the button is called <b>Save to Files</b> and opens the share sheet, which works even inside apps that can't download. Results over 512 MB, such as most DVD games, are downloaded instead, since the share sheet loads the whole file into memory. Safari puts them in Files → Downloads; apps like Sitecase usually can't, so for big games use Discpress in Safari at <b>powerbeef.github.io/discpress/</b>.</li>
   </ol>
   <p class="small muted">Add <code>.chd</code> files to extract them back to <code>.cue/.bin</code>, <code>.gdi</code>, <code>.iso</code> or a raw image, to verify their checksums, or to see their details. A CD comes back as a Redump dump by default: the same cue sheet and one <code>.bin</code> per track, so the files match Redump's checksums. With Settings → <i>Keep the cue sheet in CD CHDs</i>, new CHDs also keep the original cue sheet, so what CHDs don't otherwise hold (CATALOG, FLAGS, ISRC, extra indexes, CD-i track types) comes back too.</p>
 </div>
@@ -6861,11 +6877,11 @@ SOFTWARE.</div>
 
 <div class="dock" id="dock" hidden>
   <div class="wrap">
-    <div class="summary"><div id="dockText"></div><div class="bar" id="dockBar" hidden><i></i></div></div>
-    <button class="btn sm" id="clearDone" hidden>Clear finished</button>
+    <div class="summary"><div id="dockText"></div><div class="bar" id="dockBar" aria-hidden="true" hidden><i></i></div></div>
     <button class="btn sm" id="saveAll" hidden><svg><use href="#i-folder"/></svg>Save all to folder</button>
     <button class="btn sm" id="dlAll" hidden><svg><use href="#i-download"/></svg>Download all</button>
     <button class="btn primary" id="startAll"><svg><use href="#i-play"/></svg>Start all</button>
+    <button class="btn sm ghost" id="clearDone" hidden>Clear finished</button>
   </div>
 </div>
 
@@ -6900,17 +6916,17 @@ SOFTWARE.</div>
     <label class="field"><span>Appearance</span>
       <select id="setTheme"><option value="">Match system</option><option value="light">Light</option><option value="dark">Dark</option></select>
     </label>
-    <label class="field"><span>Scrolling</span>
-      <select id="setScroll">
-        <option value="auto">Automatic (recommended)</option>
-        <option value="page">Page scrolls (browser style)</option>
-        <option value="app">Fixed header (app style)</option>
-      </select>
-      <span class="hint" id="scrollHint"></span>
-    </label>
     <div class="row"><button class="btn sm" id="clearStorage">Free temporary storage</button><span class="small muted" id="clearInfo"></span></div>
-    <details class="log" id="diagBox"><summary>Screen info</summary>
-      <p class="small muted" style="margin:8px 0 0">If the layout looks wrong on your device, a screenshot of this helps pin it down.</p>
+    <details class="log" id="diagBox"><summary>Troubleshooting</summary>
+      <label class="field" style="margin-top:10px"><span>Scrolling</span>
+        <select id="setScroll">
+          <option value="auto">Automatic (recommended)</option>
+          <option value="page">Page scrolls (browser style)</option>
+          <option value="app">Fixed header (app style)</option>
+        </select>
+        <span class="hint" id="scrollHint"></span>
+      </label>
+      <p class="small muted" style="margin:12px 0 0"><b>Screen info.</b> If the layout looks wrong on your device, a screenshot of this helps pin it down.</p>
       <pre class="logtext" id="diagText"></pre>
       <div class="row" style="margin-top:8px"><button class="btn sm" id="diagCopy">Copy</button></div>
     </details>
@@ -6918,6 +6934,7 @@ SOFTWARE.</div>
 </dialog>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>
+<div class="sr-only" id="announce" role="status"></div>
 <div id="probes" aria-hidden="true" style="position:fixed;left:0;top:0;width:0;visibility:hidden;pointer-events:none">
   <div data-p="vh" style="position:absolute;height:100vh"></div><div data-p="dvh" style="position:absolute;height:100dvh"></div>
   <div data-p="svh" style="position:absolute;height:100svh"></div><div data-p="lvh" style="position:absolute;height:100lvh"></div>
@@ -8457,6 +8474,13 @@ function toast(msg, kind, ms) {
   toastBox.appendChild(t);
   setTimeout(function () { t.remove(); }, ms || (kind === 'err' ? 7000 : 3800));
 }
+// for screen readers: what finished or failed, which the page otherwise only shows
+function announce(msg) {
+  var a = $('#announce');
+  if (!a) return;
+  a.textContent = '';
+  setTimeout(function () { a.textContent = msg; }, 50);
+}
 
 /* ============================================================
    settings
@@ -9147,6 +9171,8 @@ if (!(navigator.locks && navigator.locks.query)) {
 /* ============================================================
    disc descriptors (.cue / .gdi / .toc)
    ============================================================ */
+// what to do about a descriptor without tracks: the image can come on its own
+var NO_TRACKS_NEXT = ' Remove this card and add the image (.bin or .img) by itself: Discpress reads a data disc\u2019s image without a cue sheet, as a single track.';
 // a descriptor line's words as chdman 0.289 reads them (cdrom_file::tokenize): double and single
 // quotes each group a word and can start or end anywhere in it, and aren't part of it.
 // Each word: {text, start, end} (its span in the line, quotes included)
@@ -9249,7 +9275,7 @@ function ccdToCue(text, img) {
     if (i0 != null && +i0 < +i1) lines.push('    INDEX 00 ' + msf(+i0));
     lines.push('    INDEX 01 ' + msf(+i1));
   }
-  if (!n) return fail('This .ccd file lists no tracks (CloneCD 3 and later list them as [TRACK n]).');
+  if (!n) return fail('This .ccd file lists no tracks (CloneCD 3 and later list them as [TRACK n]).' + NO_TRACKS_NEXT);
   return { text: lines.join('\n') + '\n', changed: true, problem: '' };
 }
 // returns {text, changed, problem}: the text chdman should read, and why it can't be converted.
@@ -9272,12 +9298,12 @@ function fixDescriptor(kind, text) {
       else if (!/^(INDEX|PREGAP|POSTGAP)$/.test(k)) return ln;
       return m[1] + k + rest;
     });
-    if (!tracks) problem = 'This CUE file lists no tracks.';
+    if (!tracks) problem = 'This CUE file lists no tracks.' + NO_TRACKS_NEXT;
   } else if (kind === 'toc') {
     // the engine reads cdrdao's TOC grammar (a missing length is the rest of the file); a TOC without
     // tracks is still refused, as chdman 0.289 never finished on one
     lines.forEach(function (ln) { if (tokenize(ln)[0] === 'TRACK') tracks++; });
-    if (!tracks) problem = 'This TOC file lists no tracks.';
+    if (!tracks) problem = 'This TOC file lists no tracks.' + NO_TRACKS_NEXT;
   } else {
     return { text: text, changed: false, problem: '' };
   }
@@ -10087,16 +10113,16 @@ function identNote(job) {
   if (id.error) return el('div', { class: 'note' + (id.readFail ? ' warn' : '') }, id.readFail ? readFailHint(id.error) : 'Could not identify this game (' + id.error + ').');
   // a compressed ISO or ECM image whose checksum step found it damaged: converting it will stop too
   var damage = id.damaged ? id.damaged + ' Converting it stops with this error.' : '';
-  if (!id.sys) return el('div', { class: 'note' + (damage ? ' warn' : '') }, damage || 'Game not recognized. The output keeps the original name.');
+  if (!id.sys) return el('div', { class: 'note' + (damage ? ' warn' : '') }, damage || 'Not a game Discpress recognizes, so the CHD keeps the file\u2019s name.');
   var box = el('div', { class: 'note ident' + (id.name ? ' ok' : '') });
   var sc = sysColor(id.sys);
   var head = el('div', { class: 'ident-head' }, el('span', { class: 'sysbadge', style: sc ? '--sys:' + sc[0] + ';--sys-fg:' + sc[1] : null }, sysShort(id.sys)), el('b', null, sysName(id.sys)));
   if (id.serial) head.append(el('span', { class: 'mono small' }, id.serial));
   box.append(head);
   if (id.name) {
-    box.append(el('div', { class: 'ident-name' }, id.name));
+    // (the game's title is the card's heading)
     var how = { hash: 'Exact match in the Redump database (checksum verified)', 'serial+size': 'Matched by serial number and size', serial: 'Matched by serial number', 'serial-ambiguous': 'Matched by serial number; several versions share it', size: 'Matched by size' }[id.method] || '';
-    box.append(el('div', { class: 'small ident-how' }, (id.method === 'hash' ? '✓ ' : '') + how));
+    head.append(el('span', { class: 'small ident-how' }, (id.method === 'hash' ? '✓ ' : '') + how));
     if (id.entry && id.entry.alternatives && id.entry.alternatives.length > 1) {
       // a running job keeps its name until it finishes, then its results are renamed (renameOutputs)
       var sel = el('select', { onchange: function () {
@@ -10109,14 +10135,14 @@ function identNote(job) {
       id.entry.alternatives.forEach(function (n) { sel.append(el('option', { value: n, selected: n === id.name }, n)); });
       box.append(el('label', { class: 'field', style: 'margin-top:6px' }, el('span', null, 'Which version?'), sel));
     }
-    if (job.state !== 'running' && job.state !== 'queued') {
-      var using = outBase(job) === safeName(id.name);
-      box.append(el('div', { class: 'row', style: 'margin-top:6px' },
-        using ? el('span', { class: 'small' }, 'Output will be named after this title.')
-          : el('button', { class: 'btn sm', onclick: function () { job.opts.out = id.name; job.outEdited = false; refreshJob(job, true); } }, 'Use this name')));
+    // the output's name is in Options; only when it isn't the title, offer to use the title
+    if (job.state !== 'running' && job.state !== 'queued' && outBase(job) !== safeName(id.name)) {
+      box.append(el('div', { class: 'row', style: 'margin-top:4px' },
+        el('span', { class: 'small muted' }, 'Saved as \u201c' + outBase(job) + '\u201d.'),
+        el('button', { class: 'btn sm', onclick: function () { job.opts.out = id.name; job.outEdited = false; refreshJob(job, true); } }, 'Use this name')));
     }
   } else {
-    box.append(el('div', { class: 'small' }, (id.headerTitle ? 'Disc title: ' + id.headerTitle + '. ' : '') + 'Not found in the Redump database, so the original name is kept.'));
+    box.append(el('div', { class: 'small' }, (id.headerTitle ? 'Disc title: ' + id.headerTitle + '. ' : '') + 'Not in the Redump database, so the CHD keeps the file\u2019s name.'));
   }
   if (job.identState === 'checking') {
     var chk = el('div', { class: 'small ident-check' }, job.identStatus || 'Checking against the game database…');
@@ -10151,9 +10177,9 @@ var KIND = {
 };
 // [value, label, codecs (-c), hint, other options]
 var PRESETS = {
-  cd: [['default', 'Smallest (default)', null, 'chdman default: CD LZMA + Deflate + FLAC. Works everywhere.'], ['plan', 'Nearly as small, faster', null, 'The same codecs, but each track tries only the one that suits it: LZMA for data, FLAC for audio. About 1.7 times as fast, files at most 0.3% bigger, same checksums. Works everywhere.', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'cdzl,cdfl', 'CD Deflate (by libdeflate) + FLAC: several times faster, files a little bigger, same checksums.', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'cdzs,cdfl', 'CD Zstandard + FLAC: quick to read on weak devices; needs a recent emulator.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']],
-  other: [['default', 'Smallest (default)', null, 'chdman default: LZMA + Deflate + Huffman + FLAC. Works everywhere.'], ['plan', 'Nearly as small, faster', null, 'The same codecs but FLAC, which almost never wins on data. About 1.5 times as fast, and as small, same checksums. Works everywhere.', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'zlib,huff', 'Deflate (by libdeflate) + Huffman: several times faster, files a little bigger, same checksums.', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'zstd', 'Zstandard: quick to read on weak devices; needs a recent emulator.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']],
-  ld: [['default', 'Default (A/V Huffman)', null, 'chdman default for LaserDisc video.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']]
+  cd: [['default', 'Smallest (default)', null, 'The smallest files. Works in every emulator. (chdman\u2019s own settings: LZMA, Deflate and FLAC.)'], ['plan', 'Nearly as small, faster', null, 'About 1.7 times as fast to create, at most 0.3% bigger, same checksums. Works in every emulator. (The same codecs, but each track tries only the one that suits it: LZMA for data, FLAC for audio.)', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'cdzl,cdfl', 'Several times faster to create, a little bigger, same checksums. (Deflate by libdeflate, and FLAC.)', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'cdzs,cdfl', 'Quicker to load on weak devices. Needs a recent emulator. (Zstandard and FLAC.)'], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']],
+  other: [['default', 'Smallest (default)', null, 'The smallest files. Works in every emulator. (chdman\u2019s own settings: LZMA, Deflate, Huffman and FLAC.)'], ['plan', 'Nearly as small, faster', null, 'About 1.5 times as fast to create, just as small, same checksums. Works in every emulator. (The same codecs but FLAC, which almost never wins on data.)', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'zlib,huff', 'Several times faster to create, a little bigger, same checksums. (Deflate by libdeflate, and Huffman.)', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'zstd', 'Quicker to load on weak devices. Needs a recent emulator. (Zstandard.)'], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']],
+  ld: [['default', 'Default (A/V Huffman)', null, 'chdman\u2019s own setting for LaserDisc video.'], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']]
 };
 var HUNKS = {
   cd: [['', 'Automatic (19,584 bytes = 8 sectors)']],
@@ -10379,7 +10405,8 @@ async function addEntriesNow(entries) {
   linkParents();
   updateDock();
   if (created.length) {
-    var m = 'Added ' + plural(created.length, 'item');
+    var nChd = created.filter(function (j) { return j.kind === 'chd'; }).length, nDisc = created.length - nChd;
+    var m = 'Added ' + [nDisc ? plural(nDisc, 'disc') : '', nChd ? plural(nChd, 'CHD') : ''].filter(Boolean).join(' and ');
     if (ignored.length) m += ' · ignored ' + plural(ignored.length, 'file') + ' (' + ignored.slice(0, 3).join(', ') + (ignored.length > 3 ? '…' : '') + ')';
     toast(m);
     var first = created[0].el;
@@ -10427,7 +10454,9 @@ async function descriptorJob(d, pool, claimed) {
   if (fix.problem) {
     job.invalid = true;
     job.state = 'error';
-    job.errorText = dec ? fix.problem + ' chdman can\u2019t convert it as it is.' : fix.problem;
+    // the reason, then what to do about it
+    var next = fix.problem.indexOf(NO_TRACKS_NEXT) > 0 ? NO_TRACKS_NEXT : '', why = fix.problem.replace(NO_TRACKS_NEXT, '');
+    job.errorText = (dec ? why + ' chdman can\u2019t convert it as it is.' : why) + next;
   }
   var dir = job.descDir = dirOf(d.path);
   refs.forEach(function (ref) {
@@ -10670,26 +10699,28 @@ function buildJob(job) {
 var jobsBox = null;
 function renderJob(job, append) {
   jobsBox = jobsBox || $('#jobs');
-  var card = el('article', { class: 'job', 'data-state': job.state });
+  // data-title: the files' name, whatever the heading shows (the game once it's identified)
+  var card = el('article', { class: 'job', 'data-state': job.state, 'data-title': job.title });
   job.el = card;
   job.ui = {};
   var badge = el('div', { class: 'badge' });
   var h3 = el('h3');
   var sub = el('p', { class: 'sub' });
-  var rm = el('button', { class: 'icon-btn', 'aria-label': 'Remove', title: 'Remove', onclick: function () { removeJob(job); } }, icon('i-x'));
+  var rm = el('button', { class: 'icon-btn', 'aria-label': 'Remove ' + job.title, title: 'Remove', onclick: function () { removeJob(job); } }, icon('i-x'));
   card.append(el('div', { class: 'job-head' }, badge, el('div', { class: 'job-title' }, h3, sub), rm));
   var body = el('div', { class: 'job-body' });
   var controls = el('div', { class: 'controls', style: 'display:grid;gap:12px' });
   var notes = el('div', { style: 'display:grid;gap:8px' });
-  var prog = el('div', { class: 'prog', hidden: true }, el('div', { class: 'bar' }, el('i')), el('div', { class: 'ptext' }));
+  var prog = el('div', { class: 'prog', hidden: true }, el('div', { class: 'bar', role: 'progressbar', 'aria-label': 'Progress', 'aria-valuemin': '0', 'aria-valuemax': '100' }, el('i')), el('div', { class: 'ptext' }));
   var result = el('div', { class: 'result', hidden: true });
   var logPre = el('pre', { class: 'logtext' });
   var cmd = el('code', { class: 'cmd' });
   var log = el('details', { class: 'log' }, el('summary', null, 'Details'), el('div', { style: 'margin-top:8px' }, cmd, logPre));
-  body.append(controls, notes, prog, result, log);
+  // what the disc is (identification, missing files, errors) before how to convert it
+  body.append(notes, controls, prog, result, log);
   var foot = el('div', { class: 'job-foot' });
   card.append(body, foot);
-  job.ui = { badge: badge, h3: h3, sub: sub, controls: controls, notes: notes, prog: prog, bar: prog.querySelector('i'), ptext: prog.querySelector('.ptext'), result: result, logPre: logPre, cmd: cmd, foot: foot, log: log };
+  job.ui = { badge: badge, h3: h3, sub: sub, rm: rm, controls: controls, notes: notes, prog: prog, bar: prog.querySelector('i'), ptext: prog.querySelector('.ptext'), result: result, logPre: logPre, cmd: cmd, foot: foot, log: log };
   if (append) jobsBox.appendChild(card);
   refreshJob(job, true);
 }
@@ -10714,8 +10745,17 @@ function refreshJob(job, full) {
   else { ui.badge.style.removeProperty('--sys'); ui.badge.style.removeProperty('--sys-fg'); }
   if (job.ident && job.ident.sys && job.ident.sys !== 'pc') small = job.kind === 'chd' ? 'CHD' : KIND[job.disc].badge;
   ui.badge.replaceChildren(document.createTextNode(discLabel(job)), el('small', null, small));
-  ui.h3.textContent = job.title;
-  ui.sub.textContent = subtitle(job);
+  // the card becomes the game once it's identified: its title leads, the files' name goes below
+  var game = job.ident && job.ident.name;
+  ui.h3.textContent = game || job.title;
+  ui.h3.className = game ? 'ident-name' : '';
+  ui.sub.textContent = (game && game !== job.title ? job.title + ' \u00b7 ' : '') + subtitle(job);
+  ui.rm.setAttribute('aria-label', 'Remove ' + (game || job.title));
+  if (job.state !== ui.said && (job.state === 'done' || job.state === 'error')) {
+    var outBytes = (job.outputs || []).reduce(function (a, o) { return a + (o.size || 0); }, 0);
+    announce((game || job.title) + (job.state === 'done' ? ': finished' + (outBytes ? ', ' + fmtBytes(outBytes) : '') + '.' : ': failed.'));
+  }
+  ui.said = job.state;
   var busy = job.state === 'running' || job.state === 'queued';
   if (full) renderControls(job);
   else $$('input,select,button', ui.controls).forEach(function (x) { x.disabled = busy; });
@@ -10743,6 +10783,8 @@ function subtitle(job) {
     return parts.join(' · ');
   }
   if (job.src === 'cso') return (ext(job.files[0].name) === 'zso' ? 'ZSO' : 'CSO') + ' compressed ISO · ' + fmtBytes(n) + (job.isoSize ? ' → ' + fmtBytes(job.isoSize) + ' unpacked' : '');
+  // a descriptor that can't be converted: only the file itself, not the tracks it doesn't list
+  if (job.invalid) return (job.descFile ? '.' + ext(job.descFile.name) + ' file · ' + fmtBytes(job.descFile.size) : fmtBytes(n));
   var what;
   var ecms = job.files.filter(function (f) { return f.ecm; }).length;
   if (job.fromCcd) what = 'CloneCD image (.ccd + .' + (job.files[0] ? fileKind(job.files[0]) : 'img') + ')';
@@ -10770,7 +10812,7 @@ function textField(label, value, onchange, opts) {
   opts = opts || {};
   var i = el('input', { type: opts.type || 'text', value: value || '', placeholder: opts.placeholder || '', inputmode: opts.inputmode, disabled: opts.disabled, autocomplete: 'off', spellcheck: 'false' });
   i.addEventListener('input', function () { onchange(i.value); });
-  return el('label', { class: 'field' }, el('span', null, label), i, opts.hint ? el('span', { class: 'hint' }, opts.hint) : null);
+  return el('label', { class: 'field' + (opts.wide ? ' wide' : '') }, el('span', null, label), i, opts.hint ? el('span', { class: 'hint' }, opts.hint) : null);
 }
 
 function renderControls(job) {
@@ -10818,14 +10860,14 @@ function renderControls(job) {
     var hunks = HUNKS[disc] || [['', 'Automatic']];
     if (hunks.length > 1) fields.append(selectField('Hunk size', hunks, o.hunk || hunks[0][0], function (v) { o.hunk = v; job.hunkEdited = true; soft(); }, disc === 'dvd' ? 'Use 2,048 for PSP games.' : null, busy));
     if (disc === 'raw') fields.append(textField('Unit size (bytes)', o.unit, function (v) { o.unit = v.replace(/[^0-9]/g, ''); soft(); }, { inputmode: 'numeric', disabled: busy }));
-    fields.append(textField('Output name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { hint: 'Saved as ' + outBase(job) + '.chd', disabled: busy }));
+    fields.append(textField('Output name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { hint: 'Saved as ' + outBase(job) + '.chd', disabled: busy, wide: true }));
     var det = el('details', { class: 'opts' }, el('summary', null, 'Options'), fields);
     if (job.ui.optsOpen) det.open = true;
     det.addEventListener('toggle', function () { job.ui.optsOpen = det.open; });
     box.append(det);
     if (job.sbi) box.append(el('p', { class: 'small muted sbi-note', style: 'margin:0' }, 'Its LibCrypt data (' + job.sbi.name + ') is saved with the CHD, under the CHD\u2019s name.'));
     if (job.disc === 'dvd' && (job.src === 'iso' || job.src === 'cso') && !(job.ident && job.ident.sys && job.ident.sys !== 'pc')) {
-      box.append(el('p', { class: 'small muted', style: 'margin:0' }, 'Use DVD for PS2 DVD games and PSP. Choose CD for CD-based games stored as .iso.'));
+      box.append(el('p', { class: 'small muted', style: 'margin:0' }, 'The console isn\u2019t known, so check the type: DVD for PSP games and PS2 games on DVD, CD for games that came on a CD.'));
     }
   } else {
     var info = job.info;
@@ -11002,10 +11044,10 @@ function renderFoot(job) {
     var label = job.kind === 'create' ? 'Create CHD' : job.action === 'extract' ? 'Extract' : job.action === 'verify' ? 'Verify' : job.action === 'rename' ? 'Save renamed copy' : 'Show info';
     f.append(el('button', { class: 'btn primary', onclick: function () { enqueueChecked(job); } }, icon('i-play'), label));
   } else if (job.state === 'queued' || job.state === 'running') {
-    f.append(el('button', { class: 'btn danger', onclick: function () { cancelJob(job); } }, 'Cancel'));
+    f.append(el('button', { class: 'btn danger sm fit', onclick: function () { cancelJob(job); } }, 'Cancel'));
   } else if (job.state === 'done' || job.state === 'error' || job.state === 'canceled') {
     if (job.kind === 'chd' && job.info || job.kind === 'create' && !job.invalid) {
-      f.append(el('button', { class: 'btn', onclick: function () { resetJob(job); } }, job.state === 'done' ? 'Run again' : 'Try again'));
+      f.append(el('button', { class: 'btn' + (job.state === 'done' ? ' sm fit' : ''), onclick: function () { resetJob(job); } }, job.state === 'done' ? 'Run again' : 'Try again'));
     }
   }
 }
@@ -11014,8 +11056,13 @@ function setProgress(job, pct, text, extra) {
   var ui = job.ui;
   if (!ui) return;
   var barBox = ui.bar.parentNode;
-  if (pct == null) { barBox.classList.add('indet'); ui.bar.style.width = ''; }
-  else { barBox.classList.remove('indet'); ui.bar.style.width = Math.max(0, Math.min(100, pct)) + '%'; }
+  if (pct == null) { barBox.classList.add('indet'); ui.bar.style.width = ''; barBox.removeAttribute('aria-valuenow'); }
+  else {
+    barBox.classList.remove('indet');
+    ui.bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    barBox.setAttribute('aria-valuenow', Math.round(Math.max(0, Math.min(100, pct))));
+  }
+  barBox.setAttribute('aria-valuetext', text + (pct == null ? '' : ', ' + Math.round(pct) + '%'));
   ui.ptext.replaceChildren(el('b', null, text));
   (extra || []).forEach(function (x) { if (x) ui.ptext.append(el('span', null, x)); });
 }
@@ -11037,7 +11084,9 @@ function updateTabCount() {
   if (d) {
     d.classList.toggle('compact', jobs.length > 0);
     $('#tab-convert').classList.toggle('has-jobs', jobs.length > 0);
-    d.querySelector('h2').textContent = jobs.length ? 'Add more games' : 'Drop your games here';
+    // touch screens have nothing to drop from
+    var touch = window.matchMedia && matchMedia('(hover: none) and (pointer: coarse)').matches;
+    d.querySelector('h2').textContent = jobs.length ? 'Add more games' : touch ? 'Choose your games' : 'Drop your games here';
     $('#addFiles').lastChild.textContent = jobs.length ? 'Add more files' : 'Choose files';
   }
 }
@@ -11250,7 +11299,7 @@ async function runJobNow(job) {
     onLine: function (s, t) {
       appendLog(job, t);
       var fm = /final ratio = ([\d.]+)%/.exec(t);
-      if (fm) setProgress(job, 100, 'Finishing…', ['ratio ' + fm[1] + '%']);
+      if (fm) setProgress(job, 100, 'Finishing…', [fm[1] + '% of the original']);
     },
     onProgress: function (t) {
       if (stalledProgress(t)) { if (!job.stalled) { job.stalled = true; job.run.cancel(); } return; }
@@ -11261,7 +11310,7 @@ async function runJobNow(job) {
       lastPct = pct;
       var el2 = (performance.now() - phaseStart) / 1000, eta = pct > 1.5 ? el2 * (100 - pct) / pct : NaN;
       var bits = [];
-      if (m[3]) bits.push('ratio ' + m[3] + '%');
+      if (m[3]) bits.push(m[3] + '% of the original');
       if (isFinite(eta)) bits.push(fmtDur(eta) + ' left');
       setProgress(job, pct, phase + ' ' + pct.toFixed(1) + '%', bits);
       if (job === current) document.title = Math.floor(pct) + '% · ' + job.title + ' · Discpress';
@@ -11640,16 +11689,19 @@ async function saveToFolder(list) {
 function updateDock() {
   var dock = $('#dock');
   if (!dock) return;
-  var counts = { ready: 0, queued: 0, running: 0, done: 0, error: 0 };
-  jobs.forEach(function (j) { if (counts[j.state] != null) counts[j.state]++; });
+  var counts = { ready: 0, queued: 0, running: 0, done: 0, error: 0, cant: 0 };
+  // a job whose files can't be converted never ran: not "failed"
+  jobs.forEach(function (j) { if (j.invalid) counts.cant++; else if (counts[j.state] != null) counts[j.state]++; });
   dock.hidden = !jobs.length || activeTab !== 'convert';
   document.body.classList.toggle('has-dock', !dock.hidden);
+  document.documentElement.classList.toggle('has-dock', !dock.hidden);
   var parts = [];
   if (counts.running) parts.push(el('b', null, current ? current.title : 'Working'));
   if (counts.queued) parts.push(counts.queued + ' queued');
   if (counts.ready) parts.push(counts.ready + ' ready');
   if (counts.done) parts.push(counts.done + ' done');
   if (counts.error) parts.push(counts.error + ' failed');
+  if (counts.cant) parts.push(counts.cant + ' can\u2019t convert');
   var t = $('#dockText');
   t.replaceChildren();
   parts.forEach(function (p, i) { if (i) t.append(' · '); t.append(p); });
@@ -11664,8 +11716,12 @@ function updateDock() {
   $('#dlAll').hidden = nOut < 2;
   var allOut = [];
   withOut.forEach(function (j) { j.outputs.forEach(function (o) { if (o.kind !== 'disk') allOut.push(o); }); });
-  $('#dlAll').lastChild.textContent = viaShare(allOut) ? 'Save all to Files' : 'Download all';
+  $('#dlAll').lastChild.textContent = (viaShare(allOut) ? 'Save all to Files' : 'Download all') + ' (' + nOut + ')';
   $('#saveAll').hidden = !window.showDirectoryPicker || nOut < 2;
+  // one primary action at a time: start what's ready, then, once nothing is left to do, save the results
+  var settledAll = !counts.ready && !counts.queued && !counts.running;
+  $('#dlAll').className = 'btn' + (settledAll ? ' primary' : ' sm');
+  $('#saveAll').className = 'btn' + (settledAll ? '' : ' sm');
   $('#clearDone').hidden = !jobs.some(function (j) { return j.state === 'done' || j.state === 'canceled' || j.state === 'error'; });
 }
 
@@ -11760,7 +11816,6 @@ function cliDefaultOut() {
 }
 function cliRender() {
   var spec = cliSpec();
-  $('#cliDesc').textContent = spec[1] + '.';
   var list = $('#cliFiles');
   list.replaceChildren();
   cli.files.forEach(function (f) {
@@ -11938,7 +11993,7 @@ async function cliRun() {
       onProgress: function (t) {
         if (stalledProgress(t)) { if (!stalled) { stalled = true; cli.run.cancel(); } return; }
         var m = /([\d.]+)% complete/.exec(t);
-        if (m) { prog.querySelector('.bar').classList.remove('indet'); barI.style.width = m[1] + '%'; ptext.textContent = t.trim(); }
+        if (m) { prog.querySelector('.bar').classList.remove('indet'); prog.querySelector('.bar').setAttribute('aria-valuenow', Math.round(+m[1])); barI.style.width = m[1] + '%'; ptext.textContent = t.trim(); }
       },
       onNotice: function (m) { if (m.level !== 'debug') con.textContent += m.message + '\n'; }
     });
@@ -12173,7 +12228,11 @@ function switchTab(name) {
     return;
   }
   tabScroll[activeTab] = root.scrollTop;
-  $$('.tab').forEach(function (t) { t.setAttribute('aria-selected', String(t.getAttribute('data-tab') === name)); });
+  $$('.tab').forEach(function (t) {
+    var on = t.getAttribute('data-tab') === name;
+    t.setAttribute('aria-selected', String(on));
+    t.tabIndex = on ? 0 : -1;
+  });
   $$('section.panel').forEach(function (p) { p.hidden = p.id !== 'tab-' + name; });
   activeTab = name;
   root.scrollTop = tabScroll[name] || 0;
@@ -12231,6 +12290,17 @@ function init() {
   $('#brandLink').addEventListener('click', function (e) { e.preventDefault(); if (activeTab !== 'convert') switchTab('convert'); scrollRoot().scrollTo({ top: 0, behavior: 'smooth' }); });
   initViewport();
   $$('.tab').forEach(function (t) { t.addEventListener('click', function () { switchTab(t.getAttribute('data-tab')); }); });
+  // the tab list's keys: arrows, Home and End move to and open a tab
+  $('.tabs').addEventListener('keydown', function (e) {
+    var tabs = $$('.tab'), i = tabs.indexOf(document.activeElement);
+    if (i < 0) return;
+    var to = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[e.key];
+    if (to == null) return;
+    e.preventDefault();
+    var t = tabs[(to + tabs.length) % tabs.length];
+    switchTab(t.getAttribute('data-tab'));
+    t.focus();
+  });
 
   // pickers
   var fi = $('#fileInput'), di = $('#dirInput');
@@ -12409,7 +12479,7 @@ function init() {
 
 function updateChips() {
   var nt = threadCount(), auto = settings.threads === 'auto';
-  setChip('chipThreads', (auto ? 'Auto \u00b7 ' : '') + plural(nt, 'thread'), '');
+  setChip('chipThreads', (auto ? 'Auto \u00b7 ' : '') + plural(nt, 'thread'), 'quiet');
   var ti = $('#threadsInfo'), rr = $('#retuneRow');
   if (ti) {
     ti.textContent = !auto ? '' : Tuning.result
