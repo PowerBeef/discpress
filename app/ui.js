@@ -576,6 +576,7 @@ var Store = {
       var work = await root.getDirectoryHandle('chdman-work', { create: true });
       this.available = true;
       await this.cleanupStale(work);
+      await Unzip.cleanup();
     } catch (e) {
       this.available = false;
       // results in memory (a page opened as a file in Chrome or Edge, older browsers): nothing to keep,
@@ -1214,7 +1215,7 @@ function refMatches(e, ref) {
 function fileKind(f) { return f.ecm ? (ext(f.name) ? ext(f.name) + '.' : '') + 'ecm' : ext(f.name); }
 
 /* ---------- grouping new files into jobs ---------- */
-var IGNORE = /^(txt|nfo|sub|m3u|dat|md5|sfv|sha1|jpg|jpeg|png|gif|webp|pdf|url|ini|cfg|xml|json|html|htm|db|ds_store|zip)$/;
+var IGNORE = /^(txt|nfo|sub|m3u|dat|md5|sfv|sha1|jpg|jpeg|png|gif|webp|pdf|url|ini|cfg|xml|json|html|htm|db|ds_store)$/;
 // disc images and archives Discpress can't read: a card says why and what to do, rather than ignoring them
 var UNSUPPORTED = {
   cdi: 'DiscJuggler (.cdi) images can\u2019t become CHDs that emulators load: most hold two sessions, which a CHD made by chdman 0.289 can\u2019t place. Flycast and Redream load .cdi files as they are, so keep this one.',
@@ -1228,15 +1229,214 @@ UNSUPPORTED.mdf = UNSUPPORTED.mds;
 // adds run one after another: a second pick or drop while the first still reads its files (slow
 // cloud files) would otherwise work from a list of jobs that is about to change
 var addChain = Promise.resolve();
+/* ============================================================
+   zip archives
+   A zip's files join the list as if picked one by one (their paths inside the zip, under its name).
+   Stored files are read in place, as slices of the zip; deflated ones are unpacked first, into private
+   storage (chdman-unzip/<visit>, like results, cleared once the visit is over), else into memory up to
+   UNZIP_MEM_MAX, and their CRC-32 must be the zip's. Other methods and encrypted files are refused.
+   ============================================================ */
+var UNZIP_MEM_MAX = 1024 * 1048576;
+var ZIP_METHODS = { 1: 'Shrink', 6: 'Implode', 9: 'Deflate64', 12: 'BZIP2', 14: 'LZMA', 93: 'Zstandard', 95: 'XZ', 98: 'PPMd' };
+function le16(b, o) { return b[o] | (b[o + 1] << 8); }
+function le32(b, o) { return (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0; }
+function le64(b, o) { return le32(b, o) + le32(b, o + 4) * 4294967296; }
+async function zipBytes(file, at, n) { return new Uint8Array(await file.slice(at, at + n).arrayBuffer()); }
+// the zip's files: [{name, method, csize, usize, crc, local, time, encrypted}], or throws with the reason
+async function zipDirectory(file) {
+  var tailLen = Math.min(file.size, 65557), tail = await zipBytes(file, file.size - tailLen, tailLen), e = -1;
+  for (var i = tail.length - 22; i >= 0; i--) if (le32(tail, i) === 0x06054b50) { e = i; break; }
+  if (e < 0) throw new Error('it is not a zip archive, or it is damaged');
+  var count = le16(tail, e + 10), cdSize = le32(tail, e + 12), cdAt = le32(tail, e + 16);
+  if (count === 0xffff || cdSize === 0xffffffff || cdAt === 0xffffffff) {
+    // zip64: its locator sits just before the end record
+    var loc = e - 20;
+    if (loc < 0 || le32(tail, loc) !== 0x07064b50) throw new Error('its zip64 directory is missing');
+    var z = await zipBytes(file, le64(tail, loc + 8), 56);
+    if (le32(z, 0) !== 0x06064b50) throw new Error('its zip64 directory is damaged');
+    count = le64(z, 32); cdSize = le64(z, 40); cdAt = le64(z, 48);
+  }
+  if (cdSize > 64 << 20 || cdAt + cdSize > file.size) throw new Error('its directory is damaged');
+  var cd = await zipBytes(file, cdAt, cdSize), out = [], p = 0;
+  for (var k = 0; k < count; k++) {
+    if (p + 46 > cd.length || le32(cd, p) !== 0x02014b50) throw new Error('its directory is damaged');
+    var flags = le16(cd, p + 8), nl = le16(cd, p + 28), xl = le16(cd, p + 30), cl = le16(cd, p + 32);
+    var ent = { method: le16(cd, p + 10), crc: le32(cd, p + 16), csize: le32(cd, p + 20), usize: le32(cd, p + 24), local: le32(cd, p + 42), encrypted: !!(flags & 1) };
+    var raw = cd.subarray(p + 46, p + 46 + nl), name = null;
+    // extras: zip64 sizes and offset (only the fields that overflowed, in this order); Info-ZIP's UTF-8 name
+    for (var x = p + 46 + nl, xe = x + xl; x + 4 <= xe;) {
+      var id = le16(cd, x), len = le16(cd, x + 2), d = x + 4;
+      if (id === 1) {
+        if (ent.usize === 0xffffffff) { ent.usize = le64(cd, d); d += 8; }
+        if (ent.csize === 0xffffffff) { ent.csize = le64(cd, d); d += 8; }
+        if (ent.local === 0xffffffff) { ent.local = le64(cd, d); d += 8; }
+      } else if (id === 0x7075 && len > 5) {
+        try { name = new TextDecoder('utf-8', { fatal: true }).decode(cd.subarray(x + 9, x + 4 + len)); } catch (err) { /* keep the other */ }
+      }
+      x += 4 + len;
+    }
+    if (name === null) {
+      try { name = new TextDecoder('utf-8', { fatal: !(flags & 0x800) }).decode(raw); }
+      catch (err) { name = new TextDecoder('windows-1252').decode(raw); }
+    }
+    var tm = le16(cd, p + 12), dt = le16(cd, p + 14);
+    ent.time = new Date(1980 + (dt >> 9), ((dt >> 5) & 15) - 1, dt & 31, tm >> 11, (tm >> 5) & 63, (tm & 31) * 2).getTime();
+    ent.name = name.replace(/\\/g, '/');
+    if (!/\/$/.test(ent.name)) out.push(ent);
+    p += 46 + nl + xl + cl;
+  }
+  return out;
+}
+var crc32Table = null;
+function crc32Update(crc, b) {
+  if (!crc32Table) {
+    crc32Table = new Int32Array(2048);
+    for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; crc32Table[n] = c; }
+    for (n = 0; n < 256; n++) { c = crc32Table[n]; for (k = 1; k < 8; k++) { c = crc32Table[c & 255] ^ (c >>> 8); crc32Table[k * 256 + n] = c; } }
+  }
+  var T = crc32Table, i = 0, len = b.length;
+  for (; i + 8 <= len; i += 8) {
+    var a = (b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24)) ^ crc;
+    crc = T[1792 + (a & 255)] ^ T[1536 + ((a >>> 8) & 255)] ^ T[1280 + ((a >>> 16) & 255)] ^ T[1024 + (a >>> 24)] ^
+      T[768 + b[i + 4]] ^ T[512 + b[i + 5]] ^ T[256 + b[i + 6]] ^ T[b[i + 7]];
+  }
+  for (; i < len; i++) crc = T[(crc ^ b[i]) & 255] ^ (crc >>> 8);
+  return crc;
+}
+var Unzip = {
+  seq: 0,
+  root: async function () { return (await navigator.storage.getDirectory()).getDirectoryHandle('chdman-unzip', { create: true }); },
+  // the files unpacked in visits that are over
+  cleanup: async function () {
+    var held = await heldLocks(), root, names = [];
+    try { root = await this.root(); for await (var n of root.keys()) names.push(n); } catch (e) { return; }
+    for (var i = 0; i < names.length; i++) {
+      if (names[i] === Store.session) continue;
+      var t = parseInt(names[i].slice(1, 9), 36);
+      if (held ? held.has('chdman-web-' + names[i]) : t && Date.now() - t < 6 * 3600e3) continue;
+      try { await root.removeEntry(names[i], { recursive: true }); } catch (e) { /* in use */ }
+    }
+  },
+  // this visit's unpacked files that no job uses any more
+  prune: async function () {
+    var used = new Set();
+    jobs.forEach(function (j) {
+      j.files.forEach(function (f) { if (f.file.unzipDir) used.add(f.file.unzipDir); });
+      if (j.descFile && j.descFile.unzipDir) used.add(j.descFile.unzipDir);
+      if (j.subFile && j.subFile.unzipDir) used.add(j.subFile.unzipDir);
+      if (j.sbi && j.sbi.file.unzipDir) used.add(j.sbi.file.unzipDir);
+    });
+    looseFiles.concat(looseSbi).forEach(function (e) { if (e.file.unzipDir) used.add(e.file.unzipDir); });
+    try {
+      var dir = await (await this.root()).getDirectoryHandle(Store.session), names = [];
+      for await (var n of dir.keys()) names.push(n);
+      for (var i = 0; i < names.length; i++) if (!used.has(names[i])) { try { await dir.removeEntry(names[i], { recursive: true }); } catch (e) { /* in use */ } }
+    } catch (e) { /* nothing unpacked */ }
+  },
+  // a deflated file unpacked: a File, its CRC-32 checked against the zip's
+  unpack: async function (zip, ent, at, onProgress) {
+    var stream = zip.slice(at, at + ent.csize).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    var reader = stream.getReader(), crc = -1, done = 0, parts = [], writer = null, fh = null, id = 'u' + (++this.seq);
+    var base_ = ent.name.replace(/^.*\//, '');
+    if (Store.available) {
+      try {
+        var dir = await (await (await this.root()).getDirectoryHandle(Store.session, { create: true })).getDirectoryHandle(id, { create: true });
+        fh = await dir.getFileHandle(base_, { create: true });
+        if (typeof fh.createWritable !== 'function') throw new Error('no writable streams');
+        writer = await fh.createWritable();
+      } catch (e) { writer = null; }
+    }
+    if (!writer && ent.usize > UNZIP_MEM_MAX) throw new Error(base_ + ' is too large (' + fmtBytes(ent.usize) + ') to unpack in this browser. Unzip it first, or use a browser with private storage (Discpress online).');
+    try {
+      for (;;) {
+        var r = await reader.read();
+        if (r.done) break;
+        crc = crc32Update(crc, r.value);
+        done += r.value.length;
+        if (writer) await writer.write(r.value); else parts.push(r.value);
+        onProgress(done);
+      }
+      if (writer) await writer.close();
+    } catch (e) {
+      if (writer) try { await writer.abort(); } catch (x) { /* ignore */ }
+      throw new Error(base_ + ' could not be unpacked (' + (e && e.name === 'QuotaExceededError' ? 'the browser\u2019s storage is full' : e && e.message || e) + ')');
+    }
+    if (((crc ^ -1) >>> 0) !== ent.crc || done !== ent.usize) throw new Error(base_ + ' is damaged in the zip: its checksum doesn\u2019t match');
+    var f = writer ? await fh.getFile() : new File(parts, base_, { lastModified: ent.time });
+    if (writer) f.unzipDir = id;
+    return f;
+  }
+};
+// a picked .zip's files as picked files ({file, path}), and the reasons some couldn't be read
+async function zipEntries(e) {
+  var zip = e.file, out = [], problems = [], skipped = [];
+  var list;
+  try { list = await zipDirectory(zip); }
+  catch (err) { return { entries: [], problems: ['This zip can\u2019t be read: ' + err.message + '.'], skipped: [] }; }
+  var total = 0, doneBefore = 0;
+  list.forEach(function (ent) { if (ent.method === 8) total += ent.usize; });
+  for (var i = 0; i < list.length; i++) {
+    var ent = list[i], nm = ent.name.replace(/^.*\//, ''), x = ext(nm), path = e.path + '/' + ent.name;
+    // what the page would ignore anyway isn't unpacked
+    if (/^\._/.test(nm) || /(^|\/)__MACOSX\//.test(ent.name) || IGNORE.test(x)) { skipped.push(nm); continue; }
+    if (ent.encrypted) { problems.push(nm + ' is encrypted.'); continue; }
+    if (ent.method !== 0 && ent.method !== 8) { problems.push(nm + ' uses ' + (ZIP_METHODS[ent.method] || 'method ' + ent.method) + ' compression, which can\u2019t be read here. Re-zip it with ordinary (Deflate) compression, or unzip it first.'); continue; }
+    var head;
+    try { head = await zipBytes(zip, ent.local, 30); } catch (err) { problems.push(nm + ' can\u2019t be read.'); continue; }
+    if (le32(head, 0) !== 0x04034b50) { problems.push(nm + ' is damaged in the zip.'); continue; }
+    var at = ent.local + 30 + le16(head, 26) + le16(head, 28), file;
+    if (ent.method === 0) {
+      if (at + ent.usize > zip.size) { problems.push(nm + ' is cut short in the zip.'); continue; }
+      file = new File([zip.slice(at, at + ent.usize)], nm, { lastModified: ent.time });
+    } else {
+      if (typeof DecompressionStream !== 'function') { problems.push(nm + ' is compressed, and this browser can\u2019t unpack it. Unzip it first.'); continue; }
+      try {
+        file = await Unzip.unpack(zip, ent, at, function (n) {
+          setChip('chipUnzip', 'Unpacking ' + base(e.path) + ', ' + (total ? Math.floor(100 * (doneBefore + n) / total) : 100) + '%', '');
+        });
+      } catch (err) { problems.push(err.message); continue; }
+      finally { doneBefore += ent.usize; }
+    }
+    out.push({ file: file, path: path });
+  }
+  var chip = document.getElementById('chipUnzip');
+  if (chip) chip.remove();
+  return { entries: out, problems: problems, skipped: skipped };
+}
+
 function addEntries(entries) {
   var p = addChain.then(function () { return addEntriesNow(entries); });
   addChain = p.catch(function () {});
   return p;
 }
 async function addEntriesNow(entries) {
+  // zips: their files join the list, unpacked if they need it (once per zip)
+  var zipCards = [], zipSkipped = [];
+  if (entries.some(function (e) { return ext(e.path) === 'zip'; })) {
+    var flat = [];
+    for (var zi = 0; zi < entries.length; zi++) {
+      var ze = entries[zi];
+      if (ext(ze.path) !== 'zip') { flat.push(ze); continue; }
+      var zkey = fileKey(ze.file, ze.path);
+      if (seen.has(zkey)) continue;
+      seen.add(zkey);
+      seenKeys.set(ze.file, zkey);
+      var zr = await zipEntries(ze);
+      zr.entries.forEach(function (x) { x.file.fromZip = ze.file; });
+      flat = flat.concat(zr.entries);
+      zipSkipped = zipSkipped.concat(zr.skipped);
+      if (zr.problems.length) {
+        // a card for what couldn't be read; the rest goes on
+        zipCards.push(newJob({ kind: 'create', src: 'zip', title: stem(ze.path), files: [{ file: ze.file, name: base(ze.path) }], disc: 'cd', state: 'error', invalid: true,
+          errorText: (zr.entries.length ? plural(zr.problems.length, 'file') + ' in this zip can\u2019t be converted. ' : '') + zr.problems.join(' ') }));
+      }
+    }
+    entries = flat;
+    if (!entries.length && !zipCards.length) { toast('Nothing to convert in ' + plural(zipSkipped.length, 'file') + ' of the zip.', 'err'); return; }
+  }
   // macOS keeps metadata in "._name" companion files (on FAT and exFAT drives, and in zips' __MACOSX
   // folders): they share the game files' extensions but aren't games
-  var junk = [];
+  var junk = zipSkipped.slice();
   entries = entries.filter(function (e) {
     if (/^\._/.test(base(e.path)) || /(^|\/)__MACOSX\//.test(e.path)) { junk.push(base(e.path)); return false; }
     return true;
@@ -1249,9 +1449,9 @@ async function addEntriesNow(entries) {
     seenKeys.set(e.file, key);
     fresh.push(e);
   });
-  if (!fresh.length) { toast(entries.length ? 'Those files are already in the list.' : 'Nothing to convert in ' + plural(junk.length, 'file') + '. Add .cue/.bin, .gdi, .iso or .chd files.', entries.length ? null : 'err'); return; }
+  if (!fresh.length && !zipCards.length) { toast(entries.length ? 'Those files are already in the list.' : 'Nothing to convert in ' + plural(junk.length, 'file') + '. Add .cue/.bin, .gdi, .iso or .chd files.', entries.length ? null : 'err'); return; }
 
-  var created = [], ignored = junk.slice();
+  var created = zipCards.slice(), ignored = junk.slice();
   var claimed = new Set();
 
   // 1) new files may complete jobs that were waiting for missing tracks
@@ -2160,6 +2360,15 @@ function removeJob(job, silent, keepFiles) {
     job.files.forEach(function (f) { forgetFile(f.file); });
     if (job.descFile) forgetFile(job.descFile);
     if (job.sbi) forgetFile(job.sbi.file);
+    // a zip whose files are all gone can be added again; what was unpacked from it is deleted
+    var zips = new Set();
+    job.files.concat(job.descFile ? [{ file: job.descFile }] : []).forEach(function (f) { if (f.file.fromZip) zips.add(f.file.fromZip); });
+    if (job.src === 'zip') zips.add(job.files[0].file);
+    zips.forEach(function (z) {
+      var inUse = jobs.some(function (o) { return o.files.some(function (f) { return f.file.fromZip === z || f.file === z; }) || (o.descFile && o.descFile.fromZip === z); });
+      if (!inUse) forgetFile(z);
+    });
+    if (zips.size) Unzip.prune();
   }
   jobs.forEach(function (o) { if (o.parentJob === job) { o.parentJob = null; refreshJob(o); } });
   if (job.state === 'done') refreshDiscSets();
@@ -3497,6 +3706,8 @@ function init() {
       var root = await navigator.storage.getDirectory();
       var work = await root.getDirectoryHandle('chdman-work', { create: true });
       await Store.cleanupStale(work);
+      await Unzip.prune();
+      await Unzip.cleanup();
     } catch (e) { /* ignore */ }
     refreshStorageInfo();
     updateDock();
