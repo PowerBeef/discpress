@@ -7788,7 +7788,11 @@ async function stageInput(msg, index, stages) {
 /* ---------------- multi-core compression and decompression (job side) ---------------- */
 
 function setupParallel(M, ports) {
-  var helpers = ports.map(function (port, i) { return { port: port, inflight: 0, id: i }; });
+  // sent/dsent: the batches a helper has and hasn't answered yet, kept until it does. A helper that fails
+  // (a WebAssembly trap: some Safari versions' optimizing compiler miscompiles now and then) is dropped,
+  // and the others do its batches: compression is deterministic, so the CHD is the same
+  var helpers = ports.map(function (port, i) { return { port: port, inflight: 0, id: i, dead: false, sent: {}, dsent: {} }; });
+  function liveHelpers() { return helpers.filter(function (h) { return !h.dead; }); }
   var hunkbytes = 0, batchSize = 1, scratch = 0, open = null, pending = [], fifo = [], done = new Set();
   var sleeper = null, seq = 0, failed = null;
   var mc = new MessageChannel(), wakeFn = null;
@@ -7804,12 +7808,12 @@ function setupParallel(M, ports) {
     for (var round = 0; round < 2; round++) {
       for (var i = 0; i < helpers.length && pending.length; i++) {
         var h = helpers[i];
-        if (h.inflight > round) continue;
-        var b = pending.shift();
+        if (h.dead || h.inflight > round) continue;
+        var b = pending.shift(), id = ++seq;
         h.inflight++;
-        var items = b.items.slice(0, b.n), codecs = b.codecs.slice(0, b.n);
-        var data = b.n === batchSize ? b.buf : b.buf.slice(0, b.n * hunkbytes);
-        h.port.postMessage({ type: 'batch', id: ++seq, items: items, codecs: codecs, data: data.buffer }, [items.buffer, codecs.buffer, data.buffer]);
+        h.sent[id] = b;
+        var items = b.items.slice(0, b.n), codecs = b.codecs.slice(0, b.n), data = b.buf.slice(0, b.n * hunkbytes);
+        h.port.postMessage({ type: 'batch', id: id, items: items, codecs: codecs, data: data.buffer }, [items.buffer, codecs.buffer, data.buffer]);
       }
     }
   }
@@ -7823,17 +7827,34 @@ function setupParallel(M, ports) {
       var s = sleeper; sleeper = null; wake(s);
     }
   }
+  // a helper failed: its unanswered batches go back in the queue for the others; with none left, a
+  // compression fails (the page runs the job again once), and the job worker decompresses by itself
+  function helperDown(h, message) {
+    if (h.dead) return;
+    h.dead = true;
+    h.inflight = 0;
+    var lost = Object.keys(h.sent).map(function (k) { return h.sent[k]; });
+    var dlost = Object.keys(h.dsent).map(function (k) { return h.dsent[k]; });
+    h.sent = {}; h.dsent = {};
+    var left = liveHelpers().length;
+    // (compressing, nothing can take new hunks now: the run stops, and the page runs the job again)
+    if (!left) failed = message;
+    postMessage({ type: 'notice', level: 'info', message: 'A helper thread stopped (' + message + ')' + (left ? '; the ' + (left === 1 ? 'other took' : left + ' others took') + ' over its work.' : '.') });
+    pending = lost.concat(pending);
+    rd.queue = dlost.filter(function (b) { return b.gen === rd.gen; }).concat(rd.queue);
+    rd.busy -= dlost.filter(function (b) { return b.gen !== rd.gen; }).reduce(function (n, b) { return n + b.n; }, 0);
+    if (left) dispatch();
+    rdDispatch();
+    maybeWake();
+    rdWake();
+  }
   helpers.forEach(function (h) {
     h.port.onmessage = function (e) {
       var m = e.data;
-      if (m.type === 'error') {
-        failed = m.message;
-        postMessage({ type: 'notice', level: 'error', message: 'A helper thread failed: ' + m.message });
-        maybeWake();
-        rdWake(); // an extract or verify waiting on it: rdWait reports the failure
-        return;
-      }
+      if (m.type === 'error') { helperDown(h, m.message); return; }
+      if (h.dead) return; // a result it sent before failing: its batches were given to the others
       if (m.type === 'dresult') {
+        delete h.dsent[m.id];
         h.inflight--;
         rdResult(m);
         rdDispatch();
@@ -7841,6 +7862,7 @@ function setupParallel(M, ports) {
         return;
       }
       if (m.type !== 'result') return;
+      delete h.sent[m.id];
       h.inflight--;
       var items = m.items, meta = m.meta, sha1 = m.sha1, out = m.out, o = 0;
       for (var i = 0; i < items.length; i++) {
@@ -7887,7 +7909,7 @@ function setupParallel(M, ports) {
     return new Promise(function (resolve) {
       if (failed) {
         // abort the whole run: helper failed, results would be incomplete
-        postMessage({ type: 'fatal', message: 'Multi-core compression failed (' + failed + '). Try again with 1 thread in Settings.' });
+        postMessage({ type: 'fatal', engine: true, message: 'Multi-core compression failed (' + failed + ').' });
         return; // never resolves: the job worker is terminated by the page
       }
       dispatch();
@@ -7909,13 +7931,21 @@ function setupParallel(M, ports) {
   // chdman uses a window of hunks, so helpers need their queue (at most two windows, see wasm_read_ahead)
   function rdDispatch() {
     rdFlush();
+    var live = liveHelpers();
     while (rd.queue.length) {
-      var h = helpers[0];
-      for (var i = 1; i < helpers.length; i++) if (helpers[i].inflight < h.inflight) h = helpers[i];
       var b = rd.queue.shift();
+      if (!live.length) {
+        // no helper left: the job worker decompresses these hunks itself, as it does a hunk a helper couldn't
+        rdResult({ gen: b.gen, meta: b.meta.slice(0, b.n * 3), ok: new Uint8Array(b.n), out: new Uint8Array(0) });
+        continue;
+      }
+      var h = live[0];
+      for (var i = 1; i < live.length; i++) if (live[i].inflight < h.inflight) h = live[i];
+      var id = ++seq;
       h.inflight++;
+      h.dsent[id] = b;
       var meta = b.meta.slice(0, b.n * 3), data = b.data.slice(0, b.used);
-      h.port.postMessage({ type: 'dbatch', gen: b.gen, meta: meta, data: data.buffer }, [meta.buffer, data.buffer]);
+      h.port.postMessage({ type: 'dbatch', id: id, gen: b.gen, meta: meta, data: data.buffer }, [meta.buffer, data.buffer]);
     }
   }
   function rdResult(m) {
@@ -7965,10 +7995,6 @@ function setupParallel(M, ports) {
   // chdman paused until hunks it is about to read are in: resolves when more results arrive
   M.rdWait = function () {
     return new Promise(function (resolve) {
-      if (failed) {
-        postMessage({ type: 'fatal', message: 'Multi-core decompression failed (' + failed + '). Try again with 1 thread in Settings.' });
-        return; // never resolves: the job worker is terminated by the page
-      }
       rdDispatch();
       rd.waiting = resolve;
       if (!rd.busy) rdWake();
@@ -7995,6 +8021,7 @@ async function runHelper(msg) {
         dhb = m.hunkbytes;
         return;
       }
+      if ((m.type === 'dbatch' || m.type === 'batch') && msg.fail) throw new Error('Out of bounds memory access (a test: DEBUG.failHelpers)');
       if (m.type === 'dbatch') {
         // a hunk that fails here is decompressed again by the job worker, which reports the error
         var dmeta = m.meta, ddata = new Uint8Array(m.data), dn = dmeta.length / 3;
@@ -8008,7 +8035,7 @@ async function runHelper(msg) {
             dout.set(M.HEAPU8.subarray(doutbuf, doutbuf + dhb), di * dhb);
           }
         }
-        port.postMessage({ type: 'dresult', gen: m.gen, meta: dmeta, ok: ok, out: dout }, [dmeta.buffer, ok.buffer, dout.buffer]);
+        port.postMessage({ type: 'dresult', id: m.id, gen: m.gen, meta: dmeta, ok: ok, out: dout }, [dmeta.buffer, ok.buffer, dout.buffer]);
         return;
       }
       if (m.type === 'init') {
@@ -8038,7 +8065,9 @@ async function runHelper(msg) {
           [m.items.buffer, meta.buffer, sha1.buffer, out.buffer]);
       }
     } catch (err) {
-      port.postMessage({ type: 'error', message: errText(err) });
+      // (a WebAssembly trap here, which some Safari versions' optimizing compiler causes: the job worker
+      // stops using this helper and gives its batches to the others)
+      port.postMessage({ type: 'error', id: m && m.id, message: errText(err) });
     }
   };
   postMessage({ type: 'helper-ready' });
@@ -8724,7 +8753,8 @@ var Engine = {
           var hw = new Worker(self.url), ch = new MessageChannel();
           hw.onmessage = function (e) { if (e.data && e.data.type === 'fatal') helperFailed(e.data.message); };
           hw.onerror = function (e) { helperFailed(e.message || 'failed to start'); };
-          self.post(hw, { type: 'helper', port: ch.port2 }, [ch.port2]);
+          // (tests: DEBUG.failHelpers makes helpers fail as a miscompiling WebAssembly engine does)
+          self.post(hw, { type: 'helper', port: ch.port2, fail: o.debugFail === 'all' || (o.debugFail === 'one' && i === 0) }, [ch.port2]);
           helpers.push(hw);
           ports.push(ch.port1);
         } catch (e) { break; }
@@ -11140,7 +11170,8 @@ async function runJobNow(job) {
     return true;
   }
   job.stalled = false;
-  job.log = [];
+  job.log = job.retryLog || []; // a run again after the engine failed keeps the first run's log
+  job.retryLog = null;
   job.outputs = [];
   job.redump = null;
   refreshJob(job, false);
@@ -11214,6 +11245,8 @@ async function runJobNow(job) {
   job.run = Engine.run({
     jobId: job.id, dirPath: Store.claim(job.id), args: spec.args, inputs: spec.inputs, writable: spec.writable,
     slots: spec.slots, helpers: spec.helpers, outMode: spec.outMode, outDir: outDir, agreed: main ? [main] : [],
+    // tests: 'one' or 'all' helpers fail on the first run, 'always' (all) on every run
+    debugFail: DEBUG.failHelpers === 'always' ? 'all' : job.engineRetried ? null : DEBUG.failHelpers,
     onLine: function (s, t) {
       appendLog(job, t);
       var fm = /final ratio = ([\d.]+)%/.exec(t);
@@ -11264,8 +11297,10 @@ async function runJobNow(job) {
     } else {
       job.state = 'error';
       if (res.readFail) { job.errorText = readFailHint(res.error); Store.removeJob(job.id); refreshJob(job, true); return; }
-      var errs = job.log.filter(function (l) { return /error|failed|invalid|unsupported|missing|not /i.test(l) && !/^\$ /.test(l); });
+      // (a helper that stopped, whose work the others did, isn't why)
+      var errs = job.log.filter(function (l) { return /error|failed|invalid|unsupported|missing|not /i.test(l) && !/^\$ |^A helper thread stopped/.test(l); });
       job.errorText = (errs.slice(-3).join('\n') || res.error || 'chdman exited with code ' + res.code) + (job.action === 'verify' ? '' : '');
+      if (engineFailure(res.error)) job.errorText = res.error; // the job worker's WebAssembly trapped
       // the worker's own report (a damaged compressed ISO, an unreadable input, full storage) explains chdman's error best
       if (workerError && job.errorText.indexOf(workerError) < 0) job.errorText = workerError + '\n' + job.errorText;
       if (job.kind === 'chd' && job.action === 'verify') job.errorText = 'Verification failed. ' + job.errorText;
@@ -11278,8 +11313,28 @@ async function runJobNow(job) {
     else { job.state = 'error'; job.errorText = readFailHint(e.message); appendLog(job, e.message); }
     Store.removeJob(job.id);
   }
+  if (job.state === 'error' && engineFailure(job.errorText)) {
+    // the browser's WebAssembly engine failed, not the conversion: once, run it again from the start
+    // (the same CHD when it works); a second failure says what to do about the browser
+    if (!job.engineRetried && !job.aborted && jobs.indexOf(job) >= 0) {
+      job.engineRetried = true;
+      appendLog(job, 'The browser\u2019s WebAssembly engine failed (' + job.errorText.split('\n')[0] + '). Converting again\u2026');
+      job.retryLog = job.log.slice();
+      await Store.removeJob(job.id);
+      if (!job.aborted && jobs.indexOf(job) >= 0) return runJobNow(job);
+    }
+    job.errorText += '\n' + ENGINE_HINT;
+  }
+  job.engineRetried = false;
   refreshJob(job, true);
 }
+
+// WebAssembly traps, which the conversion itself can't cause: some browsers' compilers (the optimizing tier
+// of some Safari versions) miscompile now and then (docs/ios/README.md)
+function engineFailure(text) { return /out of bounds memory access|memory access out of bounds|Multi-core compression failed/i.test(text || ''); }
+var ENGINE_HINT = isIOS ? 'This is a fault in the browser engine of this iOS version, not in your files. Update iOS (Settings \u2192 General \u2192 Software Update), then try again.'
+  : /Safari\//.test(navigator.userAgent) && !/Chrome|Chromium|Edg\/|Firefox|OPR\//.test(navigator.userAgent) ? 'This is a fault in this version of Safari, not in your files. Update Safari (or macOS), or convert in Chrome, Edge or Firefox.'
+  : 'This is a fault in the browser, not in your files. Update the browser, or convert in another one.';
 
 // the job's .sbi file, as a result named after its CHD: written into the folder with the CHD, or
 // given as the user's own file (nothing to store)

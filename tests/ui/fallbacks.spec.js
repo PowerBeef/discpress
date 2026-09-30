@@ -1,5 +1,8 @@
 // Paths the app takes on older or restricted browsers, forced on in Chromium.
+import fs from 'node:fs';
+import path from 'node:path';
 import { test, expect, fixture } from '../support/app.js';
+import { FIXTURES } from '../support/paths.js';
 import { engineReference, info, nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
 
 async function convertAgent(app) {
@@ -134,4 +137,50 @@ test('a helper thread that fails to start stops the job with a message instead o
   await app.run(card, { expectState: 'error', timeout: 30_000 });
   await expect(card).toContainText('A helper thread stopped');
   await expect(card).toContainText('Try again with fewer threads');
+});
+
+// Some Safari versions' WebAssembly compilers miscompile now and then, and a helper or the job worker traps
+// ("Out of bounds memory access", docs/ios/README.md). DEBUG.failHelpers makes helpers fail that way:
+// the others take over a helper's work, and when none is left the job runs once more; the CHD is the same.
+for (const [mode, logged] of [['one', 'A helper thread stopped (Out of bounds memory access'], ['all', 'Converting again']]) {
+  test(`a helper whose WebAssembly traps doesn't fail the conversion (${mode === 'one' ? 'one helper' : 'every helper, on the first run'})`, async ({ app }) => {
+    await app.open({ settings: { threads: 4 }, debug: { failHelpers: mode } });
+    const card = await convertAgent(app);
+    await expect(card.locator('pre.logtext')).toContainText(logged);
+    await expect(card.locator('.result')).toContainText('Done.');
+  });
+}
+
+test('when the engine fails again, the error says what to do about the browser, not about threads', async ({ app }) => {
+  await app.open({ settings: { threads: 4 }, debug: { failHelpers: 'always' } });
+  await app.add(fixture('ps2-dvd').add);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await app.run(card, { expectState: 'error' });
+  await expect(card).toContainText('Multi-core compression failed (Out of bounds memory access');
+  await expect(card).toContainText('This is a fault in the browser, not in your files. Update the browser, or convert in another one.');
+  await expect(card).not.toContainText('1 thread');
+  await expect(card.locator('pre.logtext')).toContainText('Converting again');
+});
+
+test('extract and verify go on when helpers fail: the others, or the job worker, decompress their hunks', async ({ app }) => {
+  test.skip(!nativeChdman(), 'needs native chdman to make the CHD');
+  const dir = path.join(FIXTURES, 'chd');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(reference('createdvd', 'agent.iso'), path.join(dir, 'agent-fault.chd'));
+  for (const mode of ['one', 'always']) {
+    await app.open({ settings: { threads: 4 }, debug: { failHelpers: mode } });
+    await app.add(['chd/agent-fault.chd']);
+    const card = app.job('agent-fault');
+    await app.settled(card);
+    await card.locator('.seg button', { hasText: 'Verify' }).click();
+    await app.run(card);
+    await expect(card).toContainText('Verified.');
+    await card.locator('.job-foot button', { hasText: 'Run again' }).click();
+    await card.locator('.seg button', { hasText: 'Extract' }).click();
+    await app.run(card);
+    const [out] = await app.downloads(card);
+    expect(sha1File(out.path), mode).toBe(sha1File(path.join(FIXTURES, 'agent.iso')));
+    await expect(card.locator('pre.logtext')).toContainText('A helper thread stopped');
+  }
 });

@@ -362,7 +362,8 @@ var Engine = {
           var hw = new Worker(self.url), ch = new MessageChannel();
           hw.onmessage = function (e) { if (e.data && e.data.type === 'fatal') helperFailed(e.data.message); };
           hw.onerror = function (e) { helperFailed(e.message || 'failed to start'); };
-          self.post(hw, { type: 'helper', port: ch.port2 }, [ch.port2]);
+          // (tests: DEBUG.failHelpers makes helpers fail as a miscompiling WebAssembly engine does)
+          self.post(hw, { type: 'helper', port: ch.port2, fail: o.debugFail === 'all' || (o.debugFail === 'one' && i === 0) }, [ch.port2]);
           helpers.push(hw);
           ports.push(ch.port1);
         } catch (e) { break; }
@@ -2132,7 +2133,8 @@ async function runJobNow(job) {
     return true;
   }
   job.stalled = false;
-  job.log = [];
+  job.log = job.retryLog || []; // a run again after the engine failed keeps the first run's log
+  job.retryLog = null;
   job.outputs = [];
   job.redump = null;
   refreshJob(job, false);
@@ -2206,6 +2208,8 @@ async function runJobNow(job) {
   job.run = Engine.run({
     jobId: job.id, dirPath: Store.claim(job.id), args: spec.args, inputs: spec.inputs, writable: spec.writable,
     slots: spec.slots, helpers: spec.helpers, outMode: spec.outMode, outDir: outDir, agreed: main ? [main] : [],
+    // tests: 'one' or 'all' helpers fail on the first run, 'always' (all) on every run
+    debugFail: DEBUG.failHelpers === 'always' ? 'all' : job.engineRetried ? null : DEBUG.failHelpers,
     onLine: function (s, t) {
       appendLog(job, t);
       var fm = /final ratio = ([\d.]+)%/.exec(t);
@@ -2256,8 +2260,10 @@ async function runJobNow(job) {
     } else {
       job.state = 'error';
       if (res.readFail) { job.errorText = readFailHint(res.error); Store.removeJob(job.id); refreshJob(job, true); return; }
-      var errs = job.log.filter(function (l) { return /error|failed|invalid|unsupported|missing|not /i.test(l) && !/^\$ /.test(l); });
+      // (a helper that stopped, whose work the others did, isn't why)
+      var errs = job.log.filter(function (l) { return /error|failed|invalid|unsupported|missing|not /i.test(l) && !/^\$ |^A helper thread stopped/.test(l); });
       job.errorText = (errs.slice(-3).join('\n') || res.error || 'chdman exited with code ' + res.code) + (job.action === 'verify' ? '' : '');
+      if (engineFailure(res.error)) job.errorText = res.error; // the job worker's WebAssembly trapped
       // the worker's own report (a damaged compressed ISO, an unreadable input, full storage) explains chdman's error best
       if (workerError && job.errorText.indexOf(workerError) < 0) job.errorText = workerError + '\n' + job.errorText;
       if (job.kind === 'chd' && job.action === 'verify') job.errorText = 'Verification failed. ' + job.errorText;
@@ -2270,8 +2276,28 @@ async function runJobNow(job) {
     else { job.state = 'error'; job.errorText = readFailHint(e.message); appendLog(job, e.message); }
     Store.removeJob(job.id);
   }
+  if (job.state === 'error' && engineFailure(job.errorText)) {
+    // the browser's WebAssembly engine failed, not the conversion: once, run it again from the start
+    // (the same CHD when it works); a second failure says what to do about the browser
+    if (!job.engineRetried && !job.aborted && jobs.indexOf(job) >= 0) {
+      job.engineRetried = true;
+      appendLog(job, 'The browser\u2019s WebAssembly engine failed (' + job.errorText.split('\n')[0] + '). Converting again\u2026');
+      job.retryLog = job.log.slice();
+      await Store.removeJob(job.id);
+      if (!job.aborted && jobs.indexOf(job) >= 0) return runJobNow(job);
+    }
+    job.errorText += '\n' + ENGINE_HINT;
+  }
+  job.engineRetried = false;
   refreshJob(job, true);
 }
+
+// WebAssembly traps, which the conversion itself can't cause: some browsers' compilers (the optimizing tier
+// of some Safari versions) miscompile now and then (docs/ios/README.md)
+function engineFailure(text) { return /out of bounds memory access|memory access out of bounds|Multi-core compression failed/i.test(text || ''); }
+var ENGINE_HINT = isIOS ? 'This is a fault in the browser engine of this iOS version, not in your files. Update iOS (Settings \u2192 General \u2192 Software Update), then try again.'
+  : /Safari\//.test(navigator.userAgent) && !/Chrome|Chromium|Edg\/|Firefox|OPR\//.test(navigator.userAgent) ? 'This is a fault in this version of Safari, not in your files. Update Safari (or macOS), or convert in Chrome, Edge or Firefox.'
+  : 'This is a fault in the browser, not in your files. Update the browser, or convert in another one.';
 
 // the job's .sbi file, as a result named after its CHD: written into the folder with the CHD, or
 // given as the user's own file (nothing to store)
