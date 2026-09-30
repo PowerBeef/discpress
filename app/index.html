@@ -169,6 +169,12 @@
     </label>
     <div class="row" id="folderRow" hidden><button class="btn sm" id="pickFolder"><svg><use href="#i-folder"/></svg>Choose folder</button><span class="small muted">Current: <b id="folderName">none</b>. A file already there is replaced only if you agree.</span></div>
     <label class="check"><input type="checkbox" id="setRename"> Name results after the official (Redump) game title</label>
+    <div class="field" id="datBox"><span>Your DAT files (Redump, No-Intro)</span>
+      <ul class="files-list" id="datList"></ul>
+      <p class="small muted" id="datEmpty" style="margin:0">None added.</p>
+      <div class="row"><button class="btn sm" id="datAdd">Add DAT files</button></div>
+      <span class="hint">Every track of your discs is checked against them, and discs that match are named after them. Add .dat or .xml files, or zips of them; they stay in this browser.</span>
+    </div>
     <div class="field"><label class="check"><input type="checkbox" id="setKeepCue"> Keep the cue sheet in CD CHDs</label>
       <span class="hint">Extracting as Redump then gives back the very same cue sheet, with what CHDs don't otherwise keep (CATALOG, FLAGS, ISRC, extra indexes). The CHD's checksums stay the same and emulators ignore the sheet, but the file is no longer byte for byte desktop chdman's.</span>
     </div>
@@ -208,6 +214,7 @@
 <input type="file" id="fileInput" multiple hidden>
 <input type="file" id="dirInput" multiple webkitdirectory hidden>
 <input type="file" id="cliFileInput" multiple hidden>
+<input type="file" id="datInput" multiple accept=".dat,.xml,.zip" hidden>
 
 <script type="text/plain" id="worker-src">/*WORKER*/</script>
 <script type="application/octet-stream" id="wasm-simd" data-size="/*SIMD_SIZE*/">/*WASM_SIMD*/</script>

@@ -992,6 +992,7 @@ async function pumpIdentify() {
       applyIdent(job);
       scanSub(job);
       if (job.subScan) await job.subScan;
+      await datCheck(job);
       // the checksum finished after the conversion started: name the results after the confirmed release
       if (job.state === 'done') renameOutputs(job);
       job.identKnownResolve();
@@ -1063,7 +1064,7 @@ function identNote(job) {
   if (id.error) return el('div', { class: 'note' + (id.readFail ? ' warn' : '') }, id.readFail ? readFailHint(id.error) : 'Could not identify this game (' + id.error + ').');
   // a compressed ISO or ECM image whose checksum step found it damaged: converting it will stop too
   var damage = id.damaged ? id.damaged + ' Converting it stops with this error.' : '';
-  if (!id.sys) return el('div', { class: 'note' + (damage ? ' warn' : '') }, damage || 'Not a game Discpress recognizes, so the CHD keeps the file\u2019s name.');
+  if (!id.sys) return id.method === 'dat' ? null : el('div', { class: 'note' + (damage ? ' warn' : '') }, damage || 'Not a game Discpress recognizes, so the CHD keeps the file\u2019s name.');
   var box = el('div', { class: 'note ident' + (id.name ? ' ok' : '') });
   var sc = sysColor(id.sys);
   var head = el('div', { class: 'ident-head' }, el('span', { class: 'sysbadge', style: sc ? '--sys:' + sc[0] + ';--sys-fg:' + sc[1] : null }, sysShort(id.sys)), el('b', null, sysName(id.sys)));
@@ -1071,7 +1072,7 @@ function identNote(job) {
   box.append(head);
   if (id.name) {
     // (the game's title is the card's heading)
-    var how = { hash: 'Exact match in the Redump database (checksum verified)', 'serial+size': 'Matched by serial number and size', serial: 'Matched by serial number', 'serial-ambiguous': 'Matched by serial number; several versions share it', size: 'Matched by size' }[id.method] || '';
+    var how = { dat: '\u2713 Every track matches your DAT file', hash: 'Exact match in the Redump database (checksum verified)', 'serial+size': 'Matched by serial number and size', serial: 'Matched by serial number', 'serial-ambiguous': 'Matched by serial number; several versions share it', size: 'Matched by size' }[id.method] || '';
     head.append(el('span', { class: 'small ident-how' }, (id.method === 'hash' ? '✓ ' : '') + how));
     if (id.entry && id.entry.alternatives && id.entry.alternatives.length > 1) {
       // a running job keeps its name until it finishes, then its results are renamed (renameOutputs)
@@ -1378,7 +1379,7 @@ async function zipEntries(e) {
   for (var i = 0; i < list.length; i++) {
     var ent = list[i], nm = ent.name.replace(/^.*\//, ''), x = ext(nm), path = e.path + '/' + ent.name;
     // what the page would ignore anyway isn't unpacked
-    if (/^\._/.test(nm) || /(^|\/)__MACOSX\//.test(ent.name) || IGNORE.test(x)) { skipped.push(nm); continue; }
+    if (/^\._/.test(nm) || /(^|\/)__MACOSX\//.test(ent.name) || (IGNORE.test(x) && !/^(dat|xml)$/.test(x))) { skipped.push(nm); continue; }
     if (ent.encrypted) { problems.push(nm + ' is encrypted.'); continue; }
     if (ent.method !== 0 && ent.method !== 8) { problems.push(nm + ' uses ' + (ZIP_METHODS[ent.method] || 'method ' + ent.method) + ' compression, which can\u2019t be read here. Re-zip it with ordinary (Deflate) compression, or unzip it first.'); continue; }
     var head;
@@ -1449,6 +1450,22 @@ async function addEntriesNow(entries) {
     seenKeys.set(e.file, key);
     fresh.push(e);
   });
+  // DAT files (Redump, No-Intro): kept, and every job checked against them again
+  var datAdded = [];
+  var datCands = fresh.filter(function (e) { return /^(dat|xml)$/.test(ext(e.path)); });
+  if (datCands.length) {
+    fresh = fresh.filter(function (e) { return datCands.indexOf(e) < 0; });
+    for (var di = 0; di < datCands.length; di++) {
+      var dm = await loadDat(datCands[di].file);
+      if (dm) datAdded.push(dm); else junk.push(base(datCands[di].path));
+    }
+    if (datAdded.length) {
+      toast('Added ' + datAdded.map(function (d) { return '\u201c' + d.name + '\u201d (' + d.games.toLocaleString('en-US') + ' games)'; }).join(', ') + '. Discs are checked against it now.');
+      renderDatList();
+      datRecheck();
+      if (!fresh.length && !zipCards.length) return;
+    }
+  }
   if (!fresh.length && !zipCards.length) { toast(entries.length ? 'Those files are already in the list.' : 'Nothing to convert in ' + plural(junk.length, 'file') + '. Add .cue/.bin, .gdi, .iso or .chd files.', entries.length ? null : 'err'); return; }
 
   var created = zipCards.slice(), ignored = junk.slice();
@@ -2092,6 +2109,8 @@ function renderNotes(job) {
   job.ui.identLine = null;
   var idn = identNote(job);
   if (idn) box.append(idn);
+  var dn = datNote(job);
+  if (dn) box.append(dn);
   if (job.missing.length) {
     box.append(el('div', { class: 'note warn' }, el('b', null, 'Missing ' + plural(job.missing.length, 'file') + ' listed in ' + (job.fromCcd ? stem(job.descName) + '.ccd' : job.descName) + ':'),
       el('ul', null, job.missing.map(function (m) { return el('li', null, base(m)); })),
@@ -2643,6 +2662,139 @@ async function addSbi(job, spec) {
   }
 }
 
+/* ---------- DAT files ----------
+   Kept in private storage (chdman-dats/<id>.json), else for this visit. A disc being converted is
+   checked once identified (its files, by size and CRC-32; checksums already computed are reused); a
+   CHD after Verify, from the files Redump's layout gives back (redumpCheck). Every track matching a
+   game names the results after it, as identification does. */
+async function loadDat(file) {
+  if (file.size > 256 << 20) return null;
+  var text;
+  try { text = await file.text(); } catch (e) { return null; }
+  var dat = parseDat(text);
+  if (!dat) return null;
+  if (!dat.meta.name) dat.meta.name = stem(file.name);
+  var old = Dats.add(dat);
+  if (old) DatStore.remove(old.id);
+  DatStore.save(dat);
+  return dat.meta;
+}
+var DatStore = {
+  dir: async function () { return (await navigator.storage.getDirectory()).getDirectoryHandle('chdman-dats', { create: true }); },
+  save: async function (dat) {
+    if (!Store.available) return;
+    try {
+      var w = await (await (await this.dir()).getFileHandle(dat.meta.id + '.json', { create: true })).createWritable();
+      await w.write(JSON.stringify({ meta: dat.meta, games: dat.games.map(function (g) { return [g.name, g.roms.map(function (r) { return [r.name, r.size, r.crc]; })]; }) }));
+      await w.close();
+      dat.meta.kept = true;
+    } catch (e) { /* kept for this visit */ }
+  },
+  remove: async function (id) {
+    try { await (await this.dir()).removeEntry(id + '.json'); } catch (e) { /* not kept */ }
+  },
+  load: async function () {
+    if (!Store.available) return;
+    try {
+      var dir = await this.dir();
+      for await (var h of dir.values()) {
+        try {
+          var d = JSON.parse(await (await h.getFile()).text());
+          d.meta.kept = true;
+          Dats.add({ meta: d.meta, games: d.games.map(function (g) { return { name: g[0], roms: g[1].map(function (r) { return { name: r[0], size: r[1], crc: r[2] }; }) }; }) });
+        } catch (e) { /* a damaged one is skipped */ }
+      }
+    } catch (e) { /* none */ }
+    renderDatList();
+    if (Dats.list.length) datRecheck();
+  }
+};
+// a job's files with what to checksum: [{file, size, how}]
+function datItems(job) {
+  var items = [];
+  job.files.forEach(function (f) {
+    if (f.ecm) { if (f.file.imageSize) items.push({ file: f.file, size: f.file.imageSize, how: 'ecm' }); }
+    else if (job.src === 'cso') { if (job.isoSize) items.push({ file: f.file, size: job.isoSize, how: 'ciso' }); }
+    else items.push({ file: f.file, size: f.file.size, how: '' });
+  });
+  if (job.descFile) items.push({ file: job.descFile, size: job.descFile.size, how: '' });
+  return items;
+}
+async function datCheck(job) {
+  if (!Dats.list.length || job.kind !== 'create' || job.invalid || job.missing.length || job.needCue) return;
+  var items = datItems(job).filter(function (it) { return Dats.size(it.size).length; });
+  if (!items.length) { job.dat = { none: true }; return; }
+  job.datState = 'checking';
+  if (job.ui && job.state !== 'running') renderNotes(job);
+  var total = items.reduce(function (n, it) { return n + it.size; }, 0), before = 0;
+  try {
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      it.crc = await crcCached(it.file, 0, it.size, function (p) {
+        var n = job.ui && job.ui.datLine;
+        if (n) n.textContent = 'Checking against your DAT files\u2026 ' + Math.round(100 * (before + p * it.size) / total) + '%';
+      }, it.how);
+      before += it.size;
+    }
+  } catch (e) { job.datState = null; appendLog(job, 'Could not check against the DAT files: ' + e.message); return; }
+  job.datState = null;
+  if (jobs.indexOf(job) < 0) return;
+  datApply(job, datMatch(items));
+}
+// the result of a DAT check: a full match names the disc after the DAT's game
+function datApply(job, res) {
+  job.dat = res;
+  if (res.full) {
+    var id = job.ident || {};
+    job.ident = Object.assign({}, id, { name: res.game, method: 'dat', entry: id.entry ? Object.assign({}, id.entry, { alternatives: null, name: res.game }) : null });
+    applyIdent(job);
+    if (job.state === 'done') renameOutputs(job);
+  }
+  if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
+}
+// after DATs were added or removed: every job again
+var datChain = Promise.resolve();
+function datRecheck() {
+  jobs.forEach(function (job) {
+    if (job.kind === 'chd') {
+      if (job.redumpFiles) datApply(job, Dats.list.length ? datMatch(job.redumpFiles) : null);
+      return;
+    }
+    if (job.identState !== 'done') return; // checked when identified
+    job.dat = null;
+    if (job.ui) renderNotes(job);
+    datChain = datChain.then(function () { return datCheck(job); });
+  });
+}
+function datNote(job) {
+  job.ui.datLine = null;
+  if (job.datState === 'checking') {
+    var n = el('div', { class: 'note dat-note' }, 'Checking against your DAT files\u2026');
+    job.ui.datLine = n;
+    return n;
+  }
+  var d = job.dat;
+  if (!d || !Dats.list.length) return null;
+  if (d.none) return el('div', { class: 'note dat-note' }, 'Not in your DAT files.');
+  var where = ' \u201c' + d.game + '\u201d in ' + d.dat.name;
+  if (d.full) {
+    return el('div', { class: 'note ok dat-note' }, el('b', null, '\u2713 Verified with your DAT file. '),
+      (d.total === 1 ? 'It matches' : 'All ' + d.total + ' tracks match') + where + '.' + (d.descDiffers ? ' The cue sheet differs from the DAT\u2019s, which doesn\u2019t change the disc.' : ''));
+  }
+  return el('div', { class: 'note warn dat-note' }, el('b', null, 'Partly matches your DAT file. '),
+    d.matched + ' of ' + d.total + ' tracks match' + where + '. Not matched: ' + d.missing.slice(0, 3).join(', ') + (d.missing.length > 3 ? ' and ' + (d.missing.length - 3) + ' more' : '') + '.');
+}
+function renderDatList() {
+  var ul = $('#datList');
+  if (!ul) return;
+  ul.replaceChildren();
+  Dats.list.forEach(function (d) {
+    ul.append(el('li', null, el('span', null, d.name), el('small', null, d.games.toLocaleString('en-US') + ' games' + (d.version ? ' \u00b7 ' + d.version : '') + (d.kept ? '' : ' \u00b7 this visit only')),
+      el('button', { class: 'icon-btn', 'aria-label': 'Remove ' + d.name, onclick: function () { Dats.remove(d.id); DatStore.remove(d.id); renderDatList(); datRecheck(); } }, icon('i-x'))));
+  });
+  $('#datEmpty').hidden = Dats.list.length > 0;
+}
+
 /* ---------- comparing a CHD with Redump ---------- */
 // After a successful verify: extract with Redump's layout into checksums only (the worker's 'crc'
 // output, no files), and look the files up in the database by size and CRC-32. The database lists
@@ -2671,7 +2823,14 @@ async function redumpCheck(job) {
     return;
   }
   if (res.code !== 0) { appendLog(job, 'Could not compare with Redump (chdman exited with code ' + res.code + ').'); return; }
+  job.redumpFiles = (res.outputs || []).filter(function (o) { return o.crc; }).map(function (o) { return { name: o.name, size: o.size, crc: o.crc }; });
   var files = (res.outputs || []).filter(function (o) { return o.crc && !/\.cue$/i.test(o.name); });
+  redumpMatch(job, files);
+  // the user's DAT files, every track: a full match names the CHD after its game
+  if (Dats.list.length) datApply(job, datMatch(job.redumpFiles));
+}
+// the files Redump's layout gave back, looked up in the built-in database
+function redumpMatch(job, files) {
   var whole = files.length === 1, id = job.ident || {};
   var trackOf = function (n) { var m = /\(Track 0*(\d+)\)\.\w+$/.exec(n); return m ? m[1] : ''; };
   var hits = [];
@@ -3724,7 +3883,8 @@ function init() {
   updateDock();
   updateChips();
 
-  Store.init().then(function () { updateChips(); renderEarlier(); });
+  Store.init().then(function () { updateChips(); renderEarlier(); DatStore.load(); });
+  $('#datAdd').addEventListener('click', function () { pickFiles('datInput', function (l) { addEntries(filesFromList(l)); }); });
   initHosted();
   initIosTip();
   Engine.ready().then(function () {
