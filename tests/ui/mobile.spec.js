@@ -17,6 +17,21 @@ test('the phone layout fits the screen before and after converting', async ({ ap
   expect(['Download', 'Save to Files']).toContain(label.trim());
 });
 
+test('the status line stays on one line, down to 320 pixels, and never cuts its words short', async ({ app, page }) => {
+  await app.open();
+  await expect(page.locator('#chipEngine')).toContainText(/ready/i, { timeout: 60_000 });
+  for (const width of [page.viewportSize().width, 360, 320]) {
+    await page.setViewportSize({ width, height: 700 });
+    // the page fits the line once it has seen the new width
+    await expect.poll(() => page.evaluate(() => {
+      const box = document.querySelector('#chips'), chips = [...box.children].filter(c => getComputedStyle(c).display !== 'none');
+      const line = parseFloat(getComputedStyle(box).lineHeight);
+      return { lines: Math.round(chips[0].getBoundingClientRect().height / line), top: new Set(chips.map(c => Math.round(c.getBoundingClientRect().top))).size,
+        cut: chips.filter(c => c.scrollWidth > c.clientWidth + 1).map(c => c.id), engine: chips.some(c => c.id === 'chipEngine'), fits: box.scrollWidth <= box.clientWidth + 1 };
+    }), { message: `at ${width} px`, timeout: 5000 }).toEqual({ lines: 1, top: 1, cut: [], engine: true, fits: true });
+  }
+});
+
 test('before measuring, phones start from fewer threads', async ({ app, page }) => {
   await app.open({ cores: 8, tuned: false });
   await expect(page.locator('#chipThreads')).toHaveText(/Auto · 4 threads/i);

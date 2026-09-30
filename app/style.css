@@ -146,14 +146,20 @@ code { font-family: var(--mono); font-size: .92em; background: var(--surface-2);
 }
 
 /* status line */
-.chips { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 12px 0 2px; font: 600 0.75rem/1.4 var(--mono); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
-.chip { display: inline-flex; align-items: center; gap: 7px; }
-.chip i { width: 8px; height: 8px; border-radius: 2px; background: var(--muted); display: inline-block; }
+.chips { display: flex; align-items: center; min-width: 0; padding: 12px 0 2px; font: 600 0.75rem/1.4 var(--body); color: var(--muted); white-space: nowrap; }
+/* one line, whatever the width: the threads item gives way first (it leaves rather than be cut short: fitChips),
+   then a storage item that is fine; the engine item and warnings never */
+.chip { display: block; flex: 0 0 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chip + .chip { margin-left: 9px; padding-left: 9px; border-left: 1.5px solid var(--line); }
+#chipThreads { flex-shrink: 100; }
+#chipStore { flex-shrink: 1; }
+.chip.warn, .chip.err { flex-shrink: 0; }
+.chip.squeezed { display: none; }
+.chip i { width: 7px; height: 7px; border-radius: 2px; background: var(--muted); display: inline-block; margin-right: 6px; vertical-align: 1px; }
 .chip.ok i { background: var(--ok); }
 .chip.warn i { background: var(--warn); }
 .chip.err i { background: var(--err); }
-/* only what needs attention shows: loading, problems, results kept in memory (the rest is in Settings) */
-.chip.ok, .chip.quiet { display: none; }
+@media (max-width: 440px) { .chip .opt { display: none; } }
 
 main { padding: 10px 0 16px; }
 section.panel > * + * { margin-top: 16px; }

@@ -187,14 +187,20 @@ code { font-family: var(--mono); font-size: .92em; background: var(--surface-2);
 }
 
 /* status line */
-.chips { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 12px 0 2px; font: 600 0.75rem/1.4 var(--mono); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
-.chip { display: inline-flex; align-items: center; gap: 7px; }
-.chip i { width: 8px; height: 8px; border-radius: 2px; background: var(--muted); display: inline-block; }
+.chips { display: flex; align-items: center; min-width: 0; padding: 12px 0 2px; font: 600 0.75rem/1.4 var(--body); color: var(--muted); white-space: nowrap; }
+/* one line, whatever the width: the threads item gives way first (it leaves rather than be cut short: fitChips),
+   then a storage item that is fine; the engine item and warnings never */
+.chip { display: block; flex: 0 0 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chip + .chip { margin-left: 9px; padding-left: 9px; border-left: 1.5px solid var(--line); }
+#chipThreads { flex-shrink: 100; }
+#chipStore { flex-shrink: 1; }
+.chip.warn, .chip.err { flex-shrink: 0; }
+.chip.squeezed { display: none; }
+.chip i { width: 7px; height: 7px; border-radius: 2px; background: var(--muted); display: inline-block; margin-right: 6px; vertical-align: 1px; }
 .chip.ok i { background: var(--ok); }
 .chip.warn i { background: var(--warn); }
 .chip.err i { background: var(--err); }
-/* only what needs attention shows: loading, problems, results kept in memory (the rest is in Settings) */
-.chip.ok, .chip.quiet { display: none; }
+@media (max-width: 440px) { .chip .opt { display: none; } }
 
 main { padding: 10px 0 16px; }
 section.panel > * + * { margin-top: 16px; }
@@ -12159,6 +12165,9 @@ function updateScrollHint() {
 }
 function initViewport() {
   window.addEventListener('resize', queueMeasure);
+  // the status line's own width: window resizes, and also a scrollbar appearing or fonts loading
+  if (window.ResizeObserver) new ResizeObserver(function () { fitChips(); }).observe($('#chips'));
+  else window.addEventListener('resize', fitChips);
   window.addEventListener('orientationchange', settleMeasure);
   window.addEventListener('pageshow', settleMeasure);
   document.addEventListener('visibilitychange', function () { if (!document.hidden) settleMeasure(); });
@@ -12274,7 +12283,16 @@ function setChip(id, text, cls) {
   var c = document.getElementById(id);
   if (!c) { c = el('span', { class: 'chip', id: id }, el('i')); $('#chips').append(c); }
   c.className = 'chip' + (cls ? ' ' + cls : '');
-  c.replaceChildren(el('i'), text);
+  // text: a string, or a list of strings and elements (a span.opt is left out on narrow screens)
+  c.replaceChildren.apply(c, [el('i')].concat(text));
+  fitChips();
+}
+// the status line stays on one line: the threads item leaves when it would be cut short
+function fitChips() {
+  var t = document.getElementById('chipThreads');
+  if (!t) return;
+  t.classList.remove('squeezed');
+  if (t.scrollWidth > t.clientWidth + 1) t.classList.add('squeezed');
 }
 
 async function refreshStorageInfo() {
@@ -12470,7 +12488,7 @@ function init() {
   initHosted();
   initIosTip();
   Engine.ready().then(function () {
-    setChip('chipEngine', 'Engine ready' + (Engine.simd ? '' : ' (compatibility mode)'), 'ok');
+    setChip('chipEngine', ['Engine ready', Engine.simd ? '' : el('span', { class: 'opt' }, ' (compatibility mode)')], 'ok');
   }, function (e) {
     setChip('chipEngine', 'Engine unavailable', 'err');
     $('#fatal').append(el('div', { class: 'note err fatal' }, el('b', null, 'This browser cannot run Discpress. '), e.message));
@@ -12479,7 +12497,7 @@ function init() {
 
 function updateChips() {
   var nt = threadCount(), auto = settings.threads === 'auto';
-  setChip('chipThreads', (auto ? 'Auto \u00b7 ' : '') + plural(nt, 'thread'), 'quiet');
+  setChip('chipThreads', [auto ? el('span', { class: 'opt' }, 'Auto \u00b7 ') : '', plural(nt, 'thread')], '');
   var ti = $('#threadsInfo'), rr = $('#retuneRow');
   if (ti) {
     ti.textContent = !auto ? '' : Tuning.result
