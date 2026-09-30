@@ -546,6 +546,33 @@ fixture('ps1-clonecd-ecm', {
    sys='ps1', serial='SLUS-00594', ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'],
    warning='subchannel data')
 
+# ---------------------------------------------------------------- PS1 EBOOT.PBP (popstation)
+# the CloneCD disc above packed as popstation does: the page reads the disc's TOC and gives chdman its
+# image with a cue sheet made from it (`ref`: the same disc's cue for native chdman)
+def pbp_mgs():
+    img, i0, i1 = ccd_image()
+    return img, [(False, 0, 0), (True, i0, i1)]
+def pbp_lone():
+    return open(os.path.join(OUT, 'lone.bin'), 'rb').read(), [(False, 0, 0)]
+fixture('ps1-pbp', {
+    'mgs.pbp': lambda: g.pbp([pbp_mgs()], 'METAL GEAR SOLID'),
+}, add=['mgs.pbp'], ref='mgs ccd-ref.cue', job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-00594',
+   ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'])
+# as it is usually named: the card takes the title in its PARAM.SFO; one track, so the checksum is compared too
+fixture('ps1-pbp-eboot', {
+    'EBOOT.PBP': lambda: g.pbp([pbp_lone()], 'Tomorrow Never Dies'),
+}, add=['EBOOT.PBP'], ref='lone-ref.cue', title='Tomorrow Never Dies', job='create', disc='cd', command='createcd', sys='ps1',
+   serial='SLUS-00975', ident='serial', name='007 - Tomorrow Never Dies (USA)')
+# two discs in one file (PSTITLEIMG000000): a card each
+fixture('ps1-pbp-discs', {
+    'two discs.pbp': lambda: g.pbp([pbp_mgs(), pbp_lone()], 'TWO DISCS'),
+}, add=['two discs.pbp'], job='pbp-discs', refs=['mgs ccd-ref.cue', 'lone-ref.cue'])
+# ones that can't be converted: a PlayStation Store download (encrypted) and a PSP program
+fixture('ps1-pbp-bad', {
+    'store.pbp': lambda: g.pbp([pbp_lone()], 'STORE', encrypted=True),
+    'homebrew.pbp': lambda: g.pbp([], 'HOMEBREW', psp=True),
+}, add=['store.pbp', 'homebrew.pbp'], job='invalid')
+
 # ---------------------------------------------------------------- benchmark images
 if args.bench:
     cd_audio_frames = int(args.cd_mb * 0.3 * (1 << 20)) // 2352 // 3

@@ -155,15 +155,16 @@ function chdReader(file, ciso, parent) {
     return { kind: m.kind, tracks: m.tracks, logical: m.logical, read: function (track, lba) { return r.request({ track: track, lba: lba }); }, close: r.close };
   });
 }
-// opens ECM images in a worker (which scans each whole file): for each, a stand-in for the image it
-// holds that reads like a file (size, slice(a, b).arrayBuffer(), and ecm: the file), or null if it
-// can't be read; and close()
+// opens ECM images, and PS1 PBP files' discs, in a worker (which scans each ECM file whole): for each,
+// a stand-in for the image it holds that reads like a file (size, slice(a, b).arrayBuffer(), and pack:
+// {file, how}, what checksums it), or null if it can't be read; and close().
+// files: the job's file entries ({file, ecm} or {file, pbp})
 function ecmImages(files) {
-  return readerWorker({ type: 'reader', ecm: files }, 180000).then(function (r) {
+  return readerWorker({ type: 'reader', ecm: files.map(function (f) { return f.pbp ? { blob: f.file, pbp: f.pbp } : f.file; }) }, 180000).then(function (r) {
     var views = files.map(function (f, i) {
       var size = r.info.sizes[i];
       return size == null ? null : {
-        size: size, ecm: f,
+        size: size, pack: { file: f.file, how: f.pbp ? 'pbp@' + f.pbp.at + ':' + f.pbp.sectors : 'ecm' },
         slice: function (a, b) {
           return {
             arrayBuffer: function () {
@@ -250,7 +251,8 @@ function crcWorker(blob, start, end, onProgress, how) {
         else if (m.type === 'fatal') { w.terminate(); reject(new Error(why || m.message)); }
       };
       w.onerror = function (e) { w.terminate(); reject(new Error(e.message || 'worker error')); };
-      Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end, ciso: how === 'ciso', ecm: how === 'ecm', debugSlow: DEBUG.crcSlow }); // with the compiled module, for zlib's crc32
+      var pbp = /^pbp@(\d+):(\d+)$/.exec(how || ''); // a PS1 PBP's disc: its header's offset and its sectors
+      Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end, ciso: how === 'ciso', ecm: how === 'ecm', pbp: pbp ? { at: +pbp[1], sectors: +pbp[2] } : null, debugSlow: DEBUG.crcSlow }); // with the compiled module, for zlib's crc32
     });
   });
 }
@@ -406,7 +408,7 @@ function msfFrames(s) {
 // nrg: the tracks of a Nero image (nrgTracks)
 function probePlan(job, images, nrg) {
   var readers = [], hashes = [];
-  var fileOf = function (f) { return f && (f.ecm ? images && images.get(f) : f.file); };
+  var fileOf = function (f) { return f && (f.ecm || f.pbp ? images && images.get(f) : f.file); };
   var byName = function (n) {
     var lc = base(n).toLowerCase();
     return fileOf(job.files.find(function (x) { return x.name.toLowerCase() === lc || (x.ref && base(x.ref).toLowerCase() === lc); }));
@@ -501,6 +503,14 @@ function probePlan(job, images, nrg) {
       if (t[2] === '4') readers.push(fileReader(f, 0, +t[3] || 2352));
     });
     readers.reverse(); // the high-density data track carries the IP.BIN header
+  } else if (job.src === 'pbp') {
+    // a PS1 PBP's disc: read through a worker (ecmImages); the whole image is the Redump file only for a
+    // single-track disc
+    var pv = fileOf(job.files[0]);
+    if (pv) {
+      readers.push(fileReader(pv, 0, 2352));
+      if (job.pbpTracks === 1) hashes.push({ file: pv, track: 0 });
+    }
   } else if (job.src === 'cso') {
     // a compressed ISO: identifyJob reads it through a worker; the checksum is the ISO's
     hashes.push({ file: job.files[0].file, track: 0, size: job.isoSize, ciso: true });
@@ -570,11 +580,11 @@ async function identifyJob(job, onStatus, onProvisional) {
         dataSizes.push(chd.logical);
       }
     } else {
-      // ECM images: a worker rebuilds the images they hold
-      var ecms = job.files.filter(function (f) { return f.ecm; }), images = null;
+      // ECM images and PS1 PBP files: a worker rebuilds the images they hold
+      var ecms = job.files.filter(function (f) { return f.ecm || f.pbp; }), images = null;
       if (ecms.length) {
-        onStatus && onStatus('Reading the ECM image' + (ecms.length > 1 ? 's' : '') + '\u2026', 0);
-        var ei = await ecmImages(ecms.map(function (f) { return f.file; }));
+        onStatus && onStatus(job.src === 'pbp' ? 'Reading the PBP file\u2026' : 'Reading the ECM image' + (ecms.length > 1 ? 's' : '') + '\u2026', 0);
+        var ei = await ecmImages(ecms);
         ecm = ei;
         images = new Map();
         ecms.forEach(function (f, i) { if (ei.views[i]) { images.set(f, ei.views[i]); f.imageSize = ei.views[i].size; } });
@@ -601,7 +611,8 @@ async function identifyJob(job, onStatus, onProvisional) {
           if (same.length) bySize = same;
         }
         // the checksum of what a CSO/ZSO or ECM file holds: a worker unpacks it again
-        if (bySize.length) toHash.push({ file: hsh.file.ecm || hsh.file, size: size, how: hsh.ciso ? 'ciso' : hsh.file.ecm ? 'ecm' : '', bySize: bySize });
+        var pk = hsh.file.pack;
+        if (bySize.length) toHash.push({ file: pk ? pk.file : hsh.file, size: size, how: hsh.ciso ? 'ciso' : pk ? pk.how : '', bySize: bySize });
       });
       if (toHash.length && onProvisional) onProvisional(result(null, true));
       for (var k = 0; k < toHash.length && !exact; k++) {

@@ -248,6 +248,70 @@ CisoStore.prototype.read = function (dst, pos, len) {
   return done;
 };
 
+// A disc in a PS1 EBOOT.PBP (popstation's format; the page reads its TOC, sniffPbp), read as the raw CD
+// image it packs: from track 1's INDEX 01, 2,352-byte sectors in blocks of 16, each deflated, or
+// stored as it is when that isn't smaller. The disc's header (PSISOIMG0000, at `pbp.at`) holds the
+// offset of its blocks at 0xBFC and their table at 0x4000: per block its offset from there and its
+// stored size, 32 bytes apart. `pbp.sectors`: the image's length, from the TOC.
+var PBP_BLOCK = 16 * 2352, PBP_TABLE = 0x4000, PBP_BLOCKS = 32256;
+function PbpStore(base, pbp, label) {
+  var head = new Uint8Array(0xC00), dv = new DataView(head.buffer);
+  if (base.read(head, pbp.at, head.length) !== head.length || String.fromCharCode.apply(null, head.subarray(0, 12)) !== 'PSISOIMG0000') throw new Error('not a PS1 disc image');
+  if (dv.getUint32(0x400, true) === 0x44475000) throw new Error('encrypted');
+  this.base = base;
+  this.sizeV = pbp.sectors * 2352;
+  this.nblocks = Math.ceil(this.sizeV / PBP_BLOCK);
+  if (!this.nblocks || this.nblocks > PBP_BLOCKS) throw new Error('unusual image size');
+  var raw = new Uint8Array(this.nblocks * 32), tv = new DataView(raw.buffer);
+  if (base.read(raw, pbp.at + PBP_TABLE, raw.length) !== raw.length) throw new Error('truncated block table');
+  var from = pbp.at + dv.getUint32(0xBFC, true);
+  this.blocks = [];
+  for (var b = 0; b < this.nblocks; b++) this.blocks.push({ start: from + tv.getUint32(b * 32, true), len: tv.getUint16(b * 32 + 4, true) });
+  this.readonly = true;
+  this.cache = [];
+  this.M = null;
+  this.label = label || 'the PBP file';
+  this.reported = false;
+}
+PbpStore.prototype.damaged = CisoStore.prototype.damaged;
+PbpStore.prototype.setModule = function (M) {
+  this.M = M;
+  this.src = M._malloc(PBP_BLOCK + 64);
+  this.dst = M._malloc(PBP_BLOCK);
+};
+PbpStore.prototype.block = function (b) {
+  for (var i = 0; i < this.cache.length; i++) if (this.cache[i].b === b) return this.cache[i].data;
+  var blk = this.blocks[b], want = Math.min(PBP_BLOCK, this.sizeV - b * PBP_BLOCK), M = this.M;
+  if (!blk || !blk.len || blk.len > PBP_BLOCK) throw this.damaged(b);
+  var stored = new Uint8Array(blk.len);
+  if (this.base.read(stored, blk.start, blk.len) !== blk.len) throw this.damaged(b);
+  var out;
+  if (blk.len === PBP_BLOCK) out = stored.subarray(0, want);
+  else {
+    if (!M) throw this.damaged(b);
+    M.HEAPU8.set(stored, this.src);
+    if (M._wasm_inflate_raw(this.src, blk.len, this.dst, want) !== want) throw this.damaged(b);
+    out = M.HEAPU8.slice(this.dst, this.dst + want);
+  }
+  this.cache = [{ b: b, data: out }].concat(this.cache.slice(0, 1));
+  return out;
+};
+PbpStore.prototype.read = function (dst, pos, len) {
+  if (pos >= this.sizeV) return 0;
+  len = Math.min(len, this.sizeV - pos);
+  var M = this.M, heap = M && dst.buffer === M.HEAPU8.buffer, addr = dst.byteOffset, done = 0, parts = [];
+  while (done < len) {
+    var p = pos + done, b = Math.floor(p / PBP_BLOCK), data = this.block(b), off = p - b * PBP_BLOCK;
+    var n = Math.min(len - done, data.length - off);
+    if (n <= 0) break;
+    parts.push({ data: data, off: off, n: n, at: done });
+    done += n;
+  }
+  if (heap && dst.byteLength === 0) dst = M.HEAPU8.subarray(addr, addr + len);
+  parts.forEach(function (q) { dst.set(q.data.subarray(q.off, q.off + q.n), q.at); });
+  return done;
+};
+
 // An ECM image (the ecm tools' Error Code Modeler format, described in wasm/ecm.cpp), read as the
 // CD image it packs. A scan of its chunk headers maps the image's bytes to the file's, with a
 // checkpoint about every ECM_WINDOW bytes of the image (on a sector boundary, or inside a chunk
@@ -1225,14 +1289,14 @@ async function runJob(msg) {
         return;
       }
     }
-    // a CSO/ZSO compressed ISO, or an ECM image: chdman reads what they hold
-    if (inputs[ii].ciso || inputs[ii].ecm) {
+    // a CSO/ZSO compressed ISO, an ECM image or a PS1 PBP's disc: chdman reads what they hold
+    if (inputs[ii].ciso || inputs[ii].ecm || inputs[ii].pbp) {
       var label = inputs[ii].blob.name || inputs[ii].name;
-      try { bs = inputs[ii].ciso ? new CisoStore(bs, 0, label) : new EcmStore(bs, label); }
+      try { bs = inputs[ii].ciso ? new CisoStore(bs, 0, label) : inputs[ii].pbp ? new PbpStore(bs, inputs[ii].pbp, label) : new EcmStore(bs, label); }
       catch (e) {
         await dropStages();
         await backing.finalize(false);
-        postMessage({ type: 'done', code: -1, error: '"' + label + '" could not be read as ' + (inputs[ii].ciso ? 'a compressed ISO' : 'an ECM image') + ': ' + (e && e.message || e), outputs: [] });
+        postMessage({ type: 'done', code: -1, error: '"' + label + '" could not be read as ' + (inputs[ii].ciso ? 'a compressed ISO' : inputs[ii].pbp ? 'a PS1 PBP file' : 'an ECM image') + ': ' + (e && e.message || e), outputs: [] });
         return;
       }
     }
@@ -1343,9 +1407,10 @@ function runCisoReader(M, msg) {
 // the CD images in a job's ECM files (msg.ecm): reports their sizes (null: not an ECM image, or
 // damaged), then answers {type:'read', id, file, pos, len} with the image's bytes
 function runEcmReader(M, msg) {
-  var images = msg.ecm.map(function (blob) {
+  var images = msg.ecm.map(function (it) {
     try {
-      var s = new EcmStore(new BlobStore(blob), blob.name);
+      var blob = it.blob || it; // {blob, pbp}: a PS1 PBP's disc
+      var s = it.pbp ? new PbpStore(new BlobStore(blob), it.pbp, blob.name) : new EcmStore(new BlobStore(blob), blob.name);
       s.setModule(M);
       return s;
     } catch (e) { return null; }
@@ -1404,9 +1469,9 @@ async function runCrc(msg) {
   }
   // msg.ciso: the checksum of the ISO inside a CSO/ZSO image, which needs the module's inflate;
   // msg.ecm: of the CD image inside an ECM file (and that image's EDC is checked)
-  if (msg.ciso || msg.ecm) {
+  if (msg.ciso || msg.ecm || msg.pbp) {
     if (!M) throw new Error('cannot decompress');
-    iso = msg.ciso ? new CisoStore(new BlobStore(blob)) : new EcmStore(new BlobStore(blob), blob.name);
+    iso = msg.ciso ? new CisoStore(new BlobStore(blob)) : msg.pbp ? new PbpStore(new BlobStore(blob), msg.pbp, blob.name) : new EcmStore(new BlobStore(blob), blob.name);
     iso.setModule(M);
     if (msg.end == null) end = iso.sizeV;
   }

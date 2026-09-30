@@ -915,6 +915,65 @@ async function sniffCiso(file) {
   return { size: size };
 }
 // an ECM image (the ecm tools' format, described in wasm/ecm.cpp): null if the file is not one, else
+// a PS1 EBOOT.PBP (popstation's format): {discs: [{at, sectors, tracks, cue(binName)}], title}, or {problem}
+// if it can't be converted, or null if it isn't a PBP. DATA.PSAR holds one disc (PSISOIMG0000) or a
+// table of up to five (PSTITLEIMG000000, at +0x200); each disc's TOC (at +0x800, 10-byte entries:
+// type, point, pregap and INDEX 01 times in BCD) lists its tracks: A0 the first, A1 the last, A2 the
+// lead-out, then one per track. The image on file starts at track 1's INDEX 01.
+async function sniffPbp(file) {
+  var rd = async function (at, n) { return new Uint8Array(await file.slice(at, at + n).arrayBuffer()); };
+  var h;
+  try { h = await rd(0, 0x28); } catch (e) { return { problem: 'This file could not be read.' }; }
+  if (h.length < 0x28 || h[0] !== 0 || h[1] !== 0x50 || h[2] !== 0x42 || h[3] !== 0x50) return null;
+  var psar = le32(h, 0x24), m = await rd(psar, 16), magic = String.fromCharCode.apply(null, m), at = [];
+  if (magic === 'PSTITLEIMG000000') {
+    var t = await rd(psar + 0x200, 20);
+    for (var i = 0; i < 5; i++) {
+      var o = le32(t, i * 4);
+      if (o === 0x44475000) return { problem: 'This PBP file is encrypted (a PlayStation Store download), so it can\u2019t be read.' };
+      if (o) at.push(psar + o);
+    }
+  } else if (magic.slice(0, 12) === 'PSISOIMG0000') at.push(psar);
+  else if (le32(m, 0) === 0x44475000) return { problem: 'This PBP file is encrypted (a PlayStation Store download), so it can\u2019t be read.' };
+  else return { problem: 'This PBP file holds a PSP program, not a PlayStation disc. PSP games convert from their .iso or .cso.' };
+  var bcd = function (v) { return (v >> 4) * 10 + (v & 15); }, fr = function (b, o) { return (bcd(b[o]) * 60 + bcd(b[o + 1])) * 75 + bcd(b[o + 2]); };
+  var discs = [];
+  for (var d = 0; d < at.length; d++) {
+    var hd = await rd(at[d], 0xC00);
+    if (String.fromCharCode.apply(null, hd.subarray(0, 12)) !== 'PSISOIMG0000') return { problem: 'Disc ' + (d + 1) + ' of this PBP file is damaged.' };
+    if (le32(hd, 0x400) === 0x44475000) return { problem: 'This PBP file is encrypted (a PlayStation Store download), so it can\u2019t be read.' };
+    var toc = hd.subarray(0x800, 0x800 + 1020), e = function (k) { return toc.subarray(k * 10, k * 10 + 10); };
+    if (e(0)[2] !== 0xA0 || e(1)[2] !== 0xA1 || e(2)[2] !== 0xA2) return { problem: 'Disc ' + (d + 1) + ' of this PBP file has no track list that can be read.' };
+    var last = bcd(e(1)[7]), lead = fr(e(2), 7), tracks = [];
+    for (var k = 1; k <= last && k <= 99; k++) {
+      var te = e(k + 2);
+      tracks.push({ no: k, audio: !(te[0] & 0x40), pregap: fr(te, 3), start: fr(te, 7) });
+    }
+    var base0 = tracks.length ? tracks[0].start : 0, sectors = lead - base0, ok = tracks.length && !tracks[0].audio && sectors > 0;
+    for (var q = 1; ok && q < tracks.length; q++) ok = tracks[q].start > tracks[q - 1].start && tracks[q].pregap >= tracks[q - 1].start && tracks[q].start - base0 < sectors;
+    if (!ok) return { problem: 'Disc ' + (d + 1) + ' of this PBP file has a track list Discpress can\u2019t read.' };
+    discs.push({ at: at[d], sectors: sectors, tracks: tracks.length, list: tracks, base: base0 });
+  }
+  // its title, from PARAM.SFO: the file is usually named EBOOT.PBP, in a folder named after the serial
+  var title = '';
+  try {
+    var so = le32(h, 8), se = le32(h, 12);
+    if (se > so && se - so < 65536) title = (parseSfo(await rd(so, se - so)).TITLE || '').replace(/\s+/g, ' ').trim();
+  } catch (e2) { /* no title then */ }
+  discs.forEach(function (dd) {
+    dd.cue = function (bin) {
+      var out = 'FILE "' + bin + '" BINARY\n';
+      dd.list.forEach(function (t) {
+        out += '  TRACK ' + ('0' + t.no).slice(-2) + (t.audio ? ' AUDIO' : ' MODE2/2352') + '\n';
+        if (t.no > 1 && t.pregap < t.start) out += '    INDEX 00 ' + cueMsf(t.pregap - dd.base) + '\n';
+        out += '    INDEX 01 ' + cueMsf(t.start - dd.base) + '\n';
+      });
+      return out;
+    };
+  });
+  return { discs: discs, title: title };
+}
+function cueMsf(n) { var p = function (v) { return ('0' + v).slice(-2); }; return p(Math.floor(n / 4500)) + ':' + p(Math.floor(n / 75) % 60) + ':' + p(n % 75); }
 // {sync} of the CD image inside as sniffSync tells it (0: no sync pattern), from its first chunk
 async function sniffEcm(file) {
   var b;
@@ -1539,6 +1598,19 @@ async function addEntriesNow(entries) {
           job2.warnings.push('No .cue file was added, so one is generated (a single ' + (sync === 2 ? 'MODE2' : 'MODE1') + ' data track). If the disc has music tracks, add the original .cue and all its files instead.');
         }
       }
+    } else if (x === 'pbp') {
+      // a PS1 EBOOT.PBP: a job per disc, chdman given the disc's image and a cue sheet from its TOC
+      var pb = await sniffPbp(file);
+      if (!pb || pb.problem) {
+        job2 = newJob({ kind: 'create', src: 'pbp', title: t, files: [{ file: file, name: name }], disc: 'cd', invalid: true, state: 'error', errorText: pb ? pb.problem : 'This is not a PBP file Discpress can read.' });
+      } else {
+        var pt = /^eboot$/i.test(t) && safeName(pb.title) || t;
+        for (var pd = 0; pd < pb.discs.length; pd++) {
+          var disc_ = pb.discs[pd], dt = pt + (pb.discs.length > 1 ? ' (Disc ' + (pd + 1) + ')' : ''), bin = dt + '.bin';
+          var pj = newJob({ kind: 'create', src: 'pbp', title: dt, files: [{ file: file, name: bin, pbp: { at: disc_.at, sectors: disc_.sectors } }], disc: 'cd', pbpCue: disc_.cue(bin), pbpTracks: disc_.tracks });
+          if (pd < pb.discs.length - 1) { pj.files[0].path = e.path; created.push(pj); } else job2 = pj;
+        }
+      }
     } else if (x === 'nrg') {
       job2 = newJob({ kind: 'create', src: 'nrg', title: t, files: [{ file: file, name: name }], disc: 'cd' });
     } else if (x === 'avi') {
@@ -1816,6 +1888,11 @@ function buildJob(job) {
       inName = job.descName;
       inputs.push({ name: job.descName, blob: job.descBlob || job.descFile });
       job.files.forEach(function (f) { inputs.push({ name: f.name, blob: f.file, ecm: f.ecm }); }); // ECM: the job worker rebuilds the image
+    } else if (job.src === 'pbp') {
+      // a PS1 PBP's disc: the job worker unpacks its image as chdman reads it, with a cue sheet from its TOC
+      inName = stem(job.files[0].name) + '.cue';
+      inputs.push({ name: inName, blob: new Blob([job.pbpCue], { type: 'text/plain' }) });
+      inputs.push({ name: job.files[0].name, blob: job.files[0].file, pbp: job.files[0].pbp });
     } else if (job.src === 'cso') {
       // the job worker decompresses the image as chdman reads it
       inName = stem(job.files[0].name) + '.iso';
@@ -1980,6 +2057,7 @@ function subtitle(job) {
     return parts.join(' · ');
   }
   if (job.src === 'cso') return (ext(job.files[0].name) === 'zso' ? 'ZSO' : 'CSO') + ' compressed ISO · ' + fmtBytes(n) + (job.isoSize ? ' → ' + fmtBytes(job.isoSize) + ' unpacked' : '');
+  if (job.src === 'pbp' && job.files[0].pbp) return 'PS1 PBP file · ' + plural(job.pbpTracks, 'track') + ' · ' + fmtBytes(job.files[0].pbp.sectors * 2352) + ' unpacked';
   // a descriptor that can't be converted: only the file itself, not the tracks it doesn't list
   if (job.invalid) {
     var f0 = job.descFile || (job.files[0] && job.files[0].file);
@@ -2713,7 +2791,8 @@ var DatStore = {
 function datItems(job) {
   var items = [];
   job.files.forEach(function (f) {
-    if (f.ecm) { if (f.file.imageSize) items.push({ file: f.file, size: f.file.imageSize, how: 'ecm' }); }
+    if (f.ecm) { if (f.imageSize) items.push({ file: f.file, size: f.imageSize, how: 'ecm' }); }
+    else if (f.pbp) items.push({ file: f.file, size: f.pbp.sectors * 2352, how: 'pbp@' + f.pbp.at + ':' + f.pbp.sectors });
     else if (job.src === 'cso') { if (job.isoSize) items.push({ file: f.file, size: job.isoSize, how: 'ciso' }); }
     else items.push({ file: f.file, size: f.file.size, how: '' });
   });
