@@ -3105,6 +3105,7 @@ function updateScrollHint() {
 }
 function initViewport() {
   window.addEventListener('resize', queueMeasure);
+  window.addEventListener('resize', fitChips);
   window.addEventListener('orientationchange', settleMeasure);
   window.addEventListener('pageshow', settleMeasure);
   document.addEventListener('visibilitychange', function () { if (!document.hidden) settleMeasure(); });
@@ -3220,7 +3221,16 @@ function setChip(id, text, cls) {
   var c = document.getElementById(id);
   if (!c) { c = el('span', { class: 'chip', id: id }, el('i')); $('#chips').append(c); }
   c.className = 'chip' + (cls ? ' ' + cls : '');
-  c.replaceChildren(el('i'), text);
+  // text: a string, or a list of strings and elements (a span.opt is left out on narrow screens)
+  c.replaceChildren.apply(c, [el('i')].concat(text));
+  fitChips();
+}
+// the status line stays on one line: the threads item leaves when it would be cut short
+function fitChips() {
+  var t = document.getElementById('chipThreads');
+  if (!t) return;
+  t.classList.remove('squeezed');
+  if (t.scrollWidth > t.clientWidth + 1) t.classList.add('squeezed');
 }
 
 async function refreshStorageInfo() {
@@ -3416,7 +3426,7 @@ function init() {
   initHosted();
   initIosTip();
   Engine.ready().then(function () {
-    setChip('chipEngine', 'Engine ready' + (Engine.simd ? '' : ' (compatibility mode)'), 'ok');
+    setChip('chipEngine', ['Engine ready', Engine.simd ? '' : el('span', { class: 'opt' }, ' (compatibility mode)')], 'ok');
   }, function (e) {
     setChip('chipEngine', 'Engine unavailable', 'err');
     $('#fatal').append(el('div', { class: 'note err fatal' }, el('b', null, 'This browser cannot run Discpress. '), e.message));
@@ -3425,7 +3435,7 @@ function init() {
 
 function updateChips() {
   var nt = threadCount(), auto = settings.threads === 'auto';
-  setChip('chipThreads', (auto ? 'Auto \u00b7 ' : '') + plural(nt, 'thread'), 'quiet');
+  setChip('chipThreads', [auto ? el('span', { class: 'opt' }, 'Auto \u00b7 ') : '', plural(nt, 'thread')], '');
   var ti = $('#threadsInfo'), rr = $('#retuneRow');
   if (ti) {
     ti.textContent = !auto ? '' : Tuning.result
