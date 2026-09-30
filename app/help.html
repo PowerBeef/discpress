@@ -17,7 +17,7 @@
     <tbody>
       <tr><td>PlayStation, Saturn, Sega CD / Mega CD, PC Engine CD, Neo Geo CD, 3DO, CD-i, Amiga CD32, PC-FX</td><td><code>.cue</code> + <code>.bin</code></td><td>CD</td></tr>
       <tr><td>Dreamcast</td><td><code>.gdi</code> + tracks, or Redump <code>.cue</code> + <code>.bin</code></td><td>CD (GD-ROM is detected)</td></tr>
-      <tr><td>PlayStation 2</td><td>DVD games: <code>.iso</code>, or compressed <code>.cso</code>/<code>.zso</code> · CD games: <code>.cue</code> + <code>.bin</code></td><td>DVD · CD</td></tr>
+      <tr><td>PlayStation 2</td><td>DVD games: <code>.iso</code>, or compressed <code>.cso</code>/<code>.zso</code> · CD games: <code>.cue</code> + <code>.bin</code></td><td>DVD · CD (AetherSX2 and NetherSX2 need CD for DVD games too: Settings)</td></tr>
       <tr><td>PSP</td><td><code>.iso</code>, or compressed <code>.cso</code>/<code>.zso</code></td><td>DVD, hunk size 2,048</td></tr>
       <tr><td>Arcade and computer hard disks</td><td><code>.img</code>, <code>.hdd</code> (raw)</td><td>Hard disk</td></tr>
       <tr><td>LaserDisc arcade games</td><td><code>.avi</code></td><td>LaserDisc</td></tr>
@@ -26,11 +26,13 @@
   </div>
   <p class="small muted">A lone <code>.bin</code> without its <code>.cue</code> still works for single-track data discs (a cue is generated), but for discs with music tracks always add the original <code>.cue</code>.</p>
   <p class="small muted">ECM images (<code>.bin.ecm</code>, packed with the ecm tools) can take the place of their <code>.bin</code>: add them with the <code>.cue</code>. They are unpacked as they are read, and a damaged one is reported.</p>
+  <p class="small muted">The type and hunk size are set from the console once the game is identified. Compression stays chdman's default, which every emulator reads; the page warns when the <i>Zstd</i> preset isn't readable by a console's emulators (Saturn, 3DO, Sega CD, PC Engine CD, Amiga). GameCube, Wii, Xbox and PS3 emulators don't load CHDs at all, and the page says so.</p>
+  <p class="small muted">Add a PAL PlayStation game's <code>.sbi</code> file (LibCrypt protection data) with its <code>.cue</code> and <code>.bin</code>: it is saved next to the CHD, under the CHD's name, where emulators look for it. When two or more discs of a game are converted, the first disc's card offers an <code>.m3u</code> playlist: keep it with the CHDs and open it, so the emulator can swap discs.</p>
 </div>
 
 <div class="card">
   <h2>Game identification and renaming</h2>
-  <p>Every disc you add is examined to find its console (PlayStation 1/2/PSP, Saturn, Sega CD, Dreamcast, PC Engine CD, PC-FX, Neo Geo CD, 3DO, CD-i, Amiga CD32/CDTV, NAOMI and more) and its serial number, read from the disc's own boot files and headers.</p>
+  <p>Every disc you add is examined to find its console (PlayStation 1/2/PSP, Saturn, Sega CD, Dreamcast, PC Engine CD, PC-FX, Neo Geo CD, 3DO, CD-i, Amiga CD32/CDTV, NAOMI, GameCube, Wii, Xbox, PS3 and more) and its serial number, read from the disc's own boot files and headers.</p>
   <p>The game is then looked up in a built-in copy of the <a href="https://redump.org" target="_blank" rel="noopener">Redump</a> database (about 42,000 discs, via <a href="https://github.com/libretro/libretro-database" target="_blank" rel="noopener">libretro-database</a>, /*DBVER*/). When a track's size and CRC-32 checksum match, the dump is an exact, verified copy; otherwise the serial number is used. Results are named after the official title, for example <code>Metal Gear Solid (USA) (Disc 1) (Rev 1).chd</code>. You can turn this off in Settings or type your own name in Options.</p>
   <p>For existing <code>.chd</code> files, choose <b>Rename</b> to save a copy with the official name. <b>Verify</b> checks the CHD's own checksums, then compares it with Redump without extracting it: the file the built-in database lists for the disc (its ISO, its only <code>.bin</code>, or its main data track) must have Redump's size and CRC-32.</p>
 </div>

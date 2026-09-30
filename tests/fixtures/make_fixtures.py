@@ -228,6 +228,27 @@ fixture('psp-zso', {'umd.zso': lambda: g.ciso(umd_iso(), zso=True)}, add=['umd.z
 fixture('ps2-cso', {'agent.cso': lambda: g.ciso(agent_iso())}, add=['agent.cso'], ref='agent.iso', job='create', disc='dvd',
         command='createdvd', sys='ps2', serial='SLUS-20265', ident='serial', name='007 - Agent Under Fire (USA)')
 
+# Xbox 360 (XGD3 layout, as Redump dumps it): a video partition, which reads as ISO 9660, then the
+# game partition at 0x2080000, whose XDVDFS volume descriptor is its sector 32. Emulators don't
+# load such CHDs: the page says so (PROFILES in ui.js)
+def xgd3_iso():
+    video = g.pad_sectors(g.iso9660({'VIDEO_TS/VIDEO_TS.IFO': g.filler(64 << 10, 71)}, 'DVD_VIDEO'))
+    vd = bytearray(2048)
+    vd[0:20] = vd[0x7EC:0x800] = b'MICROSOFT*XBOX*MEDIA'
+    vd[20:24] = (33).to_bytes(4, 'little'); vd[24:28] = (2048).to_bytes(4, 'little')
+    return video.ljust(0x2080000, b'\x00') + bytes(32 * 2048) + bytes(vd) + g.filler(1 << 20, 72)
+
+
+fixture('xbox-xgd3', {'xgd3.iso': xgd3_iso}, add=['xgd3.iso'], job='create', disc='dvd', command='createdvd', sys='xbox',
+        ident='none', name='xgd3')
+
+fixture('ps3-iso', {
+    'ps3game.iso': lambda: g.pad_sectors(g.iso9660({
+        'PS3_DISC.SFB': b'.SFB'.ljust(512, b'\x00'),
+        'PS3_GAME/PARAM.SFO': g.sfo({'CATEGORY': 'DG', 'TITLE': 'SYNTHETIC PS3 GAME', 'TITLE_ID': 'BLUS30001'}),
+        'PS3_GAME/USRDIR/EBOOT.BIN': g.filler(1 << 20, 73)}, 'PS3VOLUME')),
+}, add=['ps3game.iso'], job='create', disc='dvd', command='createdvd', sys='ps3', serial='BLUS-30001', ident='none', name='ps3game')
+
 # ---------------------------------------------------------------- Sega
 def ipbin(magic, serial_off, serial, title_off, title, extra=None):
     b = bytearray(16 * 2048)

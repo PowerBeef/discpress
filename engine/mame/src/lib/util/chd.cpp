@@ -3007,6 +3007,13 @@ chd_file_compressor::chd_file_compressor() :
 
 chd_file_compressor::~chd_file_compressor()
 {
+	// Discpress: after an error, hunks are still out, and the queue frees only the work items it holds (0.289 leaked
+	// the others): let the reads finish, then release them
+	osd_work_queue_wait(m_read_queue, 30 * osd_ticks_per_second());
+	for (work_item &item : m_work_item)
+		if (item.m_osd)
+			osd_work_item_release(std::exchange(item.m_osd, nullptr));
+
 	// free the work queues
 	osd_work_queue_free(m_read_queue);
 	osd_work_queue_free(m_work_queue);

@@ -1,8 +1,8 @@
 // A native test tool for tests/ui/engine.spec.js (built by `make -C wasm T=native cdprobe`): reads a CD CHD
 // the way the page's identification does (wasm/wasm_helper.cpp, wasm_probe_read), with cdrom_file's logical
 // reads, which no chdman command uses. It writes every LBA from 0 to the lead-out as read_data returns it (raw,
-// audio big-endian), and prints each track's start, pregap and INDEX 01, then the LBAs where get_track() changes
-// and those that fail to read (written as zeros).
+// audio big-endian), and prints each track's start, pregap and INDEX 01, then the LBAs where get_track() or
+// get_track_index() changes and those that fail to read (written as zeros).
 //
 //   cdprobe <in.chd> <out.raw>
 
@@ -37,7 +37,7 @@ int main(int argc, char **argv)
 		if (!out)
 			return 1;
 		std::vector<uint8_t> sector(cdrom_file::MAX_SECTOR_DATA);
-		uint32_t track = ~0U;
+		uint32_t track = ~0U, index = ~0U;
 		for (uint32_t lba = 0; lba < leadout; lba++)
 		{
 			std::fill(sector.begin(), sector.end(), 0);
@@ -45,6 +45,11 @@ int main(int argc, char **argv)
 			{
 				track = cd.get_track(lba);
 				std::printf("lba %u track %u\n", lba, track + 1);
+			}
+			if (cd.get_track_index(lba) != index)
+			{
+				index = cd.get_track_index(lba);
+				std::printf("lba %u index %u\n", lba, index);
 			}
 			if (!cd.read_data(lba, sector.data(), cdrom_file::CD_TRACK_RAW_DONTCARE))
 			{

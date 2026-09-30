@@ -204,7 +204,7 @@ test('an identified PSP game is a DVD CHD, and the other type is only in Options
   await card.locator('details.opts summary').click();
   const field = card.locator('label.field', { hasText: 'Create as' });
   await expect(field.locator('select')).toHaveValue('dvd');
-  await expect(field).toContainText('Sony PlayStation Portable games become DVD CHDs.');
+  await expect(field).toContainText('Sony PlayStation Portable games become DVD CHDs with 2,048-byte hunks, as PPSSPP recommends.');
 });
 
 // compressed ISOs (convert.spec: psp-cso, psp-cso2, psp-zso and ps2-cso)
