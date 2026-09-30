@@ -148,6 +148,12 @@ A conversion in Playwright's WebKit once failed with "Multi-core compression fai
 - What the page does (`app/worker.js`, `app/ui.js`): a helper that traps is dropped and the others do its batches (the job worker keeps each batch until it is answered; with none left, extract and verify decompress in the job worker). A conversion whose helpers all fail, or whose job worker traps, runs once more from the start. Both give the same CHD, since compression is deterministic. When the second run fails too, the error says it is the browser's fault and to update it (on iOS: iOS; on a Mac: Safari, or another browser). A crash of the whole page can't be caught; Recovery reports it after the reload.
 - Tests: `DEBUG.failHelpers` (`'one'`, `'all'` or `'always'`) makes helpers trap like this (`tests/ui/fallbacks.spec.js`).
 
+## The blurred top of the Home Screen web app (iOS 26)
+
+Since iOS 26, a Home Screen web app gets the Liquid Glass "scroll edge effect": a blur the system draws over the top of the page, the status bar and about 40pt below it, which covered our header (logo, name, Settings). No CSS property or meta tag turns it off, and taking the backdrop filter off the header didn't either. WebKit skips it when the page has a box at that edge it can take a colour from (`LocalFrameView::fixedContainerEdges`). From the element 4px below the middle of the top edge, it looks for the first `position: fixed` or `sticky` ancestor at least 90% as wide as the viewport (and not more than 5% taller than it), and for a plain `background-color` on a box taller and wider than 10px on the way. A `backdrop-filter` on the way makes the edge glass. Found, the status bar takes that colour; not found, the blur.
+
+So in the app layout (`mode-shell`: Home Screen apps and app web views) the header is `position: sticky; top: 0`, with its solid background and no backdrop filter. Nothing scrolls it there (the page scrolls in `#scroller` below it), so it looks the same on every device. In Safari tabs and other browsers (`mode-doc`) the header was already sticky, and its frosted background is intended. `tests/ui/mobile.spec.js` replays WebKit's rule for both.
+
 ## Device test checklist
 
 On an iPhone (4 GB and 6+ GB if possible) and an iPad, iOS 18 and 26:
@@ -159,6 +165,7 @@ On an iPhone (4 GB and 6+ GB if possible) and an iPad, iOS 18 and 26:
 - [ ] Sitecase: a small result (under 512 MB) through the share sheet still works.
 - [ ] iCab Mobile: open the file, convert, download 1 GB, find it in Files.
 - [ ] On iOS 18.x and on the first iOS 26 releases: a PSP and a PS2 DVD ISO at the default threads. Do they finish, or say that the browser engine failed (see above)?
+- [ ] Home Screen web app on iOS 26: the header (logo, name, Settings) is sharp, and the status bar has the page's colour.
 
 ## Decisions
 

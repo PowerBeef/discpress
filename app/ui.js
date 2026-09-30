@@ -3247,6 +3247,7 @@ function init() {
   // tabs
   $('#brandLink').addEventListener('click', function (e) { e.preventDefault(); if (activeTab !== 'convert') switchTab('convert'); scrollRoot().scrollTo({ top: 0, behavior: 'smooth' }); });
   initViewport();
+  updateTabCount(); // the drop zone's wording for this device (touch screens choose, others drop)
   $$('.tab').forEach(function (t) { t.addEventListener('click', function () { switchTab(t.getAttribute('data-tab')); }); });
   // the tab list's keys: arrows, Home and End move to and open a tab
   $('.tabs').addEventListener('keydown', function (e) {

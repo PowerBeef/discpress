@@ -87,9 +87,11 @@ html.mode-shell.has-dock .scroller { scroll-padding-bottom: 110px; }
    window.innerHeight), so a host that insets the web view has nothing to scroll. */
 html.mode-shell, html.mode-shell body { height: 100%; overflow: hidden; overscroll-behavior: none; }
 html.mode-shell body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; height: var(--app-h, 100dvh); }
-/* nothing scrolls under this header, so no frosted glass: iOS WebKit draws an element with a backdrop
-   filter, text included, out of focus in Home Screen web apps and app web views */
-html.mode-shell .top { position: relative; flex: none; background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; }
+/* nothing scrolls under this header, so no frosted glass. And sticky (nothing scrolls it, so it stays put):
+   since iOS 26, a Home Screen web app gets a Liquid Glass blur over its top edge (the status bar and
+   ~40pt below, our header) unless a fixed or sticky box with a plain background colour and no backdrop
+   filter spans that edge (WebKit's LocalFrameView::fixedContainerEdges); iOS then uses its colour instead */
+html.mode-shell .top { position: sticky; top: 0; flex: none; background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; }
 html.mode-shell .scroller {
   flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden;
   -webkit-overflow-scrolling: touch; overscroll-behavior: contain; scrollbar-gutter: stable;
