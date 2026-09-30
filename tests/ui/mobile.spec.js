@@ -32,6 +32,40 @@ test('the status line stays on one line, down to 320 pixels, and never cuts its 
   }
 });
 
+// WebKit's LocalFrameView::fixedContainerEdges, for the top edge: from the element 4 px below the
+// middle of the top, the first fixed or sticky ancestor at least 90% as wide as the viewport, taller
+// than 10 px, and the first plain background colour on the way; a backdrop filter on the way makes it
+// glass. Without such a box, iOS 26 blurs the top of a Home Screen web app, header included.
+const topEdge = page => page.evaluate(() => {
+  let backdrop = false, color = null;
+  for (let n = document.elementFromPoint(innerWidth / 2, 4); n && n.nodeType === 1; n = n.parentElement) {
+    const cs = getComputedStyle(n), r = n.getBoundingClientRect();
+    if (cs.backdropFilter && cs.backdropFilter !== 'none' || cs.webkitBackdropFilter && cs.webkitBackdropFilter !== 'none') backdrop = true;
+    const bg = cs.backgroundColor, wide = r.width >= innerWidth * 0.9 && r.height > 10;
+    if (!color && wide && bg !== 'transparent' && !/, 0\)$/.test(bg)) color = bg;
+    if ((cs.position === 'fixed' || cs.position === 'sticky') && wide)
+      return { container: n.className || n.tagName, glass: backdrop, color: color && !/rgba/.test(color) ? 'solid' : color };
+  }
+  return { container: null };
+});
+
+test('in the installed app, the header gives iOS a solid top edge, so the status bar takes its colour instead of blurring it', async ({ app, page }) => {
+  await app.open({ settings: { scroll: 'app' } }); // what a Home Screen web app and app web views get
+  await expect(page.locator('html')).toHaveClass(/mode-shell/);
+  const before = await page.locator('.top').boundingBox();
+  expect(await topEdge(page)).toEqual({ container: 'top', glass: false, color: 'solid' });
+  // sticky, but nothing scrolls it: it stays where it was, and the page still scrolls below it
+  await app.add(['homebrew.iso', 'agent.iso', 'frwl.iso']);
+  await page.locator('#scroller').evaluate(el => el.scrollTo(0, 400));
+  expect(await page.locator('.top').boundingBox()).toEqual(before);
+  expect(await topEdge(page)).toEqual({ container: 'top', glass: false, color: 'solid' });
+});
+
+test('on a touch screen, the empty page asks to choose games rather than drop them', async ({ app, page }) => {
+  await app.open();
+  await expect(page.locator('#drop h2')).toHaveText('Choose your games');
+});
+
 test('before measuring, phones start from fewer threads', async ({ app, page }) => {
   await app.open({ cores: 8, tuned: false });
   await expect(page.locator('#chipThreads')).toHaveText(/Auto · 4 threads/i);
