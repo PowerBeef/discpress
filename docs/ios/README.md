@@ -132,6 +132,22 @@ The plan as it was:
 - Later, a native chdman app built from `engine/` (multithreaded, can keep working in the background on iOS 26).
 - An a-Shell WASI build only as a curiosity.
 
+## WebKit's WebAssembly compiler: "Out of bounds memory access"
+
+A conversion in Playwright's WebKit once failed with "Multi-core compression failed (Out of bounds memory access (evaluating 'M._wasm_helper_compress(…)'))". Investigated (2026-09-30) with Playwright's Linux WebKit builds, the JSC options that force its optimizing tier early (`JSC_thresholdForOMGOptimizeAfterWarmUp=10` and the like, passed as environment variables), and the same PSP conversion in each:
+
+| WebKit build | Normal settings | OMG tier forced early |
+|---|---|---|
+| 2024-09-25 (about Safari 18.0) | PSP and PS2 DVD conversions fail every time, 1 thread too | 24 of 24 fail |
+| 2025-04-14 | | 0 of 24 |
+| 2025-09-30 (about Safari 26.0) | rare | 11 of 54 fail or crash the page |
+| 2026-01-14, 05-04, 07-20, 09-01 | | 0 of 24 each |
+
+- Both are JSC bugs in its optimizing tier (OMG), not in the page. Every failure was a WebAssembly trap or a crash of the page's process, never a wrong CHD. The 2024 bug needs only OMG; the 2025 one needs OMG, the SIMD build and concurrent compilation together (without any of them: none in 40). Not memory: bounds-checked or mixed fast memories changed nothing. WebKit bug 316918 (SIMD inlined into non-SIMD code) is one such fix, but turning OMG inlining off didn't stop the 2025 crashes.
+- These are x86-64 builds; iPhones and Apple silicon Macs compile with JSC's ARM64 backend, where the same bugs may or may not exist. A PSP or PS2 ISO converted on iOS 18.x and on early iOS 26 would tell.
+- What the page does (`app/worker.js`, `app/ui.js`): a helper that traps is dropped and the others do its batches (the job worker keeps each batch until it is answered; with none left, extract and verify decompress in the job worker). A conversion whose helpers all fail, or whose job worker traps, runs once more from the start. Both give the same CHD, since compression is deterministic. When the second run fails too, the error says it is the browser's fault and to update it (on iOS: iOS; on a Mac: Safari, or another browser). A crash of the whole page can't be caught; Recovery reports it after the reload.
+- Tests: `DEBUG.failHelpers` (`'one'`, `'all'` or `'always'`) makes helpers trap like this (`tests/ui/fallbacks.spec.js`).
+
 ## Device test checklist
 
 On an iPhone (4 GB and 6+ GB if possible) and an iPad, iOS 18 and 26:
@@ -142,6 +158,7 @@ On an iPhone (4 GB and 6+ GB if possible) and an iPad, iOS 18 and 26:
 - [ ] A 4 GB PS2 DVD at 1, 2 and 3 threads: time, and whether the page is reloaded (memory).
 - [ ] Sitecase: a small result (under 512 MB) through the share sheet still works.
 - [ ] iCab Mobile: open the file, convert, download 1 GB, find it in Files.
+- [ ] On iOS 18.x and on the first iOS 26 releases: a PSP and a PS2 DVD ISO at the default threads. Do they finish, or say that the browser engine failed (see above)?
 
 ## Decisions
 
