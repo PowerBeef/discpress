@@ -284,6 +284,8 @@ Priority order (C §9):
 
 A survey of MAME's trackers, emulator and tool trackers and forums (the report "chdman: what users report and ask for") found the biggest unmet needs: checking CHDs against Redump or No-Intro DATs without extracting them, zipped inputs, and LibCrypt data for PAL PS1 games. None of the steps below changes the CHDs Discpress writes by default: they are tier R, or tier C only when a preset is chosen.
 
+**Status: steps 1 to 5 done** (Discpress 1.5.0; tests in `tests/ui/profiles.spec.js`, `zip.spec.js`, `dat.spec.js` and `pbp.spec.js`, and the `ps1-libcrypt` and `ps1-pbp*` fixtures). A PBP's audio tracks are read from its image, where popstation puts them; a disc whose track list doesn't fit its image is refused.
+
 1. **Compatibility notes and clearer refusals** (small).
    - PS2 discs on CD with audio tracks: PCSX2 plays only the first track of a CD CHD (its `ChdFileReader`, draft PR #12037).
    - Dreamcast CD-based discs (CD-R, MIL-CD) whose cue has pregaps: every Flycast release up to 2.7 rejects such CHDs ("Unsupported subtype or pre/postgap", flycast #906; fixed on master only).

@@ -95,11 +95,14 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
 |---|---|---|
 | PlayStation, Saturn, Sega CD, PC Engine CD, Neo Geo CD, 3DO, CD-i, Amiga CD32, PC-FX | `.cue` + `.bin` (or ECM-packed `.bin.ecm`), or CloneCD `.ccd` + `.img` (+ `.sub`) | CD CHD |
 | Dreamcast | `.gdi` + tracks, or Redump `.cue` + `.bin` | CD CHD (GD-ROM detected) |
+| PlayStation (PSP and Vita format) | `EBOOT.PBP` made with popstation (not encrypted Store downloads) | CD CHD, one per disc |
 | PlayStation 2 | DVD games: `.iso`, or compressed `.cso`/`.zso` · CD games: `.cue` + `.bin` | DVD or CD CHD |
 | PSP | `.iso`, or compressed `.cso`/`.zso` | DVD CHD |
 | Arcade and computer hard disks | `.img`, `.hdd` | Hard disk CHD |
 | LaserDisc arcade games | `.avi` | LaserDisc CHD |
 | Any of the above | `.chd` | Back to `.cue`/`.bin` (by default the Redump dump's own files), `.gdi` or `.iso` |
+
+Any of these can also be added inside a `.zip`. Add Redump or No-Intro DAT files to check every track of a disc before converting, and every CHD after Verify.
 
 ## See it in action
 
