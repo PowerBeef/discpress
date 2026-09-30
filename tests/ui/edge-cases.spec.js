@@ -615,3 +615,21 @@ test('a cue sheet added later does not take a lone file of the same name from an
   await expect(app.jobs()).toHaveCount(2);
   await expect(app.page.locator('#jobs article.job[data-state="blocked"]')).toContainText('disc.iso');
 });
+
+// formats Discpress can't read get a card that says why and what to do, rather than being ignored
+test('unsupported disc images and archives get a card that explains them', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'unsupported');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const n of ['homebrew.cdi', 'shmup.mds', 'shmup.mdf', 'game.isz', 'set.7z', 'set.rar']) fs.writeFileSync(path.join(dir, n), Buffer.alloc(4096, 1));
+  await app.open();
+  await app.add(['homebrew.cdi', 'shmup.mds', 'shmup.mdf', 'game.isz', 'set.7z', 'set.rar'].map(n => 'gen/unsupported/' + n));
+  await expect(app.jobs()).toHaveCount(5); // the .mdf goes with its .mds
+  for (const [title, why] of [['homebrew', 'Flycast and Redream load .cdi files as they are'], ['shmup', 'Alcohol 120% images'], ['game', '.isz'], ['set', '7-Zip archives']]) {
+    const card = app.job(title).first();
+    await expect(card.locator('.note.err')).toContainText(why);
+    await expect(card.locator('.job-foot')).toContainText('Can’t convert');
+    await expect(card.locator('.job-foot button')).toHaveCount(0);
+  }
+  await expect(app.jobs().filter({ hasText: 'RAR archives' })).toHaveCount(1);
+  await expect(app.job('shmup').locator('.sub')).toHaveText('.mds file · 4.00 KB');
+});

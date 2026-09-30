@@ -1097,7 +1097,22 @@ function identNote(job) {
   }
   if (damage) box.append(el('div', { class: 'small ident-damaged', style: 'margin-top:4px;color:var(--warn)' }, damage));
   if (profile(id.sys).note) box.append(el('div', { class: 'small ident-note', style: 'margin-top:4px' }, profile(id.sys).note));
+  compatNotes(job, id).forEach(function (n) { box.append(el('div', { class: 'small compat-note', style: 'margin-top:4px' }, n)); });
   return box;
+}
+// what a known emulator does with this particular disc's CHD (from the cue sheet or TOC it is made from)
+function compatNotes(job, id) {
+  var notes = [], text = job.kind === 'create' && (job.src === 'cue' || job.src === 'toc') ? job.descText || '' : '';
+  if (!text || job.disc !== 'cd') return notes;
+  var audio = job.src === 'cue' ? /^\s*TRACK\s+\d+\s+AUDIO\b/im.test(text) : /^\s*TRACK\s+AUDIO\b/m.test(text);
+  // PCSX2's CHD reader (ChdFileReader) reads a CD's first track only
+  if (id.sys === 'ps2' && audio) notes.push('PCSX2 plays only the first track of a CD CHD, so this game\u2019s music tracks won\u2019t play in it. They are kept in the CHD.');
+  // a GD-ROM (Redump's cue lists its high-density area) is laid out as chdman 0.289 does; a CD-based
+  // Dreamcast disc with pregaps is rejected by Flycast up to 2.7 ("Unsupported subtype or pre/postgap")
+  var gd = /HIGH-DENSITY AREA/i.test(text);
+  var gaps = job.src === 'cue' ? /^\s*(INDEX\s+0*0\s|PREGAP\b|POSTGAP\b)/im.test(text) : /^\s*(PREGAP|START)\b/m.test(text);
+  if (id.sys === 'dc' && !gd && gaps) notes.push('Flycast 2.7 and earlier can\u2019t load CD-based Dreamcast CHDs whose tracks have pregaps, as this one\u2019s do; newer Flycast builds can. Keep the original files if you use an older one.');
+  return notes;
 }
 function safeName(s) { return String(s || '').replace(/[\/:*?"<>|]+/g, '_').trim(); }
 
@@ -1123,7 +1138,7 @@ var KIND = {
 };
 // [value, label, codecs (-c), hint, other options]
 var PRESETS = {
-  cd: [['default', 'Smallest (default)', null, 'The smallest files. Works in every emulator. (chdman\u2019s own settings: LZMA, Deflate and FLAC.)'], ['plan', 'Nearly as small, faster', null, 'About 1.7 times as fast to create, at most 0.3% bigger, same checksums. Works in every emulator. (The same codecs, but each track tries only the one that suits it: LZMA for data, FLAC for audio.)', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'cdzl,cdfl', 'Several times faster to create, a little bigger, same checksums. (Deflate by libdeflate, and FLAC.)', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'cdzs,cdfl', 'Quicker to load on weak devices. Needs a recent emulator. (Zstandard and FLAC.)'], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']],
+  cd: [['default', 'Smallest (default)', null, 'The smallest files. Works in every emulator. (chdman\u2019s own settings: LZMA, Deflate and FLAC.)'], ['plan', 'Nearly as small, faster', null, 'About 1.7 times as fast to create, at most 0.3% bigger, same checksums. Works in every emulator. (The same codecs, but each track tries only the one that suits it: LZMA for data, FLAC for audio.)', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'cdzl,cdfl', 'Several times faster to create, a little bigger, same checksums. (Deflate by libdeflate, and FLAC.)', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'cdzs,cdfl', 'Quicker to load on weak devices. Needs a recent emulator. (Zstandard and FLAC.)'], ['mister', 'For MiSTer FPGA', 'cdzs,cdfl', 'Zstandard and FLAC in 4-sector hunks, which MiSTer\u2019s CD cores decompress fast enough for 8\u00d7 CD speed. Other emulators read it too, if they read Zstd.', ['-hs', '9792']], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']],
   other: [['default', 'Smallest (default)', null, 'The smallest files. Works in every emulator. (chdman\u2019s own settings: LZMA, Deflate, Huffman and FLAC.)'], ['plan', 'Nearly as small, faster', null, 'About 1.5 times as fast to create, just as small, same checksums. Works in every emulator. (The same codecs but FLAC, which almost never wins on data.)', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'zlib,huff', 'Several times faster to create, a little bigger, same checksums. (Deflate by libdeflate, and Huffman.)', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'zstd', 'Quicker to load on weak devices. Needs a recent emulator. (Zstandard.)'], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']],
   ld: [['default', 'Default (A/V Huffman)', null, 'chdman\u2019s own setting for LaserDisc video.'], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']]
 };
@@ -1142,6 +1157,7 @@ var HUNKS = {
 // note: shown with the game (emulators that won't load it)
 var PROFILES = {
   psp: { disc: 'dvd', hunk: '2048', why: 'with 2,048-byte hunks, as PPSSPP recommends' },
+  ps1: { noZstd: 'SwanStation (before March 2026)' },
   saturn: { noZstd: 'Kronos and Yabause' },
   segacd: { noZstd: 'BlastEm (RetroArch)' },
   pcecd: { noZstd: 'Beetle SuperGrafx' },
@@ -1195,7 +1211,16 @@ function refMatches(e, ref) {
 function fileKind(f) { return f.ecm ? (ext(f.name) ? ext(f.name) + '.' : '') + 'ecm' : ext(f.name); }
 
 /* ---------- grouping new files into jobs ---------- */
-var IGNORE = /^(txt|nfo|sub|m3u|dat|md5|sfv|sha1|jpg|jpeg|png|gif|webp|pdf|url|ini|cfg|xml|json|html|htm|db|ds_store|zip|7z|rar)$/;
+var IGNORE = /^(txt|nfo|sub|m3u|dat|md5|sfv|sha1|jpg|jpeg|png|gif|webp|pdf|url|ini|cfg|xml|json|html|htm|db|ds_store|zip)$/;
+// disc images and archives Discpress can't read: a card says why and what to do, rather than ignoring them
+var UNSUPPORTED = {
+  cdi: 'DiscJuggler (.cdi) images can\u2019t become CHDs that emulators load: most hold two sessions, which a CHD made by chdman 0.289 can\u2019t place. Flycast and Redream load .cdi files as they are, so keep this one.',
+  mds: 'Alcohol 120% images (.mds with .mdf) can\u2019t be read here yet. Convert them to .cue/.bin with another tool first.',
+  isz: 'UltraISO compressed images (.isz) can\u2019t be read here. Convert them to .iso with UltraISO first.',
+  '7z': '7-Zip archives can\u2019t be opened here. Extract the files from it first.',
+  rar: 'RAR archives can\u2019t be opened here. Extract the files from it first.'
+};
+UNSUPPORTED.mdf = UNSUPPORTED.mds;
 
 // adds run one after another: a second pick or drop while the first still reads its files (slow
 // cloud files) would otherwise work from a list of jobs that is about to change
@@ -1320,6 +1345,10 @@ async function addEntriesNow(entries) {
     } else if (x === 'sbi') {
       looseSbi.push(e); // paired with its game below
       continue;
+    } else if (UNSUPPORTED[x]) {
+      // an Alcohol 120% image is one card, for its .mds (its .mdf beside it says the same)
+      if (x === 'mdf' && fresh.some(function (o) { return ext(o.path) === 'mds' && stem(o.path).toLowerCase() === t.toLowerCase(); })) continue;
+      job2 = newJob({ kind: 'create', src: x, title: t, files: [{ file: file, name: name }], disc: 'cd', invalid: true, state: 'error', errorText: UNSUPPORTED[x] });
     } else if (IGNORE.test(x) || name.charAt(0) === '.') {
       ignored.push(name);
       continue;
@@ -1730,7 +1759,10 @@ function subtitle(job) {
   }
   if (job.src === 'cso') return (ext(job.files[0].name) === 'zso' ? 'ZSO' : 'CSO') + ' compressed ISO · ' + fmtBytes(n) + (job.isoSize ? ' → ' + fmtBytes(job.isoSize) + ' unpacked' : '');
   // a descriptor that can't be converted: only the file itself, not the tracks it doesn't list
-  if (job.invalid) return (job.descFile ? '.' + ext(job.descFile.name) + ' file · ' + fmtBytes(job.descFile.size) : fmtBytes(n));
+  if (job.invalid) {
+    var f0 = job.descFile || (job.files[0] && job.files[0].file);
+    return f0 ? '.' + ext(f0.name) + ' file · ' + fmtBytes(f0.size) : fmtBytes(n);
+  }
   var what;
   var ecms = job.files.filter(function (f) { return f.ecm; }).length;
   if (job.fromCcd) what = 'CloneCD image (.ccd + .' + (job.files[0] ? fileKind(job.files[0]) : 'img') + ')';

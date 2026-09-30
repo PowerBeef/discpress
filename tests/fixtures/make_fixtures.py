@@ -297,6 +297,27 @@ fixture('dreamcast-gdi', {
 }, add=['aerowings.gdi', 'track01.bin', 'track02.raw', 'track03.bin'], job='create', disc='gdrom', command='createcd', sys='dc',
    serial='T-40201N', ident='serial', name='AeroWings (USA)')
 
+# a PS2 game on CD with a music track: PCSX2 plays only the first track of a CD CHD, and the card says so
+fixture('ps2-cd-audio', {
+    'ps2 cdda.cue': lambda: cue([('ps2 cdda (Track 1).bin', 'MODE2/2352', 0), ('ps2 cdda (Track 2).bin', 'AUDIO', 150)]),
+    'ps2 cdda (Track 1).bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660({
+        'SYSTEM.CNF': b'BOOT2 = cdrom0:\\SLUS_299.99;1\r\nVER = 1.00\r\nVMODE = NTSC\r\n',
+        'SLUS_299.99': exe('SLUS_299.99')}, 'CDDA', 'PLAYSTATION')), 2),
+    'ps2 cdda (Track 2).bin': lambda: g.audio(225, 71, silence=150),
+}, add=['ps2 cdda.cue', 'ps2 cdda (Track 1).bin', 'ps2 cdda (Track 2).bin'], job='create', disc='cd', command='createcd', sys='ps2',
+   serial='SLUS-29999', ident='none', name='ps2 cdda')
+
+# a CD-based Dreamcast disc (a CD-R, as homebrew is): an audio track, then the data track with a stored
+# pregap, which Flycast 2.7 and earlier reject in a CHD; the card says so
+fixture('dreamcast-cdr', {
+    'dc cdr.cue': lambda: cue([('dc cdr (Track 1).bin', 'AUDIO', 0), ('dc cdr (Track 2).bin', 'MODE1/2352', 150)]),
+    'dc cdr (Track 1).bin': lambda: g.audio(300, 72),
+    'dc cdr (Track 2).bin': lambda: g.raw_sectors(bytes(150 * 2048) + g.pad_sectors(g.iso9660(
+        {'1ST_READ.BIN': g.filler(512 << 10, 73)}, 'HOMEBREW', '',
+        ipbin(b'SEGA SEGAKATANA ', 0x40, b'T0000     ', 0x80, b'HOMEBREW', {0x10: b'SEGA ENTERPRISES', 0x30: b'CD-ROM1/1       '}))), 1, 300),
+}, add=['dc cdr.cue', 'dc cdr (Track 1).bin', 'dc cdr (Track 2).bin'], job='create', disc='cd', command='createcd', sys='dc',
+   serial='T0000', ident='none', name='dc cdr')
+
 # a NAOMI GD-ROM whose serial the database lists under NAOMI 2: the two share one header layout
 fixture('naomi2-gdi', {
     'spikers.gdi': lambda: b'3\r\n1 0 4 2352 spikers01.bin 0\r\n2 450 0 2352 spikers02.raw 0\r\n3 45000 4 2352 spikers03.bin 0\r\n',

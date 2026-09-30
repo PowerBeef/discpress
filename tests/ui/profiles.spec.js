@@ -129,3 +129,56 @@ test('discs of the same name from different consoles don\u2019t share a playlist
   await expect(one.locator('.playlist')).toHaveCount(0);
   await expect(two.locator('.playlist')).toHaveCount(0);
 });
+
+test('a PS2 game on CD with music tracks: the card says PCSX2 plays only the first track', async ({ app }) => {
+  await app.open();
+  await app.add(fixture('ps2-cd-audio').add);
+  const card = app.job('ps2 cdda');
+  await app.settled(card);
+  await expect(card.locator('.sysbadge')).toHaveText('PS2');
+  await expect(card.locator('.compat-note')).toHaveText('PCSX2 plays only the first track of a CD CHD, so this game’s music tracks won’t play in it. They are kept in the CHD.');
+  await expect(card.locator('code.cmd')).toContainText('chdman createcd');
+});
+
+test('a CD-based Dreamcast disc with pregaps: the card says older Flycast rejects its CHD; a GD-ROM gets no such note', async ({ app }) => {
+  await app.open();
+  await app.add([...fixture('dreamcast-cdr').add, ...fixture('dreamcast-gdi').add]);
+  const cdr = app.job('dc cdr'), gd = app.job('aerowings');
+  await app.settled(cdr);
+  await app.settled(gd);
+  await expect(cdr.locator('.sysbadge')).toHaveText('DC');
+  await expect(cdr.locator('.compat-note')).toContainText('Flycast 2.7 and earlier can’t load CD-based Dreamcast CHDs whose tracks have pregaps');
+  await expect(gd.locator('.compat-note')).toHaveCount(0);
+  // a PS1 disc with a music track needs no note either
+  await app.add(fixture('ps1-multitrack').add);
+  const mgs = app.job('mgs disc1');
+  await app.settled(mgs);
+  await expect(mgs.locator('.compat-note')).toHaveCount(0);
+});
+
+test('the MiSTer preset makes Zstd + FLAC CD CHDs with 4-sector hunks, as chdman does with those options', async ({ app }) => {
+  const fx = fixture('ps1-single');
+  await app.open();
+  await app.add(fx.add);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await card.locator('details.opts summary').click();
+  const field = card.locator('label.field', { hasText: 'Compression' });
+  await field.locator('select').selectOption('mister');
+  await expect(field).toContainText('MiSTer');
+  await expect(card.locator('code.cmd')).toContainText('-c cdzs,cdfl -hs 9792');
+  await app.run(card);
+  const [out] = await app.downloads(card);
+  if (nativeChdman() && sameVersion()) expect(sha1File(out.path)).toBe(sha1File(reference('createcd', fx.add[0], ['-c', 'cdzs,cdfl', '-hs', '9792'])));
+});
+
+test('PS1 games warn that older SwanStation can’t read the Zstd preset', async ({ app }) => {
+  await app.open();
+  await app.add(fixture('ps1-single').add);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await card.locator('details.opts summary').click();
+  const field = card.locator('label.field', { hasText: 'Compression' });
+  await field.locator('select').selectOption('zstd');
+  await expect(field).toContainText('SwanStation (before March 2026) can’t read Zstd CHDs of Sony PlayStation games.');
+});
