@@ -12165,7 +12165,9 @@ function updateScrollHint() {
 }
 function initViewport() {
   window.addEventListener('resize', queueMeasure);
-  window.addEventListener('resize', fitChips);
+  // the status line's own width: window resizes, and also a scrollbar appearing or fonts loading
+  if (window.ResizeObserver) new ResizeObserver(function () { fitChips(); }).observe($('#chips'));
+  else window.addEventListener('resize', fitChips);
   window.addEventListener('orientationchange', settleMeasure);
   window.addEventListener('pageshow', settleMeasure);
   document.addEventListener('visibilitychange', function () { if (!document.hidden) settleMeasure(); });

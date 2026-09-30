@@ -22,13 +22,13 @@ test('the status line stays on one line, down to 320 pixels, and never cuts its 
   await expect(page.locator('#chipEngine')).toContainText(/ready/i, { timeout: 60_000 });
   for (const width of [page.viewportSize().width, 360, 320]) {
     await page.setViewportSize({ width, height: 700 });
-    const r = await page.evaluate(() => {
+    // the page fits the line once it has seen the new width
+    await expect.poll(() => page.evaluate(() => {
       const box = document.querySelector('#chips'), chips = [...box.children].filter(c => getComputedStyle(c).display !== 'none');
       const line = parseFloat(getComputedStyle(box).lineHeight);
       return { lines: Math.round(chips[0].getBoundingClientRect().height / line), top: new Set(chips.map(c => Math.round(c.getBoundingClientRect().top))).size,
         cut: chips.filter(c => c.scrollWidth > c.clientWidth + 1).map(c => c.id), engine: chips.some(c => c.id === 'chipEngine'), fits: box.scrollWidth <= box.clientWidth + 1 };
-    });
-    expect(r, `at ${width} px`).toEqual({ lines: 1, top: 1, cut: [], engine: true, fits: true });
+    }), { message: `at ${width} px`, timeout: 5000 }).toEqual({ lines: 1, top: 1, cut: [], engine: true, fits: true });
   }
 });
 
