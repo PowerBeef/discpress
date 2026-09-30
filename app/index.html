@@ -58,11 +58,11 @@
 
 <header class="top">
   <div class="wrap top-row">
-    <a class="brand" href="#" id="brandLink" aria-label="Discpress home"><svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><rect x="2" y="2" width="44" height="44" rx="12" fill="#1c1733"/><clipPath id="lgc"><circle cx="24" cy="24" r="15"/></clipPath><circle cx="24" cy="24" r="15" fill="#fff7e6"/><g clip-path="url(#lgc)"><rect x="6" y="26" width="36" height="3.3" fill="#ff5c93"/><rect x="6" y="29.3" width="36" height="3.3" fill="#ffb23f"/><rect x="6" y="32.6" width="36" height="3.3" fill="#ffe14d"/><rect x="6" y="35.9" width="36" height="4" fill="#13a9ba"/></g><circle cx="24" cy="24" r="4.6" fill="#1c1733"/><circle cx="24" cy="24" r="1.8" fill="#fff7e6"/></svg><span class="wordmark">Disc<b>press</b></span><span class="ver" title="Discpress’s own fork of chdman 0.289 (Help → About)">chdman 0.289 fork</span></a>
+    <a class="brand" href="#" id="brandLink" aria-label="Discpress home"><svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><rect x="2" y="2" width="44" height="44" rx="12" fill="#1c1733"/><clipPath id="lgc"><circle cx="24" cy="24" r="15"/></clipPath><circle cx="24" cy="24" r="15" fill="#fff7e6"/><g clip-path="url(#lgc)"><rect x="6" y="26" width="36" height="3.3" fill="#ff5c93"/><rect x="6" y="29.3" width="36" height="3.3" fill="#ffb23f"/><rect x="6" y="32.6" width="36" height="3.3" fill="#ffe14d"/><rect x="6" y="35.9" width="36" height="4" fill="#13a9ba"/></g><circle cx="24" cy="24" r="4.6" fill="#1c1733"/><circle cx="24" cy="24" r="1.8" fill="#fff7e6"/></svg><h1 class="wordmark">Disc<b>press</b></h1></a>
     <nav class="tabs" role="tablist" aria-label="Sections">
-      <button class="tab" role="tab" aria-selected="true" data-tab="convert">Convert<span class="count" id="jobCount" hidden>0</span></button>
-      <button class="tab" role="tab" aria-selected="false" data-tab="cli">Advanced</button>
-      <button class="tab" role="tab" aria-selected="false" data-tab="help">Help</button>
+      <button class="tab" role="tab" aria-selected="true" data-tab="convert" id="tabbtn-convert" aria-controls="tab-convert">Convert<span class="count" id="jobCount" hidden>0</span></button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="cli" id="tabbtn-cli" aria-controls="tab-cli" tabindex="-1">Advanced</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="help" id="tabbtn-help" aria-controls="tab-help" tabindex="-1">Help</button>
     </nav>
     <div class="top-actions"><button class="icon-btn" id="settingsBtn" aria-label="Settings" title="Settings"><svg><use href="#i-gear"/></svg></button></div>
   </div>
@@ -74,7 +74,7 @@
   <div class="chips" id="chips" aria-live="polite"><span class="chip" id="chipEngine"><i></i>Loading engine…</span></div>
   <div id="fatal"></div>
 
-  <section class="panel" id="tab-convert" role="tabpanel">
+  <section class="panel" id="tab-convert" role="tabpanel" aria-labelledby="tabbtn-convert">
     <div class="drop" id="drop">
       <svg class="drop-art" viewBox="0 0 132 132" aria-hidden="true">
         <rect x="14" y="10" width="8" height="8" style="fill:var(--accent-3)"/><rect x="108" y="30" width="7" height="7" style="fill:var(--cyan)"/><rect x="104" y="112" width="6" height="6" style="fill:var(--accent)"/><rect x="18" y="104" width="5" height="5" style="fill:var(--accent-2)"/>
@@ -102,12 +102,11 @@
     <div class="jobs" id="jobs"></div>
   </section>
 
-  <section class="panel" id="tab-cli" role="tabpanel" hidden>
+  <section class="panel" id="tab-cli" role="tabpanel" aria-labelledby="tabbtn-cli" hidden>
     <div class="card">
       <h2>Advanced: any chdman command</h2>
       <p class="muted small" style="margin:0 0 12px">Every chdman command and option is available here. Add the files the command needs, fill in the options, then run.</p>
       <label class="field"><span>Command</span><select id="cliCmd"></select></label>
-      <p class="small muted" id="cliDesc" style="margin:6px 0 0"></p>
     </div>
     <div class="card">
       <div class="row"><h2 style="margin:0">Files</h2><span class="spacer"></span><button class="btn sm" id="cliAdd"><svg><use href="#i-upload"/></svg>Add files</button></div>
@@ -129,13 +128,13 @@
       </div>
     </div>
     <div class="card" id="cliResult" hidden>
-      <div class="prog" id="cliProg" hidden><div class="bar"><i></i></div><div class="ptext"></div></div>
+      <div class="prog" id="cliProg" hidden><div class="bar" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100"><i></i></div><div class="ptext"></div></div>
       <pre class="console" id="cliConsole"></pre>
       <div class="outs" id="cliOuts" style="margin-top:10px"></div>
     </div>
   </section>
 
-  <section class="panel help" id="tab-help" role="tabpanel" hidden>
+  <section class="panel help" id="tab-help" role="tabpanel" aria-labelledby="tabbtn-help" hidden>
     <!--HELP-->
   </section>
 </main>
@@ -143,11 +142,11 @@
 
 <div class="dock" id="dock" hidden>
   <div class="wrap">
-    <div class="summary"><div id="dockText"></div><div class="bar" id="dockBar" hidden><i></i></div></div>
-    <button class="btn sm" id="clearDone" hidden>Clear finished</button>
+    <div class="summary"><div id="dockText"></div><div class="bar" id="dockBar" aria-hidden="true" hidden><i></i></div></div>
     <button class="btn sm" id="saveAll" hidden><svg><use href="#i-folder"/></svg>Save all to folder</button>
     <button class="btn sm" id="dlAll" hidden><svg><use href="#i-download"/></svg>Download all</button>
     <button class="btn primary" id="startAll"><svg><use href="#i-play"/></svg>Start all</button>
+    <button class="btn sm ghost" id="clearDone" hidden>Clear finished</button>
   </div>
 </div>
 
@@ -182,17 +181,17 @@
     <label class="field"><span>Appearance</span>
       <select id="setTheme"><option value="">Match system</option><option value="light">Light</option><option value="dark">Dark</option></select>
     </label>
-    <label class="field"><span>Scrolling</span>
-      <select id="setScroll">
-        <option value="auto">Automatic (recommended)</option>
-        <option value="page">Page scrolls (browser style)</option>
-        <option value="app">Fixed header (app style)</option>
-      </select>
-      <span class="hint" id="scrollHint"></span>
-    </label>
     <div class="row"><button class="btn sm" id="clearStorage">Free temporary storage</button><span class="small muted" id="clearInfo"></span></div>
-    <details class="log" id="diagBox"><summary>Screen info</summary>
-      <p class="small muted" style="margin:8px 0 0">If the layout looks wrong on your device, a screenshot of this helps pin it down.</p>
+    <details class="log" id="diagBox"><summary>Troubleshooting</summary>
+      <label class="field" style="margin-top:10px"><span>Scrolling</span>
+        <select id="setScroll">
+          <option value="auto">Automatic (recommended)</option>
+          <option value="page">Page scrolls (browser style)</option>
+          <option value="app">Fixed header (app style)</option>
+        </select>
+        <span class="hint" id="scrollHint"></span>
+      </label>
+      <p class="small muted" style="margin:12px 0 0"><b>Screen info.</b> If the layout looks wrong on your device, a screenshot of this helps pin it down.</p>
       <pre class="logtext" id="diagText"></pre>
       <div class="row" style="margin-top:8px"><button class="btn sm" id="diagCopy">Copy</button></div>
     </details>
@@ -200,6 +199,7 @@
 </dialog>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>
+<div class="sr-only" id="announce" role="status"></div>
 <div id="probes" aria-hidden="true" style="position:fixed;left:0;top:0;width:0;visibility:hidden;pointer-events:none">
   <div data-p="vh" style="position:absolute;height:100vh"></div><div data-p="dvh" style="position:absolute;height:100dvh"></div>
   <div data-p="svh" style="position:absolute;height:100svh"></div><div data-p="lvh" style="position:absolute;height:100lvh"></div>

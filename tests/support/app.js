@@ -99,7 +99,8 @@ export class App {
   }
 
   jobs() { return this.page.locator('#jobs article.job'); }
-  job(title) { return this.jobs().filter({ has: this.page.locator('h3', { hasText: new RegExp(`^${escapeRe(title)}$`) }) }); }
+  // title: the files' name (data-title); the heading shows the game once it's identified
+  job(title) { return this.page.locator(`#jobs article.job[data-title=${JSON.stringify(title)}]`); }
 
   async waitState(card, states, timeout = 120_000) {
     const list = [].concat(states);

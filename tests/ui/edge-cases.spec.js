@@ -389,7 +389,7 @@ test('a job removed while it waits for identification neither runs nor blocks th
   const frwl = app.job('frwl');
   await frwl.locator('.job-foot button.primary').click();
   await app.waitState(frwl, 'running');
-  await frwl.locator('.job-head button[aria-label="Remove"]').click();
+  await frwl.locator('.job-head button[aria-label^="Remove "]').click();
   await expect(app.jobs()).toHaveCount(1);
   const tnd = app.job('tnd');
   await app.settled(tnd);
@@ -405,7 +405,7 @@ test('removing a job forgets its files', async ({ app }) => {
   await app.add(fixture('ps1-single').add);
   const card = app.job('twine');
   await app.settled(card);
-  await card.locator('.job-head button[aria-label="Remove"]').click();
+  await card.locator('.job-head button[aria-label^="Remove "]').click();
   await expect(app.jobs()).toHaveCount(0);
   await app.add(fixture('ps1-single').add); // accepted again, not "already in the list"
   await expect(app.jobs()).toHaveCount(1);
@@ -508,11 +508,11 @@ test('removing a job with unsaved results asks first', async ({ app, page }) => 
   const card = app.job('tnd');
   await app.settled(card);
   await app.run(card);
-  await card.locator('.job-head button[aria-label="Remove"]').click();
+  await card.locator('.job-head button[aria-label^="Remove "]').click();
   expect(asked).toEqual(['Remove "tnd"? Its results haven’t been saved and will be deleted.']);
   await expect(app.jobs()).toHaveCount(1);
   await app.downloads(card);
-  await card.locator('.job-head button[aria-label="Remove"]').click(); // saved: removed without asking
+  await card.locator('.job-head button[aria-label^="Remove "]').click(); // saved: removed without asking
   await expect(app.jobs()).toHaveCount(0);
   expect(asked).toHaveLength(1);
 });

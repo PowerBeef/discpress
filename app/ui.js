@@ -66,6 +66,13 @@ function toast(msg, kind, ms) {
   toastBox.appendChild(t);
   setTimeout(function () { t.remove(); }, ms || (kind === 'err' ? 7000 : 3800));
 }
+// for screen readers: what finished or failed, which the page otherwise only shows
+function announce(msg) {
+  var a = $('#announce');
+  if (!a) return;
+  a.textContent = '';
+  setTimeout(function () { a.textContent = msg; }, 50);
+}
 
 /* ============================================================
    settings
@@ -756,6 +763,8 @@ if (!(navigator.locks && navigator.locks.query)) {
 /* ============================================================
    disc descriptors (.cue / .gdi / .toc)
    ============================================================ */
+// what to do about a descriptor without tracks: the image can come on its own
+var NO_TRACKS_NEXT = ' Remove this card and add the image (.bin or .img) by itself: Discpress reads a data disc\u2019s image without a cue sheet, as a single track.';
 // a descriptor line's words as chdman 0.289 reads them (cdrom_file::tokenize): double and single
 // quotes each group a word and can start or end anywhere in it, and aren't part of it.
 // Each word: {text, start, end} (its span in the line, quotes included)
@@ -858,7 +867,7 @@ function ccdToCue(text, img) {
     if (i0 != null && +i0 < +i1) lines.push('    INDEX 00 ' + msf(+i0));
     lines.push('    INDEX 01 ' + msf(+i1));
   }
-  if (!n) return fail('This .ccd file lists no tracks (CloneCD 3 and later list them as [TRACK n]).');
+  if (!n) return fail('This .ccd file lists no tracks (CloneCD 3 and later list them as [TRACK n]).' + NO_TRACKS_NEXT);
   return { text: lines.join('\n') + '\n', changed: true, problem: '' };
 }
 // returns {text, changed, problem}: the text chdman should read, and why it can't be converted.
@@ -881,12 +890,12 @@ function fixDescriptor(kind, text) {
       else if (!/^(INDEX|PREGAP|POSTGAP)$/.test(k)) return ln;
       return m[1] + k + rest;
     });
-    if (!tracks) problem = 'This CUE file lists no tracks.';
+    if (!tracks) problem = 'This CUE file lists no tracks.' + NO_TRACKS_NEXT;
   } else if (kind === 'toc') {
     // the engine reads cdrdao's TOC grammar (a missing length is the rest of the file); a TOC without
     // tracks is still refused, as chdman 0.289 never finished on one
     lines.forEach(function (ln) { if (tokenize(ln)[0] === 'TRACK') tracks++; });
-    if (!tracks) problem = 'This TOC file lists no tracks.';
+    if (!tracks) problem = 'This TOC file lists no tracks.' + NO_TRACKS_NEXT;
   } else {
     return { text: text, changed: false, problem: '' };
   }
@@ -1050,16 +1059,16 @@ function identNote(job) {
   if (id.error) return el('div', { class: 'note' + (id.readFail ? ' warn' : '') }, id.readFail ? readFailHint(id.error) : 'Could not identify this game (' + id.error + ').');
   // a compressed ISO or ECM image whose checksum step found it damaged: converting it will stop too
   var damage = id.damaged ? id.damaged + ' Converting it stops with this error.' : '';
-  if (!id.sys) return el('div', { class: 'note' + (damage ? ' warn' : '') }, damage || 'Game not recognized. The output keeps the original name.');
+  if (!id.sys) return el('div', { class: 'note' + (damage ? ' warn' : '') }, damage || 'Not a game Discpress recognizes, so the CHD keeps the file\u2019s name.');
   var box = el('div', { class: 'note ident' + (id.name ? ' ok' : '') });
   var sc = sysColor(id.sys);
   var head = el('div', { class: 'ident-head' }, el('span', { class: 'sysbadge', style: sc ? '--sys:' + sc[0] + ';--sys-fg:' + sc[1] : null }, sysShort(id.sys)), el('b', null, sysName(id.sys)));
   if (id.serial) head.append(el('span', { class: 'mono small' }, id.serial));
   box.append(head);
   if (id.name) {
-    box.append(el('div', { class: 'ident-name' }, id.name));
+    // (the game's title is the card's heading)
     var how = { hash: 'Exact match in the Redump database (checksum verified)', 'serial+size': 'Matched by serial number and size', serial: 'Matched by serial number', 'serial-ambiguous': 'Matched by serial number; several versions share it', size: 'Matched by size' }[id.method] || '';
-    box.append(el('div', { class: 'small ident-how' }, (id.method === 'hash' ? '✓ ' : '') + how));
+    head.append(el('span', { class: 'small ident-how' }, (id.method === 'hash' ? '✓ ' : '') + how));
     if (id.entry && id.entry.alternatives && id.entry.alternatives.length > 1) {
       // a running job keeps its name until it finishes, then its results are renamed (renameOutputs)
       var sel = el('select', { onchange: function () {
@@ -1072,14 +1081,14 @@ function identNote(job) {
       id.entry.alternatives.forEach(function (n) { sel.append(el('option', { value: n, selected: n === id.name }, n)); });
       box.append(el('label', { class: 'field', style: 'margin-top:6px' }, el('span', null, 'Which version?'), sel));
     }
-    if (job.state !== 'running' && job.state !== 'queued') {
-      var using = outBase(job) === safeName(id.name);
-      box.append(el('div', { class: 'row', style: 'margin-top:6px' },
-        using ? el('span', { class: 'small' }, 'Output will be named after this title.')
-          : el('button', { class: 'btn sm', onclick: function () { job.opts.out = id.name; job.outEdited = false; refreshJob(job, true); } }, 'Use this name')));
+    // the output's name is in Options; only when it isn't the title, offer to use the title
+    if (job.state !== 'running' && job.state !== 'queued' && outBase(job) !== safeName(id.name)) {
+      box.append(el('div', { class: 'row', style: 'margin-top:4px' },
+        el('span', { class: 'small muted' }, 'Saved as \u201c' + outBase(job) + '\u201d.'),
+        el('button', { class: 'btn sm', onclick: function () { job.opts.out = id.name; job.outEdited = false; refreshJob(job, true); } }, 'Use this name')));
     }
   } else {
-    box.append(el('div', { class: 'small' }, (id.headerTitle ? 'Disc title: ' + id.headerTitle + '. ' : '') + 'Not found in the Redump database, so the original name is kept.'));
+    box.append(el('div', { class: 'small' }, (id.headerTitle ? 'Disc title: ' + id.headerTitle + '. ' : '') + 'Not in the Redump database, so the CHD keeps the file\u2019s name.'));
   }
   if (job.identState === 'checking') {
     var chk = el('div', { class: 'small ident-check' }, job.identStatus || 'Checking against the game database…');
@@ -1114,9 +1123,9 @@ var KIND = {
 };
 // [value, label, codecs (-c), hint, other options]
 var PRESETS = {
-  cd: [['default', 'Smallest (default)', null, 'chdman default: CD LZMA + Deflate + FLAC. Works everywhere.'], ['plan', 'Nearly as small, faster', null, 'The same codecs, but each track tries only the one that suits it: LZMA for data, FLAC for audio. About 1.7 times as fast, files at most 0.3% bigger, same checksums. Works everywhere.', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'cdzl,cdfl', 'CD Deflate (by libdeflate) + FLAC: several times faster, files a little bigger, same checksums.', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'cdzs,cdfl', 'CD Zstandard + FLAC: quick to read on weak devices; needs a recent emulator.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']],
-  other: [['default', 'Smallest (default)', null, 'chdman default: LZMA + Deflate + Huffman + FLAC. Works everywhere.'], ['plan', 'Nearly as small, faster', null, 'The same codecs but FLAC, which almost never wins on data. About 1.5 times as fast, and as small, same checksums. Works everywhere.', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'zlib,huff', 'Deflate (by libdeflate) + Huffman: several times faster, files a little bigger, same checksums.', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'zstd', 'Zstandard: quick to read on weak devices; needs a recent emulator.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']],
-  ld: [['default', 'Default (A/V Huffman)', null, 'chdman default for LaserDisc video.'], ['none', 'No compression', 'none', 'Stores the data uncompressed.']]
+  cd: [['default', 'Smallest (default)', null, 'The smallest files. Works in every emulator. (chdman\u2019s own settings: LZMA, Deflate and FLAC.)'], ['plan', 'Nearly as small, faster', null, 'About 1.7 times as fast to create, at most 0.3% bigger, same checksums. Works in every emulator. (The same codecs, but each track tries only the one that suits it: LZMA for data, FLAC for audio.)', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'cdzl,cdfl', 'Several times faster to create, a little bigger, same checksums. (Deflate by libdeflate, and FLAC.)', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'cdzs,cdfl', 'Quicker to load on weak devices. Needs a recent emulator. (Zstandard and FLAC.)'], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']],
+  other: [['default', 'Smallest (default)', null, 'The smallest files. Works in every emulator. (chdman\u2019s own settings: LZMA, Deflate, Huffman and FLAC.)'], ['plan', 'Nearly as small, faster', null, 'About 1.5 times as fast to create, just as small, same checksums. Works in every emulator. (The same codecs but FLAC, which almost never wins on data.)', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'zlib,huff', 'Several times faster to create, a little bigger, same checksums. (Deflate by libdeflate, and Huffman.)', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'zstd', 'Quicker to load on weak devices. Needs a recent emulator. (Zstandard.)'], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']],
+  ld: [['default', 'Default (A/V Huffman)', null, 'chdman\u2019s own setting for LaserDisc video.'], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']]
 };
 var HUNKS = {
   cd: [['', 'Automatic (19,584 bytes = 8 sectors)']],
@@ -1342,7 +1351,8 @@ async function addEntriesNow(entries) {
   linkParents();
   updateDock();
   if (created.length) {
-    var m = 'Added ' + plural(created.length, 'item');
+    var nChd = created.filter(function (j) { return j.kind === 'chd'; }).length, nDisc = created.length - nChd;
+    var m = 'Added ' + [nDisc ? plural(nDisc, 'disc') : '', nChd ? plural(nChd, 'CHD') : ''].filter(Boolean).join(' and ');
     if (ignored.length) m += ' · ignored ' + plural(ignored.length, 'file') + ' (' + ignored.slice(0, 3).join(', ') + (ignored.length > 3 ? '…' : '') + ')';
     toast(m);
     var first = created[0].el;
@@ -1390,7 +1400,9 @@ async function descriptorJob(d, pool, claimed) {
   if (fix.problem) {
     job.invalid = true;
     job.state = 'error';
-    job.errorText = dec ? fix.problem + ' chdman can\u2019t convert it as it is.' : fix.problem;
+    // the reason, then what to do about it
+    var next = fix.problem.indexOf(NO_TRACKS_NEXT) > 0 ? NO_TRACKS_NEXT : '', why = fix.problem.replace(NO_TRACKS_NEXT, '');
+    job.errorText = (dec ? why + ' chdman can\u2019t convert it as it is.' : why) + next;
   }
   var dir = job.descDir = dirOf(d.path);
   refs.forEach(function (ref) {
@@ -1633,26 +1645,28 @@ function buildJob(job) {
 var jobsBox = null;
 function renderJob(job, append) {
   jobsBox = jobsBox || $('#jobs');
-  var card = el('article', { class: 'job', 'data-state': job.state });
+  // data-title: the files' name, whatever the heading shows (the game once it's identified)
+  var card = el('article', { class: 'job', 'data-state': job.state, 'data-title': job.title });
   job.el = card;
   job.ui = {};
   var badge = el('div', { class: 'badge' });
   var h3 = el('h3');
   var sub = el('p', { class: 'sub' });
-  var rm = el('button', { class: 'icon-btn', 'aria-label': 'Remove', title: 'Remove', onclick: function () { removeJob(job); } }, icon('i-x'));
+  var rm = el('button', { class: 'icon-btn', 'aria-label': 'Remove ' + job.title, title: 'Remove', onclick: function () { removeJob(job); } }, icon('i-x'));
   card.append(el('div', { class: 'job-head' }, badge, el('div', { class: 'job-title' }, h3, sub), rm));
   var body = el('div', { class: 'job-body' });
   var controls = el('div', { class: 'controls', style: 'display:grid;gap:12px' });
   var notes = el('div', { style: 'display:grid;gap:8px' });
-  var prog = el('div', { class: 'prog', hidden: true }, el('div', { class: 'bar' }, el('i')), el('div', { class: 'ptext' }));
+  var prog = el('div', { class: 'prog', hidden: true }, el('div', { class: 'bar', role: 'progressbar', 'aria-label': 'Progress', 'aria-valuemin': '0', 'aria-valuemax': '100' }, el('i')), el('div', { class: 'ptext' }));
   var result = el('div', { class: 'result', hidden: true });
   var logPre = el('pre', { class: 'logtext' });
   var cmd = el('code', { class: 'cmd' });
   var log = el('details', { class: 'log' }, el('summary', null, 'Details'), el('div', { style: 'margin-top:8px' }, cmd, logPre));
-  body.append(controls, notes, prog, result, log);
+  // what the disc is (identification, missing files, errors) before how to convert it
+  body.append(notes, controls, prog, result, log);
   var foot = el('div', { class: 'job-foot' });
   card.append(body, foot);
-  job.ui = { badge: badge, h3: h3, sub: sub, controls: controls, notes: notes, prog: prog, bar: prog.querySelector('i'), ptext: prog.querySelector('.ptext'), result: result, logPre: logPre, cmd: cmd, foot: foot, log: log };
+  job.ui = { badge: badge, h3: h3, sub: sub, rm: rm, controls: controls, notes: notes, prog: prog, bar: prog.querySelector('i'), ptext: prog.querySelector('.ptext'), result: result, logPre: logPre, cmd: cmd, foot: foot, log: log };
   if (append) jobsBox.appendChild(card);
   refreshJob(job, true);
 }
@@ -1677,8 +1691,17 @@ function refreshJob(job, full) {
   else { ui.badge.style.removeProperty('--sys'); ui.badge.style.removeProperty('--sys-fg'); }
   if (job.ident && job.ident.sys && job.ident.sys !== 'pc') small = job.kind === 'chd' ? 'CHD' : KIND[job.disc].badge;
   ui.badge.replaceChildren(document.createTextNode(discLabel(job)), el('small', null, small));
-  ui.h3.textContent = job.title;
-  ui.sub.textContent = subtitle(job);
+  // the card becomes the game once it's identified: its title leads, the files' name goes below
+  var game = job.ident && job.ident.name;
+  ui.h3.textContent = game || job.title;
+  ui.h3.className = game ? 'ident-name' : '';
+  ui.sub.textContent = (game && game !== job.title ? job.title + ' \u00b7 ' : '') + subtitle(job);
+  ui.rm.setAttribute('aria-label', 'Remove ' + (game || job.title));
+  if (job.state !== ui.said && (job.state === 'done' || job.state === 'error')) {
+    var outBytes = (job.outputs || []).reduce(function (a, o) { return a + (o.size || 0); }, 0);
+    announce((game || job.title) + (job.state === 'done' ? ': finished' + (outBytes ? ', ' + fmtBytes(outBytes) : '') + '.' : ': failed.'));
+  }
+  ui.said = job.state;
   var busy = job.state === 'running' || job.state === 'queued';
   if (full) renderControls(job);
   else $$('input,select,button', ui.controls).forEach(function (x) { x.disabled = busy; });
@@ -1706,6 +1729,8 @@ function subtitle(job) {
     return parts.join(' · ');
   }
   if (job.src === 'cso') return (ext(job.files[0].name) === 'zso' ? 'ZSO' : 'CSO') + ' compressed ISO · ' + fmtBytes(n) + (job.isoSize ? ' → ' + fmtBytes(job.isoSize) + ' unpacked' : '');
+  // a descriptor that can't be converted: only the file itself, not the tracks it doesn't list
+  if (job.invalid) return (job.descFile ? '.' + ext(job.descFile.name) + ' file · ' + fmtBytes(job.descFile.size) : fmtBytes(n));
   var what;
   var ecms = job.files.filter(function (f) { return f.ecm; }).length;
   if (job.fromCcd) what = 'CloneCD image (.ccd + .' + (job.files[0] ? fileKind(job.files[0]) : 'img') + ')';
@@ -1733,7 +1758,7 @@ function textField(label, value, onchange, opts) {
   opts = opts || {};
   var i = el('input', { type: opts.type || 'text', value: value || '', placeholder: opts.placeholder || '', inputmode: opts.inputmode, disabled: opts.disabled, autocomplete: 'off', spellcheck: 'false' });
   i.addEventListener('input', function () { onchange(i.value); });
-  return el('label', { class: 'field' }, el('span', null, label), i, opts.hint ? el('span', { class: 'hint' }, opts.hint) : null);
+  return el('label', { class: 'field' + (opts.wide ? ' wide' : '') }, el('span', null, label), i, opts.hint ? el('span', { class: 'hint' }, opts.hint) : null);
 }
 
 function renderControls(job) {
@@ -1781,14 +1806,14 @@ function renderControls(job) {
     var hunks = HUNKS[disc] || [['', 'Automatic']];
     if (hunks.length > 1) fields.append(selectField('Hunk size', hunks, o.hunk || hunks[0][0], function (v) { o.hunk = v; job.hunkEdited = true; soft(); }, disc === 'dvd' ? 'Use 2,048 for PSP games.' : null, busy));
     if (disc === 'raw') fields.append(textField('Unit size (bytes)', o.unit, function (v) { o.unit = v.replace(/[^0-9]/g, ''); soft(); }, { inputmode: 'numeric', disabled: busy }));
-    fields.append(textField('Output name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { hint: 'Saved as ' + outBase(job) + '.chd', disabled: busy }));
+    fields.append(textField('Output name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { hint: 'Saved as ' + outBase(job) + '.chd', disabled: busy, wide: true }));
     var det = el('details', { class: 'opts' }, el('summary', null, 'Options'), fields);
     if (job.ui.optsOpen) det.open = true;
     det.addEventListener('toggle', function () { job.ui.optsOpen = det.open; });
     box.append(det);
     if (job.sbi) box.append(el('p', { class: 'small muted sbi-note', style: 'margin:0' }, 'Its LibCrypt data (' + job.sbi.name + ') is saved with the CHD, under the CHD\u2019s name.'));
     if (job.disc === 'dvd' && (job.src === 'iso' || job.src === 'cso') && !(job.ident && job.ident.sys && job.ident.sys !== 'pc')) {
-      box.append(el('p', { class: 'small muted', style: 'margin:0' }, 'Use DVD for PS2 DVD games and PSP. Choose CD for CD-based games stored as .iso.'));
+      box.append(el('p', { class: 'small muted', style: 'margin:0' }, 'The console isn\u2019t known, so check the type: DVD for PSP games and PS2 games on DVD, CD for games that came on a CD.'));
     }
   } else {
     var info = job.info;
@@ -1965,10 +1990,10 @@ function renderFoot(job) {
     var label = job.kind === 'create' ? 'Create CHD' : job.action === 'extract' ? 'Extract' : job.action === 'verify' ? 'Verify' : job.action === 'rename' ? 'Save renamed copy' : 'Show info';
     f.append(el('button', { class: 'btn primary', onclick: function () { enqueueChecked(job); } }, icon('i-play'), label));
   } else if (job.state === 'queued' || job.state === 'running') {
-    f.append(el('button', { class: 'btn danger', onclick: function () { cancelJob(job); } }, 'Cancel'));
+    f.append(el('button', { class: 'btn danger sm fit', onclick: function () { cancelJob(job); } }, 'Cancel'));
   } else if (job.state === 'done' || job.state === 'error' || job.state === 'canceled') {
     if (job.kind === 'chd' && job.info || job.kind === 'create' && !job.invalid) {
-      f.append(el('button', { class: 'btn', onclick: function () { resetJob(job); } }, job.state === 'done' ? 'Run again' : 'Try again'));
+      f.append(el('button', { class: 'btn' + (job.state === 'done' ? ' sm fit' : ''), onclick: function () { resetJob(job); } }, job.state === 'done' ? 'Run again' : 'Try again'));
     }
   }
 }
@@ -1977,8 +2002,13 @@ function setProgress(job, pct, text, extra) {
   var ui = job.ui;
   if (!ui) return;
   var barBox = ui.bar.parentNode;
-  if (pct == null) { barBox.classList.add('indet'); ui.bar.style.width = ''; }
-  else { barBox.classList.remove('indet'); ui.bar.style.width = Math.max(0, Math.min(100, pct)) + '%'; }
+  if (pct == null) { barBox.classList.add('indet'); ui.bar.style.width = ''; barBox.removeAttribute('aria-valuenow'); }
+  else {
+    barBox.classList.remove('indet');
+    ui.bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    barBox.setAttribute('aria-valuenow', Math.round(Math.max(0, Math.min(100, pct))));
+  }
+  barBox.setAttribute('aria-valuetext', text + (pct == null ? '' : ', ' + Math.round(pct) + '%'));
   ui.ptext.replaceChildren(el('b', null, text));
   (extra || []).forEach(function (x) { if (x) ui.ptext.append(el('span', null, x)); });
 }
@@ -2000,7 +2030,9 @@ function updateTabCount() {
   if (d) {
     d.classList.toggle('compact', jobs.length > 0);
     $('#tab-convert').classList.toggle('has-jobs', jobs.length > 0);
-    d.querySelector('h2').textContent = jobs.length ? 'Add more games' : 'Drop your games here';
+    // touch screens have nothing to drop from
+    var touch = window.matchMedia && matchMedia('(hover: none) and (pointer: coarse)').matches;
+    d.querySelector('h2').textContent = jobs.length ? 'Add more games' : touch ? 'Choose your games' : 'Drop your games here';
     $('#addFiles').lastChild.textContent = jobs.length ? 'Add more files' : 'Choose files';
   }
 }
@@ -2213,7 +2245,7 @@ async function runJobNow(job) {
     onLine: function (s, t) {
       appendLog(job, t);
       var fm = /final ratio = ([\d.]+)%/.exec(t);
-      if (fm) setProgress(job, 100, 'Finishing…', ['ratio ' + fm[1] + '%']);
+      if (fm) setProgress(job, 100, 'Finishing…', [fm[1] + '% of the original']);
     },
     onProgress: function (t) {
       if (stalledProgress(t)) { if (!job.stalled) { job.stalled = true; job.run.cancel(); } return; }
@@ -2224,7 +2256,7 @@ async function runJobNow(job) {
       lastPct = pct;
       var el2 = (performance.now() - phaseStart) / 1000, eta = pct > 1.5 ? el2 * (100 - pct) / pct : NaN;
       var bits = [];
-      if (m[3]) bits.push('ratio ' + m[3] + '%');
+      if (m[3]) bits.push(m[3] + '% of the original');
       if (isFinite(eta)) bits.push(fmtDur(eta) + ' left');
       setProgress(job, pct, phase + ' ' + pct.toFixed(1) + '%', bits);
       if (job === current) document.title = Math.floor(pct) + '% · ' + job.title + ' · Discpress';
@@ -2603,16 +2635,19 @@ async function saveToFolder(list) {
 function updateDock() {
   var dock = $('#dock');
   if (!dock) return;
-  var counts = { ready: 0, queued: 0, running: 0, done: 0, error: 0 };
-  jobs.forEach(function (j) { if (counts[j.state] != null) counts[j.state]++; });
+  var counts = { ready: 0, queued: 0, running: 0, done: 0, error: 0, cant: 0 };
+  // a job whose files can't be converted never ran: not "failed"
+  jobs.forEach(function (j) { if (j.invalid) counts.cant++; else if (counts[j.state] != null) counts[j.state]++; });
   dock.hidden = !jobs.length || activeTab !== 'convert';
   document.body.classList.toggle('has-dock', !dock.hidden);
+  document.documentElement.classList.toggle('has-dock', !dock.hidden);
   var parts = [];
   if (counts.running) parts.push(el('b', null, current ? current.title : 'Working'));
   if (counts.queued) parts.push(counts.queued + ' queued');
   if (counts.ready) parts.push(counts.ready + ' ready');
   if (counts.done) parts.push(counts.done + ' done');
   if (counts.error) parts.push(counts.error + ' failed');
+  if (counts.cant) parts.push(counts.cant + ' can\u2019t convert');
   var t = $('#dockText');
   t.replaceChildren();
   parts.forEach(function (p, i) { if (i) t.append(' · '); t.append(p); });
@@ -2627,8 +2662,12 @@ function updateDock() {
   $('#dlAll').hidden = nOut < 2;
   var allOut = [];
   withOut.forEach(function (j) { j.outputs.forEach(function (o) { if (o.kind !== 'disk') allOut.push(o); }); });
-  $('#dlAll').lastChild.textContent = viaShare(allOut) ? 'Save all to Files' : 'Download all';
+  $('#dlAll').lastChild.textContent = (viaShare(allOut) ? 'Save all to Files' : 'Download all') + ' (' + nOut + ')';
   $('#saveAll').hidden = !window.showDirectoryPicker || nOut < 2;
+  // one primary action at a time: start what's ready, then, once nothing is left to do, save the results
+  var settledAll = !counts.ready && !counts.queued && !counts.running;
+  $('#dlAll').className = 'btn' + (settledAll ? ' primary' : ' sm');
+  $('#saveAll').className = 'btn' + (settledAll ? '' : ' sm');
   $('#clearDone').hidden = !jobs.some(function (j) { return j.state === 'done' || j.state === 'canceled' || j.state === 'error'; });
 }
 
@@ -2723,7 +2762,6 @@ function cliDefaultOut() {
 }
 function cliRender() {
   var spec = cliSpec();
-  $('#cliDesc').textContent = spec[1] + '.';
   var list = $('#cliFiles');
   list.replaceChildren();
   cli.files.forEach(function (f) {
@@ -2901,7 +2939,7 @@ async function cliRun() {
       onProgress: function (t) {
         if (stalledProgress(t)) { if (!stalled) { stalled = true; cli.run.cancel(); } return; }
         var m = /([\d.]+)% complete/.exec(t);
-        if (m) { prog.querySelector('.bar').classList.remove('indet'); barI.style.width = m[1] + '%'; ptext.textContent = t.trim(); }
+        if (m) { prog.querySelector('.bar').classList.remove('indet'); prog.querySelector('.bar').setAttribute('aria-valuenow', Math.round(+m[1])); barI.style.width = m[1] + '%'; ptext.textContent = t.trim(); }
       },
       onNotice: function (m) { if (m.level !== 'debug') con.textContent += m.message + '\n'; }
     });
@@ -3136,7 +3174,11 @@ function switchTab(name) {
     return;
   }
   tabScroll[activeTab] = root.scrollTop;
-  $$('.tab').forEach(function (t) { t.setAttribute('aria-selected', String(t.getAttribute('data-tab') === name)); });
+  $$('.tab').forEach(function (t) {
+    var on = t.getAttribute('data-tab') === name;
+    t.setAttribute('aria-selected', String(on));
+    t.tabIndex = on ? 0 : -1;
+  });
   $$('section.panel').forEach(function (p) { p.hidden = p.id !== 'tab-' + name; });
   activeTab = name;
   root.scrollTop = tabScroll[name] || 0;
@@ -3194,6 +3236,17 @@ function init() {
   $('#brandLink').addEventListener('click', function (e) { e.preventDefault(); if (activeTab !== 'convert') switchTab('convert'); scrollRoot().scrollTo({ top: 0, behavior: 'smooth' }); });
   initViewport();
   $$('.tab').forEach(function (t) { t.addEventListener('click', function () { switchTab(t.getAttribute('data-tab')); }); });
+  // the tab list's keys: arrows, Home and End move to and open a tab
+  $('.tabs').addEventListener('keydown', function (e) {
+    var tabs = $$('.tab'), i = tabs.indexOf(document.activeElement);
+    if (i < 0) return;
+    var to = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: tabs.length - 1 }[e.key];
+    if (to == null) return;
+    e.preventDefault();
+    var t = tabs[(to + tabs.length) % tabs.length];
+    switchTab(t.getAttribute('data-tab'));
+    t.focus();
+  });
 
   // pickers
   var fi = $('#fileInput'), di = $('#dirInput');
@@ -3372,7 +3425,7 @@ function init() {
 
 function updateChips() {
   var nt = threadCount(), auto = settings.threads === 'auto';
-  setChip('chipThreads', (auto ? 'Auto \u00b7 ' : '') + plural(nt, 'thread'), '');
+  setChip('chipThreads', (auto ? 'Auto \u00b7 ' : '') + plural(nt, 'thread'), 'quiet');
   var ti = $('#threadsInfo'), rr = $('#retuneRow');
   if (ti) {
     ti.textContent = !auto ? '' : Tuning.result
