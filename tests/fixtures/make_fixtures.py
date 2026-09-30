@@ -101,6 +101,52 @@ fixture('ps1-clonecd', {
    serial='SLUS-00594', ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'],
    warning='subchannel data')
 
+# a PAL PS1 disc as CloneCD saves it, with a real Q subchannel in the .sub and LibCrypt's mark on a few
+# sectors: Q changed, its CRC left as it was. The page makes the .sbi an emulator needs from it
+# (`lc-expected.sbi`: "SBI\0", then per sector its absolute BCD time, type 1 and the 10 bytes of Q)
+LC_BAD = [300, 301, 450, 500]
+def lc_image():
+    return g.raw_sectors(ps1_iso('SLES_999.90', 'LCTEST', 1, 81), 2)
+
+def q_crc(q):
+    c = 0
+    for b in q:
+        c ^= b << 8
+        for _ in range(8):
+            c = ((c << 1) ^ 0x1021) & 0xffff if c & 0x8000 else (c << 1) & 0xffff
+    return (~c) & 0xffff
+
+def bcd_msf(n):
+    return bytes([g._bcd(n // 4500), g._bcd((n // 75) % 60), g._bcd(n % 75)])
+
+def lc_q(i):
+    q = bytes([0x41, 0x01, 0x01]) + bcd_msf(i) + b'\x00' + bcd_msf(i + 150)
+    c = q_crc(q)
+    q += bytes([c >> 8, c & 0xff])
+    if i in LC_BAD:  # LibCrypt: the times change, the CRC stays
+        q = bytearray(q)
+        q[3] ^= 0x01
+        q[8] ^= 0x80
+        q = bytes(q)
+    return q
+
+def lc_sub():
+    n = len(lc_image()) // g.RAW
+    return b''.join(bytes(12) + lc_q(i) + bytes(72) for i in range(n))
+
+def lc_sbi():
+    return b'SBI\x00' + b''.join(bcd_msf(i + 150) + b'\x01' + lc_q(i)[:10] for i in LC_BAD)
+
+fixture('ps1-libcrypt', {
+    'lc.ccd': lambda: ('[CloneCD]\r\nVersion=3\r\n[Disc]\r\nTocEntries=4\r\nSessions=1\r\nDataTracksScrambled=0\r\nCDTextLength=0\r\n'
+                       '[Session 1]\r\nPreGapMode=2\r\nPreGapSubC=0\r\n[TRACK 1]\r\nMODE=2\r\nINDEX 1=0\r\n').encode(),
+    'lc.img': lc_image,
+    'lc.sub': lc_sub,
+    'lc-ref.cue': lambda: b'FILE "lc.img" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n',
+    'lc-expected.sbi': lc_sbi,
+}, add=['lc.ccd', 'lc.img', 'lc.sub'], ref='lc-ref.cue', job='create', disc='cd', command='createcd', sys='ps1',
+   serial='SLES-99990', ident='none', name='lc', sbi=True, warning='subchannel data')
+
 # the same disc with a cdrdao TOC (each track's file, a byte offset and a length, and the audio
 # track's pregap inside its file) and as a Nero image (both tracks in one file, the track list at the end)
 def toc_text():

@@ -979,6 +979,7 @@ async function pumpIdentify() {
           job.ident = keepPick(job, provisional);
           job.identState = 'checking';
           applyIdent(job);
+          scanSub(job);
           job.identKnownResolve();
           if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
         });
@@ -988,6 +989,8 @@ async function pumpIdentify() {
       keepPick(job, job.ident);
       job.identState = 'done';
       applyIdent(job);
+      scanSub(job);
+      if (job.subScan) await job.subScan;
       // the checksum finished after the conversion started: name the results after the confirmed release
       if (job.state === 'done') renameOutputs(job);
       job.identKnownResolve();
@@ -1396,7 +1399,7 @@ async function addEntriesNow(entries) {
 function sbiJob(e, list) {
   var want = stem(e.path).toLowerCase(), dir = dirOf(e.path);
   var cands = list.filter(function (j) {
-    if (j.kind !== 'create' || j.sbi || j.disc === 'dvd' || (j.state !== 'ready' && j.state !== 'blocked' && j.state !== 'probing')) return false;
+    if (j.kind !== 'create' || (j.sbi && !j.sbi.fromSub) || j.disc === 'dvd' || (j.state !== 'ready' && j.state !== 'blocked' && j.state !== 'probing')) return false;
     var names = [j.title, j.descName ? stem(j.descName) : ''].concat(j.files.map(function (f) { return stem(f.name); }));
     return names.some(function (n) { return n && n.toLowerCase() === want; });
   });
@@ -1423,7 +1426,9 @@ async function descriptorJob(d, pool, claimed) {
       claimed.add(sub);
       var si = looseFiles.indexOf(sub);
       if (si >= 0) looseFiles.splice(si, 1);
-      if (!fix.problem) job.warnings.push('The .sub file (subchannel data) is not kept: CHDs store the discs\u2019 data and audio. For PlayStation games with LibCrypt protection, keep an .sbi file next to the CHD.');
+      // a PS1 disc's LibCrypt sectors are in it: once the console is known, they become an .sbi (sbiFromSub)
+      job.subFile = sub.file;
+      if (!fix.problem) job.warnings.push('The .sub file (subchannel data) isn\u2019t kept in the CHD: CHDs store the disc\u2019s data and audio.');
     }
   }
   if (fix.problem) {
@@ -1843,7 +1848,10 @@ function renderControls(job) {
     if (job.ui.optsOpen) det.open = true;
     det.addEventListener('toggle', function () { job.ui.optsOpen = det.open; });
     box.append(det);
-    if (job.sbi) box.append(el('p', { class: 'small muted sbi-note', style: 'margin:0' }, 'Its LibCrypt data (' + job.sbi.name + ') is saved with the CHD, under the CHD\u2019s name.'));
+    if (job.sbi) box.append(el('p', { class: 'small muted sbi-note', style: 'margin:0' }, job.sbi.fromSub
+      ? 'Its LibCrypt data (' + plural(job.sbi.count, 'protected sector') + ', read from the .sub file) is saved with the CHD as an .sbi file, under the CHD\u2019s name.'
+      : 'Its LibCrypt data (' + job.sbi.name + ') is saved with the CHD, under the CHD\u2019s name.'));
+    if (job.subNote) box.append(el('p', { class: 'small muted sub-note', style: 'margin:0' }, job.subNote));
     if (job.disc === 'dvd' && (job.src === 'iso' || job.src === 'cso') && !(job.ident && job.ident.sys && job.ident.sys !== 'pc')) {
       box.append(el('p', { class: 'small muted', style: 'margin:0' }, 'The console isn\u2019t known, so check the type: DVD for PSP games and PS2 games on DVD, CD for games that came on a CD.'));
     }
@@ -2222,6 +2230,7 @@ async function runJobNow(job) {
     }))) return;
     if (job.state !== 'running') return;
   }
+  if (job.subScan && await stopped(job.subScan)) return;
   var spec = buildJob(job);
   if (settings.storage === 'folder' && outDir && (spec.rename || spec.outMode === 'stream')) {
     var oi = spec.args.indexOf('-o'), main = spec.rename ? outBase(job) + '.chd' : oi >= 0 ? spec.args[oi + 1].replace(/^.*\//, '') : '';
@@ -2365,6 +2374,53 @@ var ENGINE_HINT = isIOS ? 'This is a fault in the browser engine of this iOS ver
 
 // the job's .sbi file, as a result named after its CHD: written into the folder with the CHD, or
 // given as the user's own file (nothing to store)
+/* ---------- LibCrypt data from a CloneCD .sub ----------
+   A CloneCD .sub holds 96 bytes of subchannel per sector of the .img, P to W in 12-byte blocks. A PS1
+   disc's LibCrypt sectors carry Q subchannel with a deliberately wrong CRC; an .sbi lists them for
+   emulators: "SBI\0", then per sector its absolute time (BCD minutes, seconds, frames: the .img's
+   sector n is at n + 150), type 1 and the 10 bytes of Q without the CRC (DuckStation's LoadSBI). */
+var SUB_MAX_BAD = 200; // more than LibCrypt ever uses: a damaged .sub, not a protection
+function scanSub(job) {
+  if (!job.subFile || job.subScan || (job.sbi && !job.sbi.fromSub) || !job.ident || job.ident.sys !== 'ps1') return;
+  job.subScan = sbiFromSub(job.subFile).then(function (r) {
+    if (jobs.indexOf(job) < 0) return;
+    if (r.bad > SUB_MAX_BAD) job.subNote = 'The .sub file has ' + r.bad.toLocaleString('en-US') + ' sectors whose subchannel data is damaged, far more than LibCrypt protection uses, so no .sbi file is made from it.';
+    else if (r.sbi && !job.sbi) job.sbi = { file: new File([r.sbi], stem(job.descName || job.title) + '.sbi'), name: stem(job.descName || job.title) + '.sbi', fromSub: true, count: r.bad };
+    if (job.ui && job.state !== 'running') refreshJob(job, true);
+  }, function (e) { appendLog(job, 'The .sub file could not be read: ' + e.message); });
+}
+function subCrc(b, o) {
+  var c = 0;
+  for (var i = 0; i < 10; i++) {
+    c ^= b[o + i] << 8;
+    for (var k = 0; k < 8; k++) c = c & 0x8000 ? ((c << 1) ^ 0x1021) & 0xffff : (c << 1) & 0xffff;
+  }
+  return ~c & 0xffff;
+}
+async function sbiFromSub(file) {
+  var n = Math.floor(file.size / 96), step = 96 * 43690, entries = [], bad = 0, bcd = function (v) { return ((v / 10) | 0) * 16 + v % 10; };
+  for (var pos = 0; pos < n * 96; pos += step) {
+    var b = new Uint8Array(await file.slice(pos, Math.min(n * 96, pos + step)).arrayBuffer());
+    for (var o = 0; o + 96 <= b.length; o += 96) {
+      var q = o + 12, any = 0;
+      for (var z = 0; z < 12; z++) any |= b[q + z];
+      if (!any) continue; // no subchannel read for this sector
+      if (subCrc(b, q) === ((b[q + 10] << 8) | b[q + 11])) continue;
+      bad++;
+      if (bad > SUB_MAX_BAD) return { bad: bad };
+      var lba = (pos + o) / 96 + 150, e = new Uint8Array(14);
+      e[0] = bcd(Math.floor(lba / 4500)); e[1] = bcd(Math.floor(lba / 75) % 60); e[2] = bcd(lba % 75); e[3] = 1;
+      e.set(b.subarray(q, q + 10), 4);
+      entries.push(e);
+    }
+  }
+  if (!entries.length) return { bad: 0 };
+  var out = new Uint8Array(4 + 14 * entries.length);
+  out.set([83, 66, 73, 0]);
+  entries.forEach(function (e, i) { out.set(e, 4 + 14 * i); });
+  return { bad: bad, sbi: out };
+}
+
 async function addSbi(job, spec) {
   var nm = outBase(job) + '.sbi', f = job.sbi.file;
   if (spec.outMode === 'stream' && outDir) {

@@ -182,3 +182,35 @@ test('PS1 games warn that older SwanStation can’t read the Zstd preset', async
   await field.locator('select').selectOption('zstd');
   await expect(field).toContainText('SwanStation (before March 2026) can’t read Zstd CHDs of Sony PlayStation games.');
 });
+
+test('a PS1 CloneCD image: LibCrypt sectors in its .sub become an .sbi saved with the CHD', async ({ app }) => {
+  const fx = fixture('ps1-libcrypt');
+  await app.open();
+  await app.add(fx.add);
+  const card = app.job('lc');
+  await app.settled(card);
+  await expect(card.locator('.sbi-note')).toHaveText('Its LibCrypt data (4 protected sectors, read from the .sub file) is saved with the CHD as an .sbi file, under the CHD’s name.');
+  await app.run(card);
+  const outs = await app.downloads(card);
+  expect(outs.map(o => o.name)).toEqual(['lc.chd', 'lc.sbi']);
+  expect(fs.readFileSync(outs[1].path).equals(fs.readFileSync(path.join(FIXTURES, 'lc-expected.sbi')))).toBe(true);
+});
+
+test('a .sub with far too many damaged sectors makes no .sbi, and the card says why; an .sbi added by hand wins', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'badsub');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const n of ['lc.ccd', 'lc.img']) fs.copyFileSync(path.join(FIXTURES, n), path.join(dir, n));
+  const sub = fs.readFileSync(path.join(FIXTURES, 'lc.sub'));
+  for (let i = 0; i < 300; i++) sub[i * 96 * 2 + 12 + 5] ^= 0x10; // Q changed, CRC not: 300 bad sectors
+  fs.writeFileSync(path.join(dir, 'lc.sub'), sub);
+  await app.open();
+  await app.add(['lc.ccd', 'lc.img', 'lc.sub'].map(n => 'gen/badsub/' + n));
+  const card = app.job('lc');
+  await app.settled(card);
+  await expect(card.locator('.sub-note')).toContainText('far more than LibCrypt protection uses, so no .sbi file is made from it');
+  await expect(card.locator('.sbi-note')).toHaveCount(0);
+  // the user's own .sbi is used
+  fs.writeFileSync(path.join(dir, 'lc.sbi'), fs.readFileSync(path.join(FIXTURES, 'lc-expected.sbi')));
+  await app.add(['gen/badsub/lc.sbi']);
+  await expect(card.locator('.sbi-note')).toHaveText('Its LibCrypt data (lc.sbi) is saved with the CHD, under the CHD’s name.');
+});
