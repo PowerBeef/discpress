@@ -38,6 +38,7 @@ npm run bench -- --quick           # conversion benchmark; `npm run bench:dev --
 ./scripts/update-db.sh             # clones libretro-database into third_party/, runs db/mkdb.py -> db/db.json.gz
 
 # README graphics (docs/brand/*.png) from scripts/brand/brand.html; needs Playwright + Chromium
+python3 scripts/brand/screenshots.py   # first, when the app's look changed: docs/screenshots/ from dist/discpress.html and the test discs
 python3 scripts/brand/render.py
 ```
 

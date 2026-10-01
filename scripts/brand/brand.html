@@ -162,6 +162,9 @@ body { font-family: var(--display); color: var(--text); -webkit-font-smoothing: 
   <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3a1.5 1.5 0 0 1 0 2.1l-6.6 6.6a1.5 1.5 0 0 1-2.1 0z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><circle cx="8.3" cy="8.3" r="1.8" fill="currentColor"/></symbol>
   <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13.5 2.5 5 13.5h6l-1 8 8.5-11h-6z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/></symbol>
   <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6.5" y="2.5" width="11" height="19" rx="2.8" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M10.5 18.2h3" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 2.8 4.5 5.6v5.6c0 4.6 3.1 8.4 7.5 9.9 4.4-1.5 7.5-5.3 7.5-9.9V5.6z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="m8.6 12.1 2.4 2.4 4.6-4.8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/></symbol>
+  <symbol id="i-pad" viewBox="0 0 24 24"><path d="M7.2 7h9.6a4.7 4.7 0 0 1 4.6 5.6l-.8 4.2a2.6 2.6 0 0 1-4.5 1.2L14.4 16H9.6l-1.7 2a2.6 2.6 0 0 1-4.5-1.2l-.8-4.2A4.7 4.7 0 0 1 7.2 7z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="M7.5 10v3.4M5.8 11.7h3.4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="15.6" cy="10.6" r="1.2" fill="currentColor"/><circle cx="17.4" cy="13" r="1.2" fill="currentColor"/></symbol>
   <symbol id="i-stack" viewBox="0 0 24 24"><ellipse cx="12" cy="6.5" rx="8" ry="3" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M4 6.5v5c0 1.7 3.6 3 8 3s8-1.3 8-3v-5M4 11.5v5c0 1.7 3.6 3 8 3s8-1.3 8-3v-5" fill="none" stroke="currentColor" stroke-width="2.2"/></symbol>
 </svg>
 
@@ -194,7 +197,7 @@ body { font-family: var(--display); color: var(--text); -webkit-font-smoothing: 
 
 <!-- STEPS -->
 <div class="scene" id="steps"><div class="row">
-  <div class="step"><span class="num">1</span><div class="icon" style="background:var(--accent-3)"><svg><use href="#i-upload"/></svg></div><h3>Add your games</h3><p>Pick the .cue and .bin files, a .gdi set or an .iso. Discpress spots the console and the exact game.</p></div>
+  <div class="step"><span class="num">1</span><div class="icon" style="background:var(--accent-3)"><svg><use href="#i-upload"/></svg></div><h3>Add your games</h3><p>Pick the .cue and .bin files, a .gdi set, an .iso or a .zip. Discpress spots the console and the exact game.</p></div>
   <div class="arrow"><svg><use href="#i-arrow"/></svg></div>
   <div class="step"><span class="num">2</span><div class="icon" style="background:var(--accent)"><svg><use href="#i-play"/></svg></div><h3>Press Start</h3><p>Discpress’s chdman compresses every disc using all your CPU cores. Queue as many as you like.</p></div>
   <div class="arrow"><svg><use href="#i-arrow"/></svg></div>
@@ -209,6 +212,9 @@ body { font-family: var(--display); color: var(--text); -webkit-font-smoothing: 
   <div class="f"><div class="top"><div class="icon" style="background:var(--cyan)"><svg><use href="#i-phone"/></svg></div><h3>Made for phones</h3></div><p>Fits any screen, notch and text size. Save to Files on iPhone, dark mode included.</p></div>
   <div class="f"><div class="top"><div class="icon" style="background:#b69cff"><svg><use href="#i-stack"/></svg></div><h3>Big discs welcome</h3></div><p>Results stream to disk, not memory, so multi-gigabyte DVD images work too.</p></div>
   <div class="f"><div class="top"><div class="icon" style="background:#7be3a3"><svg><use href="#i-lock"/></svg></div><h3>Totally private</h3></div><p>Nothing leaves your device. It even works offline, straight from your Files app.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:#7be3a3"><svg><use href="#i-shield"/></svg></div><h3>Checks your dumps</h3></div><p>Add Redump or No-Intro DAT files and every track is checked, before converting and after.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-2)"><svg><use href="#i-box"/></svg></div><h3>Opens what you have</h3></div><p>Zips, PS1 EBOOT.PBP, ECM, CSO and ZSO, CloneCD and Nero images, unpacked as they’re read.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent)"><svg><use href="#i-pad"/></svg></div><h3>Ready to play</h3></div><p>LibCrypt .sbi and .m3u playlists made for you, a MiSTer preset, and a warning when an emulator can’t load it.</p></div>
 </div></div>
 
 <!-- SYSTEMS -->
