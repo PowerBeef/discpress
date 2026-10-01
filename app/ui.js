@@ -576,6 +576,7 @@ var Store = {
       var work = await root.getDirectoryHandle('chdman-work', { create: true });
       this.available = true;
       await this.cleanupStale(work);
+      await Unzip.cleanup();
     } catch (e) {
       this.available = false;
       // results in memory (a page opened as a file in Chrome or Edge, older browsers): nothing to keep,
@@ -914,6 +915,65 @@ async function sniffCiso(file) {
   return { size: size };
 }
 // an ECM image (the ecm tools' format, described in wasm/ecm.cpp): null if the file is not one, else
+// a PS1 EBOOT.PBP (popstation's format): {discs: [{at, sectors, tracks, cue(binName)}], title}, or {problem}
+// if it can't be converted, or null if it isn't a PBP. DATA.PSAR holds one disc (PSISOIMG0000) or a
+// table of up to five (PSTITLEIMG000000, at +0x200); each disc's TOC (at +0x800, 10-byte entries:
+// type, point, pregap and INDEX 01 times in BCD) lists its tracks: A0 the first, A1 the last, A2 the
+// lead-out, then one per track. The image on file starts at track 1's INDEX 01.
+async function sniffPbp(file) {
+  var rd = async function (at, n) { return new Uint8Array(await file.slice(at, at + n).arrayBuffer()); };
+  var h;
+  try { h = await rd(0, 0x28); } catch (e) { return { problem: 'This file could not be read.' }; }
+  if (h.length < 0x28 || h[0] !== 0 || h[1] !== 0x50 || h[2] !== 0x42 || h[3] !== 0x50) return null;
+  var psar = le32(h, 0x24), m = await rd(psar, 16), magic = String.fromCharCode.apply(null, m), at = [];
+  if (magic === 'PSTITLEIMG000000') {
+    var t = await rd(psar + 0x200, 20);
+    for (var i = 0; i < 5; i++) {
+      var o = le32(t, i * 4);
+      if (o === 0x44475000) return { problem: 'This PBP file is encrypted (a PlayStation Store download), so it can\u2019t be read.' };
+      if (o) at.push(psar + o);
+    }
+  } else if (magic.slice(0, 12) === 'PSISOIMG0000') at.push(psar);
+  else if (le32(m, 0) === 0x44475000) return { problem: 'This PBP file is encrypted (a PlayStation Store download), so it can\u2019t be read.' };
+  else return { problem: 'This PBP file holds a PSP program, not a PlayStation disc. PSP games convert from their .iso or .cso.' };
+  var bcd = function (v) { return (v >> 4) * 10 + (v & 15); }, fr = function (b, o) { return (bcd(b[o]) * 60 + bcd(b[o + 1])) * 75 + bcd(b[o + 2]); };
+  var discs = [];
+  for (var d = 0; d < at.length; d++) {
+    var hd = await rd(at[d], 0xC00);
+    if (String.fromCharCode.apply(null, hd.subarray(0, 12)) !== 'PSISOIMG0000') return { problem: 'Disc ' + (d + 1) + ' of this PBP file is damaged.' };
+    if (le32(hd, 0x400) === 0x44475000) return { problem: 'This PBP file is encrypted (a PlayStation Store download), so it can\u2019t be read.' };
+    var toc = hd.subarray(0x800, 0x800 + 1020), e = function (k) { return toc.subarray(k * 10, k * 10 + 10); };
+    if (e(0)[2] !== 0xA0 || e(1)[2] !== 0xA1 || e(2)[2] !== 0xA2) return { problem: 'Disc ' + (d + 1) + ' of this PBP file has no track list that can be read.' };
+    var last = bcd(e(1)[7]), lead = fr(e(2), 7), tracks = [];
+    for (var k = 1; k <= last && k <= 99; k++) {
+      var te = e(k + 2);
+      tracks.push({ no: k, audio: !(te[0] & 0x40), pregap: fr(te, 3), start: fr(te, 7) });
+    }
+    var base0 = tracks.length ? tracks[0].start : 0, sectors = lead - base0, ok = tracks.length && !tracks[0].audio && sectors > 0;
+    for (var q = 1; ok && q < tracks.length; q++) ok = tracks[q].start > tracks[q - 1].start && tracks[q].pregap >= tracks[q - 1].start && tracks[q].start - base0 < sectors;
+    if (!ok) return { problem: 'Disc ' + (d + 1) + ' of this PBP file has a track list Discpress can\u2019t read.' };
+    discs.push({ at: at[d], sectors: sectors, tracks: tracks.length, list: tracks, base: base0 });
+  }
+  // its title, from PARAM.SFO: the file is usually named EBOOT.PBP, in a folder named after the serial
+  var title = '';
+  try {
+    var so = le32(h, 8), se = le32(h, 12);
+    if (se > so && se - so < 65536) title = (parseSfo(await rd(so, se - so)).TITLE || '').replace(/\s+/g, ' ').trim();
+  } catch (e2) { /* no title then */ }
+  discs.forEach(function (dd) {
+    dd.cue = function (bin) {
+      var out = 'FILE "' + bin + '" BINARY\n';
+      dd.list.forEach(function (t) {
+        out += '  TRACK ' + ('0' + t.no).slice(-2) + (t.audio ? ' AUDIO' : ' MODE2/2352') + '\n';
+        if (t.no > 1 && t.pregap < t.start) out += '    INDEX 00 ' + cueMsf(t.pregap - dd.base) + '\n';
+        out += '    INDEX 01 ' + cueMsf(t.start - dd.base) + '\n';
+      });
+      return out;
+    };
+  });
+  return { discs: discs, title: title };
+}
+function cueMsf(n) { var p = function (v) { return ('0' + v).slice(-2); }; return p(Math.floor(n / 4500)) + ':' + p(Math.floor(n / 75) % 60) + ':' + p(n % 75); }
 // {sync} of the CD image inside as sniffSync tells it (0: no sync pattern), from its first chunk
 async function sniffEcm(file) {
   var b;
@@ -979,6 +1039,7 @@ async function pumpIdentify() {
           job.ident = keepPick(job, provisional);
           job.identState = 'checking';
           applyIdent(job);
+          scanSub(job);
           job.identKnownResolve();
           if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
         });
@@ -988,6 +1049,9 @@ async function pumpIdentify() {
       keepPick(job, job.ident);
       job.identState = 'done';
       applyIdent(job);
+      scanSub(job);
+      if (job.subScan) await job.subScan;
+      await datCheck(job);
       // the checksum finished after the conversion started: name the results after the confirmed release
       if (job.state === 'done') renameOutputs(job);
       job.identKnownResolve();
@@ -1059,7 +1123,7 @@ function identNote(job) {
   if (id.error) return el('div', { class: 'note' + (id.readFail ? ' warn' : '') }, id.readFail ? readFailHint(id.error) : 'Could not identify this game (' + id.error + ').');
   // a compressed ISO or ECM image whose checksum step found it damaged: converting it will stop too
   var damage = id.damaged ? id.damaged + ' Converting it stops with this error.' : '';
-  if (!id.sys) return el('div', { class: 'note' + (damage ? ' warn' : '') }, damage || 'Not a game Discpress recognizes, so the CHD keeps the file\u2019s name.');
+  if (!id.sys) return id.method === 'dat' ? null : el('div', { class: 'note' + (damage ? ' warn' : '') }, damage || 'Not a game Discpress recognizes, so the CHD keeps the file\u2019s name.');
   var box = el('div', { class: 'note ident' + (id.name ? ' ok' : '') });
   var sc = sysColor(id.sys);
   var head = el('div', { class: 'ident-head' }, el('span', { class: 'sysbadge', style: sc ? '--sys:' + sc[0] + ';--sys-fg:' + sc[1] : null }, sysShort(id.sys)), el('b', null, sysName(id.sys)));
@@ -1067,7 +1131,7 @@ function identNote(job) {
   box.append(head);
   if (id.name) {
     // (the game's title is the card's heading)
-    var how = { hash: 'Exact match in the Redump database (checksum verified)', 'serial+size': 'Matched by serial number and size', serial: 'Matched by serial number', 'serial-ambiguous': 'Matched by serial number; several versions share it', size: 'Matched by size' }[id.method] || '';
+    var how = { dat: '\u2713 Every track matches your DAT file', hash: 'Exact match in the Redump database (checksum verified)', 'serial+size': 'Matched by serial number and size', serial: 'Matched by serial number', 'serial-ambiguous': 'Matched by serial number; several versions share it', size: 'Matched by size' }[id.method] || '';
     head.append(el('span', { class: 'small ident-how' }, (id.method === 'hash' ? '✓ ' : '') + how));
     if (id.entry && id.entry.alternatives && id.entry.alternatives.length > 1) {
       // a running job keeps its name until it finishes, then its results are renamed (renameOutputs)
@@ -1097,7 +1161,22 @@ function identNote(job) {
   }
   if (damage) box.append(el('div', { class: 'small ident-damaged', style: 'margin-top:4px;color:var(--warn)' }, damage));
   if (profile(id.sys).note) box.append(el('div', { class: 'small ident-note', style: 'margin-top:4px' }, profile(id.sys).note));
+  compatNotes(job, id).forEach(function (n) { box.append(el('div', { class: 'small compat-note', style: 'margin-top:4px' }, n)); });
   return box;
+}
+// what a known emulator does with this particular disc's CHD (from the cue sheet or TOC it is made from)
+function compatNotes(job, id) {
+  var notes = [], text = job.kind === 'create' && (job.src === 'cue' || job.src === 'toc') ? job.descText || '' : '';
+  if (!text || job.disc !== 'cd') return notes;
+  var audio = job.src === 'cue' ? /^\s*TRACK\s+\d+\s+AUDIO\b/im.test(text) : /^\s*TRACK\s+AUDIO\b/m.test(text);
+  // PCSX2's CHD reader (ChdFileReader) reads a CD's first track only
+  if (id.sys === 'ps2' && audio) notes.push('PCSX2 plays only the first track of a CD CHD, so this game\u2019s music tracks won\u2019t play in it. They are kept in the CHD.');
+  // a GD-ROM (Redump's cue lists its high-density area) is laid out as chdman 0.289 does; a CD-based
+  // Dreamcast disc with pregaps is rejected by Flycast up to 2.7 ("Unsupported subtype or pre/postgap")
+  var gd = /HIGH-DENSITY AREA/i.test(text);
+  var gaps = job.src === 'cue' ? /^\s*(INDEX\s+0*0\s|PREGAP\b|POSTGAP\b)/im.test(text) : /^\s*(PREGAP|START)\b/m.test(text);
+  if (id.sys === 'dc' && !gd && gaps) notes.push('Flycast 2.7 and earlier can\u2019t load CD-based Dreamcast CHDs whose tracks have pregaps, as this one\u2019s do; newer Flycast builds can. Keep the original files if you use an older one.');
+  return notes;
 }
 function safeName(s) { return String(s || '').replace(/[\/:*?"<>|]+/g, '_').trim(); }
 
@@ -1123,7 +1202,7 @@ var KIND = {
 };
 // [value, label, codecs (-c), hint, other options]
 var PRESETS = {
-  cd: [['default', 'Smallest (default)', null, 'The smallest files. Works in every emulator. (chdman\u2019s own settings: LZMA, Deflate and FLAC.)'], ['plan', 'Nearly as small, faster', null, 'About 1.7 times as fast to create, at most 0.3% bigger, same checksums. Works in every emulator. (The same codecs, but each track tries only the one that suits it: LZMA for data, FLAC for audio.)', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'cdzl,cdfl', 'Several times faster to create, a little bigger, same checksums. (Deflate by libdeflate, and FLAC.)', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'cdzs,cdfl', 'Quicker to load on weak devices. Needs a recent emulator. (Zstandard and FLAC.)'], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']],
+  cd: [['default', 'Smallest (default)', null, 'The smallest files. Works in every emulator. (chdman\u2019s own settings: LZMA, Deflate and FLAC.)'], ['plan', 'Nearly as small, faster', null, 'About 1.7 times as fast to create, at most 0.3% bigger, same checksums. Works in every emulator. (The same codecs, but each track tries only the one that suits it: LZMA for data, FLAC for audio.)', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'cdzl,cdfl', 'Several times faster to create, a little bigger, same checksums. (Deflate by libdeflate, and FLAC.)', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'cdzs,cdfl', 'Quicker to load on weak devices. Needs a recent emulator. (Zstandard and FLAC.)'], ['mister', 'For MiSTer FPGA', 'cdzs,cdfl', 'Zstandard and FLAC in 4-sector hunks, which MiSTer\u2019s CD cores decompress fast enough for 8\u00d7 CD speed. Other emulators read it too, if they read Zstd.', ['-hs', '9792']], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']],
   other: [['default', 'Smallest (default)', null, 'The smallest files. Works in every emulator. (chdman\u2019s own settings: LZMA, Deflate, Huffman and FLAC.)'], ['plan', 'Nearly as small, faster', null, 'About 1.5 times as fast to create, just as small, same checksums. Works in every emulator. (The same codecs but FLAC, which almost never wins on data.)', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'zlib,huff', 'Several times faster to create, a little bigger, same checksums. (Deflate by libdeflate, and Huffman.)', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'zstd', 'Quicker to load on weak devices. Needs a recent emulator. (Zstandard.)'], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']],
   ld: [['default', 'Default (A/V Huffman)', null, 'chdman\u2019s own setting for LaserDisc video.'], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']]
 };
@@ -1142,6 +1221,7 @@ var HUNKS = {
 // note: shown with the game (emulators that won't load it)
 var PROFILES = {
   psp: { disc: 'dvd', hunk: '2048', why: 'with 2,048-byte hunks, as PPSSPP recommends' },
+  ps1: { noZstd: 'SwanStation (before March 2026)' },
   saturn: { noZstd: 'Kronos and Yabause' },
   segacd: { noZstd: 'BlastEm (RetroArch)' },
   pcecd: { noZstd: 'Beetle SuperGrafx' },
@@ -1195,20 +1275,228 @@ function refMatches(e, ref) {
 function fileKind(f) { return f.ecm ? (ext(f.name) ? ext(f.name) + '.' : '') + 'ecm' : ext(f.name); }
 
 /* ---------- grouping new files into jobs ---------- */
-var IGNORE = /^(txt|nfo|sub|m3u|dat|md5|sfv|sha1|jpg|jpeg|png|gif|webp|pdf|url|ini|cfg|xml|json|html|htm|db|ds_store|zip|7z|rar)$/;
+var IGNORE = /^(txt|nfo|sub|m3u|dat|md5|sfv|sha1|jpg|jpeg|png|gif|webp|pdf|url|ini|cfg|xml|json|html|htm|db|ds_store)$/;
+// disc images and archives Discpress can't read: a card says why and what to do, rather than ignoring them
+var UNSUPPORTED = {
+  cdi: 'DiscJuggler (.cdi) images can\u2019t become CHDs that emulators load: most hold two sessions, which a CHD made by chdman 0.289 can\u2019t place. Flycast and Redream load .cdi files as they are, so keep this one.',
+  mds: 'Alcohol 120% images (.mds with .mdf) can\u2019t be read here yet. Convert them to .cue/.bin with another tool first.',
+  isz: 'UltraISO compressed images (.isz) can\u2019t be read here. Convert them to .iso with UltraISO first.',
+  '7z': '7-Zip archives can\u2019t be opened here. Extract the files from it first.',
+  rar: 'RAR archives can\u2019t be opened here. Extract the files from it first.'
+};
+UNSUPPORTED.mdf = UNSUPPORTED.mds;
 
 // adds run one after another: a second pick or drop while the first still reads its files (slow
 // cloud files) would otherwise work from a list of jobs that is about to change
 var addChain = Promise.resolve();
+/* ============================================================
+   zip archives
+   A zip's files join the list as if picked one by one (their paths inside the zip, under its name).
+   Stored files are read in place, as slices of the zip; deflated ones are unpacked first, into private
+   storage (chdman-unzip/<visit>, like results, cleared once the visit is over), else into memory up to
+   UNZIP_MEM_MAX, and their CRC-32 must be the zip's. Other methods and encrypted files are refused.
+   ============================================================ */
+var UNZIP_MEM_MAX = 1024 * 1048576;
+var ZIP_METHODS = { 1: 'Shrink', 6: 'Implode', 9: 'Deflate64', 12: 'BZIP2', 14: 'LZMA', 93: 'Zstandard', 95: 'XZ', 98: 'PPMd' };
+function le16(b, o) { return b[o] | (b[o + 1] << 8); }
+function le32(b, o) { return (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0; }
+function le64(b, o) { return le32(b, o) + le32(b, o + 4) * 4294967296; }
+async function zipBytes(file, at, n) { return new Uint8Array(await file.slice(at, at + n).arrayBuffer()); }
+// the zip's files: [{name, method, csize, usize, crc, local, time, encrypted}], or throws with the reason
+async function zipDirectory(file) {
+  var tailLen = Math.min(file.size, 65557), tail = await zipBytes(file, file.size - tailLen, tailLen), e = -1;
+  for (var i = tail.length - 22; i >= 0; i--) if (le32(tail, i) === 0x06054b50) { e = i; break; }
+  if (e < 0) throw new Error('it is not a zip archive, or it is damaged');
+  var count = le16(tail, e + 10), cdSize = le32(tail, e + 12), cdAt = le32(tail, e + 16);
+  if (count === 0xffff || cdSize === 0xffffffff || cdAt === 0xffffffff) {
+    // zip64: its locator sits just before the end record
+    var loc = e - 20;
+    if (loc < 0 || le32(tail, loc) !== 0x07064b50) throw new Error('its zip64 directory is missing');
+    var z = await zipBytes(file, le64(tail, loc + 8), 56);
+    if (le32(z, 0) !== 0x06064b50) throw new Error('its zip64 directory is damaged');
+    count = le64(z, 32); cdSize = le64(z, 40); cdAt = le64(z, 48);
+  }
+  if (cdSize > 64 << 20 || cdAt + cdSize > file.size) throw new Error('its directory is damaged');
+  var cd = await zipBytes(file, cdAt, cdSize), out = [], p = 0;
+  for (var k = 0; k < count; k++) {
+    if (p + 46 > cd.length || le32(cd, p) !== 0x02014b50) throw new Error('its directory is damaged');
+    var flags = le16(cd, p + 8), nl = le16(cd, p + 28), xl = le16(cd, p + 30), cl = le16(cd, p + 32);
+    var ent = { method: le16(cd, p + 10), crc: le32(cd, p + 16), csize: le32(cd, p + 20), usize: le32(cd, p + 24), local: le32(cd, p + 42), encrypted: !!(flags & 1) };
+    var raw = cd.subarray(p + 46, p + 46 + nl), name = null;
+    // extras: zip64 sizes and offset (only the fields that overflowed, in this order); Info-ZIP's UTF-8 name
+    for (var x = p + 46 + nl, xe = x + xl; x + 4 <= xe;) {
+      var id = le16(cd, x), len = le16(cd, x + 2), d = x + 4;
+      if (id === 1) {
+        if (ent.usize === 0xffffffff) { ent.usize = le64(cd, d); d += 8; }
+        if (ent.csize === 0xffffffff) { ent.csize = le64(cd, d); d += 8; }
+        if (ent.local === 0xffffffff) { ent.local = le64(cd, d); d += 8; }
+      } else if (id === 0x7075 && len > 5) {
+        try { name = new TextDecoder('utf-8', { fatal: true }).decode(cd.subarray(x + 9, x + 4 + len)); } catch (err) { /* keep the other */ }
+      }
+      x += 4 + len;
+    }
+    if (name === null) {
+      try { name = new TextDecoder('utf-8', { fatal: !(flags & 0x800) }).decode(raw); }
+      catch (err) { name = new TextDecoder('windows-1252').decode(raw); }
+    }
+    var tm = le16(cd, p + 12), dt = le16(cd, p + 14);
+    ent.time = new Date(1980 + (dt >> 9), ((dt >> 5) & 15) - 1, dt & 31, tm >> 11, (tm >> 5) & 63, (tm & 31) * 2).getTime();
+    ent.name = name.replace(/\\/g, '/');
+    if (!/\/$/.test(ent.name)) out.push(ent);
+    p += 46 + nl + xl + cl;
+  }
+  return out;
+}
+var crc32Table = null;
+function crc32Update(crc, b) {
+  if (!crc32Table) {
+    crc32Table = new Int32Array(2048);
+    for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; crc32Table[n] = c; }
+    for (n = 0; n < 256; n++) { c = crc32Table[n]; for (k = 1; k < 8; k++) { c = crc32Table[c & 255] ^ (c >>> 8); crc32Table[k * 256 + n] = c; } }
+  }
+  var T = crc32Table, i = 0, len = b.length;
+  for (; i + 8 <= len; i += 8) {
+    var a = (b[i] | (b[i + 1] << 8) | (b[i + 2] << 16) | (b[i + 3] << 24)) ^ crc;
+    crc = T[1792 + (a & 255)] ^ T[1536 + ((a >>> 8) & 255)] ^ T[1280 + ((a >>> 16) & 255)] ^ T[1024 + (a >>> 24)] ^
+      T[768 + b[i + 4]] ^ T[512 + b[i + 5]] ^ T[256 + b[i + 6]] ^ T[b[i + 7]];
+  }
+  for (; i < len; i++) crc = T[(crc ^ b[i]) & 255] ^ (crc >>> 8);
+  return crc;
+}
+var Unzip = {
+  seq: 0,
+  root: async function () { return (await navigator.storage.getDirectory()).getDirectoryHandle('chdman-unzip', { create: true }); },
+  // the files unpacked in visits that are over
+  cleanup: async function () {
+    var held = await heldLocks(), root, names = [];
+    try { root = await this.root(); for await (var n of root.keys()) names.push(n); } catch (e) { return; }
+    for (var i = 0; i < names.length; i++) {
+      if (names[i] === Store.session) continue;
+      var t = parseInt(names[i].slice(1, 9), 36);
+      if (held ? held.has('chdman-web-' + names[i]) : t && Date.now() - t < 6 * 3600e3) continue;
+      try { await root.removeEntry(names[i], { recursive: true }); } catch (e) { /* in use */ }
+    }
+  },
+  // this visit's unpacked files that no job uses any more
+  prune: async function () {
+    var used = new Set();
+    jobs.forEach(function (j) {
+      j.files.forEach(function (f) { if (f.file.unzipDir) used.add(f.file.unzipDir); });
+      if (j.descFile && j.descFile.unzipDir) used.add(j.descFile.unzipDir);
+      if (j.subFile && j.subFile.unzipDir) used.add(j.subFile.unzipDir);
+      if (j.sbi && j.sbi.file.unzipDir) used.add(j.sbi.file.unzipDir);
+    });
+    looseFiles.concat(looseSbi).forEach(function (e) { if (e.file.unzipDir) used.add(e.file.unzipDir); });
+    try {
+      var dir = await (await this.root()).getDirectoryHandle(Store.session), names = [];
+      for await (var n of dir.keys()) names.push(n);
+      for (var i = 0; i < names.length; i++) if (!used.has(names[i])) { try { await dir.removeEntry(names[i], { recursive: true }); } catch (e) { /* in use */ } }
+    } catch (e) { /* nothing unpacked */ }
+  },
+  // a deflated file unpacked: a File, its CRC-32 checked against the zip's
+  unpack: async function (zip, ent, at, onProgress) {
+    var stream = zip.slice(at, at + ent.csize).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    var reader = stream.getReader(), crc = -1, done = 0, parts = [], writer = null, fh = null, id = 'u' + (++this.seq);
+    var base_ = ent.name.replace(/^.*\//, '');
+    if (Store.available) {
+      try {
+        var dir = await (await (await this.root()).getDirectoryHandle(Store.session, { create: true })).getDirectoryHandle(id, { create: true });
+        fh = await dir.getFileHandle(base_, { create: true });
+        if (typeof fh.createWritable !== 'function') throw new Error('no writable streams');
+        writer = await fh.createWritable();
+      } catch (e) { writer = null; }
+    }
+    if (!writer && ent.usize > UNZIP_MEM_MAX) throw new Error(base_ + ' is too large (' + fmtBytes(ent.usize) + ') to unpack in this browser. Unzip it first, or use a browser with private storage (Discpress online).');
+    try {
+      for (;;) {
+        var r = await reader.read();
+        if (r.done) break;
+        crc = crc32Update(crc, r.value);
+        done += r.value.length;
+        if (writer) await writer.write(r.value); else parts.push(r.value);
+        onProgress(done);
+      }
+      if (writer) await writer.close();
+    } catch (e) {
+      if (writer) try { await writer.abort(); } catch (x) { /* ignore */ }
+      throw new Error(base_ + ' could not be unpacked (' + (e && e.name === 'QuotaExceededError' ? 'the browser\u2019s storage is full' : e && e.message || e) + ')');
+    }
+    if (((crc ^ -1) >>> 0) !== ent.crc || done !== ent.usize) throw new Error(base_ + ' is damaged in the zip: its checksum doesn\u2019t match');
+    var f = writer ? await fh.getFile() : new File(parts, base_, { lastModified: ent.time });
+    if (writer) f.unzipDir = id;
+    return f;
+  }
+};
+// a picked .zip's files as picked files ({file, path}), and the reasons some couldn't be read
+async function zipEntries(e) {
+  var zip = e.file, out = [], problems = [], skipped = [];
+  var list;
+  try { list = await zipDirectory(zip); }
+  catch (err) { return { entries: [], problems: ['This zip can\u2019t be read: ' + err.message + '.'], skipped: [] }; }
+  var total = 0, doneBefore = 0;
+  list.forEach(function (ent) { if (ent.method === 8) total += ent.usize; });
+  for (var i = 0; i < list.length; i++) {
+    var ent = list[i], nm = ent.name.replace(/^.*\//, ''), x = ext(nm), path = e.path + '/' + ent.name;
+    // what the page would ignore anyway isn't unpacked
+    if (/^\._/.test(nm) || /(^|\/)__MACOSX\//.test(ent.name) || (IGNORE.test(x) && !/^(dat|xml)$/.test(x))) { skipped.push(nm); continue; }
+    if (ent.encrypted) { problems.push(nm + ' is encrypted.'); continue; }
+    if (ent.method !== 0 && ent.method !== 8) { problems.push(nm + ' uses ' + (ZIP_METHODS[ent.method] || 'method ' + ent.method) + ' compression, which can\u2019t be read here. Re-zip it with ordinary (Deflate) compression, or unzip it first.'); continue; }
+    var head;
+    try { head = await zipBytes(zip, ent.local, 30); } catch (err) { problems.push(nm + ' can\u2019t be read.'); continue; }
+    if (le32(head, 0) !== 0x04034b50) { problems.push(nm + ' is damaged in the zip.'); continue; }
+    var at = ent.local + 30 + le16(head, 26) + le16(head, 28), file;
+    if (ent.method === 0) {
+      if (at + ent.usize > zip.size) { problems.push(nm + ' is cut short in the zip.'); continue; }
+      file = new File([zip.slice(at, at + ent.usize)], nm, { lastModified: ent.time });
+    } else {
+      if (typeof DecompressionStream !== 'function') { problems.push(nm + ' is compressed, and this browser can\u2019t unpack it. Unzip it first.'); continue; }
+      try {
+        file = await Unzip.unpack(zip, ent, at, function (n) {
+          setChip('chipUnzip', 'Unpacking ' + base(e.path) + ', ' + (total ? Math.floor(100 * (doneBefore + n) / total) : 100) + '%', '');
+        });
+      } catch (err) { problems.push(err.message); continue; }
+      finally { doneBefore += ent.usize; }
+    }
+    out.push({ file: file, path: path });
+  }
+  var chip = document.getElementById('chipUnzip');
+  if (chip) chip.remove();
+  return { entries: out, problems: problems, skipped: skipped };
+}
+
 function addEntries(entries) {
   var p = addChain.then(function () { return addEntriesNow(entries); });
   addChain = p.catch(function () {});
   return p;
 }
 async function addEntriesNow(entries) {
+  // zips: their files join the list, unpacked if they need it (once per zip)
+  var zipCards = [], zipSkipped = [];
+  if (entries.some(function (e) { return ext(e.path) === 'zip'; })) {
+    var flat = [];
+    for (var zi = 0; zi < entries.length; zi++) {
+      var ze = entries[zi];
+      if (ext(ze.path) !== 'zip') { flat.push(ze); continue; }
+      var zkey = fileKey(ze.file, ze.path);
+      if (seen.has(zkey)) continue;
+      seen.add(zkey);
+      seenKeys.set(ze.file, zkey);
+      var zr = await zipEntries(ze);
+      zr.entries.forEach(function (x) { x.file.fromZip = ze.file; });
+      flat = flat.concat(zr.entries);
+      zipSkipped = zipSkipped.concat(zr.skipped);
+      if (zr.problems.length) {
+        // a card for what couldn't be read; the rest goes on
+        zipCards.push(newJob({ kind: 'create', src: 'zip', title: stem(ze.path), files: [{ file: ze.file, name: base(ze.path) }], disc: 'cd', state: 'error', invalid: true,
+          errorText: (zr.entries.length ? plural(zr.problems.length, 'file') + ' in this zip can\u2019t be converted. ' : '') + zr.problems.join(' ') }));
+      }
+    }
+    entries = flat;
+    if (!entries.length && !zipCards.length) { toast('Nothing to convert in ' + plural(zipSkipped.length, 'file') + ' of the zip.', 'err'); return; }
+  }
   // macOS keeps metadata in "._name" companion files (on FAT and exFAT drives, and in zips' __MACOSX
   // folders): they share the game files' extensions but aren't games
-  var junk = [];
+  var junk = zipSkipped.slice();
   entries = entries.filter(function (e) {
     if (/^\._/.test(base(e.path)) || /(^|\/)__MACOSX\//.test(e.path)) { junk.push(base(e.path)); return false; }
     return true;
@@ -1221,9 +1509,25 @@ async function addEntriesNow(entries) {
     seenKeys.set(e.file, key);
     fresh.push(e);
   });
-  if (!fresh.length) { toast(entries.length ? 'Those files are already in the list.' : 'Nothing to convert in ' + plural(junk.length, 'file') + '. Add .cue/.bin, .gdi, .iso or .chd files.', entries.length ? null : 'err'); return; }
+  // DAT files (Redump, No-Intro): kept, and every job checked against them again
+  var datAdded = [];
+  var datCands = fresh.filter(function (e) { return /^(dat|xml)$/.test(ext(e.path)); });
+  if (datCands.length) {
+    fresh = fresh.filter(function (e) { return datCands.indexOf(e) < 0; });
+    for (var di = 0; di < datCands.length; di++) {
+      var dm = await loadDat(datCands[di].file);
+      if (dm) datAdded.push(dm); else junk.push(base(datCands[di].path));
+    }
+    if (datAdded.length) {
+      toast('Added ' + datAdded.map(function (d) { return '\u201c' + d.name + '\u201d (' + d.games.toLocaleString('en-US') + ' games)'; }).join(', ') + '. Discs are checked against it now.');
+      renderDatList();
+      datRecheck();
+      if (!fresh.length && !zipCards.length) return;
+    }
+  }
+  if (!fresh.length && !zipCards.length) { toast(entries.length ? 'Those files are already in the list.' : 'Nothing to convert in ' + plural(junk.length, 'file') + '. Add .cue/.bin, .gdi, .iso or .chd files.', entries.length ? null : 'err'); return; }
 
-  var created = [], ignored = junk.slice();
+  var created = zipCards.slice(), ignored = junk.slice();
   var claimed = new Set();
 
   // 1) new files may complete jobs that were waiting for missing tracks
@@ -1294,6 +1598,19 @@ async function addEntriesNow(entries) {
           job2.warnings.push('No .cue file was added, so one is generated (a single ' + (sync === 2 ? 'MODE2' : 'MODE1') + ' data track). If the disc has music tracks, add the original .cue and all its files instead.');
         }
       }
+    } else if (x === 'pbp') {
+      // a PS1 EBOOT.PBP: a job per disc, chdman given the disc's image and a cue sheet from its TOC
+      var pb = await sniffPbp(file);
+      if (!pb || pb.problem) {
+        job2 = newJob({ kind: 'create', src: 'pbp', title: t, files: [{ file: file, name: name }], disc: 'cd', invalid: true, state: 'error', errorText: pb ? pb.problem : 'This is not a PBP file Discpress can read.' });
+      } else {
+        var pt = /^eboot$/i.test(t) && safeName(pb.title) || t;
+        for (var pd = 0; pd < pb.discs.length; pd++) {
+          var disc_ = pb.discs[pd], dt = pt + (pb.discs.length > 1 ? ' (Disc ' + (pd + 1) + ')' : ''), bin = dt + '.bin';
+          var pj = newJob({ kind: 'create', src: 'pbp', title: dt, files: [{ file: file, name: bin, pbp: { at: disc_.at, sectors: disc_.sectors } }], disc: 'cd', pbpCue: disc_.cue(bin), pbpTracks: disc_.tracks });
+          if (pd < pb.discs.length - 1) { pj.files[0].path = e.path; created.push(pj); } else job2 = pj;
+        }
+      }
     } else if (x === 'nrg') {
       job2 = newJob({ kind: 'create', src: 'nrg', title: t, files: [{ file: file, name: name }], disc: 'cd' });
     } else if (x === 'avi') {
@@ -1320,6 +1637,10 @@ async function addEntriesNow(entries) {
     } else if (x === 'sbi') {
       looseSbi.push(e); // paired with its game below
       continue;
+    } else if (UNSUPPORTED[x]) {
+      // an Alcohol 120% image is one card, for its .mds (its .mdf beside it says the same)
+      if (x === 'mdf' && fresh.some(function (o) { return ext(o.path) === 'mds' && stem(o.path).toLowerCase() === t.toLowerCase(); })) continue;
+      job2 = newJob({ kind: 'create', src: x, title: t, files: [{ file: file, name: name }], disc: 'cd', invalid: true, state: 'error', errorText: UNSUPPORTED[x] });
     } else if (IGNORE.test(x) || name.charAt(0) === '.') {
       ignored.push(name);
       continue;
@@ -1367,7 +1688,7 @@ async function addEntriesNow(entries) {
 function sbiJob(e, list) {
   var want = stem(e.path).toLowerCase(), dir = dirOf(e.path);
   var cands = list.filter(function (j) {
-    if (j.kind !== 'create' || j.sbi || j.disc === 'dvd' || (j.state !== 'ready' && j.state !== 'blocked' && j.state !== 'probing')) return false;
+    if (j.kind !== 'create' || (j.sbi && !j.sbi.fromSub) || j.disc === 'dvd' || (j.state !== 'ready' && j.state !== 'blocked' && j.state !== 'probing')) return false;
     var names = [j.title, j.descName ? stem(j.descName) : ''].concat(j.files.map(function (f) { return stem(f.name); }));
     return names.some(function (n) { return n && n.toLowerCase() === want; });
   });
@@ -1394,7 +1715,9 @@ async function descriptorJob(d, pool, claimed) {
       claimed.add(sub);
       var si = looseFiles.indexOf(sub);
       if (si >= 0) looseFiles.splice(si, 1);
-      if (!fix.problem) job.warnings.push('The .sub file (subchannel data) is not kept: CHDs store the discs\u2019 data and audio. For PlayStation games with LibCrypt protection, keep an .sbi file next to the CHD.');
+      // a PS1 disc's LibCrypt sectors are in it: once the console is known, they become an .sbi (sbiFromSub)
+      job.subFile = sub.file;
+      if (!fix.problem) job.warnings.push('The .sub file (subchannel data) isn\u2019t kept in the CHD: CHDs store the disc\u2019s data and audio.');
     }
   }
   if (fix.problem) {
@@ -1565,6 +1888,11 @@ function buildJob(job) {
       inName = job.descName;
       inputs.push({ name: job.descName, blob: job.descBlob || job.descFile });
       job.files.forEach(function (f) { inputs.push({ name: f.name, blob: f.file, ecm: f.ecm }); }); // ECM: the job worker rebuilds the image
+    } else if (job.src === 'pbp') {
+      // a PS1 PBP's disc: the job worker unpacks its image as chdman reads it, with a cue sheet from its TOC
+      inName = stem(job.files[0].name) + '.cue';
+      inputs.push({ name: inName, blob: new Blob([job.pbpCue], { type: 'text/plain' }) });
+      inputs.push({ name: job.files[0].name, blob: job.files[0].file, pbp: job.files[0].pbp });
     } else if (job.src === 'cso') {
       // the job worker decompresses the image as chdman reads it
       inName = stem(job.files[0].name) + '.iso';
@@ -1729,8 +2057,12 @@ function subtitle(job) {
     return parts.join(' · ');
   }
   if (job.src === 'cso') return (ext(job.files[0].name) === 'zso' ? 'ZSO' : 'CSO') + ' compressed ISO · ' + fmtBytes(n) + (job.isoSize ? ' → ' + fmtBytes(job.isoSize) + ' unpacked' : '');
+  if (job.src === 'pbp' && job.files[0].pbp) return 'PS1 PBP file · ' + plural(job.pbpTracks, 'track') + ' · ' + fmtBytes(job.files[0].pbp.sectors * 2352) + ' unpacked';
   // a descriptor that can't be converted: only the file itself, not the tracks it doesn't list
-  if (job.invalid) return (job.descFile ? '.' + ext(job.descFile.name) + ' file · ' + fmtBytes(job.descFile.size) : fmtBytes(n));
+  if (job.invalid) {
+    var f0 = job.descFile || (job.files[0] && job.files[0].file);
+    return f0 ? '.' + ext(f0.name) + ' file · ' + fmtBytes(f0.size) : fmtBytes(n);
+  }
   var what;
   var ecms = job.files.filter(function (f) { return f.ecm; }).length;
   if (job.fromCcd) what = 'CloneCD image (.ccd + .' + (job.files[0] ? fileKind(job.files[0]) : 'img') + ')';
@@ -1811,7 +2143,10 @@ function renderControls(job) {
     if (job.ui.optsOpen) det.open = true;
     det.addEventListener('toggle', function () { job.ui.optsOpen = det.open; });
     box.append(det);
-    if (job.sbi) box.append(el('p', { class: 'small muted sbi-note', style: 'margin:0' }, 'Its LibCrypt data (' + job.sbi.name + ') is saved with the CHD, under the CHD\u2019s name.'));
+    if (job.sbi) box.append(el('p', { class: 'small muted sbi-note', style: 'margin:0' }, job.sbi.fromSub
+      ? 'Its LibCrypt data (' + plural(job.sbi.count, 'protected sector') + ', read from the .sub file) is saved with the CHD as an .sbi file, under the CHD\u2019s name.'
+      : 'Its LibCrypt data (' + job.sbi.name + ') is saved with the CHD, under the CHD\u2019s name.'));
+    if (job.subNote) box.append(el('p', { class: 'small muted sub-note', style: 'margin:0' }, job.subNote));
     if (job.disc === 'dvd' && (job.src === 'iso' || job.src === 'cso') && !(job.ident && job.ident.sys && job.ident.sys !== 'pc')) {
       box.append(el('p', { class: 'small muted', style: 'margin:0' }, 'The console isn\u2019t known, so check the type: DVD for PSP games and PS2 games on DVD, CD for games that came on a CD.'));
     }
@@ -1852,6 +2187,8 @@ function renderNotes(job) {
   job.ui.identLine = null;
   var idn = identNote(job);
   if (idn) box.append(idn);
+  var dn = datNote(job);
+  if (dn) box.append(dn);
   if (job.missing.length) {
     box.append(el('div', { class: 'note warn' }, el('b', null, 'Missing ' + plural(job.missing.length, 'file') + ' listed in ' + (job.fromCcd ? stem(job.descName) + '.ccd' : job.descName) + ':'),
       el('ul', null, job.missing.map(function (m) { return el('li', null, base(m)); })),
@@ -2120,6 +2457,15 @@ function removeJob(job, silent, keepFiles) {
     job.files.forEach(function (f) { forgetFile(f.file); });
     if (job.descFile) forgetFile(job.descFile);
     if (job.sbi) forgetFile(job.sbi.file);
+    // a zip whose files are all gone can be added again; what was unpacked from it is deleted
+    var zips = new Set();
+    job.files.concat(job.descFile ? [{ file: job.descFile }] : []).forEach(function (f) { if (f.file.fromZip) zips.add(f.file.fromZip); });
+    if (job.src === 'zip') zips.add(job.files[0].file);
+    zips.forEach(function (z) {
+      var inUse = jobs.some(function (o) { return o.files.some(function (f) { return f.file.fromZip === z || f.file === z; }) || (o.descFile && o.descFile.fromZip === z); });
+      if (!inUse) forgetFile(z);
+    });
+    if (zips.size) Unzip.prune();
   }
   jobs.forEach(function (o) { if (o.parentJob === job) { o.parentJob = null; refreshJob(o); } });
   if (job.state === 'done') refreshDiscSets();
@@ -2190,6 +2536,7 @@ async function runJobNow(job) {
     }))) return;
     if (job.state !== 'running') return;
   }
+  if (job.subScan && await stopped(job.subScan)) return;
   var spec = buildJob(job);
   if (settings.storage === 'folder' && outDir && (spec.rename || spec.outMode === 'stream')) {
     var oi = spec.args.indexOf('-o'), main = spec.rename ? outBase(job) + '.chd' : oi >= 0 ? spec.args[oi + 1].replace(/^.*\//, '') : '';
@@ -2333,6 +2680,53 @@ var ENGINE_HINT = isIOS ? 'This is a fault in the browser engine of this iOS ver
 
 // the job's .sbi file, as a result named after its CHD: written into the folder with the CHD, or
 // given as the user's own file (nothing to store)
+/* ---------- LibCrypt data from a CloneCD .sub ----------
+   A CloneCD .sub holds 96 bytes of subchannel per sector of the .img, P to W in 12-byte blocks. A PS1
+   disc's LibCrypt sectors carry Q subchannel with a deliberately wrong CRC; an .sbi lists them for
+   emulators: "SBI\0", then per sector its absolute time (BCD minutes, seconds, frames: the .img's
+   sector n is at n + 150), type 1 and the 10 bytes of Q without the CRC (DuckStation's LoadSBI). */
+var SUB_MAX_BAD = 200; // more than LibCrypt ever uses: a damaged .sub, not a protection
+function scanSub(job) {
+  if (!job.subFile || job.subScan || (job.sbi && !job.sbi.fromSub) || !job.ident || job.ident.sys !== 'ps1') return;
+  job.subScan = sbiFromSub(job.subFile).then(function (r) {
+    if (jobs.indexOf(job) < 0) return;
+    if (r.bad > SUB_MAX_BAD) job.subNote = 'The .sub file has ' + r.bad.toLocaleString('en-US') + ' sectors whose subchannel data is damaged, far more than LibCrypt protection uses, so no .sbi file is made from it.';
+    else if (r.sbi && !job.sbi) job.sbi = { file: new File([r.sbi], stem(job.descName || job.title) + '.sbi'), name: stem(job.descName || job.title) + '.sbi', fromSub: true, count: r.bad };
+    if (job.ui && job.state !== 'running') refreshJob(job, true);
+  }, function (e) { appendLog(job, 'The .sub file could not be read: ' + e.message); });
+}
+function subCrc(b, o) {
+  var c = 0;
+  for (var i = 0; i < 10; i++) {
+    c ^= b[o + i] << 8;
+    for (var k = 0; k < 8; k++) c = c & 0x8000 ? ((c << 1) ^ 0x1021) & 0xffff : (c << 1) & 0xffff;
+  }
+  return ~c & 0xffff;
+}
+async function sbiFromSub(file) {
+  var n = Math.floor(file.size / 96), step = 96 * 43690, entries = [], bad = 0, bcd = function (v) { return ((v / 10) | 0) * 16 + v % 10; };
+  for (var pos = 0; pos < n * 96; pos += step) {
+    var b = new Uint8Array(await file.slice(pos, Math.min(n * 96, pos + step)).arrayBuffer());
+    for (var o = 0; o + 96 <= b.length; o += 96) {
+      var q = o + 12, any = 0;
+      for (var z = 0; z < 12; z++) any |= b[q + z];
+      if (!any) continue; // no subchannel read for this sector
+      if (subCrc(b, q) === ((b[q + 10] << 8) | b[q + 11])) continue;
+      bad++;
+      if (bad > SUB_MAX_BAD) return { bad: bad };
+      var lba = (pos + o) / 96 + 150, e = new Uint8Array(14);
+      e[0] = bcd(Math.floor(lba / 4500)); e[1] = bcd(Math.floor(lba / 75) % 60); e[2] = bcd(lba % 75); e[3] = 1;
+      e.set(b.subarray(q, q + 10), 4);
+      entries.push(e);
+    }
+  }
+  if (!entries.length) return { bad: 0 };
+  var out = new Uint8Array(4 + 14 * entries.length);
+  out.set([83, 66, 73, 0]);
+  entries.forEach(function (e, i) { out.set(e, 4 + 14 * i); });
+  return { bad: bad, sbi: out };
+}
+
 async function addSbi(job, spec) {
   var nm = outBase(job) + '.sbi', f = job.sbi.file;
   if (spec.outMode === 'stream' && outDir) {
@@ -2344,6 +2738,140 @@ async function addSbi(job, spec) {
   } else {
     job.outputs.push({ name: nm, size: f.size, kind: 'blob', blob: f, input: true });
   }
+}
+
+/* ---------- DAT files ----------
+   Kept in private storage (chdman-dats/<id>.json), else for this visit. A disc being converted is
+   checked once identified (its files, by size and CRC-32; checksums already computed are reused); a
+   CHD after Verify, from the files Redump's layout gives back (redumpCheck). Every track matching a
+   game names the results after it, as identification does. */
+async function loadDat(file) {
+  if (file.size > 256 << 20) return null;
+  var text;
+  try { text = await file.text(); } catch (e) { return null; }
+  var dat = parseDat(text);
+  if (!dat) return null;
+  if (!dat.meta.name) dat.meta.name = stem(file.name);
+  var old = Dats.add(dat);
+  if (old) DatStore.remove(old.id);
+  DatStore.save(dat);
+  return dat.meta;
+}
+var DatStore = {
+  dir: async function () { return (await navigator.storage.getDirectory()).getDirectoryHandle('chdman-dats', { create: true }); },
+  save: async function (dat) {
+    if (!Store.available) return;
+    try {
+      var w = await (await (await this.dir()).getFileHandle(dat.meta.id + '.json', { create: true })).createWritable();
+      await w.write(JSON.stringify({ meta: dat.meta, games: dat.games.map(function (g) { return [g.name, g.roms.map(function (r) { return [r.name, r.size, r.crc]; })]; }) }));
+      await w.close();
+      dat.meta.kept = true;
+    } catch (e) { /* kept for this visit */ }
+  },
+  remove: async function (id) {
+    try { await (await this.dir()).removeEntry(id + '.json'); } catch (e) { /* not kept */ }
+  },
+  load: async function () {
+    if (!Store.available) return;
+    try {
+      var dir = await this.dir();
+      for await (var h of dir.values()) {
+        try {
+          var d = JSON.parse(await (await h.getFile()).text());
+          d.meta.kept = true;
+          Dats.add({ meta: d.meta, games: d.games.map(function (g) { return { name: g[0], roms: g[1].map(function (r) { return { name: r[0], size: r[1], crc: r[2] }; }) }; }) });
+        } catch (e) { /* a damaged one is skipped */ }
+      }
+    } catch (e) { /* none */ }
+    renderDatList();
+    if (Dats.list.length) datRecheck();
+  }
+};
+// a job's files with what to checksum: [{file, size, how}]
+function datItems(job) {
+  var items = [];
+  job.files.forEach(function (f) {
+    if (f.ecm) { if (f.imageSize) items.push({ file: f.file, size: f.imageSize, how: 'ecm' }); }
+    else if (f.pbp) items.push({ file: f.file, size: f.pbp.sectors * 2352, how: 'pbp@' + f.pbp.at + ':' + f.pbp.sectors });
+    else if (job.src === 'cso') { if (job.isoSize) items.push({ file: f.file, size: job.isoSize, how: 'ciso' }); }
+    else items.push({ file: f.file, size: f.file.size, how: '' });
+  });
+  if (job.descFile) items.push({ file: job.descFile, size: job.descFile.size, how: '' });
+  return items;
+}
+async function datCheck(job) {
+  if (!Dats.list.length || job.kind !== 'create' || job.invalid || job.missing.length || job.needCue) return;
+  var items = datItems(job).filter(function (it) { return Dats.size(it.size).length; });
+  if (!items.length) { job.dat = { none: true }; return; }
+  job.datState = 'checking';
+  if (job.ui && job.state !== 'running') renderNotes(job);
+  var total = items.reduce(function (n, it) { return n + it.size; }, 0), before = 0;
+  try {
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      it.crc = await crcCached(it.file, 0, it.size, function (p) {
+        var n = job.ui && job.ui.datLine;
+        if (n) n.textContent = 'Checking against your DAT files\u2026 ' + Math.round(100 * (before + p * it.size) / total) + '%';
+      }, it.how);
+      before += it.size;
+    }
+  } catch (e) { job.datState = null; appendLog(job, 'Could not check against the DAT files: ' + e.message); return; }
+  job.datState = null;
+  if (jobs.indexOf(job) < 0) return;
+  datApply(job, datMatch(items));
+}
+// the result of a DAT check: a full match names the disc after the DAT's game
+function datApply(job, res) {
+  job.dat = res;
+  if (res.full) {
+    var id = job.ident || {};
+    job.ident = Object.assign({}, id, { name: res.game, method: 'dat', entry: id.entry ? Object.assign({}, id.entry, { alternatives: null, name: res.game }) : null });
+    applyIdent(job);
+    if (job.state === 'done') renameOutputs(job);
+  }
+  if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
+}
+// after DATs were added or removed: every job again
+var datChain = Promise.resolve();
+function datRecheck() {
+  jobs.forEach(function (job) {
+    if (job.kind === 'chd') {
+      if (job.redumpFiles) datApply(job, Dats.list.length ? datMatch(job.redumpFiles) : null);
+      return;
+    }
+    if (job.identState !== 'done') return; // checked when identified
+    job.dat = null;
+    if (job.ui) renderNotes(job);
+    datChain = datChain.then(function () { return datCheck(job); });
+  });
+}
+function datNote(job) {
+  job.ui.datLine = null;
+  if (job.datState === 'checking') {
+    var n = el('div', { class: 'note dat-note' }, 'Checking against your DAT files\u2026');
+    job.ui.datLine = n;
+    return n;
+  }
+  var d = job.dat;
+  if (!d || !Dats.list.length) return null;
+  if (d.none) return el('div', { class: 'note dat-note' }, 'Not in your DAT files.');
+  var where = ' \u201c' + d.game + '\u201d in ' + d.dat.name;
+  if (d.full) {
+    return el('div', { class: 'note ok dat-note' }, el('b', null, '\u2713 Verified with your DAT file. '),
+      (d.total === 1 ? 'It matches' : 'All ' + d.total + ' tracks match') + where + '.' + (d.descDiffers ? ' The cue sheet differs from the DAT\u2019s, which doesn\u2019t change the disc.' : ''));
+  }
+  return el('div', { class: 'note warn dat-note' }, el('b', null, 'Partly matches your DAT file. '),
+    d.matched + ' of ' + d.total + ' tracks match' + where + '. Not matched: ' + d.missing.slice(0, 3).join(', ') + (d.missing.length > 3 ? ' and ' + (d.missing.length - 3) + ' more' : '') + '.');
+}
+function renderDatList() {
+  var ul = $('#datList');
+  if (!ul) return;
+  ul.replaceChildren();
+  Dats.list.forEach(function (d) {
+    ul.append(el('li', null, el('span', null, d.name), el('small', null, d.games.toLocaleString('en-US') + ' games' + (d.version ? ' \u00b7 ' + d.version : '') + (d.kept ? '' : ' \u00b7 this visit only')),
+      el('button', { class: 'icon-btn', 'aria-label': 'Remove ' + d.name, onclick: function () { Dats.remove(d.id); DatStore.remove(d.id); renderDatList(); datRecheck(); } }, icon('i-x'))));
+  });
+  $('#datEmpty').hidden = Dats.list.length > 0;
 }
 
 /* ---------- comparing a CHD with Redump ---------- */
@@ -2374,7 +2902,14 @@ async function redumpCheck(job) {
     return;
   }
   if (res.code !== 0) { appendLog(job, 'Could not compare with Redump (chdman exited with code ' + res.code + ').'); return; }
+  job.redumpFiles = (res.outputs || []).filter(function (o) { return o.crc; }).map(function (o) { return { name: o.name, size: o.size, crc: o.crc }; });
   var files = (res.outputs || []).filter(function (o) { return o.crc && !/\.cue$/i.test(o.name); });
+  redumpMatch(job, files);
+  // the user's DAT files, every track: a full match names the CHD after its game
+  if (Dats.list.length) datApply(job, datMatch(job.redumpFiles));
+}
+// the files Redump's layout gave back, looked up in the built-in database
+function redumpMatch(job, files) {
   var whole = files.length === 1, id = job.ident || {};
   var trackOf = function (n) { var m = /\(Track 0*(\d+)\)\.\w+$/.exec(n); return m ? m[1] : ''; };
   var hits = [];
@@ -3409,6 +3944,8 @@ function init() {
       var root = await navigator.storage.getDirectory();
       var work = await root.getDirectoryHandle('chdman-work', { create: true });
       await Store.cleanupStale(work);
+      await Unzip.prune();
+      await Unzip.cleanup();
     } catch (e) { /* ignore */ }
     refreshStorageInfo();
     updateDock();
@@ -3425,7 +3962,8 @@ function init() {
   updateDock();
   updateChips();
 
-  Store.init().then(function () { updateChips(); renderEarlier(); });
+  Store.init().then(function () { updateChips(); renderEarlier(); DatStore.load(); });
+  $('#datAdd').addEventListener('click', function () { pickFiles('datInput', function (l) { addEntries(filesFromList(l)); }); });
   initHosted();
   initIosTip();
   Engine.ready().then(function () {

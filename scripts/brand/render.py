@@ -3,9 +3,9 @@
 
 Needs Playwright with Chromium (pip install playwright && playwright install chromium)
 and internet access for the Nunito / JetBrains Mono web fonts.
-Screenshots of the app itself live in docs/screenshots/.
+Screenshots of the app itself live in docs/screenshots/ (screenshots.py takes them).
 """
-import os
+import os, urllib.request
 from playwright.sync_api import sync_playwright
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -18,6 +18,13 @@ os.makedirs(OUT, exist_ok=True)
 with sync_playwright() as p:
     b = p.chromium.launch()
     pg = b.new_page(viewport={'width': 1400, 'height': 1000}, device_scale_factor=2)
+    # the web fonts are fetched here, not by the browser, which may not trust a proxy's certificate
+    # (a font that fails to load silently falls back to another, and every graphic changes)
+    def font(route):
+        with urllib.request.urlopen(urllib.request.Request(route.request.url, headers={'User-Agent': route.request.headers.get('user-agent', '')})) as r:
+            route.fulfill(status=r.status, headers={'Content-Type': r.headers['Content-Type'], 'Access-Control-Allow-Origin': '*'}, body=r.read())
+    pg.route('https://fonts.googleapis.com/**', font)
+    pg.route('https://fonts.gstatic.com/**', font)
     def shot(scene, theme, name, flat=False, m=False):
         pg.goto('%s?scene=%s&theme=%s%s%s' % (URL, scene, theme, '&flat=1' if flat else '', '&m=1' if m else ''))
         pg.evaluate('document.fonts.ready')

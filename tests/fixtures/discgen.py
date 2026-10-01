@@ -5,6 +5,8 @@ raw 2352-byte CD sectors with valid EDC/ECC (Mode 1, Mode 2 Form 1 and 2), CD au
 and filler data with a realistic mix of compressible and incompressible content.
 Output is fully deterministic for a given seed.
 """
+import zlib
+
 import numpy as np
 
 SECTOR = 2048
@@ -577,3 +579,69 @@ def ecm(image):
     out.append(_ecm_count(0, 1 << 32))   # count - 1 = 0xffffffff: the end
     out.append(edc_bytes(image).to_bytes(4, 'little'))
     return b''.join(out)
+
+
+# ---------------------------------------------------------------- PS1 EBOOT.PBP (popstation)
+
+PBP_BLOCK = 16 * RAW
+
+
+def _bcd_msf(frames):
+    return bytes([_bcd(frames // 4500), _bcd((frames // 75) % 60), _bcd(frames % 75)])
+
+
+def _pbp_disc(image, tracks, encrypted=False):
+    """One disc's PSISOIMG0000 section: `image` from track 1's INDEX 01, `tracks` [(audio, index0, index1)] in
+    sectors of the image. TOC at 0x800 (A0, A1, A2, then a 10-byte entry per track), the blocks' offset at 0xBFC,
+    their table at 0x4000 (offset, size; 32 bytes each), blocks of 16 sectors deflated or stored."""
+    head = bytearray(0x100000)
+    head[0:12] = b'PSISOIMG0000'
+    if encrypted:
+        head[0x400:0x404] = b'\x00PGD'
+    toc = bytearray()
+    first_type = 0x01 if tracks[0][0] else 0x41
+    toc += bytes([first_type, 0, 0xA0, 0, 0, 0, 0, _bcd(1), 0x20, 0])
+    toc += bytes([0x41 if not tracks[-1][0] else 0x01, 0, 0xA1, 0, 0, 0, 0, _bcd(len(tracks)), 0, 0])
+    toc += bytes([0x01, 0, 0xA2, 0, 0, 0, 0]) + _bcd_msf(150 + len(image) // RAW)
+    for i, (au, i0, i1) in enumerate(tracks, 1):
+        toc += bytes([0x01 if au else 0x41, 0, _bcd(i)]) + _bcd_msf(150 + i0) + b'\x00' + _bcd_msf(150 + i1)
+    head[0x800:0x800 + len(toc)] = toc
+    data_at = len(head)
+    head[0xBFC:0xC00] = data_at.to_bytes(4, 'little')
+    blocks, table, off = [], bytearray(), 0
+    padded = image + bytes(-len(image) % PBP_BLOCK)
+    for b in range(0, len(padded), PBP_BLOCK):
+        raw = padded[b:b + PBP_BLOCK]
+        z = zlib.compressobj(9, zlib.DEFLATED, -15)
+        d = z.compress(raw) + z.flush()
+        if len(d) >= PBP_BLOCK:
+            d = raw
+        table += off.to_bytes(4, 'little') + len(d).to_bytes(2, 'little') + bytes(26)
+        blocks.append(d)
+        off += len(d)
+    assert 0x4000 + len(table) <= data_at
+    head[0x4000:0x4000 + len(table)] = table
+    return bytes(head) + b''.join(blocks)
+
+
+def pbp(discs, title='GAME', encrypted=False, psp=False):
+    """A PS1 EBOOT.PBP holding `discs` [(image, tracks)] (see _pbp_disc); `psp`: a PSP program's DATA.PSAR instead."""
+    sfo_b = sfo({'CATEGORY': 'ME', 'DISC_ID': 'SLUS00000', 'TITLE': title})
+    if psp:
+        psar = b'PSAR\x00\x00\x00\x00'.ljust(0x400, b'\x00')
+    elif len(discs) == 1:
+        psar = _pbp_disc(*discs[0], encrypted=encrypted)
+    else:
+        parts, table, at = [], bytearray(20), 0x400
+        for i, d in enumerate(discs):
+            part = _pbp_disc(*d, encrypted=encrypted)
+            table[i * 4:i * 4 + 4] = at.to_bytes(4, 'little')
+            parts.append(part)
+            at += len(part)
+        psar = (b'PSTITLEIMG000000'.ljust(0x200, b'\x00') + bytes(table)).ljust(0x400, b'\x00') + b''.join(parts)
+    offs, at = [], 0x28
+    for part in (sfo_b, b'', b'', b'', b'', b'', b'PSP\x00'.ljust(0x100, b'\x00')):
+        offs.append(at)
+        at += len(part)
+    offs.append(at)
+    return b'\x00PBP' + (0x10000).to_bytes(4, 'little') + b''.join(o.to_bytes(4, 'little') for o in offs) + sfo_b + b'PSP\x00'.ljust(0x100, b'\x00') + psar

@@ -101,6 +101,52 @@ fixture('ps1-clonecd', {
    serial='SLUS-00594', ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'],
    warning='subchannel data')
 
+# a PAL PS1 disc as CloneCD saves it, with a real Q subchannel in the .sub and LibCrypt's mark on a few
+# sectors: Q changed, its CRC left as it was. The page makes the .sbi an emulator needs from it
+# (`lc-expected.sbi`: "SBI\0", then per sector its absolute BCD time, type 1 and the 10 bytes of Q)
+LC_BAD = [300, 301, 450, 500]
+def lc_image():
+    return g.raw_sectors(ps1_iso('SLES_999.90', 'LCTEST', 1, 81), 2)
+
+def q_crc(q):
+    c = 0
+    for b in q:
+        c ^= b << 8
+        for _ in range(8):
+            c = ((c << 1) ^ 0x1021) & 0xffff if c & 0x8000 else (c << 1) & 0xffff
+    return (~c) & 0xffff
+
+def bcd_msf(n):
+    return bytes([g._bcd(n // 4500), g._bcd((n // 75) % 60), g._bcd(n % 75)])
+
+def lc_q(i):
+    q = bytes([0x41, 0x01, 0x01]) + bcd_msf(i) + b'\x00' + bcd_msf(i + 150)
+    c = q_crc(q)
+    q += bytes([c >> 8, c & 0xff])
+    if i in LC_BAD:  # LibCrypt: the times change, the CRC stays
+        q = bytearray(q)
+        q[3] ^= 0x01
+        q[8] ^= 0x80
+        q = bytes(q)
+    return q
+
+def lc_sub():
+    n = len(lc_image()) // g.RAW
+    return b''.join(bytes(12) + lc_q(i) + bytes(72) for i in range(n))
+
+def lc_sbi():
+    return b'SBI\x00' + b''.join(bcd_msf(i + 150) + b'\x01' + lc_q(i)[:10] for i in LC_BAD)
+
+fixture('ps1-libcrypt', {
+    'lc.ccd': lambda: ('[CloneCD]\r\nVersion=3\r\n[Disc]\r\nTocEntries=4\r\nSessions=1\r\nDataTracksScrambled=0\r\nCDTextLength=0\r\n'
+                       '[Session 1]\r\nPreGapMode=2\r\nPreGapSubC=0\r\n[TRACK 1]\r\nMODE=2\r\nINDEX 1=0\r\n').encode(),
+    'lc.img': lc_image,
+    'lc.sub': lc_sub,
+    'lc-ref.cue': lambda: b'FILE "lc.img" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n',
+    'lc-expected.sbi': lc_sbi,
+}, add=['lc.ccd', 'lc.img', 'lc.sub'], ref='lc-ref.cue', job='create', disc='cd', command='createcd', sys='ps1',
+   serial='SLES-99990', ident='none', name='lc', sbi=True, warning='subchannel data')
+
 # the same disc with a cdrdao TOC (each track's file, a byte offset and a length, and the audio
 # track's pregap inside its file) and as a Nero image (both tracks in one file, the track list at the end)
 def toc_text():
@@ -297,6 +343,27 @@ fixture('dreamcast-gdi', {
 }, add=['aerowings.gdi', 'track01.bin', 'track02.raw', 'track03.bin'], job='create', disc='gdrom', command='createcd', sys='dc',
    serial='T-40201N', ident='serial', name='AeroWings (USA)')
 
+# a PS2 game on CD with a music track: PCSX2 plays only the first track of a CD CHD, and the card says so
+fixture('ps2-cd-audio', {
+    'ps2 cdda.cue': lambda: cue([('ps2 cdda (Track 1).bin', 'MODE2/2352', 0), ('ps2 cdda (Track 2).bin', 'AUDIO', 150)]),
+    'ps2 cdda (Track 1).bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660({
+        'SYSTEM.CNF': b'BOOT2 = cdrom0:\\SLUS_299.99;1\r\nVER = 1.00\r\nVMODE = NTSC\r\n',
+        'SLUS_299.99': exe('SLUS_299.99')}, 'CDDA', 'PLAYSTATION')), 2),
+    'ps2 cdda (Track 2).bin': lambda: g.audio(225, 71, silence=150),
+}, add=['ps2 cdda.cue', 'ps2 cdda (Track 1).bin', 'ps2 cdda (Track 2).bin'], job='create', disc='cd', command='createcd', sys='ps2',
+   serial='SLUS-29999', ident='none', name='ps2 cdda')
+
+# a CD-based Dreamcast disc (a CD-R, as homebrew is): an audio track, then the data track with a stored
+# pregap, which Flycast 2.7 and earlier reject in a CHD; the card says so
+fixture('dreamcast-cdr', {
+    'dc cdr.cue': lambda: cue([('dc cdr (Track 1).bin', 'AUDIO', 0), ('dc cdr (Track 2).bin', 'MODE1/2352', 150)]),
+    'dc cdr (Track 1).bin': lambda: g.audio(300, 72),
+    'dc cdr (Track 2).bin': lambda: g.raw_sectors(bytes(150 * 2048) + g.pad_sectors(g.iso9660(
+        {'1ST_READ.BIN': g.filler(512 << 10, 73)}, 'HOMEBREW', '',
+        ipbin(b'SEGA SEGAKATANA ', 0x40, b'T0000     ', 0x80, b'HOMEBREW', {0x10: b'SEGA ENTERPRISES', 0x30: b'CD-ROM1/1       '}))), 1, 300),
+}, add=['dc cdr.cue', 'dc cdr (Track 1).bin', 'dc cdr (Track 2).bin'], job='create', disc='cd', command='createcd', sys='dc',
+   serial='T0000', ident='none', name='dc cdr')
+
 # a NAOMI GD-ROM whose serial the database lists under NAOMI 2: the two share one header layout
 fixture('naomi2-gdi', {
     'spikers.gdi': lambda: b'3\r\n1 0 4 2352 spikers01.bin 0\r\n2 450 0 2352 spikers02.raw 0\r\n3 45000 4 2352 spikers03.bin 0\r\n',
@@ -478,6 +545,33 @@ fixture('ps1-clonecd-ecm', {
 }, add=['mgs ccd.ccd', 'mgs ccd.img.ecm', 'mgs ccd.sub'], ref='mgs ccd-ref.cue', job='create', disc='cd', command='createcd',
    sys='ps1', serial='SLUS-00594', ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'],
    warning='subchannel data')
+
+# ---------------------------------------------------------------- PS1 EBOOT.PBP (popstation)
+# the CloneCD disc above packed as popstation does: the page reads the disc's TOC and gives chdman its
+# image with a cue sheet made from it (`ref`: the same disc's cue for native chdman)
+def pbp_mgs():
+    img, i0, i1 = ccd_image()
+    return img, [(False, 0, 0), (True, i0, i1)]
+def pbp_lone():
+    return open(os.path.join(OUT, 'lone.bin'), 'rb').read(), [(False, 0, 0)]
+fixture('ps1-pbp', {
+    'mgs.pbp': lambda: g.pbp([pbp_mgs()], 'METAL GEAR SOLID'),
+}, add=['mgs.pbp'], ref='mgs ccd-ref.cue', job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-00594',
+   ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'])
+# as it is usually named: the card takes the title in its PARAM.SFO; one track, so the checksum is compared too
+fixture('ps1-pbp-eboot', {
+    'EBOOT.PBP': lambda: g.pbp([pbp_lone()], 'Tomorrow Never Dies'),
+}, add=['EBOOT.PBP'], ref='lone-ref.cue', title='Tomorrow Never Dies', job='create', disc='cd', command='createcd', sys='ps1',
+   serial='SLUS-00975', ident='serial', name='007 - Tomorrow Never Dies (USA)')
+# two discs in one file (PSTITLEIMG000000): a card each
+fixture('ps1-pbp-discs', {
+    'two discs.pbp': lambda: g.pbp([pbp_mgs(), pbp_lone()], 'TWO DISCS'),
+}, add=['two discs.pbp'], job='pbp-discs', refs=['mgs ccd-ref.cue', 'lone-ref.cue'])
+# ones that can't be converted: a PlayStation Store download (encrypted) and a PSP program
+fixture('ps1-pbp-bad', {
+    'store.pbp': lambda: g.pbp([pbp_lone()], 'STORE', encrypted=True),
+    'homebrew.pbp': lambda: g.pbp([], 'HOMEBREW', psp=True),
+}, add=['store.pbp', 'homebrew.pbp'], job='invalid')
 
 # ---------------------------------------------------------------- benchmark images
 if args.bench:

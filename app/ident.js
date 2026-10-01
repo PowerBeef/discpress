@@ -155,15 +155,16 @@ function chdReader(file, ciso, parent) {
     return { kind: m.kind, tracks: m.tracks, logical: m.logical, read: function (track, lba) { return r.request({ track: track, lba: lba }); }, close: r.close };
   });
 }
-// opens ECM images in a worker (which scans each whole file): for each, a stand-in for the image it
-// holds that reads like a file (size, slice(a, b).arrayBuffer(), and ecm: the file), or null if it
-// can't be read; and close()
+// opens ECM images, and PS1 PBP files' discs, in a worker (which scans each ECM file whole): for each,
+// a stand-in for the image it holds that reads like a file (size, slice(a, b).arrayBuffer(), and pack:
+// {file, how}, what checksums it), or null if it can't be read; and close().
+// files: the job's file entries ({file, ecm} or {file, pbp})
 function ecmImages(files) {
-  return readerWorker({ type: 'reader', ecm: files }, 180000).then(function (r) {
+  return readerWorker({ type: 'reader', ecm: files.map(function (f) { return f.pbp ? { blob: f.file, pbp: f.pbp } : f.file; }) }, 180000).then(function (r) {
     var views = files.map(function (f, i) {
       var size = r.info.sizes[i];
       return size == null ? null : {
-        size: size, ecm: f,
+        size: size, pack: { file: f.file, how: f.pbp ? 'pbp@' + f.pbp.at + ':' + f.pbp.sectors : 'ecm' },
         slice: function (a, b) {
           return {
             arrayBuffer: function () {
@@ -215,6 +216,19 @@ function crcOf(blob, start, end, onProgress, how) {
   // DEBUG.crcDelay (ms): a slow checksum, for testing that conversions don't wait for it
   return DEBUG.crcDelay ? p.then(function (c) { return sleep(DEBUG.crcDelay).then(function () { return c; }); }) : p;
 }
+// the same checksum asked for twice (identification, then the DAT check) is computed once
+var crcCache = new WeakMap();
+function crcCached(blob, start, end, onProgress, how) {
+  var m = crcCache.get(blob);
+  if (!m) crcCache.set(blob, m = new Map());
+  var k = (start || 0) + ':' + (end == null ? blob.size : end) + ':' + (how || '');
+  if (!m.has(k)) {
+    var p = crcOf(blob, start, end, onProgress, how);
+    m.set(k, p);
+    p.catch(function () { m.delete(k); });
+  }
+  return m.get(k);
+}
 // checksum workers running now, which the speed test stops so that it measures an idle device
 var crcRunning = new Set();
 function pauseChecksums() {
@@ -237,7 +251,8 @@ function crcWorker(blob, start, end, onProgress, how) {
         else if (m.type === 'fatal') { w.terminate(); reject(new Error(why || m.message)); }
       };
       w.onerror = function (e) { w.terminate(); reject(new Error(e.message || 'worker error')); };
-      Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end, ciso: how === 'ciso', ecm: how === 'ecm', debugSlow: DEBUG.crcSlow }); // with the compiled module, for zlib's crc32
+      var pbp = /^pbp@(\d+):(\d+)$/.exec(how || ''); // a PS1 PBP's disc: its header's offset and its sectors
+      Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end, ciso: how === 'ciso', ecm: how === 'ecm', pbp: pbp ? { at: +pbp[1], sectors: +pbp[2] } : null, debugSlow: DEBUG.crcSlow }); // with the compiled module, for zlib's crc32
     });
   });
 }
@@ -393,7 +408,7 @@ function msfFrames(s) {
 // nrg: the tracks of a Nero image (nrgTracks)
 function probePlan(job, images, nrg) {
   var readers = [], hashes = [];
-  var fileOf = function (f) { return f && (f.ecm ? images && images.get(f) : f.file); };
+  var fileOf = function (f) { return f && (f.ecm || f.pbp ? images && images.get(f) : f.file); };
   var byName = function (n) {
     var lc = base(n).toLowerCase();
     return fileOf(job.files.find(function (x) { return x.name.toLowerCase() === lc || (x.ref && base(x.ref).toLowerCase() === lc); }));
@@ -488,6 +503,14 @@ function probePlan(job, images, nrg) {
       if (t[2] === '4') readers.push(fileReader(f, 0, +t[3] || 2352));
     });
     readers.reverse(); // the high-density data track carries the IP.BIN header
+  } else if (job.src === 'pbp') {
+    // a PS1 PBP's disc: read through a worker (ecmImages); the whole image is the Redump file only for a
+    // single-track disc
+    var pv = fileOf(job.files[0]);
+    if (pv) {
+      readers.push(fileReader(pv, 0, 2352));
+      if (job.pbpTracks === 1) hashes.push({ file: pv, track: 0 });
+    }
   } else if (job.src === 'cso') {
     // a compressed ISO: identifyJob reads it through a worker; the checksum is the ISO's
     hashes.push({ file: job.files[0].file, track: 0, size: job.isoSize, ciso: true });
@@ -557,14 +580,14 @@ async function identifyJob(job, onStatus, onProvisional) {
         dataSizes.push(chd.logical);
       }
     } else {
-      // ECM images: a worker rebuilds the images they hold
-      var ecms = job.files.filter(function (f) { return f.ecm; }), images = null;
+      // ECM images and PS1 PBP files: a worker rebuilds the images they hold
+      var ecms = job.files.filter(function (f) { return f.ecm || f.pbp; }), images = null;
       if (ecms.length) {
-        onStatus && onStatus('Reading the ECM image' + (ecms.length > 1 ? 's' : '') + '\u2026', 0);
-        var ei = await ecmImages(ecms.map(function (f) { return f.file; }));
+        onStatus && onStatus(job.src === 'pbp' ? 'Reading the PBP file\u2026' : 'Reading the ECM image' + (ecms.length > 1 ? 's' : '') + '\u2026', 0);
+        var ei = await ecmImages(ecms);
         ecm = ei;
         images = new Map();
-        ecms.forEach(function (f, i) { if (ei.views[i]) images.set(f, ei.views[i]); });
+        ecms.forEach(function (f, i) { if (ei.views[i]) { images.set(f, ei.views[i]); f.imageSize = ei.views[i].size; } });
       }
       var plan = probePlan(job, images, job.src === 'nrg' ? await nrgTracks(job.files[0].file) : null);
       if (job.src === 'cso') {
@@ -588,14 +611,15 @@ async function identifyJob(job, onStatus, onProvisional) {
           if (same.length) bySize = same;
         }
         // the checksum of what a CSO/ZSO or ECM file holds: a worker unpacks it again
-        if (bySize.length) toHash.push({ file: hsh.file.ecm || hsh.file, size: size, how: hsh.ciso ? 'ciso' : hsh.file.ecm ? 'ecm' : '', bySize: bySize });
+        var pk = hsh.file.pack;
+        if (bySize.length) toHash.push({ file: pk ? pk.file : hsh.file, size: size, how: hsh.ciso ? 'ciso' : pk ? pk.how : '', bySize: bySize });
       });
       if (toHash.length && onProvisional) onProvisional(result(null, true));
       for (var k = 0; k < toHash.length && !exact; k++) {
         var th = toHash[k];
         onStatus && onStatus('Checking against the game database…', 0);
         var crc = null;
-        try { crc = await crcOf(th.file, 0, th.size, function (p) { onStatus && onStatus('Checking against the game database…', p); }, th.how); }
+        try { crc = await crcCached(th.file, 0, th.size, function (p) { onStatus && onStatus('Checking against the game database…', p); }, th.how); }
         catch (e) { if (!th.how) throw e; damaged = e.message; } // a damaged compressed ISO or ECM image: no exact match, and the card says why
         var hits = th.bySize.filter(function (e) { return e.crc === crc; });
         if (hits.length) exact = hits;
@@ -643,4 +667,126 @@ async function identifyJob(job, onStatus, onProvisional) {
       headerTitle: det && det.title || '', checking: checking, damaged: damaged
     };
   }
+}
+
+/* ---------- DAT files (Redump, No-Intro): every track checked ----------
+   Users add Logiqx XML or clrmamepro DAT files; each game's files (roms) are indexed by size, and a
+   disc's files are matched by size and CRC-32. A disc matches a game when every file the game lists,
+   its cue sheet or GDI aside, is among them. */
+var Dats = {
+  list: [],         // [{id, name, description, version, games, roms}]
+  data: new Map(),  // id -> {meta, games: [{name, roms: [{name, size, crc}]}]}
+  bySize: new Map(), // size -> [{dat, game, rom}]
+  loaded: false,
+  add: function (dat) {
+    // the same list again (name and version) replaces the one kept
+    var same = this.list.find(function (d) { return d.name === dat.meta.name && d.version === dat.meta.version; });
+    if (same) this.remove(same.id, true);
+    this.data.set(dat.meta.id, dat);
+    this.list.push(dat.meta);
+    this.index(dat);
+    return same;
+  },
+  index: function (dat) {
+    var self = this;
+    dat.games.forEach(function (g) {
+      g.roms.forEach(function (r) {
+        var l = self.bySize.get(r.size);
+        if (!l) self.bySize.set(r.size, l = []);
+        l.push({ dat: dat.meta, game: g, rom: r });
+      });
+    });
+  },
+  remove: function (id, quiet) {
+    this.data.delete(id);
+    this.list = this.list.filter(function (d) { return d.id !== id; });
+    this.bySize = new Map();
+    var self = this;
+    this.data.forEach(function (d) { self.index(d); });
+  },
+  size: function (n) { return this.bySize.get(n) || []; }
+};
+function datCrc(v) { return ('00000000' + String(v || '').replace(/^0x/i, '')).slice(-8).toUpperCase(); }
+// a DAT file's text: {meta, games} or null if it isn't one
+function parseDat(text) {
+  var head = text.slice(0, 65536), games = [], meta = { name: '', description: '', version: '' };
+  if (/<datafile[\s>]/.test(head)) {
+    var doc = new DOMParser().parseFromString(text, 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length) return null;
+    var hd = doc.getElementsByTagName('header')[0], hv = function (t) { var n = hd && hd.getElementsByTagName(t)[0]; return n ? n.textContent.trim() : ''; };
+    meta.name = hv('name'); meta.description = hv('description'); meta.version = hv('version');
+    var root = doc.documentElement, nodes = root.children;
+    for (var i = 0; i < nodes.length; i++) {
+      var g = nodes[i];
+      if (g.tagName !== 'game' && g.tagName !== 'machine') continue;
+      var roms = [], rl = g.getElementsByTagName('rom');
+      for (var j = 0; j < rl.length; j++) {
+        var r = rl[j], size = r.getAttribute('size'), crc = r.getAttribute('crc');
+        if (size && crc) roms.push({ name: r.getAttribute('name') || '', size: +size, crc: datCrc(crc) });
+      }
+      if (roms.length) games.push({ name: g.getAttribute('name') || '', roms: roms });
+    }
+  } else if (/^\s*clrmamepro\s*\(/m.test(head)) {
+    // clrmamepro's format: key value pairs in nested parentheses, strings in double quotes
+    var re = /"((?:[^"\\]|\\.)*)"|([()])|([^\s()"]+)/g, m, stack = [], cur = null, key = null;
+    var top = null;
+    while ((m = re.exec(text))) {
+      var tok = m[1] != null ? m[1] : m[2] || m[3];
+      if (m[2] === '(') {
+        var blk = { name: key, fields: {}, kids: [] };
+        if (cur) cur.kids.push(blk); else top = blk;
+        stack.push(cur); cur = blk; key = null;
+        continue;
+      }
+      if (m[2] === ')') {
+        var done_ = cur; cur = stack.pop();
+        if (!cur && done_) {
+          if (done_.name === 'clrmamepro') { meta.name = done_.fields.name || ''; meta.description = done_.fields.description || ''; meta.version = done_.fields.version || ''; }
+          else if (done_.name === 'game' || done_.name === 'machine') {
+            var rs = done_.kids.filter(function (k) { return k.name === 'rom' && k.fields.size && k.fields.crc; })
+              .map(function (k) { return { name: k.fields.name || '', size: +k.fields.size, crc: datCrc(k.fields.crc) }; });
+            if (rs.length) games.push({ name: done_.fields.name || '', roms: rs });
+          }
+        }
+        key = null;
+        continue;
+      }
+      if (!cur) { key = tok; continue; }
+      if (key == null) key = tok; else { cur.fields[key] = tok; key = null; }
+    }
+    void top;
+  } else return null;
+  if (!games.length) return null;
+  meta.games = games.length;
+  meta.roms = games.reduce(function (n, g) { return n + g.roms.length; }, 0);
+  meta.id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  return { meta: meta, games: games };
+}
+// files: [{size, crc}] with their checksums: the game they match best, and how well
+function datMatch(files) {
+  var hits = new Map();
+  files.forEach(function (f) {
+    if (!f.crc) return;
+    Dats.size(f.size).forEach(function (h) {
+      if (h.rom.crc !== f.crc) return;
+      var k = h.dat.id + '\n' + h.game.name, e = hits.get(k);
+      if (!e) hits.set(k, e = { dat: h.dat, game: h.game, roms: new Set() });
+      e.roms.add(h.rom);
+    });
+  });
+  var desc = function (r) { return /\.(cue|gdi|toc|ccd)$/i.test(r.name); };
+  var best = null;
+  hits.forEach(function (e) {
+    var tracks = e.game.roms.filter(function (r) { return !desc(r); });
+    var got = tracks.filter(function (r) { return e.roms.has(r); }).length;
+    var score = got * 1000 - (tracks.length - got);
+    if (!best || score > best.score) best = { e: e, tracks: tracks, got: got, score: score };
+  });
+  if (!best || !best.got) return { none: true };
+  var missing = best.tracks.filter(function (r) { return !best.e.roms.has(r); }).map(function (r) { return r.name; });
+  var descs = best.e.game.roms.filter(desc);
+  return {
+    dat: best.e.dat, game: best.e.game.name, total: best.tracks.length, matched: best.got, missing: missing,
+    full: best.got === best.tracks.length, descDiffers: descs.length > 0 && !descs.some(function (r) { return best.e.roms.has(r); })
+  };
 }

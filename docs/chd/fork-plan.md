@@ -280,6 +280,28 @@ Priority order (C §9):
 
 **GameCube and Wii** have no CHD reader anywhere; their format is RVZ (D2 §12). It is out of scope for this fork.
 
+### Milestone 5: what users ask for (research of 2026-09-30)
+
+A survey of MAME's trackers, emulator and tool trackers and forums (the report "chdman: what users report and ask for") found the biggest unmet needs: checking CHDs against Redump or No-Intro DATs without extracting them, zipped inputs, and LibCrypt data for PAL PS1 games. None of the steps below changes the CHDs Discpress writes by default: they are tier R, or tier C only when a preset is chosen.
+
+**Status: steps 1 to 5 done** (Discpress 1.5.0; tests in `tests/ui/profiles.spec.js`, `zip.spec.js`, `dat.spec.js` and `pbp.spec.js`, and the `ps1-libcrypt` and `ps1-pbp*` fixtures). A PBP's audio tracks are read from its image, where popstation puts them; a disc whose track list doesn't fit its image is refused.
+
+1. **Compatibility notes and clearer refusals** (small).
+   - PS2 discs on CD with audio tracks: PCSX2 plays only the first track of a CD CHD (its `ChdFileReader`, draft PR #12037).
+   - Dreamcast CD-based discs (CD-R, MIL-CD) whose cue has pregaps: every Flycast release up to 2.7 rejects such CHDs ("Unsupported subtype or pre/postgap", flycast #906; fixed on master only).
+   - PS1 and Zstd: SwanStation before March 2026 can't read Zstd CHDs (RetroArch #18867).
+   - Formats Discpress can't read (`.cdi`, `.mds`/`.mdf`, `.isz`, `.7z`, `.rar`) get a card that says so and what to do, instead of being ignored.
+   - A "For MiSTer FPGA" preset for CDs: Zstd and FLAC with 4-sector hunks (`-c cdzs,cdfl -hs 9792`), what MiSTer needs for 8× CD speed (mkchd). Tier C: chosen, never automatic.
+2. **`.sbi` from a CloneCD `.sub`** (small). A PS1 disc's LibCrypt sectors carry Q subchannel with a deliberately wrong CRC. The page reads the `.sub`'s Q channel, lists the sectors whose CRC fails, and saves them as an `.sbi` next to the CHD, as for an `.sbi` the user adds. Too many bad sectors means a damaged `.sub`, not LibCrypt: no `.sbi` then, and the card says why.
+3. **`.zip` input** (medium). The page reads a zip's central directory (zip64 too). Stored entries are read in place, as slices of the zip. Deflated ones are unpacked first, into private storage where there is some, else into memory up to a limit, and their CRC-32 must match the zip's. The entries then join the list like picked files, so cue sheets find their tracks inside the zip. Other compression methods and encrypted entries are refused by name.
+4. **DAT verification** (medium). Users add Logiqx DAT files (Redump, No-Intro), plain or zipped; the page keeps them across visits (private storage, else for the visit). Every track of a disc is matched by size and CRC-32: before converting, from the input files (the checksums identification already computes are reused), and for a CHD after Verify, from the checksums of `extractcd --redump`'s files. The card says which DAT entry it matches and whether every track does; results can be named after it. Settings lists the loaded DATs.
+5. **PS1 `.pbp` input** (medium). Unencrypted PS1 `EBOOT.PBP` files (popstation's format: `PSISOIMG0000` for one disc, `PSTITLEIMG` for up to five) hold the disc's raw sectors in deflated 16-sector blocks with an index, so they read like a CSO: a worker store (`PbpStore`) serves the image, and the disc's TOC gives the cue sheet. Encrypted PBPs (PSN downloads), and ones whose audio tracks aren't in the image, are refused with the reason.
+
+Deferred, with the reason:
+- **DiscJuggler `.cdi` conversion and multi-session discs.** Most `.cdi` images are multi-session (Dreamcast self-boot discs), and chdman 0.289's CHDs can't place a second session: its data track would sit at the wrong address and not boot. Session metadata (`CHSE`, post-0.289) is also fatal to Kronos, Yabause and jgenesis. Emulators that matter for these discs (Flycast, Redream) load `.cdi` directly, so the page says to keep them.
+- **`.7z` and `.rar`.** 7z's solid LZMA2 blocks need a whole decoder and archive reader; rar has no free decoder. The card asks for zip or plain files.
+- **MDF/MDS.** Rare in the research; revisit on demand.
+
 ## 5. Test and verification strategy
 
 - **Oracles.** Each output is checked against a set of oracles, not one:

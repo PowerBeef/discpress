@@ -27,7 +27,8 @@
   <br><br>
   <a href="#how-it-works">How it works</a> &nbsp;·&nbsp;
   <a href="#features">Features</a> &nbsp;·&nbsp;
-  <a href="#supported-systems">Systems</a> &nbsp;·&nbsp;
+  <a href="#systems-and-files">Systems and files</a> &nbsp;·&nbsp;
+  <a href="#ready-for-your-emulator">Your emulator</a> &nbsp;·&nbsp;
   <a href="#get-started">Get started</a> &nbsp;·&nbsp;
   <a href="#faq">FAQ</a> &nbsp;·&nbsp;
   <a href="#build-it-yourself">Build it yourself</a>
@@ -37,9 +38,11 @@
 
 ## What is Discpress?
 
-A single PlayStation or Saturn game can be a dozen `.bin` files plus a `.cue`. **CHD** packs the whole disc into one compressed file that takes much less space, loses nothing, and loads directly in MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast and more.
+A single PlayStation or Saturn game can be a dozen `.bin` files plus a `.cue`. **CHD** packs the whole disc into one compressed file that takes much less space, loses nothing, and loads directly in MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast, MiSTer and more.
 
-The standard tool for making CHDs is **chdman**, a command-line program from the MAME project. **Discpress** puts its own fork of chdman, built from MAME 0.289 and made faster with its bugs fixed, inside a friendly app that runs in your web browser, on your phone or your computer. By default it makes the very same CHD files as chdman 0.289. There's no terminal and nothing to install, and your files never leave your device. It also recognizes your games and names each file after its official title.
+The standard tool for making CHDs is **chdman**, a command-line program from the MAME project. **Discpress** is chdman in a friendly app that runs in your web browser, on your phone or your computer: nothing to install, no terminal, and your files never leave your device. It runs its own fork of chdman, built from MAME 0.289, faster and with chdman's crashes on bad input fixed. With the default settings it makes the very same CHD files as chdman 0.289.
+
+Discpress also does what chdman leaves to you. It recognizes each game and names the file after its official title. It checks your dumps against the Redump database, or against your own Redump and No-Intro DAT files. It opens the formats your games actually come in, from `.zip` archives to PSP-style `EBOOT.PBP` files. And it prepares what your emulator needs next to the CHD.
 
 Use it the way that suits you: **download it** as one HTML file that works anywhere, even without internet, or **use it online** with nothing to download. The online version is also the way to convert big games on iPhone and iPad.
 
@@ -50,7 +53,7 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
     <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/steps-mobile-dark.png">
     <source media="(max-width: 600px)" srcset="docs/brand/steps-mobile-light.png">
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/steps-dark.png">
-    <img src="docs/brand/steps-light.png" width="100%" alt="1. Add your games: pick the cue and bin files, a gdi set or an iso; Discpress spots the console and the exact game. 2. Press Start: Discpress’s chdman compresses every disc using all your CPU cores. 3. Save the CHDs, named after the official title and ready for your emulator.">
+    <img src="docs/brand/steps-light.png" width="100%" alt="1. Add your games: pick the cue and bin files, a gdi set, an iso or a zip; Discpress spots the console and the exact game. 2. Press Start: Discpress’s chdman compresses every disc using all your CPU cores. 3. Save the CHDs, named after the official title and ready for your emulator.">
   </picture>
 </p>
 
@@ -61,7 +64,7 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
     <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/features-mobile-dark.png">
     <source media="(max-width: 600px)" srcset="docs/brand/features-mobile-light.png">
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/features-dark.png">
-    <img src="docs/brand/features-light.png" width="100%" alt="chdman, improved. Knows your games. Multi-core fast. Made for phones. Big discs welcome. Totally private.">
+    <img src="docs/brand/features-light.png" width="100%" alt="chdman, improved. Knows your games. Multi-core fast. Made for phones. Big discs welcome. Totally private. Checks your dumps. Opens what you have. Ready to play.">
   </picture>
 </p>
 
@@ -69,18 +72,42 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
 <summary><b>Everything it can do</b></summary>
 <br>
 
-- **Real chdman output.** chdman from the official MAME 0.289 release, compiled to WebAssembly, makes standard CHD v5 files, byte for byte the same as desktop chdman 0.289 makes on Linux, and with the same checksums as any chdman 0.289.
-- **The right command, picked for you:** `createcd`, `createdvd`, `createhd`, `createld`, `extractcd`, `extractdvd`, `extracthd`, `verify` and `info`. The **Advanced** tab gives you every chdman command and option, including `copy`, parent CHDs, `addmeta` and hard disk templates.
-- **Game recognition.** Discpress reads the disc's own boot files to find the console and serial number, then looks the game up in a built-in copy of the [Redump](http://redump.org) database (about 42,000 discs). When the size and CRC-32 match, the dump is marked as verified. When several releases share a serial number, you choose which one. Verifying a CHD also compares it with Redump, without extracting it.
+**Converting**
+
+- **Real chdman output.** Discpress makes standard CHD v5 files, byte for byte the same as desktop chdman 0.289 makes on Linux, with the same checksums as any chdman 0.289.
+- **The right command, picked for you:** `createcd`, `createdvd`, `createhd`, `createld`, `extractcd`, `extractdvd`, `extracthd`, `verify` and `info`, with the type and hunk size each console's emulators need. The **Advanced** tab gives you every chdman command and option, including `copy`, parent CHDs, `addmeta` and hard disk templates.
+- **Compression to suit you.** *Smallest* (the default) is chdman's own. *Nearly as small, faster* tries each track only with the codec that suits it: about 1.7 times as fast for CDs, at most 0.3% bigger, same checksums. *Faster to create*, *Faster to load (Zstd)*, *For MiSTer FPGA* and *No compression* are there too.
+- **Fast.** Compression is spread over all your CPU cores, with WebAssembly SIMD when your browser supports it. Extracting and verifying use several cores too.
+- **Back again.** A CHD extracts to its Redump dump: the same cue sheet and one `.bin` per track, so the files match Redump's checksums. Settings → *Keep the cue sheet in CD CHDs* also keeps what a CHD doesn't otherwise hold (CATALOG, FLAGS, ISRC, extra indexes), for discs that have it.
+
+**Knowing your games**
+
+- **Game recognition.** Discpress reads the disc's own boot files to find the console and serial number, then looks the game up in a built-in copy of the [Redump](http://redump.org) database (about 42,000 discs). When the size and CRC-32 match, the dump is marked as verified. When several releases share a serial number, you choose which one.
 - **Official names.** For example `Metal Gear Solid (USA) (Disc 1).chd`. You can also type your own name, turn renaming off, or use **Rename** to fix the name of a CHD you already have.
-- **Fast.** Compression is spread over all your CPU cores, with WebAssembly SIMD when your browser supports it.
+- **Your DAT files.** Add Redump or No-Intro DAT files (the `.dat` or `.xml`, or the `.zip` they come in) and every track of a disc is checked against them by size and CRC-32: before converting, and for a CHD after **Verify**, without extracting it. A disc whose every track matches is named after its DAT entry. The DATs are kept in the browser for your next visits.
+- **Verify** checks a CHD's own checksums, then compares it with Redump without extracting it.
+
+**Reading what you have**
+
+- **Archives and packed images are opened as they are read:** `.zip` archives (zip64 included), ECM images (`.bin.ecm`), CSO and ZSO compressed ISOs, and PlayStation `EBOOT.PBP` files made with popstation, one card per disc. Each is checked as it is unpacked.
+- **Disc images of every common kind:** cue sheets and their tracks, Dreamcast `.gdi` sets, `.iso` images (2,048- or 2,352-byte sectors), CloneCD (`.ccd` + `.img` + `.sub`), Nero (`.nrg`) and cdrdao (`.toc`). Cue sheets in odd encodings, with lower-case keywords or Windows line ends, are read correctly.
+- **Clear refusals.** Formats chdman can't take (DiscJuggler `.cdi`, Alcohol 120% `.mds`/`.mdf`, `.isz`, `.7z`, `.rar`) get a card that says why and what to do instead.
+
+**Ready for your emulator** (see [below](#ready-for-your-emulator))
+
+- **LibCrypt `.sbi` files** for PAL PlayStation games: one you add is saved next to the CHD under its name, and for a CloneCD dump the page makes it from the `.sub` file.
+- **`.m3u` playlists** for games on several discs, so the emulator can swap them.
+- **Warnings where an emulator can't load the result**, and settings that suit the console's emulators.
+
+**Phones, big files and privacy**
+
 - **Big files.** Results are written to the browser's private disk storage, so multi-gigabyte DVD images work, and results not saved yet are still there after a reload. On desktop Chrome and Edge, results can go straight into a folder you choose. (Chrome and Edge give a page opened as a downloaded file no disk storage, so there it keeps results in memory: for big DVD images, choose a folder or use it online.)
-- **Made for phones.** It adapts to any screen, notch, rotation and text size, in light or dark mode. On iPhone and iPad, **Save to Files** uses the share sheet; results over 512 MB are downloaded instead, since the share sheet loads the whole file into memory. If iOS reloads the page before you save, finished results are still there, under **From your last visit**.
+- **Made for phones.** It adapts to any screen, notch, rotation and text size, in light or dark mode, and can be added to the Home Screen. On iPhone and iPad, **Save to Files** uses the share sheet; results over 512 MB are downloaded instead, since the share sheet loads the whole file into memory. If iOS reloads the page before you save, finished results are still there, under **From your last visit**.
 - **Private and offline.** It's one self-contained HTML file with nothing to load from the internet. The online version is that same file: it runs on your device too, and once opened it works offline.
 
 </details>
 
-## Supported systems
+## Systems and files
 
 <p align="center">
   <picture>
@@ -93,20 +120,53 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
 
 | System | Add these files | Becomes |
 |---|---|---|
-| PlayStation, Saturn, Sega CD, PC Engine CD, Neo Geo CD, 3DO, CD-i, Amiga CD32, PC-FX | `.cue` + `.bin` (or ECM-packed `.bin.ecm`), or CloneCD `.ccd` + `.img` (+ `.sub`) | CD CHD |
-| Dreamcast | `.gdi` + tracks, or Redump `.cue` + `.bin` | CD CHD (GD-ROM detected) |
-| PlayStation 2 | DVD games: `.iso`, or compressed `.cso`/`.zso` · CD games: `.cue` + `.bin` | DVD or CD CHD |
-| PSP | `.iso`, or compressed `.cso`/`.zso` | DVD CHD |
+| PlayStation | `.cue` + `.bin`, CloneCD `.ccd` + `.img` + `.sub`, or an `EBOOT.PBP` made with popstation | CD CHD (one per disc) |
+| Saturn, Sega CD, PC Engine CD, Neo Geo CD, 3DO, CD-i, Amiga CD32, CDTV, PC-FX | `.cue` + `.bin`, or CloneCD `.ccd` + `.img` | CD CHD |
+| Dreamcast and NAOMI | `.gdi` + tracks, or Redump `.cue` + `.bin` | CD CHD (GD-ROM detected) |
+| PlayStation 2 | DVD games: `.iso`, `.cso` or `.zso` · CD games: `.cue` + `.bin` | DVD or CD CHD |
+| PSP | `.iso`, `.cso` or `.zso` | DVD CHD, with the 2,048-byte hunks PPSSPP recommends |
 | Arcade and computer hard disks | `.img`, `.hdd` | Hard disk CHD |
 | LaserDisc arcade games | `.avi` | LaserDisc CHD |
 | Any of the above | `.chd` | Back to `.cue`/`.bin` (by default the Redump dump's own files), `.gdi` or `.iso` |
+
+**Also works:**
+
+- A `.zip` of any of these. A zipped cue sheet finds its tracks inside the zip.
+- ECM-packed tracks (`.bin.ecm`) in place of their `.bin`.
+- Nero `.nrg` and cdrdao `.toc` images.
+- A lone `.bin` or raw `.iso` without its cue sheet: one is generated for single-track data discs.
+
+**Not supported, and what to do:**
+
+| Format | Why | Instead |
+|---|---|---|
+| DiscJuggler `.cdi` | Most are multi-session Dreamcast discs, which chdman 0.289 can't store so that they boot | Keep the `.cdi`: Flycast and Redream load it directly |
+| Alcohol 120% `.mds`/`.mdf` | Not a format chdman reads | Convert it to `.cue`/`.bin` with another tool first |
+| `.isz` | A proprietary compressed ISO | Unpack it to `.iso` with UltraISO first |
+| `.7z`, `.rar` | Need decoders the page doesn't have | Unpack them, or zip the files again |
+| Encrypted `EBOOT.PBP` (PlayStation Store) | Encrypted | Use a dump of the disc |
+
+## Ready for your emulator
+
+Discpress sets the CHD type and hunk size from the console, so the result loads where it should. **Compression never changes by itself**: the default is chdman's own, which every emulator reads. The card tells you when a choice or a disc won't work in a common emulator:
+
+| When | What Discpress does |
+|---|---|
+| Zstd compression for Saturn, Sega CD, PC Engine CD, 3DO, Amiga or PlayStation games | Warns: Kronos, Yabause, BlastEm, Beetle SuperGrafx, Opera, WinUAE and SwanStation before March 2026 can't read Zstd CHDs |
+| A PS2 game on CD with music tracks | Notes that PCSX2 plays only the first track of a CD CHD |
+| A CD-based Dreamcast disc (CD-R, MIL-CD) whose tracks have pregaps | Notes that Flycast 2.7 and earlier can't load it |
+| A PAL PlayStation game with LibCrypt | Saves its `.sbi` next to the CHD, under the CHD's name, where DuckStation, Beetle PSX, SwanStation, PCSX ReARMed and MiSTer look for it (made from the CloneCD `.sub` when there is one) |
+| Two or more discs of a game | Offers an `.m3u` playlist on the first disc's card: keep it with the CHDs and open it |
+| PS2 DVD games for AetherSX2 or NetherSX2 (Android) | Settings → *PlayStation 2 DVD games* makes CD CHDs, the only kind they read |
+| MiSTer FPGA | The *For MiSTer FPGA* preset: Zstd and FLAC in 4-sector hunks, fast enough for MiSTer's CD cores |
+| GameCube, Wii, Xbox or PS3 discs | Recognized, with a note that their emulators don't load CHDs |
 
 ## See it in action
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/showcase-dark.png">
-    <img src="docs/brand/showcase-light.png" width="100%" alt="Discpress on a desktop browser with a PlayStation disc identified as Metal Gear Solid (USA) (Disc 1), next to the phone version.">
+    <img src="docs/brand/showcase-light.png" width="100%" alt="Discpress on a desktop browser with a Saturn game converted and a PlayStation disc identified as Metal Gear Solid (USA) (Disc 1), next to the phone version.">
   </picture>
 </p>
 
@@ -121,9 +181,10 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
    | **How to open it** | Double-click it on a computer; on Android, open it with Chrome or another browser | Open the link. On iPhone and iPad, use Safari |
    | **Offline** | Always | Once opened; you can also install it (Share → **Add to Home Screen**, or the install button in Chrome and Edge) |
    | **Big DVD images** | In Chrome and Edge, choose a folder for the results (Settings): opened as a file, the page keeps them in memory | Results go to disk in every modern browser |
+   | **Updates** | Download the file again for a new version | Automatic: the next visit gets the new version |
 
    **On iPhone and iPad, use it online, in Safari.** Safari can't open a downloaded HTML file, and apps that can, such as Sitecase, can't save results over about 512 MB (most DVD, PSP and PS2 games). In Safari, results of any size download to Files → Downloads. If a big download doesn't start from the Home Screen icon, open the page in Safari itself.
-2. **Add your games.** Pick every file of a game together (the `.cue` *and* its `.bin` files), or drag them onto the page.
+2. **Add your games.** Pick every file of a game together (the `.cue` *and* its `.bin` files, or the `.zip` they're in), or drag them onto the page. To check every track against Redump or No-Intro, add their DAT files too, or in Settings.
 3. **Press Start all**, then **Save** or **Download** each CHD when it's ready. Keep the page open while it works; on a phone, keep the screen on too, since iOS and Android pause pages in the background.
 
 <img src="docs/brand/divider.png" width="100%" alt="">
@@ -133,13 +194,25 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
 <details>
 <summary><b>Are my games uploaded anywhere?</b></summary>
 <br>
-No. Discpress is a single file that runs entirely on your device, downloaded or online. It makes no network requests and works in airplane mode: its Content-Security-Policy (`connect-src 'none'`) forbids the page any connection, in the downloaded file and on [powerbeef.github.io/discpress/](https://powerbeef.github.io/discpress/) alike. The online version is the release file byte for byte; each release lists its SHA-256 (`discpress.html.sha256`), and the site has the same file, so you can compare them. Opening it online is an ordinary visit to a GitHub Pages site: GitHub sees the request for the page, as for any website, never your files. It sets no cookies and has no analytics. The downloaded file doesn't contact anything at all.
+No. Discpress is a single file that runs entirely on your device, downloaded or online. It makes no network requests and works in airplane mode: its Content-Security-Policy (`connect-src 'none'`) forbids the page any connection, in the downloaded file and on [powerbeef.github.io/discpress/](https://powerbeef.github.io/discpress/) alike. The online version is the release file byte for byte; each release lists its SHA-256 (`discpress.html.sha256`), and the site has the same file, so you can compare them. Opening it online is an ordinary visit to a GitHub Pages site: GitHub sees the request for the page, as for any website, never your files. It sets no cookies and has no analytics. The downloaded file doesn't contact anything at all, and DAT files you add stay in your browser.
 </details>
 
 <details>
 <summary><b>Are the CHDs as good as the ones from desktop chdman?</b></summary>
 <br>
-Yes. Discpress runs chdman from the official MAME 0.289 release, so the files are standard CHD v5 with the same checksums as desktop chdman 0.289's, and byte for byte the same as chdman 0.289 makes on Linux, CD audio included. (chdman builds for Windows or macOS round the FLAC encoder's floating-point math differently, so their CD-audio bytes can differ from each other's and from Discpress's, never the audio itself.) Its source is in <a href="engine/README.md"><code>engine/</code></a>. The changes let it run in a browser and on several cores, make it faster without changing a byte, and fix chdman 0.289's crashes on bad input. Some opt-in choices change the bytes but not the checksums: the <i>Nearly as small, faster</i> and <i>Faster to create</i> compressions, and keeping cue sheets in CD CHDs. You can read every change in <a href="engine/mame-0.289.diff"><code>engine/mame-0.289.diff</code></a>.
+Yes. Discpress runs chdman from the official MAME 0.289 release, so the files are standard CHD v5 with the same checksums as desktop chdman 0.289's, and byte for byte the same as chdman 0.289 makes on Linux, CD audio included. (chdman builds for Windows or macOS round the FLAC encoder's floating-point math differently, so their CD-audio bytes can differ from each other's and from Discpress's, never the audio itself.) Its source is in <a href="engine/README.md"><code>engine/</code></a>. The changes let it run in a browser and on several cores, make it faster without changing a byte, read packed images, and fix chdman 0.289's crashes on bad input. Some opt-in choices change the bytes but not the checksums: the faster compressions, Zstd, the MiSTer preset, and keeping cue sheets in CD CHDs. You can read every change in <a href="engine/mame-0.289.diff"><code>engine/mame-0.289.diff</code></a>.
+</details>
+
+<details>
+<summary><b>Which compression should I choose?</b></summary>
+<br>
+Keep the default, <i>Smallest</i>, unless you have a reason not to: every emulator reads it. <i>Nearly as small, faster</i> is the best trade when you convert a lot (about 1.7 times as fast for CDs, 1.5 for DVDs, files at most 0.3% bigger). <i>Faster to load (Zstd)</i> helps weak devices, but some emulators can't read it, and the card says which. On MiSTer, use <i>For MiSTer FPGA</i>.
+</details>
+
+<details>
+<summary><b>How do I check my games against Redump or No-Intro?</b></summary>
+<br>
+Every disc is already looked up in the built-in Redump database, which lists one file per game: the ISO, the only <code>.bin</code> or the main data track. To check <i>every</i> track, download the DAT files for your consoles from <a href="http://redump.org/downloads/">Redump</a> or No-Intro and add them, with your games or in Settings → <i>Your DAT files</i>. Each disc then says whether all its tracks match a game in them, before you convert it; a CHD says so after <b>Verify</b>. A fully matched disc is named after the DAT entry.
 </details>
 
 <details>
@@ -152,7 +225,7 @@ Yes. Discpress runs chdman from the official MAME 0.289 release, so the files ar
 | Chrome and Edge 102+ (desktop, Android) | Full, plus saving straight into a folder |
 | Firefox 111+ | Full |
 
-Older browsers keep results in memory instead of on disk, and so do Chrome and Edge when Discpress is opened as a downloaded file. That limits how big a disc can be, and a reload loses the results not saved yet (the page then says which). Choose a folder for results in Chrome and Edge, or use the online version.
+Older browsers keep results in memory instead of on disk, and so do Chrome and Edge when Discpress is opened as a downloaded file. That limits how big a disc can be, and a reload loses the results not saved yet (the page then says which). Choose a folder for results in Chrome and Edge, or use the online version. Unpacking deflated files from a `.zip` also uses disk storage where there is some, else memory, up to 1 GB.
 
 The downloaded file and the online version work the same in each of them. On iPhone and iPad, use the [online version](https://powerbeef.github.io/discpress/) in Safari. Apps that open HTML files, such as Sitecase, run it too, but they can't save results over about 512 MB (most DVD, PSP and PS2 games): the page tells you when that's the case. Lockdown Mode turns off WebAssembly, which Discpress needs.
 </details>
@@ -160,7 +233,7 @@ The downloaded file and the online version work the same in each of them. On iPh
 <details>
 <summary><b>How big can a disc be?</b></summary>
 <br>
-Multi-gigabyte DVD images work as long as your device has the free space, because results are written to disk rather than memory. Creating a CHD is CPU-heavy, so expect a few minutes per CD on a computer and longer on a phone. <i>Nearly as small, faster</i> in Options tries each track with only the codec that suits it: about 1.7 times as fast for CDs and 1.5 for DVDs, with files at most 0.3% bigger and the same checksums. <i>Faster to create</i> trades more size for more speed.
+Multi-gigabyte DVD images work as long as your device has the free space, because results are written to disk rather than memory. Creating a CHD is CPU-heavy, so expect a few minutes per CD on a computer and longer on a phone; the faster compressions in Options trade a little size for speed.
 </details>
 
 <details>
@@ -172,7 +245,7 @@ No. Hacks, translations, homebrew and modified dumps aren't in the Redump databa
 <details>
 <summary><b>Can I turn a CHD back into a .cue/.bin or .iso?</b></summary>
 <br>
-Yes. Add the <code>.chd</code> and choose Extract. A CD comes back as its Redump dump: the same cue sheet and <code>.bin</code> files. For discs whose cue sheet holds more than a CHD stores (CATALOG, FLAGS, ISRC, extra indexes: common on Saturn, Sega CD, PC Engine CD, 3DO and CD-i), turn on Settings → *Keep the cue sheet in CD CHDs* before converting, and that sheet comes back too. You can also verify a CHD's checksums, which compares it with Redump too, or view its details.
+Yes. Add the <code>.chd</code> and choose Extract. A CD comes back as its Redump dump: the same cue sheet and <code>.bin</code> files. For discs whose cue sheet holds more than a CHD stores (CATALOG, FLAGS, ISRC, extra indexes: common on Saturn, Sega CD, PC Engine CD, 3DO and CD-i), turn on Settings → <i>Keep the cue sheet in CD CHDs</i> before converting, and that sheet comes back too. You can also verify a CHD's checksums, which compares it with Redump too, or view its details.
 </details>
 
 <details>
@@ -202,10 +275,10 @@ source ~/emsdk/emsdk_env.sh
 ```
 
 - If you only change files in `app/`, run `python3 scripts/assemble.py` instead of the full build. Without Emscripten, run `python3 scripts/extract-build.py` once first: it recovers the WebAssembly build from `dist/discpress.html`. A change to `engine/`, `wasm/` or `build.sh` needs the full build: the page records the sources its WebAssembly was built from, and `scripts/check-dist.sh` (run by every release) refuses a page built from older ones.
-- `tests/` has end-to-end UI tests (Playwright) that check every conversion against native chdman, plus conversion benchmarks. See [`tests/README.md`](tests/README.md).
+- `tests/` has end-to-end UI tests (Playwright) that check every conversion against native chdman, with synthetic disc images of every supported kind, plus conversion benchmarks. See [`tests/README.md`](tests/README.md).
 - To refresh the game database with the latest Redump data, run `./scripts/update-db.sh`, then `python3 scripts/assemble.py`.
-- The README graphics are rendered from `scripts/brand/brand.html` with `python3 scripts/brand/render.py` (needs Playwright).
-- Running **Actions → Release → Run workflow** on `main` with a tag such as `v1.3.5` (always `vX.Y.Z`: there are no prereleases) publishes a release: `discpress.html` and its SHA-256 as the download, and the same file on GitHub Pages as the online version. The download goes public only once the site is deployed, so both always carry the same version; a daily check (`scripts/check-release.sh`) confirms it. See `.github/workflows/release.yml` and [`web/README.md`](web/README.md). Release notes come from `.github/release-notes/<tag>.md` when that file exists.
+- The README graphics are rendered from `scripts/brand/brand.html` with `python3 scripts/brand/render.py`, after `python3 scripts/brand/screenshots.py` takes the app screenshots they show (both need Playwright).
+- Running **Actions → Release → Run workflow** on `main` with a tag such as `v1.5.0` (always `vX.Y.Z`: there are no prereleases) publishes a release: `discpress.html` and its SHA-256 as the download, and the same file on GitHub Pages as the online version. The download goes public only once the site is deployed, so both always carry the same version; a daily check (`scripts/check-release.sh`) confirms it. See `.github/workflows/release.yml` and [`web/README.md`](web/README.md). Release notes come from `.github/release-notes/<tag>.md` when that file exists.
 
 </details>
 
@@ -220,10 +293,10 @@ source ~/emsdk/emsdk_env.sh
 | `wasm/` | WebAssembly build: Makefile, link flags, the parallel-compression helper, ECM decoding, and a small SDL stub |
 | `db/` | Game database (`db.json.gz`) and the script that builds it from libretro-database |
 | `web/` | What the online version adds to `discpress.html`: offline service worker, web app manifest and icons |
-| `scripts/` | Fetch MAME, build native chdman, update the database, assemble the single HTML file, and render the brand graphics |
+| `scripts/` | Fetch MAME, build native chdman, update the database, assemble the single HTML file, check releases, and render the README graphics |
 | `dist/` | The ready-to-use `discpress.html` |
 | `tests/` | End-to-end UI tests and benchmarks (Playwright) with synthetic disc images |
-| `docs/` | README graphics, research on the CHD format and chdman (`docs/chd/`), and on iPhone and iPad (`docs/ios/`) |
+| `docs/` | README graphics and screenshots, research on the CHD format and chdman (`docs/chd/`), and on iPhone and iPad (`docs/ios/`) |
 
 </details>
 
@@ -231,10 +304,11 @@ source ~/emsdk/emsdk_env.sh
 <summary><b>How it works inside</b></summary>
 <br>
 
-- **File access.** A custom Emscripten file system reads your files directly (no copy into memory) and writes results to the browser's private storage (OPFS), to a folder, or to memory.
+- **File access.** A custom Emscripten file system reads your files directly (no copy into memory) and writes results to the browser's private storage (OPFS), to a folder, or to memory. Packed inputs (CSO/ZSO, ECM, PBP) are unpacked block by block as chdman reads them; a zip's stored files are read in place, and its deflated ones are unpacked into private storage first.
 - **Multi-core compression.** Helper workers compress hunks in parallel. chdman's commands are C++20 coroutines that pause while the helpers work; extracting and verifying use the helpers the same way to decompress ahead of the reads.
+- **Game identification.** It reads boot headers (IP.BIN, SYSTEM.CNF, PARAM.SFO, IPL.TXT and others) through ISO 9660, including inside existing CHDs and packed images, then matches the serial number, or the size and CRC-32, against the database and your DAT files. Checking a CHD against them extracts it into checksums only, never to files.
 - **iPhone and iPad.** When a worker can't read the picked files (inside some file-viewer apps), the page streams them to the worker in chunks instead. A small record in the page's storage lets results survive a reload. [`docs/ios/`](docs/ios/README.md) explains iOS's limits and how Discpress works around them.
-- **Game identification.** It reads boot headers (IP.BIN, SYSTEM.CNF, PARAM.SFO, IPL.TXT and others) through ISO 9660, including inside existing CHDs, then matches the serial number, or the size and CRC-32, against the database.
+- **The plan.** [`docs/chd/fork-plan.md`](docs/chd/fork-plan.md) is the roadmap of the chdman fork, with the research behind it in [`docs/chd/`](docs/chd/README.md).
 
 </details>
 

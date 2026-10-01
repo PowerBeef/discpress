@@ -129,3 +129,88 @@ test('discs of the same name from different consoles don\u2019t share a playlist
   await expect(one.locator('.playlist')).toHaveCount(0);
   await expect(two.locator('.playlist')).toHaveCount(0);
 });
+
+test('a PS2 game on CD with music tracks: the card says PCSX2 plays only the first track', async ({ app }) => {
+  await app.open();
+  await app.add(fixture('ps2-cd-audio').add);
+  const card = app.job('ps2 cdda');
+  await app.settled(card);
+  await expect(card.locator('.sysbadge')).toHaveText('PS2');
+  await expect(card.locator('.compat-note')).toHaveText('PCSX2 plays only the first track of a CD CHD, so this game’s music tracks won’t play in it. They are kept in the CHD.');
+  await expect(card.locator('code.cmd')).toContainText('chdman createcd');
+});
+
+test('a CD-based Dreamcast disc with pregaps: the card says older Flycast rejects its CHD; a GD-ROM gets no such note', async ({ app }) => {
+  await app.open();
+  await app.add([...fixture('dreamcast-cdr').add, ...fixture('dreamcast-gdi').add]);
+  const cdr = app.job('dc cdr'), gd = app.job('aerowings');
+  await app.settled(cdr);
+  await app.settled(gd);
+  await expect(cdr.locator('.sysbadge')).toHaveText('DC');
+  await expect(cdr.locator('.compat-note')).toContainText('Flycast 2.7 and earlier can’t load CD-based Dreamcast CHDs whose tracks have pregaps');
+  await expect(gd.locator('.compat-note')).toHaveCount(0);
+  // a PS1 disc with a music track needs no note either
+  await app.add(fixture('ps1-multitrack').add);
+  const mgs = app.job('mgs disc1');
+  await app.settled(mgs);
+  await expect(mgs.locator('.compat-note')).toHaveCount(0);
+});
+
+test('the MiSTer preset makes Zstd + FLAC CD CHDs with 4-sector hunks, as chdman does with those options', async ({ app }) => {
+  const fx = fixture('ps1-single');
+  await app.open();
+  await app.add(fx.add);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await card.locator('details.opts summary').click();
+  const field = card.locator('label.field', { hasText: 'Compression' });
+  await field.locator('select').selectOption('mister');
+  await expect(field).toContainText('MiSTer');
+  await expect(card.locator('code.cmd')).toContainText('-c cdzs,cdfl -hs 9792');
+  await app.run(card);
+  const [out] = await app.downloads(card);
+  if (nativeChdman() && sameVersion()) expect(sha1File(out.path)).toBe(sha1File(reference('createcd', fx.add[0], ['-c', 'cdzs,cdfl', '-hs', '9792'])));
+});
+
+test('PS1 games warn that older SwanStation can’t read the Zstd preset', async ({ app }) => {
+  await app.open();
+  await app.add(fixture('ps1-single').add);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await card.locator('details.opts summary').click();
+  const field = card.locator('label.field', { hasText: 'Compression' });
+  await field.locator('select').selectOption('zstd');
+  await expect(field).toContainText('SwanStation (before March 2026) can’t read Zstd CHDs of Sony PlayStation games.');
+});
+
+test('a PS1 CloneCD image: LibCrypt sectors in its .sub become an .sbi saved with the CHD', async ({ app }) => {
+  const fx = fixture('ps1-libcrypt');
+  await app.open();
+  await app.add(fx.add);
+  const card = app.job('lc');
+  await app.settled(card);
+  await expect(card.locator('.sbi-note')).toHaveText('Its LibCrypt data (4 protected sectors, read from the .sub file) is saved with the CHD as an .sbi file, under the CHD’s name.');
+  await app.run(card);
+  const outs = await app.downloads(card);
+  expect(outs.map(o => o.name)).toEqual(['lc.chd', 'lc.sbi']);
+  expect(fs.readFileSync(outs[1].path).equals(fs.readFileSync(path.join(FIXTURES, 'lc-expected.sbi')))).toBe(true);
+});
+
+test('a .sub with far too many damaged sectors makes no .sbi, and the card says why; an .sbi added by hand wins', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'badsub');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const n of ['lc.ccd', 'lc.img']) fs.copyFileSync(path.join(FIXTURES, n), path.join(dir, n));
+  const sub = fs.readFileSync(path.join(FIXTURES, 'lc.sub'));
+  for (let i = 0; i < 300; i++) sub[i * 96 * 2 + 12 + 5] ^= 0x10; // Q changed, CRC not: 300 bad sectors
+  fs.writeFileSync(path.join(dir, 'lc.sub'), sub);
+  await app.open();
+  await app.add(['lc.ccd', 'lc.img', 'lc.sub'].map(n => 'gen/badsub/' + n));
+  const card = app.job('lc');
+  await app.settled(card);
+  await expect(card.locator('.sub-note')).toContainText('far more than LibCrypt protection uses, so no .sbi file is made from it');
+  await expect(card.locator('.sbi-note')).toHaveCount(0);
+  // the user's own .sbi is used
+  fs.writeFileSync(path.join(dir, 'lc.sbi'), fs.readFileSync(path.join(FIXTURES, 'lc-expected.sbi')));
+  await app.add(['gen/badsub/lc.sbi']);
+  await expect(card.locator('.sbi-note')).toHaveText('Its LibCrypt data (lc.sbi) is saved with the CHD, under the CHD’s name.');
+});

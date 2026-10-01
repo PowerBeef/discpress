@@ -37,7 +37,8 @@ for (const fx of manifest().filter(f => f.job === 'create' && !f.bench && !f.tes
     await app.run(card);
     await expect(card.locator('.result')).toContainText('Done.');
     const outs = await app.downloads(card);
-    expect(outs.map(o => o.name)).toEqual([`${expectedName}.chd`]);
+    // (a CloneCD image with LibCrypt sectors in its .sub: the .sbi made from them goes along)
+    expect(outs.map(o => o.name)).toEqual([`${expectedName}.chd`].concat(fx.sbi ? [`${expectedName}.sbi`] : []));
 
     const extra = fx.sys === 'psp' ? ['-hs', '2048'] : [];
     if (fx.key === 'ps1-lone-bin') return; // the app generates its own .cue for a lone .bin
