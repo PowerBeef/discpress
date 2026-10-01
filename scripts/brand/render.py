@@ -11,7 +11,7 @@ from playwright.sync_api import sync_playwright
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, '..', '..', 'docs', 'brand')
 URL = 'file://' + os.path.join(HERE, 'brand.html')
-JOBS = [(s, t) for s in ('hero', 'download', 'open', 'steps', 'features', 'systems', 'showcase') for t in ('light', 'dark')]
+JOBS = [(s, t) for s in ('hero', 'download', 'open', 'steps', 'features', 'formats', 'emulators', 'systems', 'showcase') for t in ('light', 'dark')]
 JOBS += [('divider', 'light'), ('mark', 'light')]
 
 os.makedirs(OUT, exist_ok=True)
@@ -35,7 +35,7 @@ with sync_playwright() as p:
         name = {'divider': 'divider.png', 'mark': 'logo.png'}.get(scene, '%s-%s.png' % (scene, theme))
         shot(scene, theme, name)
     # narrow layouts shown on phones (README <picture> sources with max-width)
-    for scene in ('hero', 'steps', 'features', 'systems'):
+    for scene in ('hero', 'steps', 'features', 'formats', 'emulators', 'systems'):
         for theme in ('light', 'dark'):
             shot(scene, theme, '%s-mobile-%s.png' % (scene, theme), m=True)
     # 1280x640 image for GitHub's social preview (Settings > General > Social preview)
