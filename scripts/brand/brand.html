@@ -89,14 +89,18 @@ body { font-family: var(--display); color: var(--text); -webkit-font-smoothing: 
 #steps .arrow { width: 64px; display: grid; place-items: center; color: var(--muted); }
 #steps .arrow svg { width: 44px; height: 44px; }
 
-/* feature cards */
-#features .grid { display: grid; grid-template-columns: repeat(3, 400px); gap: 28px 26px; }
-#features .f { background: var(--surface); border: 4px solid var(--ink); border-radius: 24px; box-shadow: 7px 7px 0 var(--shadow-c); padding: 26px 26px 28px; }
-#features .top { display: flex; align-items: center; gap: 16px; }
-#features .icon { width: 58px; height: 58px; flex: none; border-radius: 16px; border: 3.5px solid var(--ink); display: grid; place-items: center; color: #1c1733; box-shadow: 0 4px 0 var(--ink); }
-#features .icon svg { width: 30px; height: 30px; }
-#features h3 { font-size: 26px; font-weight: 900; letter-spacing: -.015em; line-height: 1.1; }
-#features p { font: 600 18.5px/1.45 var(--display); color: var(--muted); margin-top: 14px; }
+/* feature cards (features, emulators, formats) */
+.feat .grid { display: grid; grid-template-columns: repeat(3, 400px); gap: 28px 26px; }
+.feat .f { background: var(--surface); border: 4px solid var(--ink); border-radius: 24px; box-shadow: 7px 7px 0 var(--shadow-c); padding: 26px 26px 28px; }
+.feat .top { display: flex; align-items: center; gap: 16px; }
+.feat .icon { width: 58px; height: 58px; flex: none; border-radius: 16px; border: 3.5px solid var(--ink); display: grid; place-items: center; color: #1c1733; box-shadow: 0 4px 0 var(--ink); }
+.feat .icon svg { width: 30px; height: 30px; }
+.feat h3 { font-size: 26px; font-weight: 900; letter-spacing: -.015em; line-height: 1.1; }
+.feat p { font: 600 18.5px/1.45 var(--display); color: var(--muted); margin-top: 14px; }
+/* formats: file types as small chips in each card; the ones it can't read dashed */
+.feat .exts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.feat .x { font: 800 17px/1 var(--mono); padding: 9px 12px; border: 3px solid var(--ink); border-radius: 11px; background: var(--surface-2); color: var(--text); box-shadow: 0 3px 0 var(--ink); white-space: nowrap; }
+.feat .x.no { border: 3px dashed var(--muted); background: transparent; color: var(--muted); box-shadow: none; }
 
 /* systems */
 #systems .wrap { width: 1250px; display: flex; flex-wrap: wrap; gap: 18px 16px; justify-content: center; }
@@ -138,12 +142,14 @@ body { font-family: var(--display); color: var(--text); -webkit-font-smoothing: 
 .m #steps h3 { font-size: 46px; }
 .m #steps p { font-size: 28px; }
 .m #steps .num { font-size: 26px; }
-.m #features .grid { grid-template-columns: 720px; gap: 26px; }
-.m #features .f { padding: 30px 34px 34px; }
-.m #features .icon { width: 76px; height: 76px; border-radius: 20px; }
-.m #features .icon svg { width: 40px; height: 40px; }
-.m #features h3 { font-size: 38px; }
-.m #features p { font-size: 27px; }
+.m .feat .grid { grid-template-columns: 720px; gap: 26px; }
+.m .feat .f { padding: 30px 34px 34px; }
+.m .feat .icon { width: 76px; height: 76px; border-radius: 20px; }
+.m .feat .icon svg { width: 40px; height: 40px; }
+.m .feat h3 { font-size: 38px; }
+.m .feat p { font-size: 27px; }
+.m .feat .x { font-size: 25px; padding: 11px 15px; }
+.m .feat .exts { gap: 14px; margin-top: 24px; }
 .m #systems .wrap { width: 720px; gap: 16px 14px; }
 .m #systems .chip { font-size: 25px; padding: 12px 18px; }
 </style>
@@ -165,6 +171,12 @@ body { font-family: var(--display); color: var(--text); -webkit-font-smoothing: 
   <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 2.8 4.5 5.6v5.6c0 4.6 3.1 8.4 7.5 9.9 4.4-1.5 7.5-5.3 7.5-9.9V5.6z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="m8.6 12.1 2.4 2.4 4.6-4.8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
   <symbol id="i-box" viewBox="0 0 24 24"><path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/></symbol>
   <symbol id="i-pad" viewBox="0 0 24 24"><path d="M7.2 7h9.6a4.7 4.7 0 0 1 4.6 5.6l-.8 4.2a2.6 2.6 0 0 1-4.5 1.2L14.4 16H9.6l-1.7 2a2.6 2.6 0 0 1-4.5-1.2l-.8-4.2A4.7 4.7 0 0 1 7.2 7z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="M7.5 10v3.4M5.8 11.7h3.4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="15.6" cy="10.6" r="1.2" fill="currentColor"/><circle cx="17.4" cy="13" r="1.2" fill="currentColor"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.5 2.8 19.5h18.4z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/><path d="M12 9.5v4.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="12" cy="16.9" r="1.3" fill="currentColor"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="m11.3 11.7 8.2-8.2M16.5 6.5l2.6 2.6M14 9l2 2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 6.5h11M9 12h11M9 17.5h11" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="4.6" cy="6.5" r="1.5" fill="currentColor"/><circle cx="4.6" cy="12" r="1.5" fill="currentColor"/><circle cx="4.6" cy="17.5" r="1.5" fill="currentColor"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 11v5.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="12" cy="7.8" r="1.4" fill="currentColor"/></symbol>
+  <symbol id="i-disc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="2.2"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="m9 9 6 6m0-6-6 6" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
   <symbol id="i-stack" viewBox="0 0 24 24"><ellipse cx="12" cy="6.5" rx="8" ry="3" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M4 6.5v5c0 1.7 3.6 3 8 3s8-1.3 8-3v-5M4 11.5v5c0 1.7 3.6 3 8 3s8-1.3 8-3v-5" fill="none" stroke="currentColor" stroke-width="2.2"/></symbol>
 </svg>
 
@@ -205,7 +217,7 @@ body { font-family: var(--display); color: var(--text); -webkit-font-smoothing: 
 </div></div>
 
 <!-- FEATURES -->
-<div class="scene" id="features"><div class="grid">
+<div class="scene feat" id="features"><div class="grid">
   <div class="f"><div class="top"><div class="icon" style="background:var(--accent)"><svg><use href="#i-chip"/></svg></div><h3>chdman, improved</h3></div><p>Our own fork of MAME 0.289’s chdman: faster, bugs fixed. Same CHD files and checksums as the desktop tool.</p></div>
   <div class="f"><div class="top"><div class="icon" style="background:var(--accent-3)"><svg><use href="#i-tag"/></svg></div><h3>Knows your games</h3></div><p>Reads the disc, finds the console and serial, and names it from 42,000 Redump entries.</p></div>
   <div class="f"><div class="top"><div class="icon" style="background:var(--accent-2)"><svg><use href="#i-bolt"/></svg></div><h3>Multi-core fast</h3></div><p>Compression runs on every CPU core, with SIMD when your browser supports it.</p></div>
@@ -215,6 +227,26 @@ body { font-family: var(--display); color: var(--text); -webkit-font-smoothing: 
   <div class="f"><div class="top"><div class="icon" style="background:#7be3a3"><svg><use href="#i-shield"/></svg></div><h3>Checks your dumps</h3></div><p>Add Redump or No-Intro DAT files and every track is checked, before converting and after.</p></div>
   <div class="f"><div class="top"><div class="icon" style="background:var(--accent-2)"><svg><use href="#i-box"/></svg></div><h3>Opens what you have</h3></div><p>Zips, PS1 EBOOT.PBP, ECM, CSO and ZSO, CloneCD and Nero images, unpacked as they’re read.</p></div>
   <div class="f"><div class="top"><div class="icon" style="background:var(--accent)"><svg><use href="#i-pad"/></svg></div><h3>Ready to play</h3></div><p>LibCrypt .sbi and .m3u playlists made for you, a MiSTer preset, and a warning when an emulator can’t load it.</p></div>
+</div></div>
+
+<!-- FORMATS -->
+<div class="scene feat" id="formats"><div class="grid">
+  <div class="f"><div class="top"><div class="icon" style="background:var(--cyan)"><svg><use href="#i-disc"/></svg></div><h3>Disc images</h3></div><p>Every common kind, read as it is.</p>
+    <div class="exts"><span class="x">.cue + .bin</span><span class="x">.gdi</span><span class="x">.iso</span><span class="x">.ccd + .img</span><span class="x">.nrg</span><span class="x">.toc</span><span class="x">.chd</span></div></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-2)"><svg><use href="#i-box"/></svg></div><h3>Packed and zipped</h3></div><p>Unpacked as they’re read, and checked.</p>
+    <div class="exts"><span class="x">.zip</span><span class="x">.bin.ecm</span><span class="x">.cso</span><span class="x">.zso</span><span class="x">EBOOT.PBP</span></div></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--surface-2)"><svg style="color:var(--text)"><use href="#i-x"/></svg></div><h3>Not these</h3></div><p>The card says why, and what to do instead.</p>
+    <div class="exts"><span class="x no">.cdi</span><span class="x no">.mds / .mdf</span><span class="x no">.isz</span><span class="x no">.7z</span><span class="x no">.rar</span></div></div>
+</div></div>
+
+<!-- EMULATORS -->
+<div class="scene feat" id="emulators"><div class="grid">
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-3)"><svg><use href="#i-alert"/></svg></div><h3>Warns in time</h3></div><p>Says when an emulator can’t read Zstd, or load a disc like this one, before you convert.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:#b69cff"><svg><use href="#i-key"/></svg></div><h3>LibCrypt .sbi</h3></div><p>Saved next to a PAL PlayStation CHD under its name, or made from a CloneCD .sub.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--cyan)"><svg><use href="#i-list"/></svg></div><h3>.m3u playlists</h3></div><p>For games on several discs, so the emulator can swap them.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent)"><svg><use href="#i-chip"/></svg></div><h3>MiSTer preset</h3></div><p>Zstd and FLAC in small hunks, fast enough for MiSTer’s CD cores.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:#7be3a3"><svg><use href="#i-phone"/></svg></div><h3>Android PS2</h3></div><p>CD CHDs of DVD games, the only kind AetherSX2 and NetherSX2 read.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-2)"><svg><use href="#i-info"/></svg></div><h3>Says what won’t</h3></div><p>GameCube, Wii, Xbox and PS3 discs are recognized, with a note that their emulators skip CHDs.</p></div>
 </div></div>
 
 <!-- SYSTEMS -->

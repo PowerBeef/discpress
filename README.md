@@ -40,11 +40,9 @@
 
 A single PlayStation or Saturn game can be a dozen `.bin` files plus a `.cue`. **CHD** packs the whole disc into one compressed file that takes much less space, loses nothing, and loads directly in MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast, MiSTer and more.
 
-The standard tool for making CHDs is **chdman**, a command-line program from the MAME project. **Discpress** is chdman in a friendly app that runs in your web browser, on your phone or your computer: nothing to install, no terminal, and your files never leave your device. It runs its own fork of chdman, built from MAME 0.289, faster and with chdman's crashes on bad input fixed. With the default settings it makes the very same CHD files as chdman 0.289.
+The standard tool for making CHDs is **chdman**, a command-line program from the MAME project. **Discpress** puts its own fork of chdman (MAME 0.289, faster, with its bugs fixed) inside a friendly app that runs in your browser, on your phone or your computer. It makes the very same CHD files as chdman 0.289, names each game after its official title, checks your dumps, and opens the formats your games come in. Nothing to install, and your files never leave your device.
 
-Discpress also does what chdman leaves to you. It recognizes each game and names the file after its official title. It checks your dumps against the Redump database, or against your own Redump and No-Intro DAT files. It opens the formats your games actually come in, from `.zip` archives to PSP-style `EBOOT.PBP` files. And it prepares what your emulator needs next to the CHD.
-
-Use it the way that suits you: **download it** as one HTML file that works anywhere, even without internet, or **use it online** with nothing to download. The online version is also the way to convert big games on iPhone and iPad.
+**Download it** as one HTML file that works anywhere, even offline, or **use it online** with nothing to download: the way to convert big games on iPhone and iPad.
 
 ## How it works
 
@@ -118,6 +116,19 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
   </picture>
 </p>
 
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/formats-mobile-dark.png">
+    <source media="(max-width: 600px)" srcset="docs/brand/formats-mobile-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/formats-dark.png">
+    <img src="docs/brand/formats-light.png" width="100%" alt="Disc images: .cue + .bin, .gdi, .iso, .ccd + .img, .nrg, .toc, .chd. Packed and zipped, unpacked as they're read: .zip, .bin.ecm, .cso, .zso, EBOOT.PBP. Not these, and the card says why and what to do instead: .cdi, .mds / .mdf, .isz, .7z, .rar.">
+  </picture>
+</p>
+
+<details>
+<summary><b>Which files for which console</b></summary>
+<br>
+
 | System | Add these files | Becomes |
 |---|---|---|
 | PlayStation | `.cue` + `.bin`, CloneCD `.ccd` + `.img` + `.sub`, or an `EBOOT.PBP` made with popstation | CD CHD (one per disc) |
@@ -129,37 +140,53 @@ Use it the way that suits you: **download it** as one HTML file that works anywh
 | LaserDisc arcade games | `.avi` | LaserDisc CHD |
 | Any of the above | `.chd` | Back to `.cue`/`.bin` (by default the Redump dump's own files), `.gdi` or `.iso` |
 
-**Also works:**
+</details>
 
-- A `.zip` of any of these. A zipped cue sheet finds its tracks inside the zip.
-- ECM-packed tracks (`.bin.ecm`) in place of their `.bin`.
-- Nero `.nrg` and cdrdao `.toc` images.
-- A lone `.bin` or raw `.iso` without its cue sheet: one is generated for single-track data discs.
+<details>
+<summary><b>Formats it can't read, and what to do</b></summary>
+<br>
 
-**Not supported, and what to do:**
+| Format | Instead |
+|---|---|
+| DiscJuggler `.cdi` | Keep it: Flycast and Redream load it directly (most are multi-session discs, which chdman 0.289 can't store so they boot) |
+| Alcohol 120% `.mds`/`.mdf` | Convert it to `.cue`/`.bin` with another tool first |
+| UltraISO `.isz` | Convert it to `.iso` with UltraISO first |
+| `.7z`, `.rar` | Unpack them, or zip the files instead |
+| Encrypted `EBOOT.PBP` (PlayStation Store) | Use a dump of the disc |
 
-| Format | Why | Instead |
-|---|---|---|
-| DiscJuggler `.cdi` | Most are multi-session Dreamcast discs, which chdman 0.289 can't store so that they boot | Keep the `.cdi`: Flycast and Redream load it directly |
-| Alcohol 120% `.mds`/`.mdf` | Not a format chdman reads | Convert it to `.cue`/`.bin` with another tool first |
-| `.isz` | A proprietary compressed ISO | Unpack it to `.iso` with UltraISO first |
-| `.7z`, `.rar` | Need decoders the page doesn't have | Unpack them, or zip the files again |
-| Encrypted `EBOOT.PBP` (PlayStation Store) | Encrypted | Use a dump of the disc |
+A lone `.bin` or raw `.iso` without its cue sheet works for single-track data discs: one is generated.
+
+</details>
 
 ## Ready for your emulator
 
-Discpress sets the CHD type and hunk size from the console, so the result loads where it should. **Compression never changes by itself**: the default is chdman's own, which every emulator reads. The card tells you when a choice or a disc won't work in a common emulator:
+The right CHD type and hunk size for each console, compression that every emulator reads unless you choose otherwise, and the files your emulator wants next to the CHD.
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/emulators-mobile-dark.png">
+    <source media="(max-width: 600px)" srcset="docs/brand/emulators-mobile-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/emulators-dark.png">
+    <img src="docs/brand/emulators-light.png" width="100%" alt="Warns in time: says when an emulator can't read Zstd, or load a disc like this one. LibCrypt .sbi: saved next to a PAL PlayStation CHD, or made from a CloneCD .sub. .m3u playlists for games on several discs. MiSTer preset. Android PS2: CD CHDs of DVD games for AetherSX2 and NetherSX2. Says what won't: GameCube, Wii, Xbox and PS3 discs are recognized, with a note that their emulators skip CHDs.">
+  </picture>
+</p>
+
+<details>
+<summary><b>Every warning and setting</b></summary>
+<br>
 
 | When | What Discpress does |
 |---|---|
-| Zstd compression for Saturn, Sega CD, PC Engine CD, 3DO, Amiga or PlayStation games | Warns: Kronos, Yabause, BlastEm, Beetle SuperGrafx, Opera, WinUAE and SwanStation before March 2026 can't read Zstd CHDs |
+| Zstd for Saturn, Sega CD, PC Engine CD, 3DO, Amiga or PlayStation | Warns: Kronos, Yabause, BlastEm, Beetle SuperGrafx, Opera, WinUAE and SwanStation before March 2026 can't read it |
 | A PS2 game on CD with music tracks | Notes that PCSX2 plays only the first track of a CD CHD |
-| A CD-based Dreamcast disc (CD-R, MIL-CD) whose tracks have pregaps | Notes that Flycast 2.7 and earlier can't load it |
-| A PAL PlayStation game with LibCrypt | Saves its `.sbi` next to the CHD, under the CHD's name, where DuckStation, Beetle PSX, SwanStation, PCSX ReARMed and MiSTer look for it (made from the CloneCD `.sub` when there is one) |
-| Two or more discs of a game | Offers an `.m3u` playlist on the first disc's card: keep it with the CHDs and open it |
-| PS2 DVD games for AetherSX2 or NetherSX2 (Android) | Settings → *PlayStation 2 DVD games* makes CD CHDs, the only kind they read |
-| MiSTer FPGA | The *For MiSTer FPGA* preset: Zstd and FLAC in 4-sector hunks, fast enough for MiSTer's CD cores |
-| GameCube, Wii, Xbox or PS3 discs | Recognized, with a note that their emulators don't load CHDs |
+| A CD-based Dreamcast disc with pregaps | Notes that Flycast 2.7 and earlier can't load it |
+| A PAL PlayStation game with LibCrypt | Saves its `.sbi` under the CHD's name, where DuckStation, Beetle PSX, SwanStation, PCSX ReARMed and MiSTer look for it |
+| Two or more discs of a game | Offers an `.m3u` playlist on the first disc's card |
+| PS2 DVD games for AetherSX2 or NetherSX2 | Settings → *PlayStation 2 DVD games* makes CD CHDs |
+| MiSTer FPGA | *For MiSTer FPGA*: Zstd and FLAC in 4-sector hunks |
+| GameCube, Wii, Xbox or PS3 | A note that their emulators don't load CHDs |
+
+</details>
 
 ## See it in action
 
@@ -183,8 +210,8 @@ Discpress sets the CHD type and hunk size from the console, so the result loads 
    | **Big DVD images** | In Chrome and Edge, choose a folder for the results (Settings): opened as a file, the page keeps them in memory | Results go to disk in every modern browser |
    | **Updates** | Download the file again for a new version | Automatic: the next visit gets the new version |
 
-   **On iPhone and iPad, use it online, in Safari.** Safari can't open a downloaded HTML file, and apps that can, such as Sitecase, can't save results over about 512 MB (most DVD, PSP and PS2 games). In Safari, results of any size download to Files → Downloads. If a big download doesn't start from the Home Screen icon, open the page in Safari itself.
-2. **Add your games.** Pick every file of a game together (the `.cue` *and* its `.bin` files, or the `.zip` they're in), or drag them onto the page. To check every track against Redump or No-Intro, add their DAT files too, or in Settings.
+   **On iPhone and iPad, use it online, in Safari:** Safari can't open a downloaded HTML file, and results of any size download to Files → Downloads.
+2. **Add your games.** Pick every file of a game together (the `.cue` *and* its `.bin` files, or their `.zip`), or drag them onto the page.
 3. **Press Start all**, then **Save** or **Download** each CHD when it's ready. Keep the page open while it works; on a phone, keep the screen on too, since iOS and Android pause pages in the background.
 
 <img src="docs/brand/divider.png" width="100%" alt="">
