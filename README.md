@@ -177,13 +177,15 @@ The right CHD type and hunk size for each console, compression that every emulat
 
 | When | What Discpress does |
 |---|---|
-| Zstd for Saturn, Sega CD, PC Engine CD, 3DO, Amiga or PlayStation | Warns: Kronos, Yabause, BlastEm, Beetle SuperGrafx, Opera, WinUAE and SwanStation before March 2026 can't read it |
+| Zstd (or the MiSTer preset) for Saturn, Sega CD, PC Engine CD, 3DO, Amiga, PlayStation, PS2, Dreamcast, NAOMI or PC-FX | Warns: Kronos, Yabause, BlastEm, Beetle SuperGrafx, Opera, WinUAE, SwanStation before March 2026, AetherSX2, Flycast before 2.3 and older Beetle PC-FX can't read it |
+| Keeping the cue sheet, for a Saturn or Sega CD game | Leaves it out and says why: Kronos, Yabause and jgenesis can't open such a CHD |
+| A NAOMI GD-ROM | Keeps its file's name, which MAME and Flycast look for in the game's romset |
 | A PS2 game on CD with music tracks | Notes that PCSX2 plays only the first track of a CD CHD |
 | A CD-based Dreamcast disc with pregaps | Notes that Flycast 2.7 and earlier can't load it |
 | A PAL PlayStation game with LibCrypt | Saves its `.sbi` under the CHD's name, where DuckStation, Beetle PSX, SwanStation, PCSX ReARMed and MiSTer look for it |
 | Two or more discs of a game | Offers an `.m3u` playlist on the first disc's card |
 | PS2 DVD games for AetherSX2 or NetherSX2 | Settings → *PlayStation 2 DVD games* makes CD CHDs |
-| MiSTer FPGA | *For MiSTer FPGA*: Zstd and FLAC in 4-sector hunks |
+| MiSTer FPGA | *For MiSTer FPGA*: Zstd and FLAC in 4-sector hunks; warns for consoles MiSTer has no core for |
 | GameCube, Wii, Xbox or PS3 | A note that their emulators don't load CHDs |
 
 </details>
@@ -272,7 +274,7 @@ No. Hacks, translations, homebrew and modified dumps aren't in the Redump databa
 <details>
 <summary><b>Can I turn a CHD back into a .cue/.bin or .iso?</b></summary>
 <br>
-Yes. Add the <code>.chd</code> and choose Extract. A CD comes back as its Redump dump: the same cue sheet and <code>.bin</code> files. For discs whose cue sheet holds more than a CHD stores (CATALOG, FLAGS, ISRC, extra indexes: common on Saturn, Sega CD, PC Engine CD, 3DO and CD-i), turn on Settings → <i>Keep the cue sheet in CD CHDs</i> before converting, and that sheet comes back too. You can also verify a CHD's checksums, which compares it with Redump too, or view its details.
+Yes. Add the <code>.chd</code> and choose Extract. A CD comes back as its Redump dump: the same cue sheet and <code>.bin</code> files. For discs whose cue sheet holds more than a CHD stores (CATALOG, FLAGS, ISRC, extra indexes: common on PC Engine CD, 3DO and CD-i), turn on Settings → <i>Keep the cue sheet in CD CHDs</i> before converting, and that sheet comes back too. Saturn and Sega CD games leave it out, since Kronos, Yabause and jgenesis can't open a CHD that keeps one. You can also verify a CHD's checksums, which compares it with Redump too, or view its details.
 </details>
 
 <details>

@@ -32,7 +32,8 @@ for (const fx of manifest().filter(f => f.job === 'create' && !f.bench && !f.tes
     if (fx.warning) await expect(card).toContainText(fx.warning);
 
     // command and output name
-    const expectedName = fx.name || fx.names[0];
+    // (out: a result that keeps its file's name although the game is named, as NAOMI GD-ROMs do)
+    const expectedName = fx.out || fx.name || fx.names[0];
     await expect(card.locator('code.cmd')).toContainText(`chdman ${fx.command} -i`);
     await app.run(card);
     await expect(card.locator('.result')).toContainText('Done.');

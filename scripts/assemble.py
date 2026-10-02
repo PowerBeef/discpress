@@ -62,7 +62,11 @@ db_raw = rd(DB, 'rb')
 db_json = gzip.decompress(db_raw)
 dbver = json.loads(db_json)['version']
 helpc = rd(os.path.join(A, 'help.html')).replace('/*PATCH*/', html.escape(patch)).replace('/*DBVER*/', 'version ' + html.escape(dbver))
-ui = inline_script(rd(os.path.join(A, 'ui.js')).replace('/*IDENT*/', rd(os.path.join(A, 'ident.js'))), 'app/ui.js + app/ident.js')
+ui_src = rd(os.path.join(A, 'ui.js'))
+for k in ('/*IDENT*/', '/*QUIRKS*/'):
+    assert ui_src.count(k) == 1, k + ' in app/ui.js'
+ui = inline_script(ui_src.replace('/*IDENT*/', rd(os.path.join(A, 'ident.js'))).replace('/*QUIRKS*/', rd(os.path.join(A, 'quirks.js'))),
+                   'app/ui.js + app/ident.js + app/quirks.js')
 style = rd(os.path.join(A, 'style.css'))
 assert '</style' not in style.lower(), '</style in app/style.css'
 
