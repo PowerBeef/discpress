@@ -1,0 +1,65 @@
+# Rebuilds the WebAssembly from the sources with the pinned Emscripten (build.sh) and checks that the
+# page comes out byte for byte the dist/discpress.html in the repository, the file releases ship.
+# scripts/check-dist.sh (run by CI and by every release) checks that the page records the sources it
+# was built from, a hash build.sh writes itself; this checks the build itself, on another machine.
+# Runs when the engine or its build changes, weekly, and on demand.
+name: Rebuild
+
+on:
+  push:
+    branches: [main]
+    paths: ['engine/**', 'wasm/**', 'build.sh', 'scripts/engine-sources.py', 'scripts/assemble.py', '.github/workflows/rebuild.yml']
+  pull_request:
+    paths: ['engine/**', 'wasm/**', 'build.sh', 'scripts/engine-sources.py', 'scripts/assemble.py', '.github/workflows/rebuild.yml']
+  schedule:
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rebuild-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Emscripten 6.0.10
+        uses: actions/cache@v4
+        with:
+          path: ~/emsdk
+          key: emsdk-6.0.10-${{ runner.os }}
+      - name: Emscripten 6.0.10 (emsdk)
+        run: |
+          [ -d ~/emsdk/.git ] || git clone --depth 1 https://github.com/emscripten-core/emsdk.git ~/emsdk
+          cd ~/emsdk
+          ./emsdk install 6.0.10
+          ./emsdk activate 6.0.10
+      - name: Build
+        run: |
+          source ~/emsdk/emsdk_env.sh
+          ./build.sh
+      - name: The page is the one in the repository, byte for byte
+        run: |
+          if git diff --quiet -- dist/discpress.html; then
+            echo "dist/discpress.html rebuilt byte for byte ($(sha256sum dist/discpress.html | cut -c1-64))"
+          else
+            echo "::error::A clean build of these sources doesn't give the committed dist/discpress.html"
+            git diff --stat -- dist/discpress.html
+            exit 1
+          fi
+      - name: The rebuilt page, when it differs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rebuilt-discpress
+          path: |
+            dist/discpress.html
+            build/chdman.wasm
+            build/chdman-nosimd.wasm
+            build/chdman.js
+          retention-days: 14

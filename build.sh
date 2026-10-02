@@ -2,7 +2,9 @@
 # Build Discpress: compile the chdman engine (engine/) to WebAssembly (SIMD and
 # non-SIMD) and assemble everything into the single file dist/discpress.html.
 #
-# Requirements: Emscripten 6.0.x on PATH (source emsdk_env.sh), python3 and make.
+# Requirements: Emscripten 6.0.10 on PATH (source emsdk_env.sh), python3 and make. Another version
+# can give other WebAssembly bytes, so the build refuses it (EMSCRIPTEN_ANY=1 allows it, for experiments:
+# the page it makes is not a release build).
 #
 # Environment: JOBS (default: CPU count)
 set -euo pipefail
@@ -11,6 +13,16 @@ OUT="$ROOT/build"
 
 if ! command -v em++ >/dev/null; then
   echo "Emscripten not found. Install emsdk and run: source <emsdk>/emsdk_env.sh" >&2
+  exit 1
+fi
+# the exact Emscripten release (emsdk 6.0.10: emscripten commit d6c521a7f...); this file is part of the
+# sources the page records (scripts/engine-sources.py), so the pin is too
+EMSCRIPTEN_VERSION=6.0.10
+EMSCRIPTEN_COMMIT=d6c521a7f05449857c76bd99e396895583cf2083
+have="$(em++ --version)"; have="${have%%$'\n'*}" # its first line
+if [ "$have" = "${have%" $EMSCRIPTEN_VERSION ($EMSCRIPTEN_COMMIT)"}" ] && [ -z "${EMSCRIPTEN_ANY:-}" ]; then
+  echo "Emscripten $EMSCRIPTEN_VERSION ($EMSCRIPTEN_COMMIT) is required, found: $have" >&2
+  echo "Install it: emsdk install $EMSCRIPTEN_VERSION && emsdk activate $EMSCRIPTEN_VERSION (or set EMSCRIPTEN_ANY=1 to try another)" >&2
   exit 1
 fi
 JOBS="${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)}"

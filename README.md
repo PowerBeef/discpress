@@ -283,13 +283,13 @@ No. It only converts files you already have. Please convert only discs you own.
 
 ## Build it yourself
 
-The build is fully reproducible: building from a clean checkout gives a byte-identical `dist/discpress.html`.
+The build is fully reproducible: building from a clean checkout gives a byte-identical `dist/discpress.html`, and CI checks it by rebuilding the WebAssembly on GitHub's machines (`.github/workflows/rebuild.yml`).
 
 <details>
 <summary><b>Build instructions</b></summary>
 <br>
 
-Requirements: [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) 6.0.10, Python 3 and make. The chdman source is in `engine/` (see [`engine/README.md`](engine/README.md)).
+Requirements: [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) 6.0.10 exactly (`build.sh` refuses another version, which could give other bytes), Python 3 and make. The chdman source is in `engine/` (see [`engine/README.md`](engine/README.md)).
 
 ```sh
 # one-time setup
