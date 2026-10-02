@@ -700,7 +700,7 @@ body { overflow-x: clip; }
     <li>When a job finishes, press <b>Download</b>. On desktop Chrome and Edge you can also <b>Save all to folder</b>.</li>
     <li>On iPhone and iPad the button is called <b>Save to Files</b> and opens the share sheet, which works even inside apps that can't download. Results over 512 MB, such as most DVD games, are downloaded instead, since the share sheet loads the whole file into memory. Safari puts them in Files → Downloads; apps like Sitecase usually can't, so for big games use Discpress in Safari at <b>powerbeef.github.io/discpress/</b>.</li>
   </ol>
-  <p class="small muted">Add <code>.chd</code> files to extract them back to <code>.cue/.bin</code>, <code>.gdi</code>, <code>.iso</code> or a raw image, to verify their checksums, or to see their details. A CD comes back as a Redump dump by default: the same cue sheet and one <code>.bin</code> per track, so the files match Redump's checksums. With Settings → <i>Keep the cue sheet in CD CHDs</i>, new CHDs also keep the original cue sheet, so what CHDs don't otherwise hold (CATALOG, FLAGS, ISRC, extra indexes, CD-i track types) comes back too.</p>
+  <p class="small muted">Add <code>.chd</code> files to extract them back to <code>.cue/.bin</code>, <code>.gdi</code>, <code>.iso</code> or a raw image, to verify their checksums, or to see their details. A CD comes back as a Redump dump by default: the same cue sheet and one <code>.bin</code> per track, so the files match Redump's checksums. With Settings → <i>Keep the cue sheet in CD CHDs</i>, new CHDs also keep the original cue sheet, so what CHDs don't otherwise hold (CATALOG, FLAGS, ISRC, extra indexes, CD-i track types) comes back too. Saturn and Sega CD games leave it out: Kronos, Yabause and jgenesis can't open a CHD that keeps one.</p>
 </div>
 
 <div class="card">
@@ -723,7 +723,7 @@ body { overflow-x: clip; }
   <p class="small muted">A <code>.zip</code> works like the files inside it: add the zip of a game (or several), and its cue sheet finds its tracks inside. Files stored in the zip are read in place; compressed ones are unpacked first into the browser's private storage and checked against the zip's checksum. <code>.7z</code> and <code>.rar</code> can't be read: unpack them, or zip them again.</p>
   <p class="small muted">A PlayStation <code>EBOOT.PBP</code> (made with popstation for a PSP or PS Vita) converts to a CD CHD: each disc in it gets its own card, named after the game in the file. PlayStation Store downloads are encrypted and can't be read.</p>
   <p class="small muted">DiscJuggler <code>.cdi</code>, Alcohol 120% <code>.mds</code>/<code>.mdf</code> and <code>.isz</code> images get a card that says why they can't be converted and what to do instead. Emulators that play <code>.cdi</code> images (Flycast, Redream) load them directly, so keep those as they are.</p>
-  <p class="small muted">The type and hunk size are set from the console once the game is identified. Compression stays chdman's default, which every emulator reads; the page warns when the <i>Zstd</i> preset isn't readable by a console's emulators (Saturn, 3DO, Sega CD, PC Engine CD, Amiga). GameCube, Wii, Xbox and PS3 emulators don't load CHDs at all, and the page says so. It also says when a common emulator can't load a CHD of the disc: PCSX2 plays only the first track of a PS2 CD with music tracks, and Flycast 2.7 and earlier can't load CD-based Dreamcast discs whose tracks have pregaps. For MiSTer FPGA, choose the <i>For MiSTer FPGA</i> compression preset (Zstd and FLAC with small hunks, which MiSTer reads fast enough).</p>
+  <p class="small muted">The type and hunk size are set from the console once the game is identified. Compression stays chdman's default, which every emulator reads; the page warns when the <i>Zstd</i> or <i>MiSTer</i> preset isn't readable by a console's emulators (Saturn, 3DO, Sega CD, PC Engine CD, Amiga, PlayStation, PS2, Dreamcast, NAOMI, PC-FX). NAOMI GD-ROMs keep their file's name, which MAME and Flycast look for in the game's romset. GameCube, Wii, Xbox and PS3 emulators don't load CHDs at all, and the page says so. It also says when a common emulator can't load a CHD of the disc: PCSX2 plays only the first track of a PS2 CD with music tracks, and Flycast 2.7 and earlier can't load CD-based Dreamcast discs whose tracks have pregaps. For MiSTer FPGA, choose the <i>For MiSTer FPGA</i> compression preset (Zstd and FLAC with small hunks, which MiSTer reads fast enough); the page says when MiSTer has no core for the console.</p>
   <p class="small muted">Add a PAL PlayStation game's <code>.sbi</code> file (LibCrypt protection data) with its <code>.cue</code> and <code>.bin</code>: it is saved next to the CHD, under the CHD's name, where emulators look for it. A CloneCD dump's <code>.sub</code> holds the same data: for a PlayStation game, the page reads it and saves the <code>.sbi</code> for you. When two or more discs of a game are converted, the first disc's card offers an <code>.m3u</code> playlist: keep it with the CHDs and open it, so the emulator can swap discs.</p>
 </div>
 
@@ -6924,7 +6924,7 @@ SOFTWARE.</div>
       <span class="hint">Every track of your discs is checked against them, and discs that match are named after them. Add .dat or .xml files, or zips of them; they stay in this browser.</span>
     </div>
     <div class="field"><label class="check"><input type="checkbox" id="setKeepCue"> Keep the cue sheet in CD CHDs</label>
-      <span class="hint">Extracting as Redump then gives back the very same cue sheet, with what CHDs don't otherwise keep (CATALOG, FLAGS, ISRC, extra indexes). The CHD's checksums stay the same and emulators ignore the sheet, but the file is no longer byte for byte desktop chdman's.</span>
+      <span class="hint">Extracting as Redump then gives back the very same cue sheet, with what CHDs don't otherwise keep (CATALOG, FLAGS, ISRC, extra indexes). The CHD's checksums stay the same and most emulators ignore the sheet, but the file is no longer byte for byte desktop chdman's. Saturn and Sega CD games leave it out: Kronos, Yabause and jgenesis reject CHDs that keep one.</span>
     </div>
     <div class="field"><label class="check"><input type="checkbox" id="setVerify"> Verify each new CHD after creating it</label>
       <span class="hint">Reads the CHD back and checks it holds exactly the data it was made from. Takes a little longer. It is also done when a helper thread fails during a conversion, and each finished CHD has a Verify button.</span>
@@ -9991,6 +9991,30 @@ function msfFrames(s) {
   var m = /(\d+):(\d+):(\d+)/.exec(s || '');
   return m ? (+m[1] * 60 + +m[2]) * 75 + +m[3] : 0;
 }
+// a cue sheet's layout, as the per-disc rules (quirks.js) see it: its tracks (number, mode, session,
+// INDEX 00 and 01 and PREGAP and POSTGAP in frames), its sessions (REM SESSION nn, as Redump writes),
+// whether it is a GD-ROM's (REM HIGH-DENSITY AREA), and whether it has audio, CD+G or gaps
+function cueModel(text) {
+  var m = { tracks: [], sessions: 1, gd: /^\s*REM\s+HIGH-DENSITY AREA/im.test(text), audio: false, cdg: false, gaps: false };
+  var cur = null, session = 1;
+  text.split(/\r?\n/).forEach(function (ln) {
+    var r;
+    if ((r = /^\s*REM\s+SESSION\s+0*(\d+)/i.exec(ln))) { session = +r[1]; m.sessions = Math.max(m.sessions, session); }
+    else if ((r = /^\s*TRACK\s+(\d+)\s+(\S+)/i.exec(ln))) {
+      cur = { no: +r[1], mode: r[2].toUpperCase(), session: session, index: {}, pregap: 0, postgap: 0 };
+      m.tracks.push(cur);
+    } else if (cur && (r = /^\s*INDEX\s+(\d+)\s+(\S+)/i.exec(ln))) cur.index[+r[1]] = msfFrames(r[2]);
+    else if (cur && (r = /^\s*(PREGAP|POSTGAP)\s+(\S+)/i.exec(ln))) cur[r[1].toLowerCase()] = msfFrames(r[2]);
+  });
+  m.audio = m.tracks.some(function (t) { return t.mode === 'AUDIO'; });
+  m.cdg = m.tracks.some(function (t) { return t.mode === 'CDG'; });
+  m.gaps = /^\s*(INDEX\s+0*0\s|PREGAP\b|POSTGAP\b)/im.test(text);
+  return m;
+}
+// the same of a TOC file (cdrdao's), as far as the rules need it
+function tocModel(text) {
+  return { tracks: [], sessions: 1, gd: false, audio: /^\s*TRACK\s+AUDIO\b/m.test(text), cdg: false, gaps: /^\s*(PREGAP|START)\b/m.test(text) };
+}
 // data tracks + hashable files of a "create" job; images: the stand-ins for its ECM files (ecmImages);
 // nrg: the tracks of a Nero image (nrgTracks)
 function probePlan(job, images, nrg) {
@@ -10411,6 +10435,69 @@ function datMatch(files) {
 }
 
 
+/* ============================================================
+   per-console and per-disc rules: what an emulator needs or can't do, and what chdman 0.289 does
+   wrong with a disc. Each rule has a stable id (data-quirk on its note), the systems it applies to
+   (sys, or every system when it has none), and when(ctx) (does it apply to this job?). What it does:
+   - act: 'nokeepcue' (createcd leaves out --keepcue; that gives chdman's own CHD) or 'norename'
+     (the results keep their file's name);
+   - text: shown on the card (a string, or a function of ctx), in the warning colour with warn.
+   src: where the fact comes from (docs/chd, or an emulator's source).
+   Compression never changes by itself: those warnings are in PROFILES (noZstd, noMister).
+   ============================================================ */
+var QUIRKS = [
+  {
+    id: 'keepcue-strict', sys: ['saturn', 'segacd'], act: 'nokeepcue',
+    when: function (c) { return c.keepCue; },
+    text: function (c) {
+      return (c.sys === 'saturn' ? 'Kronos and Yabause reject' : 'jgenesis rejects') + ' CHDs that keep their cue sheet, so this one leaves it out (the setting \u201cKeep the cue sheet in CD CHDs\u201d is on).';
+    },
+    src: 'docs/chd/ecosystem-other.md §0 finding 4, §2.5, §3.2, §3.3: readers that fail on any metadata tag but a track\u2019s'
+  },
+  {
+    id: 'naomi-name', sys: ['naomi', 'naomi2'], act: 'norename',
+    when: function () { return settings.rename; },
+    text: 'MAME and Flycast find a NAOMI GD-ROM by its file name in the game\u2019s romset (such as gds-0014.chd), so this CHD keeps its file\u2019s name.',
+    src: 'docs/chd/ecosystem-sony-dreamcast.md §5.1 (Flycast gdcartridge.cpp: <romset>/<gdrom>.chd), §5.4'
+  },
+  {
+    // PCSX2's CHD reader (ChdFileReader) reads a CD's first track only
+    id: 'ps2-cd-audio', sys: ['ps2'],
+    when: function (c) { return c.disc && c.disc.audio; },
+    text: 'PCSX2 plays only the first track of a CD CHD, so this game\u2019s music tracks won\u2019t play in it. They are kept in the CHD.',
+    src: 'docs/chd/ecosystem-sony-dreamcast.md §3.1 (PCSX2 draft PR #12037)'
+  },
+  {
+    // a GD-ROM (Redump's cue lists its high-density area) is laid out as chdman 0.289 does; a CD-based
+    // Dreamcast disc with pregaps is rejected by Flycast up to 2.7 ("Unsupported subtype or pre/postgap")
+    id: 'dc-cd-gaps', sys: ['dc'],
+    when: function (c) { return c.disc && c.job.disc === 'cd' && !c.disc.gd && c.disc.gaps; },
+    text: 'Flycast 2.7 and earlier can\u2019t load CD-based Dreamcast CHDs whose tracks have pregaps, as this one\u2019s do; newer Flycast builds can. Keep the original files if you use an older one.',
+    src: 'docs/chd/ecosystem-sony-dreamcast.md §5.1 (flycast #906)'
+  }
+];
+// what the rules look at: the job's system and identification, its cue sheet or TOC, the settings
+function quirkCtx(job) {
+  var id = job.ident || {};
+  return { job: job, id: id, sys: id.sys || '', det: id.detected || {}, disc: discModel(job), keepCue: keepCueWanted(job) };
+}
+// the rules that apply to a job: [{id, act, warn, text}]
+function quirks(job) {
+  if (job.kind !== 'create') return [];
+  var ctx = quirkCtx(job);
+  return QUIRKS.filter(function (r) { return (!r.sys || r.sys.indexOf(ctx.sys) >= 0) && r.when(ctx); }).map(function (r) {
+    return { id: r.id, act: r.act || '', warn: !!r.warn, text: typeof r.text === 'function' ? r.text(ctx) : r.text || '' };
+  });
+}
+function quirkAct(job, act) { return quirks(job).some(function (q) { return q.act === act; }); }
+// the layout of the CD a cue sheet or TOC describes (cueModel), kept with the job; null for other jobs
+function discModel(job) {
+  if (job.kind !== 'create' || (job.disc !== 'cd' && job.disc !== 'gdrom') || (job.src !== 'cue' && job.src !== 'toc') || !job.descText) return null;
+  if (job.discModelOf !== job.descText) { job.discModelOf = job.descText; job.discModelVal = job.src === 'cue' ? cueModel(job.descText) : tocModel(job.descText); }
+  return job.discModelVal;
+}
+
+
 /* ---------- identification scheduling ---------- */
 var identQueue = [], identBusy = false;
 function scheduleIdentify(job) {
@@ -10483,12 +10570,17 @@ function keepPick(job, id) {
   if (job.versionPicked && alt && alt.indexOf(job.versionPicked) >= 0) id.name = job.versionPicked;
   return id;
 }
+// results are named after the game, unless the setting is off or a rule keeps the file's name (NAOMI)
+function renameWanted(job) { return settings.rename && !quirkAct(job, 'norename'); }
+// the setting "Keep the cue sheet in CD CHDs", for a job it can apply to: a real cue sheet (not one
+// written for chdman here); a rule may still leave it out (keepcue-strict)
+function keepCueWanted(job) { return !!settings.keepCue && job.kind === 'create' && job.src === 'cue' && !job.fromCcd && !!KIND[job.disc] && KIND[job.disc].cmd === 'createcd'; }
 // starting: the job is about to run (state is already 'running') and may still take the name and type
 function applyIdent(job, starting) {
   var id = job.ident;
   if (!id || !id.sys) return;
   var locked = !starting && (job.state === 'running' || job.state === 'done');
-  if (settings.rename && id.name && !job.outEdited && !locked) job.opts.out = id.name;
+  if (renameWanted(job) && id.name && !job.outEdited && !locked) job.opts.out = id.name;
   if (job.kind !== 'create' || locked) return;
   // pick the right CHD flavour for the system
   if ((job.src === 'iso' || job.src === 'cso' || (job.src === 'bin' && job.choices)) && !job.discEdited) {
@@ -10514,7 +10606,7 @@ function applyIdent(job, starting) {
 // if the confirmed release has a different name (unless the user named them or already saved one)
 function renameOutputs(job) {
   var id = job.ident;
-  if (job.kind !== 'create' || !id || !id.name || !settings.rename || job.outEdited) return;
+  if (job.kind !== 'create' || !id || !id.name || !renameWanted(job) || job.outEdited) return;
   if (job.outputs.some(function (o) { return o.downloaded || o.kind === 'disk'; })) return;
   var from = outBase(job);
   job.opts.out = id.name;
@@ -10553,7 +10645,7 @@ function identNote(job) {
         id.name = job.versionPicked = sel.value;
         if (job.state === 'done') renameOutputs(job);
         // until chdman runs (queued, or started but still waiting), the name is still to be used
-        else if (!job.run && !job.outEdited && settings.rename) job.opts.out = id.name;
+        else if (!job.run && !job.outEdited && renameWanted(job)) job.opts.out = id.name;
         refreshJob(job, true);
       } });
       id.entry.alternatives.forEach(function (n) { sel.append(el('option', { value: n, selected: n === id.name }, n)); });
@@ -10575,22 +10667,10 @@ function identNote(job) {
   }
   if (damage) box.append(el('div', { class: 'small ident-damaged', style: 'margin-top:4px;color:var(--warn)' }, damage));
   if (profile(id.sys).note) box.append(el('div', { class: 'small ident-note', style: 'margin-top:4px' }, profile(id.sys).note));
-  compatNotes(job, id).forEach(function (n) { box.append(el('div', { class: 'small compat-note', style: 'margin-top:4px' }, n)); });
+  quirks(job).forEach(function (q) {
+    if (q.text) box.append(el('div', { class: 'small compat-note', 'data-quirk': q.id, style: 'margin-top:4px' + (q.warn ? ';color:var(--warn)' : '') }, q.text));
+  });
   return box;
-}
-// what a known emulator does with this particular disc's CHD (from the cue sheet or TOC it is made from)
-function compatNotes(job, id) {
-  var notes = [], text = job.kind === 'create' && (job.src === 'cue' || job.src === 'toc') ? job.descText || '' : '';
-  if (!text || job.disc !== 'cd') return notes;
-  var audio = job.src === 'cue' ? /^\s*TRACK\s+\d+\s+AUDIO\b/im.test(text) : /^\s*TRACK\s+AUDIO\b/m.test(text);
-  // PCSX2's CHD reader (ChdFileReader) reads a CD's first track only
-  if (id.sys === 'ps2' && audio) notes.push('PCSX2 plays only the first track of a CD CHD, so this game\u2019s music tracks won\u2019t play in it. They are kept in the CHD.');
-  // a GD-ROM (Redump's cue lists its high-density area) is laid out as chdman 0.289 does; a CD-based
-  // Dreamcast disc with pregaps is rejected by Flycast up to 2.7 ("Unsupported subtype or pre/postgap")
-  var gd = /HIGH-DENSITY AREA/i.test(text);
-  var gaps = job.src === 'cue' ? /^\s*(INDEX\s+0*0\s|PREGAP\b|POSTGAP\b)/im.test(text) : /^\s*(PREGAP|START)\b/m.test(text);
-  if (id.sys === 'dc' && !gd && gaps) notes.push('Flycast 2.7 and earlier can\u2019t load CD-based Dreamcast CHDs whose tracks have pregaps, as this one\u2019s do; newer Flycast builds can. Keep the original files if you use an older one.');
-  return notes;
 }
 function safeName(s) { return String(s || '').replace(/[\/:*?"<>|]+/g, '_').trim(); }
 
@@ -10631,10 +10711,17 @@ var HUNKS = {
 // what the emulators of each system need (docs/chd/ecosystem-*.md). The type and hunk size are set
 // from it when a game is identified (applyIdent); compression never changes by itself.
 // disc/hunk: the CHD to make from an .iso; why: its reason, shown under "Create as"; noZstd: its readers that
-// can't decode Zstandard (the Zstd preset warns); hint: added to the compression hint;
-// note: shown with the game (emulators that won't load it)
+// can't decode Zstandard (the presets that use it warn); noMister: MiSTer has no core for its CHDs (the
+// MiSTer preset warns); hint: added to the compression hint; note: shown with the game (emulators that
+// won't load it). Rules for particular discs are in quirks.js
 var PROFILES = {
   psp: { disc: 'dvd', hunk: '2048', why: 'with 2,048-byte hunks, as PPSSPP recommends' },
+  ps2: { noZstd: 'AetherSX2 and NetherSX2', noMister: true },
+  dc: { noZstd: 'Flycast before 2.3 (and probably Redream)', noMister: true },
+  naomi: { noZstd: 'Flycast before 2.3 (and probably Demul)', noMister: true },
+  naomi2: { noZstd: 'Flycast before 2.3 (and probably Demul)', noMister: true },
+  pcfx: { noZstd: 'Beetle PC-FX before August 2026', noMister: true },
+  pc98: { noMister: true },
   ps1: { noZstd: 'SwanStation (before March 2026)' },
   saturn: { noZstd: 'Kronos and Yabause' },
   segacd: { noZstd: 'BlastEm (RetroArch)' },
@@ -10642,7 +10729,7 @@ var PROFILES = {
   '3do': { noZstd: 'Opera (RetroArch)' },
   cd32: { noZstd: 'WinUAE' },
   cdtv: { noZstd: 'WinUAE' },
-  jagcd: { note: 'Jaguar CD emulators may not load this CHD: BigPEmu doesn\u2019t take CHDs, and Virtual Jaguar (RetroArch) needs session data that chdman 0.289 doesn\u2019t write. Keep the original files too.' },
+  jagcd: { noMister: true, note: 'Jaguar CD emulators may not load this CHD: BigPEmu doesn\u2019t take CHDs, and Virtual Jaguar (RetroArch) needs session data that chdman 0.289 doesn\u2019t write. Keep the original files too.' },
   pc: { keep: true, hint: 'DOSBox Pure opens only uncompressed CHDs (No compression).' },
   gc: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },
   wii: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },
@@ -11329,8 +11416,8 @@ function buildJob(job) {
     var hs = (HUNKS[disc] || []).some(function (h) { return h[0] === o.hunk; }) ? o.hunk : '';
     if (disc === 'raw') hs = hs || '4096';
     if (hs) { args.push('-hs', hs); display.push('-hs', hs); }
-    // the setting: keep a real cue sheet (not one written for chdman here) in the CHD (the engine's --keepcue)
-    if (settings.keepCue && job.src === 'cue' && !job.fromCcd && cmd === 'createcd') { args.push('--keepcue'); display.push('--keepcue'); }
+    // the setting: keep a real cue sheet in the CHD (the engine's --keepcue), unless its emulators reject that
+    if (keepCueWanted(job) && !quirkAct(job, 'nokeepcue')) { args.push('--keepcue'); display.push('--keepcue'); }
     if (disc === 'raw') { args.push('-us', o.unit || '512'); display.push('-us', o.unit || '512'); }
     slots = 2;
     var nt = threadCount();
@@ -11543,9 +11630,11 @@ function renderControls(job) {
     }
     var cur = presets.find(function (p) { return p[0] === o.preset; }) || presets[0];
     var pfc = profile(job.ident && job.ident.sys), chint = cur[3];
-    if (cur[0] === 'zstd' && pfc.noZstd) chint += ' ' + pfc.noZstd + ' can\u2019t read Zstd CHDs of ' + sysName(job.ident.sys) + ' games.';
+    // the presets that use Zstandard (Zstd, MiSTer): what can't read them; MiSTer's: where it has no core
+    var zwarn = /(^|,)(cdzs|zstd)(,|$)/.test(cur[2] || '') && pfc.noZstd;
+    if (zwarn) chint += ' ' + pfc.noZstd + ' can\u2019t read Zstd CHDs of ' + sysName(job.ident.sys) + ' games.';
+    if (cur[0] === 'mister' && pfc.noMister) { chint += ' MiSTer has no core that plays ' + sysName(job.ident.sys) + ' games from CHDs.'; zwarn = true; }
     if (pfc.hint && cur[0] !== 'none') chint += ' ' + pfc.hint;
-    var zwarn = cur[0] === 'zstd' && pfc.noZstd;
     var cfield = selectField('Compression', presets.map(function (p) { return [p[0], p[1]]; }), o.preset, function (v) { o.preset = v; refresh(); }, chint, busy);
     if (zwarn) cfield.lastChild.style.color = 'var(--warn)';
     fields.append(cfield);
@@ -13382,7 +13471,7 @@ function init() {
     settings.rename = e.target.checked; saveSettings();
     jobs.forEach(function (j) {
       if (j.state === 'running' || j.state === 'queued' || j.state === 'done' || j.outEdited) return;
-      j.opts.out = settings.rename && j.ident && j.ident.name ? j.ident.name : j.title;
+      j.opts.out = renameWanted(j) && j.ident && j.ident.name ? j.ident.name : j.title;
       refreshJob(j, true);
     });
   });

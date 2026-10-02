@@ -1002,6 +1002,8 @@ async function sniffSync(file) {
 
 /*IDENT*/
 
+/*QUIRKS*/
+
 /* ---------- identification scheduling ---------- */
 var identQueue = [], identBusy = false;
 function scheduleIdentify(job) {
@@ -1074,12 +1076,17 @@ function keepPick(job, id) {
   if (job.versionPicked && alt && alt.indexOf(job.versionPicked) >= 0) id.name = job.versionPicked;
   return id;
 }
+// results are named after the game, unless the setting is off or a rule keeps the file's name (NAOMI)
+function renameWanted(job) { return settings.rename && !quirkAct(job, 'norename'); }
+// the setting "Keep the cue sheet in CD CHDs", for a job it can apply to: a real cue sheet (not one
+// written for chdman here); a rule may still leave it out (keepcue-strict)
+function keepCueWanted(job) { return !!settings.keepCue && job.kind === 'create' && job.src === 'cue' && !job.fromCcd && !!KIND[job.disc] && KIND[job.disc].cmd === 'createcd'; }
 // starting: the job is about to run (state is already 'running') and may still take the name and type
 function applyIdent(job, starting) {
   var id = job.ident;
   if (!id || !id.sys) return;
   var locked = !starting && (job.state === 'running' || job.state === 'done');
-  if (settings.rename && id.name && !job.outEdited && !locked) job.opts.out = id.name;
+  if (renameWanted(job) && id.name && !job.outEdited && !locked) job.opts.out = id.name;
   if (job.kind !== 'create' || locked) return;
   // pick the right CHD flavour for the system
   if ((job.src === 'iso' || job.src === 'cso' || (job.src === 'bin' && job.choices)) && !job.discEdited) {
@@ -1105,7 +1112,7 @@ function applyIdent(job, starting) {
 // if the confirmed release has a different name (unless the user named them or already saved one)
 function renameOutputs(job) {
   var id = job.ident;
-  if (job.kind !== 'create' || !id || !id.name || !settings.rename || job.outEdited) return;
+  if (job.kind !== 'create' || !id || !id.name || !renameWanted(job) || job.outEdited) return;
   if (job.outputs.some(function (o) { return o.downloaded || o.kind === 'disk'; })) return;
   var from = outBase(job);
   job.opts.out = id.name;
@@ -1144,7 +1151,7 @@ function identNote(job) {
         id.name = job.versionPicked = sel.value;
         if (job.state === 'done') renameOutputs(job);
         // until chdman runs (queued, or started but still waiting), the name is still to be used
-        else if (!job.run && !job.outEdited && settings.rename) job.opts.out = id.name;
+        else if (!job.run && !job.outEdited && renameWanted(job)) job.opts.out = id.name;
         refreshJob(job, true);
       } });
       id.entry.alternatives.forEach(function (n) { sel.append(el('option', { value: n, selected: n === id.name }, n)); });
@@ -1166,22 +1173,10 @@ function identNote(job) {
   }
   if (damage) box.append(el('div', { class: 'small ident-damaged', style: 'margin-top:4px;color:var(--warn)' }, damage));
   if (profile(id.sys).note) box.append(el('div', { class: 'small ident-note', style: 'margin-top:4px' }, profile(id.sys).note));
-  compatNotes(job, id).forEach(function (n) { box.append(el('div', { class: 'small compat-note', style: 'margin-top:4px' }, n)); });
+  quirks(job).forEach(function (q) {
+    if (q.text) box.append(el('div', { class: 'small compat-note', 'data-quirk': q.id, style: 'margin-top:4px' + (q.warn ? ';color:var(--warn)' : '') }, q.text));
+  });
   return box;
-}
-// what a known emulator does with this particular disc's CHD (from the cue sheet or TOC it is made from)
-function compatNotes(job, id) {
-  var notes = [], text = job.kind === 'create' && (job.src === 'cue' || job.src === 'toc') ? job.descText || '' : '';
-  if (!text || job.disc !== 'cd') return notes;
-  var audio = job.src === 'cue' ? /^\s*TRACK\s+\d+\s+AUDIO\b/im.test(text) : /^\s*TRACK\s+AUDIO\b/m.test(text);
-  // PCSX2's CHD reader (ChdFileReader) reads a CD's first track only
-  if (id.sys === 'ps2' && audio) notes.push('PCSX2 plays only the first track of a CD CHD, so this game\u2019s music tracks won\u2019t play in it. They are kept in the CHD.');
-  // a GD-ROM (Redump's cue lists its high-density area) is laid out as chdman 0.289 does; a CD-based
-  // Dreamcast disc with pregaps is rejected by Flycast up to 2.7 ("Unsupported subtype or pre/postgap")
-  var gd = /HIGH-DENSITY AREA/i.test(text);
-  var gaps = job.src === 'cue' ? /^\s*(INDEX\s+0*0\s|PREGAP\b|POSTGAP\b)/im.test(text) : /^\s*(PREGAP|START)\b/m.test(text);
-  if (id.sys === 'dc' && !gd && gaps) notes.push('Flycast 2.7 and earlier can\u2019t load CD-based Dreamcast CHDs whose tracks have pregaps, as this one\u2019s do; newer Flycast builds can. Keep the original files if you use an older one.');
-  return notes;
 }
 function safeName(s) { return String(s || '').replace(/[\/:*?"<>|]+/g, '_').trim(); }
 
@@ -1222,10 +1217,17 @@ var HUNKS = {
 // what the emulators of each system need (docs/chd/ecosystem-*.md). The type and hunk size are set
 // from it when a game is identified (applyIdent); compression never changes by itself.
 // disc/hunk: the CHD to make from an .iso; why: its reason, shown under "Create as"; noZstd: its readers that
-// can't decode Zstandard (the Zstd preset warns); hint: added to the compression hint;
-// note: shown with the game (emulators that won't load it)
+// can't decode Zstandard (the presets that use it warn); noMister: MiSTer has no core for its CHDs (the
+// MiSTer preset warns); hint: added to the compression hint; note: shown with the game (emulators that
+// won't load it). Rules for particular discs are in quirks.js
 var PROFILES = {
   psp: { disc: 'dvd', hunk: '2048', why: 'with 2,048-byte hunks, as PPSSPP recommends' },
+  ps2: { noZstd: 'AetherSX2 and NetherSX2', noMister: true },
+  dc: { noZstd: 'Flycast before 2.3 (and probably Redream)', noMister: true },
+  naomi: { noZstd: 'Flycast before 2.3 (and probably Demul)', noMister: true },
+  naomi2: { noZstd: 'Flycast before 2.3 (and probably Demul)', noMister: true },
+  pcfx: { noZstd: 'Beetle PC-FX before August 2026', noMister: true },
+  pc98: { noMister: true },
   ps1: { noZstd: 'SwanStation (before March 2026)' },
   saturn: { noZstd: 'Kronos and Yabause' },
   segacd: { noZstd: 'BlastEm (RetroArch)' },
@@ -1233,7 +1235,7 @@ var PROFILES = {
   '3do': { noZstd: 'Opera (RetroArch)' },
   cd32: { noZstd: 'WinUAE' },
   cdtv: { noZstd: 'WinUAE' },
-  jagcd: { note: 'Jaguar CD emulators may not load this CHD: BigPEmu doesn\u2019t take CHDs, and Virtual Jaguar (RetroArch) needs session data that chdman 0.289 doesn\u2019t write. Keep the original files too.' },
+  jagcd: { noMister: true, note: 'Jaguar CD emulators may not load this CHD: BigPEmu doesn\u2019t take CHDs, and Virtual Jaguar (RetroArch) needs session data that chdman 0.289 doesn\u2019t write. Keep the original files too.' },
   pc: { keep: true, hint: 'DOSBox Pure opens only uncompressed CHDs (No compression).' },
   gc: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },
   wii: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },
@@ -1920,8 +1922,8 @@ function buildJob(job) {
     var hs = (HUNKS[disc] || []).some(function (h) { return h[0] === o.hunk; }) ? o.hunk : '';
     if (disc === 'raw') hs = hs || '4096';
     if (hs) { args.push('-hs', hs); display.push('-hs', hs); }
-    // the setting: keep a real cue sheet (not one written for chdman here) in the CHD (the engine's --keepcue)
-    if (settings.keepCue && job.src === 'cue' && !job.fromCcd && cmd === 'createcd') { args.push('--keepcue'); display.push('--keepcue'); }
+    // the setting: keep a real cue sheet in the CHD (the engine's --keepcue), unless its emulators reject that
+    if (keepCueWanted(job) && !quirkAct(job, 'nokeepcue')) { args.push('--keepcue'); display.push('--keepcue'); }
     if (disc === 'raw') { args.push('-us', o.unit || '512'); display.push('-us', o.unit || '512'); }
     slots = 2;
     var nt = threadCount();
@@ -2134,9 +2136,11 @@ function renderControls(job) {
     }
     var cur = presets.find(function (p) { return p[0] === o.preset; }) || presets[0];
     var pfc = profile(job.ident && job.ident.sys), chint = cur[3];
-    if (cur[0] === 'zstd' && pfc.noZstd) chint += ' ' + pfc.noZstd + ' can\u2019t read Zstd CHDs of ' + sysName(job.ident.sys) + ' games.';
+    // the presets that use Zstandard (Zstd, MiSTer): what can't read them; MiSTer's: where it has no core
+    var zwarn = /(^|,)(cdzs|zstd)(,|$)/.test(cur[2] || '') && pfc.noZstd;
+    if (zwarn) chint += ' ' + pfc.noZstd + ' can\u2019t read Zstd CHDs of ' + sysName(job.ident.sys) + ' games.';
+    if (cur[0] === 'mister' && pfc.noMister) { chint += ' MiSTer has no core that plays ' + sysName(job.ident.sys) + ' games from CHDs.'; zwarn = true; }
     if (pfc.hint && cur[0] !== 'none') chint += ' ' + pfc.hint;
-    var zwarn = cur[0] === 'zstd' && pfc.noZstd;
     var cfield = selectField('Compression', presets.map(function (p) { return [p[0], p[1]]; }), o.preset, function (v) { o.preset = v; refresh(); }, chint, busy);
     if (zwarn) cfield.lastChild.style.color = 'var(--warn)';
     fields.append(cfield);
@@ -3973,7 +3977,7 @@ function init() {
     settings.rename = e.target.checked; saveSettings();
     jobs.forEach(function (j) {
       if (j.state === 'running' || j.state === 'queued' || j.state === 'done' || j.outEdited) return;
-      j.opts.out = settings.rename && j.ident && j.ident.name ? j.ident.name : j.title;
+      j.opts.out = renameWanted(j) && j.ident && j.ident.name ? j.ident.name : j.title;
       refreshJob(j, true);
     });
   });

@@ -479,6 +479,30 @@ function msfFrames(s) {
   var m = /(\d+):(\d+):(\d+)/.exec(s || '');
   return m ? (+m[1] * 60 + +m[2]) * 75 + +m[3] : 0;
 }
+// a cue sheet's layout, as the per-disc rules (quirks.js) see it: its tracks (number, mode, session,
+// INDEX 00 and 01 and PREGAP and POSTGAP in frames), its sessions (REM SESSION nn, as Redump writes),
+// whether it is a GD-ROM's (REM HIGH-DENSITY AREA), and whether it has audio, CD+G or gaps
+function cueModel(text) {
+  var m = { tracks: [], sessions: 1, gd: /^\s*REM\s+HIGH-DENSITY AREA/im.test(text), audio: false, cdg: false, gaps: false };
+  var cur = null, session = 1;
+  text.split(/\r?\n/).forEach(function (ln) {
+    var r;
+    if ((r = /^\s*REM\s+SESSION\s+0*(\d+)/i.exec(ln))) { session = +r[1]; m.sessions = Math.max(m.sessions, session); }
+    else if ((r = /^\s*TRACK\s+(\d+)\s+(\S+)/i.exec(ln))) {
+      cur = { no: +r[1], mode: r[2].toUpperCase(), session: session, index: {}, pregap: 0, postgap: 0 };
+      m.tracks.push(cur);
+    } else if (cur && (r = /^\s*INDEX\s+(\d+)\s+(\S+)/i.exec(ln))) cur.index[+r[1]] = msfFrames(r[2]);
+    else if (cur && (r = /^\s*(PREGAP|POSTGAP)\s+(\S+)/i.exec(ln))) cur[r[1].toLowerCase()] = msfFrames(r[2]);
+  });
+  m.audio = m.tracks.some(function (t) { return t.mode === 'AUDIO'; });
+  m.cdg = m.tracks.some(function (t) { return t.mode === 'CDG'; });
+  m.gaps = /^\s*(INDEX\s+0*0\s|PREGAP\b|POSTGAP\b)/im.test(text);
+  return m;
+}
+// the same of a TOC file (cdrdao's), as far as the rules need it
+function tocModel(text) {
+  return { tracks: [], sessions: 1, gd: false, audio: /^\s*TRACK\s+AUDIO\b/m.test(text), cdg: false, gaps: /^\s*(PREGAP|START)\b/m.test(text) };
+}
 // data tracks + hashable files of a "create" job; images: the stand-ins for its ECM files (ecmImages);
 // nrg: the tracks of a Nero image (nrgTracks)
 function probePlan(job, images, nrg) {

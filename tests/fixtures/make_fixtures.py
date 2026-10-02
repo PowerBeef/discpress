@@ -368,7 +368,8 @@ fixture('dreamcast-cdr', {
 }, add=['dc cdr.cue', 'dc cdr (Track 1).bin', 'dc cdr (Track 2).bin'], job='create', disc='cd', command='createcd', sys='dc',
    serial='T0000', ident='none', name='dc cdr')
 
-# a NAOMI GD-ROM whose serial the database lists under NAOMI 2: the two share one header layout
+# a NAOMI GD-ROM whose serial the database lists under NAOMI 2: the two share one header layout. Its CHD
+# keeps its file's name (out), which MAME and Flycast look for in the game's romset
 fixture('naomi2-gdi', {
     'spikers.gdi': lambda: b'3\r\n1 0 4 2352 spikers01.bin 0\r\n2 450 0 2352 spikers02.raw 0\r\n3 45000 4 2352 spikers03.bin 0\r\n',
     'spikers01.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660({'README.TXT': b'fixture'}, 'SPIKERS')), 1, 0),
@@ -377,7 +378,7 @@ fixture('naomi2-gdi', {
         {'1ST_READ.BIN': g.filler(1 << 20, 66)}, 'SPIKERS', '',
         ipbin(b'SEGA SEGAKATANA ', 0x40, b'GDS-0014  ', 0x80, b'BEACH SPIKERS', {0x10: b'SEGA ENTERPRISES', 0x20: b'0000 GD-ROM1/1  ', 0x30: b'JUE     ', 0x38: b'NAOMI   '}))), 1, 45000),
 }, add=['spikers.gdi', 'spikers01.bin', 'spikers02.raw', 'spikers03.bin'], job='create', disc='gdrom', command='createcd', sys='naomi2',
-   serial='GDS-0014', ident='serial', name='Beach Spikers - Virtua Beach Volleyball (World) (En,Ja)')
+   serial='GDS-0014', ident='serial', name='Beach Spikers - Virtua Beach Volleyball (World) (En,Ja)', out='spikers')
 
 # The Redump layout of a GD-ROM: one .bin per track, track 2's 2-second pregap stored at the start of
 # its file (INDEX 00), and REM lines marking the high-density area, which chdman places at LBA 45000.
