@@ -1,0 +1,65 @@
+# Runs the engine's native tests (tests/ui/engine.spec.js: chdman's commands on the fixtures, and the
+# malformed inputs chdman 0.289 crashed or hung on) with the engine built with AddressSanitizer,
+# LeakSanitizer and UndefinedBehaviorSanitizer (scripts/build-sanitized.sh). Any report fails the run,
+# but leaks unmodified chdman 0.289 has too (tests/support/lsan.supp, each with how it was checked).
+# When engine/ or wasm/ change, weekly, and on demand.
+name: Sanitizers
+
+on:
+  push:
+    branches: [main]
+    paths: ['engine/**', 'wasm/**', 'scripts/build-sanitized.sh', 'tests/ui/engine.spec.js', 'tests/support/lsan.supp', 'tests/fixtures/**', '.github/workflows/sanitizers.yml']
+  pull_request:
+    paths: ['engine/**', 'wasm/**', 'scripts/build-sanitized.sh', 'tests/ui/engine.spec.js', 'tests/support/lsan.supp', 'tests/fixtures/**', '.github/workflows/sanitizers.yml']
+  schedule:
+    - cron: '41 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sanitizers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: numpy, for the synthetic test discs
+        run: pip install numpy
+      # the tests compare the engine with unmodified chdman 0.289 (the same cache as ci.yml)
+      - name: Cache MAME 0.289 and its chdman
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party/mame
+            build/chdman-0.289
+          key: mame-0.289-${{ runner.os }}-${{ hashFiles('scripts/fetch-mame.sh', 'scripts/build-upstream.sh', 'wasm/**') }}
+      - name: Unmodified chdman 0.289
+        run: '[ -x build/chdman-0.289 ] || ./scripts/build-upstream.sh'
+      - name: The engine with sanitizers
+        run: ./scripts/build-sanitized.sh
+      - name: Playwright Test
+        working-directory: tests
+        run: npm ci --no-audit --no-fund
+      - name: Synthetic test discs
+        run: python3 tests/fixtures/make_fixtures.py
+      - name: Engine tests on the sanitized build
+        working-directory: tests
+        env:
+          CHDMAN_ENGINE: ../build/chdman-san
+          ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1
+          LSAN_OPTIONS: suppressions=${{ github.workspace }}/tests/support/lsan.supp
+          UBSAN_OPTIONS: print_stacktrace=1
+        run: npx playwright test ui/engine.spec.js --project=desktop --reporter=list

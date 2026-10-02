@@ -45,6 +45,13 @@ it serves, and the run stops if that isn't the page `DISCPRESS_HTML` picks (stop
 checks skip. Set it locally too to be sure a run compared everything. The same workflow runs
 `scripts/check-dist.sh`, `scripts/engine-diff.sh --check` and `scripts/check-licenses.sh`.
 
+`.github/workflows/sanitizers.yml` runs `ui/engine.spec.js` on the engine built with AddressSanitizer,
+LeakSanitizer and UndefinedBehaviorSanitizer (`scripts/build-sanitized.sh`, `build/chdman-san`), named
+by `CHDMAN_ENGINE`: a sanitizer report in chdman's output fails the test, whatever its exit code. It runs
+when `engine/` or `wasm/` change, and weekly. Leaks unmodified chdman 0.289 has too are suppressed
+(`support/lsan.supp`, each with how that was checked). Locally:
+`CHDMAN_ENGINE=../build/chdman-san LSAN_OPTIONS=suppressions=$PWD/support/lsan.supp npx playwright test ui/engine.spec.js`.
+
 ## How correctness is checked
 
 - **Native chdman is the oracle.** Every CHD the app creates is compared with what native chdman
