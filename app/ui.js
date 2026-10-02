@@ -90,7 +90,7 @@ var HOSTED_URL = 'https://powerbeef.github.io/discpress/';
 var iosThreadCap = isIOS && !(/iPad/.test(navigator.userAgent) || navigator.platform === 'MacIntel') ? 4 : 0;
 var maxThreads = Math.min(cores, 16);
 // threads: 'auto' (measured per device, see Tuning) or a fixed number of compression threads
-var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false, notify: false, ps2dvd: 'dvd' };
+var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false, notify: false, ps2dvd: 'dvd', verifyAfter: false };
 var outDir = null; // folder picked for direct writing (not persisted)
 try {
   var saved = JSON.parse(localStorage.getItem('chdman-web-settings') || '{}');
@@ -369,8 +369,9 @@ var Engine = {
           var hw = new Worker(self.url), ch = new MessageChannel();
           hw.onmessage = function (e) { if (e.data && e.data.type === 'fatal') helperFailed(e.data.message); };
           hw.onerror = function (e) { helperFailed(e.message || 'failed to start'); };
-          // (tests: DEBUG.failHelpers makes helpers fail as a miscompiling WebAssembly engine does)
-          self.post(hw, { type: 'helper', port: ch.port2, fail: o.debugFail === 'all' || (o.debugFail === 'one' && i === 0) }, [ch.port2]);
+          // (tests: DEBUG.failHelpers makes helpers fail as a miscompiling WebAssembly engine does; 'lie': the
+          // first one answers for other hunks than it was given)
+          self.post(hw, { type: 'helper', port: ch.port2, fail: o.debugFail === 'all' || (o.debugFail === 'one' && i === 0), lie: o.debugFail === 'lie' && i === 0 }, [ch.port2]);
           helpers.push(hw);
           ports.push(ch.port1);
         } catch (e) { break; }
@@ -383,6 +384,7 @@ var Engine = {
         else if (m.type === 'stage-ack') { var a = ackWait; ackWait = null; if (a) a(); }
         else if (m.type === 'line') o.onLine && o.onLine(m.stream, m.text);
         else if (m.type === 'progress') o.onProgress && o.onProgress(m.text);
+        else if (m.type === 'scan') o.onScan && o.onScan(m.done / m.total);
         else if (m.type === 'notice') o.onNotice && o.onNotice(m);
         else if (m.type === 'storage') o.onStorage && o.onStorage(m.mode);
         else if (m.type === 'fatal') { cleanup(); if (sink) sink.abort(); reject(new Error(m.message)); }
@@ -2237,6 +2239,7 @@ function renderResult(job) {
       box.append(el('div', { class: 'note ok' }, el('b', null, 'Extracted ' + plural(job.outputs.length, 'file') + '. '), job.outputs.length > 1 ? 'Keep them together in one folder.' : ''));
     }
     box.append(outs);
+    if (job.kind === 'create' && job.outputs.some(function (o) { return /\.chd$/i.test(o.name); })) box.append(verifyRow(job));
     if (job.outputs.length > 1 && job.outputs[0].kind !== 'disk') {
       var row = el('div', { class: 'row end' });
       row.append(saveButton(job.outputs, function () { downloadMany([job]); }, true));
@@ -2515,6 +2518,8 @@ async function runJobNow(job) {
   job.retryLog = null;
   job.outputs = [];
   job.redump = null;
+  job.verify = null;
+  job.helperStopped = false;
   refreshJob(job, false);
   setProgress(job, null, 'Starting…');
   try { if (await stopped(Engine.ready())) return; }
@@ -2544,6 +2549,7 @@ async function runJobNow(job) {
     if (main && !(await confirmReplace(outDir, [main].concat(sideNames)))) { job.state = 'canceled'; refreshJob(job, true); return; }
     if (job.aborted) { job.state = 'canceled'; if (jobs.indexOf(job) >= 0) refreshJob(job, true); return; }
   }
+  if (!confirmMemory(memoryNeed(spec))) { job.state = 'canceled'; refreshJob(job, true); return; }
   if (spec.rename) {
     var nm = outBase(job) + '.chd', src = job.files[0].file;
     try {
@@ -2612,7 +2618,9 @@ async function runJobNow(job) {
     onNotice: function (m) {
       if (m.level !== 'debug') appendLog(job, m.message);
       if (m.level === 'error') { toast(m.message, 'err'); workerError = workerError || m.message; }
+      if (/^A helper thread stopped/.test(m.message)) job.helperStopped = true;
     },
+    onScan: function (f) { setProgress(job, null, 'Reading the ECM image\u2026 ' + Math.floor(f * 100) + '%'); },
     onStorage: function (mode) {
       job.storage = mode;
       if (spec.outMode === 'opfs' && mode === 'mem') { Store.available = false; updateChips(); }
@@ -2636,6 +2644,13 @@ async function runJobNow(job) {
       if (job.kind === 'create' && job.sbi) await addSbi(job, spec);
       if (job.identState === 'done') renameOutputs(job); // the checksum finished while converting
       Recovery.finished(job);
+      // a helper that failed (or a run that had to start again) means this browser's WebAssembly engine
+      // misbehaved: the result is read back before anything else runs, as the setting asks for every one
+      if (job.kind === 'create' && (settings.verifyAfter || job.helperStopped || job.engineRetried)) {
+        job.verifyWhy = settings.verifyAfter ? '' : 'A helper thread failed during the conversion, so the CHD was checked.';
+        refreshJob(job, true);
+        await verifyResult(job);
+      }
     } else {
       job.state = 'error';
       if (res.readFail) { job.errorText = readFailHint(res.error); Store.removeJob(job.id); refreshJob(job, true); return; }
@@ -2669,6 +2684,75 @@ async function runJobNow(job) {
   }
   job.engineRetried = false;
   refreshJob(job, true);
+}
+
+// Results kept in memory (no private storage: a page opened as a file in Chrome or Edge, an older
+// browser, or the setting) can be more than a page can hold, and a page that runs out of memory is
+// closed with everything in it. A job whose results could be that large asks first.
+// memoryNeed: about how much a run keeps in memory (its results, at most the size of what it reads,
+// and copies of inputs chdman changes in place); confirmMemory: true to go on
+function memoryNeed(spec) {
+  if (spec.outMode !== 'mem' || spec.rename) return 0;
+  var n = spec.slots ? spec.expected || 0 : 0;
+  (spec.writable || []).forEach(function (w) { n += w.blob.size; });
+  return n;
+}
+function memoryLimit() { return DEBUG.memMax || (isMobile ? 1 : 2) * 1073741824; }
+function confirmMemory(bytes) {
+  if (!(bytes > memoryLimit())) return true;
+  return confirm('This browser keeps results in memory here, and this one could take about ' + fmtBytes(bytes) +
+    ': more than the page may be able to hold. If the browser closes the page, the work is lost.\n\n' +
+    keepResultsAdvice() + '\n\nConvert anyway?');
+}
+
+// Verify for a finished CHD: chdman verify reads it back (helper workers decompress, as for Verify on a
+// .chd) and checks the data's SHA-1 against the one recorded from the input while it was made.
+// Runs from the card's button, after every conversion with the setting, and by itself after a conversion
+// during which a helper failed. job.verify: {state: 'running' | 'ok' | 'failed', pct, text}
+async function verifyResult(job) {
+  var out = job.outputs.find(function (o) { return /\.chd$/i.test(o.name); });
+  if (!out || (job.verify && job.verify.state === 'running')) return;
+  job.verify = { state: 'running', pct: 0 };
+  refreshJob(job, true);
+  var lines = [], file;
+  try {
+    file = out.kind === 'disk' ? await (await outDir.getFileHandle(out.name)).getFile() : await outputFile(job, out);
+    job.verify.run = Engine.run({
+      jobId: job.id + '-verify', args: ['verify', '-i', '/in/' + out.name], inputs: [{ name: out.name, blob: file }], writable: [],
+      slots: 0, helpers: readHelpers(), outMode: 'mem',
+      onLine: function (s, t) { lines.push(t); },
+      onProgress: function (t) {
+        var m = /([\d.]+)% complete/.exec(t);
+        if (!m || !job.verify) return;
+        job.verify.pct = parseFloat(m[1]);
+        var n = job.ui && job.ui.verifyText;
+        if (n) n.textContent = 'Verifying\u2026 ' + Math.floor(job.verify.pct) + '%';
+      },
+      onNotice: function (m) { if (m.level === 'error') lines.push(m.message); }
+    });
+    var res = await job.verify.run.promise;
+    var why = lines.filter(function (l) { return /error|failed|mismatch|invalid|incorrect/i.test(l); }).slice(-2).join(' ');
+    job.verify = res.code === 0 ? { state: 'ok' } : { state: 'failed', text: why || res.error || 'chdman exited with code ' + res.code };
+  } catch (e) {
+    job.verify = e.canceled ? null : { state: 'failed', text: readFailHint(e.message) };
+  }
+  appendLog(job, job.verify ? (job.verify.state === 'ok' ? 'Verified: the CHD holds exactly the data it was made from.' : 'Verification failed: ' + job.verify.text) : 'Verification canceled.');
+  if (jobs.indexOf(job) >= 0) refreshJob(job, true);
+}
+function verifyRow(job) {
+  var v = job.verify, row = el('div', { class: 'row verify-row' });
+  if (!v) {
+    row.append(el('button', { class: 'btn sm', onclick: function () { verifyResult(job); } }, icon('i-check'), 'Verify'),
+      el('span', { class: 'small muted' }, 'Read the CHD back and check it holds exactly the data it was made from.'));
+    return row;
+  }
+  if (v.state === 'running') {
+    job.ui.verifyText = el('span', { class: 'small muted', role: 'status' }, 'Verifying\u2026 ' + Math.floor(v.pct || 0) + '%');
+    row.append(job.ui.verifyText, el('button', { class: 'btn sm', onclick: function () { if (v.run) v.run.cancel(); } }, 'Stop'));
+    return row;
+  }
+  if (v.state === 'ok') return el('div', { class: 'note ok verify-note' }, el('b', null, '\u2713 Verified. '), 'The CHD holds exactly the data it was made from.' + (job.verifyWhy ? ' ' + job.verifyWhy : ''));
+  return el('div', { class: 'note err verify-note' }, el('b', null, 'Verification failed. '), v.text + ' Don\u2019t keep this CHD: convert the disc again' + (job.helperStopped || job.verifyWhy ? ', in an up-to-date browser.' : '.'));
 }
 
 // WebAssembly traps, which the conversion itself can't cause: some browsers' compilers (the optimizing tier
@@ -3431,18 +3515,23 @@ async function cliRun() {
     }
   } catch (e) { toast(e.message, 'err'); return; }
   if (!args.length) return;
-  // the last command's results give way to this one's (only one command's results are shown)
-  if (cli.last) {
-    if (unsaved(cli.last) && !confirm('The last command\u2019s results haven\u2019t been saved. Run this one and delete them?')) return;
-    Store.removeJob(cli.last.id);
-    cli.last = null;
-  }
   var writable = [], inputs = [];
   var writeTarget = args.find(function (a) { return /^\/out\//.test(a) && cli.files.some(function (f) { return '/out/' + f.name === a; }); });
   cli.files.forEach(function (f) {
     if (writeTarget === '/out/' + f.name) writable.push({ name: f.name, blob: f });
     else inputs.push({ name: f.name, blob: f });
   });
+  // results kept in memory, as for a conversion: ask first when they could be too large (what it reads,
+  // twice that for an extraction, and the copies of inputs chdman changes)
+  var cliOut = /^(info|listtemplates|verify|addmeta|delmeta|dumpmeta)$/.test(args[0]) ? 0 : (/^extract/.test(args[0]) ? 2 : 1) * inputs.reduce(function (n, i) { return n + i.blob.size; }, 0);
+  var cliMem = !(settings.storage === 'folder' && outDir) && (settings.storage === 'memory' || !Store.available);
+  if (!confirmMemory(memoryNeed({ outMode: cliMem ? 'mem' : 'opfs', slots: cliOut ? 1 : 0, expected: cliOut, writable: writable }))) return;
+  // the last command's results give way to this one's (only one command's results are shown)
+  if (cli.last) {
+    if (unsaved(cli.last) && !confirm('The last command\u2019s results haven\u2019t been saved. Run this one and delete them?')) return;
+    Store.removeJob(cli.last.id);
+    cli.last = null;
+  }
   var res = $('#cliResult'), con = $('#cliConsole'), outs = $('#cliOuts'), prog = $('#cliProg');
   res.hidden = false;
   con.textContent = '$ ' + (c ? c.display : $('#cliText').value.trim()) + '\n';
@@ -3895,6 +3984,8 @@ function init() {
       refreshJob(j, true);
     });
   });
+  $('#setVerify').checked = !!settings.verifyAfter;
+  $('#setVerify').addEventListener('change', function (e) { settings.verifyAfter = e.target.checked; saveSettings(); });
   $('#setKeepCue').checked = !!settings.keepCue;
   $('#setKeepCue').addEventListener('change', function (e) {
     settings.keepCue = e.target.checked; saveSettings();

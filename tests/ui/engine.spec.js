@@ -8,7 +8,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { FIXTURES, ROOT } from '../support/paths.js';
 
-const ENGINE = path.join(ROOT, 'build', 'chdman-native');
+// CHDMAN_ENGINE: another build of the engine, such as the sanitized one (scripts/build-sanitized.sh)
+const ENGINE = process.env.CHDMAN_ENGINE ? path.resolve(process.env.CHDMAN_ENGINE) : path.join(ROOT, 'build', 'chdman-native');
 const UPSTREAM = path.join(ROOT, 'build', 'chdman-0.289');
 
 function newest(dir) {
@@ -23,9 +24,13 @@ const missing = !fs.existsSync(ENGINE) || !fs.existsSync(UPSTREAM);
 test.skip(missing, 'needs build/chdman-native and build/chdman-0.289');
 test.skip(!missing && fs.statSync(ENGINE).mtimeMs < newest(path.join(ROOT, 'engine', 'mame')), 'build/chdman-native is older than engine/: run scripts/build-native.sh');
 
+// a sanitized build's report fails the test, whatever chdman's exit code (it often exits 1 here on purpose)
+const SANITIZER = /ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:/;
 function run(bin, args) {
   const r = spawnSync(bin, args, { cwd: FIXTURES, timeout: 120_000 });
-  return { code: r.status, signal: r.signal, out: r.stdout, err: r.stderr.toString() };
+  const err = r.stderr.toString();
+  if (SANITIZER.test(err)) throw new Error(`${path.basename(bin)} ${args.join(' ')}: sanitizer report\n${err.slice(0, 4000)}`);
+  return { code: r.status, signal: r.signal, out: r.stdout, err };
 }
 function tmp(name) {
   const dir = test.info().outputPath();

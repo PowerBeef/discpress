@@ -283,13 +283,13 @@ No. It only converts files you already have. Please convert only discs you own.
 
 ## Build it yourself
 
-The build is fully reproducible: building from a clean checkout gives a byte-identical `dist/discpress.html`.
+The build is fully reproducible: building from a clean checkout gives a byte-identical `dist/discpress.html`, and CI checks it by rebuilding the WebAssembly on GitHub's machines (`.github/workflows/rebuild.yml`).
 
 <details>
 <summary><b>Build instructions</b></summary>
 <br>
 
-Requirements: [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) 6.0.10, Python 3 and make. The chdman source is in `engine/` (see [`engine/README.md`](engine/README.md)).
+Requirements: [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) 6.0.10 exactly (`build.sh` refuses another version, which could give other bytes), Python 3 and make. The chdman source is in `engine/` (see [`engine/README.md`](engine/README.md)).
 
 ```sh
 # one-time setup
@@ -302,7 +302,7 @@ source ~/emsdk/emsdk_env.sh
 ```
 
 - If you only change files in `app/`, run `python3 scripts/assemble.py` instead of the full build. Without Emscripten, run `python3 scripts/extract-build.py` once first: it recovers the WebAssembly build from `dist/discpress.html`. A change to `engine/`, `wasm/` or `build.sh` needs the full build: the page records the sources its WebAssembly was built from, and `scripts/check-dist.sh` (run by every release) refuses a page built from older ones.
-- `tests/` has end-to-end UI tests (Playwright) that check every conversion against native chdman, with synthetic disc images of every supported kind, plus conversion benchmarks. See [`tests/README.md`](tests/README.md).
+- `tests/` has end-to-end UI tests (Playwright) that check every conversion against native chdman, with synthetic disc images of every supported kind, plus conversion benchmarks. CI runs them on every push and pull request (`.github/workflows/ci.yml`). See [`tests/README.md`](tests/README.md).
 - To refresh the game database with the latest Redump data, run `./scripts/update-db.sh`, then `python3 scripts/assemble.py`.
 - The README graphics are rendered from `scripts/brand/brand.html` with `python3 scripts/brand/render.py`, after `python3 scripts/brand/screenshots.py` takes the app screenshots they show (both need Playwright).
 - Running **Actions → Release → Run workflow** on `main` with a tag such as `v1.5.0` (always `vX.Y.Z`: there are no prereleases) publishes a release: `discpress.html` and its SHA-256 as the download, and the same file on GitHub Pages as the online version. The download goes public only once the site is deployed, so both always carry the same version; a daily check (`scripts/check-release.sh`) confirms it. See `.github/workflows/release.yml` and [`web/README.md`](web/README.md). Release notes come from `.github/release-notes/<tag>.md` when that file exists.

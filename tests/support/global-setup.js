@@ -2,8 +2,8 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { FIXTURES, TESTS, pageUnderTest } from './paths.js';
-import { nativeChdman, APP_CHDMAN_VERSION } from './native.js';
+import { FIXTURES, ROOT, TESTS, pageUnderTest } from './paths.js';
+import { nativeChdman, engineChdman, APP_CHDMAN_VERSION } from './native.js';
 
 export default async function globalSetup(config) {
   const page = pageUnderTest();
@@ -23,4 +23,11 @@ export default async function globalSetup(config) {
     : n.version === APP_CHDMAN_VERSION ? `${n.bin} ${n.version}: outputs must match byte for byte`
       : `${n.bin} ${n.version}: data checksums must match (different version than the app's ${APP_CHDMAN_VERSION})`;
   console.log(`page: ${page}\nnative chdman: ${note}`);
+  // REQUIRE_NATIVE=1 (CI): without both references, the byte-for-byte checks would skip, and a run
+  // that proves nothing would pass
+  if (process.env.REQUIRE_NATIVE) {
+    const want = path.join(ROOT, 'build', 'chdman-0.289');
+    if (!n || n.bin !== want || n.version !== APP_CHDMAN_VERSION) throw new Error(`REQUIRE_NATIVE: ${want} (scripts/build-upstream.sh) is missing or not chdman ${APP_CHDMAN_VERSION}`);
+    if (!engineChdman()) throw new Error('REQUIRE_NATIVE: build/chdman-native (scripts/build-native.sh) is missing or older than engine/');
+  }
 }

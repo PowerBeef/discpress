@@ -8,11 +8,14 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="${1:-$ROOT/third_party/mame}"
 COMMIT=f34f02505e32c1993c6a782b6814232cbfc74e36   # MAME 0.289 (release tag mame0289)
 
+fresh=
 if [ ! -d "$DEST/.git" ]; then
   git clone --filter=blob:none --no-checkout https://github.com/mamedev/mame.git "$DEST"
+  fresh=1
 fi
 cd "$DEST"
-if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+# (a fresh --no-checkout clone has nothing checked out, which git status shows as every file deleted)
+if [ -z "$fresh" ] && [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
   echo "$DEST has local changes (from an older Discpress, the browser patch?)." >&2
   echo "It must stay unmodified; discard them with: git -C \"$DEST\" checkout -- ." >&2
   exit 1

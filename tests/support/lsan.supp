@@ -1,0 +1,11 @@
+# LeakSanitizer suppressions for the sanitized engine (scripts/build-sanitized.sh, CI's sanitizers.yml).
+# Only leaks unmodified chdman 0.289 has too belong here, each with how that was checked.
+#
+# MAME's work queue (src/osd/osdsync.cpp, unchanged in engine/) loses some of the work items the
+# compressor queues from its read thread, and the events waiting on them creates, and frees them only
+# at exit: a few dozen bytes per hunk. chdman 0.289 built from the MAME release with
+# -fsanitize=address reports the same leak on every run of
+#   createdvd -i agent.iso -o x.chd -f -np 1 -c zlib,huff
+# (checked 2026-10-02). The page's compression doesn't queue its hunks there (helper workers do it).
+leak:osd_work_item_queue_multiple
+leak:osd_work_item_wait
