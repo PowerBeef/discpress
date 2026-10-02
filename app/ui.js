@@ -1126,7 +1126,10 @@ function identNote(job) {
   // a compressed ISO or ECM image whose checksum step found it damaged: converting it will stop too
   var damage = id.damaged ? id.damaged + ' Converting it stops with this error.' : '';
   if (!id.sys) return id.method === 'dat' ? null : el('div', { class: 'note' + (damage ? ' warn' : '') }, damage || 'Not a game Discpress recognizes, so the CHD keeps the file\u2019s name.');
-  var box = el('div', { class: 'note ident' + (id.name ? ' ok' : '') });
+  // (how it was matched, and what the disc's header says, for tests and bug reports)
+  var det = id.detected || {};
+  var box = el('div', { class: 'note ident' + (id.name ? ' ok' : ''), 'data-method': id.method || null,
+    'data-disc': det.disc ? det.disc.n + '/' + det.disc.of : null, 'data-region': det.area || null });
   var sc = sysColor(id.sys);
   var head = el('div', { class: 'ident-head' }, el('span', { class: 'sysbadge', style: sc ? '--sys:' + sc[0] + ';--sys-fg:' + sc[1] : null }, sysShort(id.sys)), el('b', null, sysName(id.sys)));
   if (id.serial) head.append(el('span', { class: 'mono small' }, id.serial));
@@ -2255,13 +2258,14 @@ function renderResult(job) {
 // Redump names a game's discs "Name (Region) (Disc 1)": when two or more of them are converted, the
 // first disc's card offers an .m3u listing the CHDs, which RetroArch, DuckStation, ES-DE and
 // Batocera use to swap discs. It is made when saved, from the names the CHDs have then.
-var DISC_RE = /^(.*?) \((?:Disc|Disk) (\d+)(?: of \d+)?\)(.*)\.chd$/i;
+// ("(Disc A)", "(Disc B)": a few sets are lettered)
+var DISC_RE = /^(.*?) \((?:Disc|Disk) (\d+|[A-Z])(?: of \d+)?\)(.*)\.chd$/i;
 function discOf(job) {
   if (job.kind !== 'create' || job.state !== 'done' || !job.outputs[0]) return null;
   var m = DISC_RE.exec(job.outputs[0].name);
   // the same name on another console (or one identified and one not) is another game
   var sys = job.ident && job.ident.sys || '';
-  return m ? { key: sys + '|' + (m[1] + m[3]).toLowerCase(), name: (m[1] + m[3]).trim(), n: +m[2], job: job } : null;
+  return m ? { key: sys + '|' + (m[1] + m[3]).toLowerCase(), name: (m[1] + m[3]).trim(), n: /\d/.test(m[2]) ? +m[2] : m[2].toUpperCase().charCodeAt(0) - 64, job: job } : null;
 }
 function discSet(job) {
   var me = discOf(job);
@@ -2999,7 +3003,7 @@ function redumpMatch(job, files) {
   var hits = [];
   files.forEach(function (f) { GameDB.size(f.size).forEach(function (e) { if (e.crc === f.crc) hits.push({ e: e, f: f }); }); });
   if (hits.length) {
-    var serial = normSerial(id.serial), hit = hits.find(function (h) { return serial && normSerial(h.e.serial) === serial; }) || hits[0];
+    var hit = hits.find(function (h) { return id.serial && sameSerial(h.e.sys, h.e.serial, id.serial); }) || hits[0];
     var names = hits.map(function (h) { return h.e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
     job.redump = { match: true, entry: hit.e, track: whole ? '' : trackOf(hit.f.name) };
     // the checksum settles which release it is

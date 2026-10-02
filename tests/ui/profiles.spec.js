@@ -112,6 +112,24 @@ test('a game on several discs gets an .m3u playlist of its CHDs', async ({ app, 
   expect(fs.readFileSync(p, 'utf8')).toBe('Game (USA) (Disc 1).chd\nGame (USA) (Disc 2).chd\n');
 });
 
+test('lettered discs (Disc A, Disc B) make a playlist too', async ({ app, page }) => {
+  const dir = path.join(FIXTURES, 'gen', 'lettered');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const n of ['A', 'B']) fs.copyFileSync(path.join(FIXTURES, 'homebrew.iso'), path.join(dir, `Game (Japan) (Disc ${n}).iso`));
+  await app.open();
+  await app.add(['gen/lettered/Game (Japan) (Disc B).iso', 'gen/lettered/Game (Japan) (Disc A).iso']);
+  const a = app.job('Game (Japan) (Disc A)'), b = app.job('Game (Japan) (Disc B)');
+  await app.settled(a);
+  await app.settled(b);
+  await app.run(b);
+  await app.run(a);
+  await expect(a.locator('.playlist')).toContainText('A game on 2 discs.');
+  const [dl] = await Promise.all([page.waitForEvent('download'), a.locator('.playlist button').click()]);
+  const p = test.info().outputPath('Game (Japan).m3u');
+  await dl.saveAs(p);
+  expect(fs.readFileSync(p, 'utf8')).toBe('Game (Japan) (Disc A).chd\nGame (Japan) (Disc B).chd\n');
+});
+
 test('discs of the same name from different consoles don\u2019t share a playlist', async ({ app }) => {
   const dir = path.join(FIXTURES, 'gen', 'multi2');
   fs.mkdirSync(dir, { recursive: true });
