@@ -888,6 +888,8 @@ function fixDescriptor(kind, text) {
         tracks++;
         var n = parseInt(rest, 10);
         if (!(n >= 1 && n <= 99) && !problem) problem = 'Track numbers go from 01 to 99, but this CUE file has \u201c' + ln.trim() + '\u201d.';
+        // CD+G (karaoke graphics in the subchannel): chdman 0.289 refuses the cue sheet ("Unsupported format")
+        else if (/^\s+\d+\s+CDG\b/.test(rest) && !problem) problem = 'Track ' + n + ' is a CD+G track (karaoke graphics), which chdman 0.289 can\u2019t convert.';
       } else if (k === 'FLAGS') rest = rest.toUpperCase();
       else if (k === 'REM') rest = rest.replace(/^(\s+)(SESSION|PREGAP|LEAD-OUT|LEAD-IN|SINGLE-DENSITY AREA|HIGH-DENSITY AREA)\b/i, function (a, sp, w) { return sp + w.toUpperCase(); });
       else if (!/^(INDEX|PREGAP|POSTGAP)$/.test(k)) return ln;
@@ -1173,9 +1175,16 @@ function identNote(job) {
   }
   if (damage) box.append(el('div', { class: 'small ident-damaged', style: 'margin-top:4px;color:var(--warn)' }, damage));
   if (profile(id.sys).note) box.append(el('div', { class: 'small ident-note', style: 'margin-top:4px' }, profile(id.sys).note));
-  quirks(job).forEach(function (q) {
-    if (q.text) box.append(el('div', { class: 'small compat-note', 'data-quirk': q.id, style: 'margin-top:4px' + (q.warn ? ';color:var(--warn)' : '') }, q.text));
-  });
+  // what emulators make of this disc (quirks.js): warnings shown, notes grouped when there are more than 2
+  var qs = quirks(job).filter(function (q) { return q.text; });
+  var qnote = function (q) { return el('div', { class: 'small compat-note', 'data-quirk': q.id, style: 'margin-top:4px' + (q.warn ? ';color:var(--warn)' : '') }, q.text); };
+  var notes = qs.filter(function (q) { return !q.warn; });
+  qs.filter(function (q) { return q.warn; }).forEach(function (q) { box.append(qnote(q)); });
+  if (notes.length > 2) {
+    var grp = el('details', { class: 'compat-notes', style: 'margin-top:4px' }, el('summary', { class: 'small' }, 'Emulator notes (' + notes.length + ')'));
+    notes.forEach(function (q) { grp.append(qnote(q)); });
+    box.append(grp);
+  } else notes.forEach(function (q) { box.append(qnote(q)); });
   return box;
 }
 function safeName(s) { return String(s || '').replace(/[\/:*?"<>|]+/g, '_').trim(); }
@@ -1235,7 +1244,7 @@ var PROFILES = {
   '3do': { noZstd: 'Opera (RetroArch)' },
   cd32: { noZstd: 'WinUAE' },
   cdtv: { noZstd: 'WinUAE' },
-  jagcd: { noMister: true, note: 'Jaguar CD emulators may not load this CHD: BigPEmu doesn\u2019t take CHDs, and Virtual Jaguar (RetroArch) needs session data that chdman 0.289 doesn\u2019t write. Keep the original files too.' },
+  jagcd: { noMister: true },
   pc: { keep: true, hint: 'DOSBox Pure opens only uncompressed CHDs (No compression).' },
   gc: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },
   wii: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },

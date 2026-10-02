@@ -210,7 +210,7 @@ fixture('ps1-psxexe', {'psxexe.iso': psxexe_iso}, add=['psxexe.iso'], job='creat
 fixture('ps1-as-iso', {
     'tnd.iso': lambda: ps1_iso('SLUS_009.75', 'TND', 1, 14),
 }, add=['tnd.iso'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-00975',
-   ident='serial', name='007 - Tomorrow Never Dies (USA)')
+   ident='serial', name='007 - Tomorrow Never Dies (USA)', warning='This is a 2,048-byte copy of a PlayStation disc', quirks=['ps1-cooked'])
 
 # a CD game dumped as raw 2,352-byte sectors but named .iso. Given the .iso, chdman types the track by
 # file size alone: 640 raw sectors are also a whole number of 2,048-byte ones, so it would store the
@@ -452,6 +452,85 @@ fixture('ps1-size-rank', {
     'size rank.bin': lambda: g.raw_sectors(ps1_iso('SLES_999.80', 'SIZERANK', 1, 143), 2),
 }, add=['size rank.cue', 'size rank.bin'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLES-99980',
    testdb=True, ident='serial+size', name='Size Rank Game (Europe) (De,Es) (Rev 1)')
+
+# ---------------------------------------------------------------- disc layouts some emulators misread
+# (app/quirks.js: each card warns or notes, and the CHD is still chdman's own)
+def text_cue(lines):
+    return ('\r\n'.join(lines) + '\r\n').encode()
+
+def segacd_data(seed):
+    return g.raw_sectors(g.pad_sectors(g.iso9660({'MAIN.PRG': g.filler(256 << 10, seed)}, 'NINJAS', '',
+        ipbin(b'SEGADISCSYSTEM  ', 0x180, b'GM T-93175 -00', 0x150, b'3 NINJAS KICK BACK', {0x1F0: b'U  '}))), 1)
+
+# a Sega CD disc with a second data track (Genesis Plus GX stops there), an audio track whose pregap
+# is stored (INDEX 00: libretro BlastEm) and a PREGAP line on track 3 (ares)
+fixture('segacd-layout', {
+    'ninjas.cue': lambda: text_cue([
+        'FILE "ninjas (Track 1).bin" BINARY', '  TRACK 01 MODE1/2352', '    INDEX 01 00:00:00',
+        'FILE "ninjas (Track 2).bin" BINARY', '  TRACK 02 AUDIO', '    INDEX 00 00:00:00', '    INDEX 01 00:02:00',
+        'FILE "ninjas (Track 3).bin" BINARY', '  TRACK 03 MODE1/2352', '    PREGAP 00:02:00', '    INDEX 01 00:00:00']),
+    'ninjas (Track 1).bin': lambda: segacd_data(151),
+    'ninjas (Track 2).bin': lambda: g.audio(300, 152, silence=150),
+    'ninjas (Track 3).bin': lambda: g.raw_sectors(g.filler(200 * 2048, 153), 1),
+}, add=['ninjas.cue', 'ninjas (Track 1).bin', 'ninjas (Track 2).bin', 'ninjas (Track 3).bin'], job='create', disc='cd',
+   command='createcd', sys='segacd', serial='T-93175', ident='ambiguous', names=['3 Ninjas Kick Back (USA)', 'Hook (USA) (Alt)'],
+   warning='Genesis Plus GX reads a Sega CD disc’s tracks only up to the first data track after track 1, here track 3',
+   quirks=['segacd-data-tracks', 'segacd-index0', 'ares-pregap'])
+
+# a Saturn cue sheet with a PREGAP line (a virtual pregap): Beetle Saturn, Kronos and Yabause misplace what follows
+fixture('saturn-pregap-cmd', {
+    'albert pregap.cue': lambda: text_cue([
+        'FILE "albert pregap (Track 1).bin" BINARY', '  TRACK 01 MODE1/2352', '    INDEX 01 00:00:00',
+        'FILE "albert pregap (Track 2).bin" BINARY', '  TRACK 02 AUDIO', '    PREGAP 00:02:00', '    INDEX 01 00:00:00']),
+    'albert pregap (Track 1).bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(
+        {'0.BIN': g.filler(256 << 10, 155)}, 'ALBERT', 'SEGA SEGASATURN',
+        ipbin(b'SEGA SEGASATURN ', 0x20, b'T-12705H  ', 0x60, b'ALBERT ODYSSEY', {0x10: b'SEGA TP T-127   ', 0x38: b'CD-1/1  ', 0x40: b'U         '}))), 1),
+    'albert pregap (Track 2).bin': lambda: g.audio(225, 156),
+}, add=['albert pregap.cue', 'albert pregap (Track 1).bin', 'albert pregap (Track 2).bin'], job='create', disc='cd',
+   command='createcd', sys='saturn', serial='T-12705H', ident='serial', name='Albert Odyssey - Legend of Eldean (USA)',
+   warning='Beetle Saturn, Kronos and Yabause read the tracks after a PREGAP or POSTGAP line from the wrong place', quirks=['saturn-gapcmd'])
+
+def dc_cd_data(mode2048, seed):
+    iso = g.pad_sectors(g.iso9660({'1ST_READ.BIN': g.filler(256 << 10, seed)}, 'HOMEBREW', '',
+        ipbin(b'SEGA SEGAKATANA ', 0x40, b'T0000     ', 0x80, b'HOMEBREW', {0x10: b'SEGA ENTERPRISES', 0x20: b'0000 CD-ROM1/1  ', 0x30: b'JUE     '})))
+    return iso if mode2048 else g.raw_sectors(iso, 2)
+
+# a Dreamcast CD with a MODE2/2048 track (chdman: MODE2_FORM1, which Flycast refuses)
+fixture('dc-mode2-2048', {
+    'dc form1.cue': lambda: text_cue(['FILE "dc form1 (Track 1).bin" BINARY', '  TRACK 01 AUDIO', '    INDEX 01 00:00:00',
+                                      'FILE "dc form1 (Track 2).bin" BINARY', '  TRACK 02 MODE2/2048', '    INDEX 01 00:00:00']),
+    'dc form1 (Track 1).bin': lambda: g.audio(300, 157),
+    'dc form1 (Track 2).bin': lambda: dc_cd_data(True, 158),
+}, add=['dc form1.cue', 'dc form1 (Track 1).bin', 'dc form1 (Track 2).bin'], job='create', disc='cd', command='createcd',
+   sys='dc', serial='T0000', ident='none', name='dc form1', warning='Flycast can’t load CHDs with MODE2/2048 or MODE2/2324 tracks',
+   quirks=['dc-mode2-form'])
+
+# a MIL-CD-like Dreamcast disc: music in session 1, the game in session 2 (a CHD keeps no session gap)
+fixture('dc-multisession', {
+    'milcd.cue': lambda: text_cue(['REM SESSION 01', 'FILE "milcd (Track 1).bin" BINARY', '  TRACK 01 AUDIO', '    INDEX 01 00:00:00',
+                                   'REM SESSION 02', 'FILE "milcd (Track 2).bin" BINARY', '  TRACK 02 MODE2/2352', '    INDEX 01 00:00:00']),
+    'milcd (Track 1).bin': lambda: g.audio(300, 159),
+    'milcd (Track 2).bin': lambda: dc_cd_data(False, 160),
+}, add=['milcd.cue', 'milcd (Track 1).bin', 'milcd (Track 2).bin'], job='create', disc='cd', command='createcd',
+   sys='dc', serial='T0000', ident='none', name='milcd', warning='This disc has 2 sessions.', quirks=['multisession'])
+
+# a PlayStation cue sheet with a POSTGAP line: Beetle PSX counts it into the file
+fixture('ps1-postgap', {
+    'tnd postgap.cue': lambda: text_cue(['FILE "tnd postgap (Track 1).bin" BINARY', '  TRACK 01 MODE2/2352', '    INDEX 01 00:00:00', '    POSTGAP 00:02:00',
+                                         'FILE "tnd postgap (Track 2).bin" BINARY', '  TRACK 02 AUDIO', '    INDEX 01 00:00:00']),
+    'tnd postgap (Track 1).bin': lambda: g.raw_sectors(ps1_iso('SLUS_009.75', 'TND', 1, 161), 2),
+    'tnd postgap (Track 2).bin': lambda: g.audio(225, 162),
+}, add=['tnd postgap.cue', 'tnd postgap (Track 1).bin', 'tnd postgap (Track 2).bin'], job='create', disc='cd', command='createcd',
+   sys='ps1', serial='SLUS-00975', ident='serial', name='007 - Tomorrow Never Dies (USA)',
+   warning='Beetle PSX read the tracks after a POSTGAP line from the wrong place', quirks=['postgap'])
+
+# a Neo Geo CD with a Mode 2 data track, which NeoCD doesn't take
+fixture('ngcd-mode2', {
+    'ngcd mode2.cue': lambda: cue([('ngcd mode2 (Track 1).bin', 'MODE2/2352', 0), ('ngcd mode2 (Track 2).bin', 'AUDIO', 150)]),
+    'ngcd mode2 (Track 1).bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660({'IPL.TXT': b'PROG.PRG,0,0\r\n', 'PROG.PRG': g.filler(128 << 10, 163)}, 'NEOGEO')), 2),
+    'ngcd mode2 (Track 2).bin': lambda: g.audio(225, 164, silence=150),
+}, add=['ngcd mode2.cue', 'ngcd mode2 (Track 1).bin', 'ngcd mode2 (Track 2).bin'], job='create', disc='cd', command='createcd',
+   sys='ngcd', ident='none', name='ngcd mode2', warning='NeoCD can’t load this CHD', quirks=['ngcd-layout'])
 
 # ---------------------------------------------------------------- unrecognized / other types
 fixture('homebrew-iso', {

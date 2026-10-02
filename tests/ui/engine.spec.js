@@ -1115,6 +1115,22 @@ test('every GD-ROM extract reads back as the same disc, and a TOC is refused', (
 
 // Cue sheets with INDEX points out of order, or a track with no frames from its INDEX 01 on: 0.289 made tracks of a
 // negative length (exit 0, or a read error) or of none (exit 0), whose TOC does not read back (START at the end)
+// CD+G tracks (TRACK nn CDG): 0.289 refuses the cue sheet, and so does the engine (the page refuses
+// it before running, edge-cases.spec.js; CD+G CHDs are post-0.289)
+test('a CD+G track is an error, and no CHD is written', () => {
+  const dir = tmp('cdg');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'karaoke.bin'), Buffer.alloc(2448 * 300));
+  fs.writeFileSync(path.join(dir, 'karaoke.cue'), 'FILE "karaoke.bin" BINARY\n  TRACK 01 CDG\n    INDEX 01 00:00:00\n');
+  for (const bin of [UPSTREAM, ENGINE]) {
+    const out = path.join(dir, path.basename(bin) + '.chd');
+    const r = run(bin, ['createcd', '-i', path.join(dir, 'karaoke.cue'), '-o', out, '-f']);
+    expect(r.code, path.basename(bin)).toBe(1);
+    expect(r.err).toContain('Unsupported format');
+    expect(fs.existsSync(out)).toBe(false);
+  }
+});
+
 test('INDEX points out of order, or a track without data, are an error', () => {
   const F = 2352;
   write('ix.bin', noise(100, 400 * F));
