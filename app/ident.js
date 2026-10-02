@@ -489,10 +489,13 @@ function cueModel(text) {
     var r;
     if ((r = /^\s*REM\s+SESSION\s+0*(\d+)/i.exec(ln))) { session = +r[1]; m.sessions = Math.max(m.sessions, session); }
     else if ((r = /^\s*TRACK\s+(\d+)\s+(\S+)/i.exec(ln))) {
-      cur = { no: +r[1], mode: r[2].toUpperCase(), session: session, index: {}, pregap: 0, postgap: 0 };
+      cur = { no: +r[1], mode: r[2].toUpperCase(), session: session, index: {}, pregap: 0, postgap: 0, pregapCmd: false };
       m.tracks.push(cur);
     } else if (cur && (r = /^\s*INDEX\s+(\d+)\s+(\S+)/i.exec(ln))) cur.index[+r[1]] = msfFrames(r[2]);
-    else if (cur && (r = /^\s*(PREGAP|POSTGAP)\s+(\S+)/i.exec(ln))) cur[r[1].toLowerCase()] = msfFrames(r[2]);
+    else if (cur && (r = /^\s*(PREGAP|POSTGAP)\s+(\S+)/i.exec(ln))) {
+      cur[r[1].toLowerCase()] = msfFrames(r[2]);
+      if (r[1].toUpperCase() === 'PREGAP') cur.pregapCmd = true; // a virtual pregap (not in the file)
+    }
   });
   m.audio = m.tracks.some(function (t) { return t.mode === 'AUDIO'; });
   m.cdg = m.tracks.some(function (t) { return t.mode === 'CDG'; });

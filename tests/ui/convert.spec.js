@@ -30,6 +30,11 @@ for (const fx of manifest().filter(f => f.job === 'create' && !f.bench && !f.tes
     if (fx.ident === 'ambiguous') await expect(card.locator('.ident-how')).toContainText('several versions share it');
     if (fx.ident === 'none') await expect(card.locator('.ident-name')).toHaveCount(0);
     if (fx.warning) await expect(card).toContainText(fx.warning);
+    // quirks: the ids of the rules (app/quirks.js) whose notes the card shows, all of them
+    if (fx.quirks) {
+      await expect(card.locator('[data-quirk]')).toHaveCount(fx.quirks.length);
+      expect((await card.locator('[data-quirk]').evaluateAll(ns => ns.map(n => n.dataset.quirk))).sort()).toEqual([...fx.quirks].sort());
+    }
 
     // command and output name
     // (out: a result that keeps its file's name although the game is named, as NAOMI GD-ROMs do)

@@ -723,7 +723,7 @@ body { overflow-x: clip; }
   <p class="small muted">A <code>.zip</code> works like the files inside it: add the zip of a game (or several), and its cue sheet finds its tracks inside. Files stored in the zip are read in place; compressed ones are unpacked first into the browser's private storage and checked against the zip's checksum. <code>.7z</code> and <code>.rar</code> can't be read: unpack them, or zip them again.</p>
   <p class="small muted">A PlayStation <code>EBOOT.PBP</code> (made with popstation for a PSP or PS Vita) converts to a CD CHD: each disc in it gets its own card, named after the game in the file. PlayStation Store downloads are encrypted and can't be read.</p>
   <p class="small muted">DiscJuggler <code>.cdi</code>, Alcohol 120% <code>.mds</code>/<code>.mdf</code> and <code>.isz</code> images get a card that says why they can't be converted and what to do instead. Emulators that play <code>.cdi</code> images (Flycast, Redream) load them directly, so keep those as they are.</p>
-  <p class="small muted">The type and hunk size are set from the console once the game is identified. Compression stays chdman's default, which every emulator reads; the page warns when the <i>Zstd</i> or <i>MiSTer</i> preset isn't readable by a console's emulators (Saturn, 3DO, Sega CD, PC Engine CD, Amiga, PlayStation, PS2, Dreamcast, NAOMI, PC-FX). NAOMI GD-ROMs keep their file's name, which MAME and Flycast look for in the game's romset. GameCube, Wii, Xbox and PS3 emulators don't load CHDs at all, and the page says so. It also says when a common emulator can't load a CHD of the disc: PCSX2 plays only the first track of a PS2 CD with music tracks, and Flycast 2.7 and earlier can't load CD-based Dreamcast discs whose tracks have pregaps. For MiSTer FPGA, choose the <i>For MiSTer FPGA</i> compression preset (Zstd and FLAC with small hunks, which MiSTer reads fast enough); the page says when MiSTer has no core for the console.</p>
+  <p class="small muted">The type and hunk size are set from the console once the game is identified. Compression stays chdman's default, which every emulator reads; the page warns when the <i>Zstd</i> or <i>MiSTer</i> preset isn't readable by a console's emulators (Saturn, 3DO, Sega CD, PC Engine CD, Amiga, PlayStation, PS2, Dreamcast, NAOMI, PC-FX). NAOMI GD-ROMs keep their file's name, which MAME and Flycast look for in the game's romset. GameCube, Wii, Xbox and PS3 emulators don't load CHDs at all, and the page says so. It also says when a common emulator can't load a CHD of the disc: PCSX2 plays only the first track of a PS2 CD with music tracks, Flycast 2.7 and earlier can't load CD-based Dreamcast discs whose tracks have pregaps, a disc with two sessions is read from the wrong place, a 2,048-byte PlayStation ISO has lost data, and some Saturn, Sega CD, PC Engine, PlayStation and Neo Geo CD emulators misread particular cue sheets. Cue sheets with CD+G (karaoke) tracks are refused: chdman 0.289 can't convert them. For MiSTer FPGA, choose the <i>For MiSTer FPGA</i> compression preset (Zstd and FLAC with small hunks, which MiSTer reads fast enough); the page says when MiSTer has no core for the console.</p>
   <p class="small muted">Add a PAL PlayStation game's <code>.sbi</code> file (LibCrypt protection data) with its <code>.cue</code> and <code>.bin</code>: it is saved next to the CHD, under the CHD's name, where emulators look for it. A CloneCD dump's <code>.sub</code> holds the same data: for a PlayStation game, the page reads it and saves the <code>.sbi</code> for you. When two or more discs of a game are converted, the first disc's card offers an <code>.m3u</code> playlist: keep it with the CHDs and open it, so the emulator can swap discs.</p>
 </div>
 
@@ -9398,6 +9398,8 @@ function fixDescriptor(kind, text) {
         tracks++;
         var n = parseInt(rest, 10);
         if (!(n >= 1 && n <= 99) && !problem) problem = 'Track numbers go from 01 to 99, but this CUE file has \u201c' + ln.trim() + '\u201d.';
+        // CD+G (karaoke graphics in the subchannel): chdman 0.289 refuses the cue sheet ("Unsupported format")
+        else if (/^\s+\d+\s+CDG\b/.test(rest) && !problem) problem = 'Track ' + n + ' is a CD+G track (karaoke graphics), which chdman 0.289 can\u2019t convert.';
       } else if (k === 'FLAGS') rest = rest.toUpperCase();
       else if (k === 'REM') rest = rest.replace(/^(\s+)(SESSION|PREGAP|LEAD-OUT|LEAD-IN|SINGLE-DENSITY AREA|HIGH-DENSITY AREA)\b/i, function (a, sp, w) { return sp + w.toUpperCase(); });
       else if (!/^(INDEX|PREGAP|POSTGAP)$/.test(k)) return ln;
@@ -10001,10 +10003,13 @@ function cueModel(text) {
     var r;
     if ((r = /^\s*REM\s+SESSION\s+0*(\d+)/i.exec(ln))) { session = +r[1]; m.sessions = Math.max(m.sessions, session); }
     else if ((r = /^\s*TRACK\s+(\d+)\s+(\S+)/i.exec(ln))) {
-      cur = { no: +r[1], mode: r[2].toUpperCase(), session: session, index: {}, pregap: 0, postgap: 0 };
+      cur = { no: +r[1], mode: r[2].toUpperCase(), session: session, index: {}, pregap: 0, postgap: 0, pregapCmd: false };
       m.tracks.push(cur);
     } else if (cur && (r = /^\s*INDEX\s+(\d+)\s+(\S+)/i.exec(ln))) cur.index[+r[1]] = msfFrames(r[2]);
-    else if (cur && (r = /^\s*(PREGAP|POSTGAP)\s+(\S+)/i.exec(ln))) cur[r[1].toLowerCase()] = msfFrames(r[2]);
+    else if (cur && (r = /^\s*(PREGAP|POSTGAP)\s+(\S+)/i.exec(ln))) {
+      cur[r[1].toLowerCase()] = msfFrames(r[2]);
+      if (r[1].toUpperCase() === 'PREGAP') cur.pregapCmd = true; // a virtual pregap (not in the file)
+    }
   });
   m.audio = m.tracks.some(function (t) { return t.mode === 'AUDIO'; });
   m.cdg = m.tracks.some(function (t) { return t.mode === 'CDG'; });
@@ -10474,6 +10479,101 @@ var QUIRKS = [
     when: function (c) { return c.disc && c.job.disc === 'cd' && !c.disc.gd && c.disc.gaps; },
     text: 'Flycast 2.7 and earlier can\u2019t load CD-based Dreamcast CHDs whose tracks have pregaps, as this one\u2019s do; newer Flycast builds can. Keep the original files if you use an older one.',
     src: 'docs/chd/ecosystem-sony-dreamcast.md §5.1 (flycast #906)'
+  },
+  {
+    // every Jaguar CD is multi-session (Redump: 38 of 38); 0.289 writes no session data
+    id: 'jagcd-sessions', sys: ['jagcd'], warn: true,
+    when: function () { return true; },
+    text: 'Jaguar CD emulators may not load this CHD: BigPEmu doesn\u2019t take CHDs, and Virtual Jaguar (RetroArch) needs session data that chdman 0.289 doesn\u2019t write. Keep the original files too.',
+    src: 'docs/chd/optical-media.md §3.5; docs/chd/ecosystem-other.md §0 findings 4 and 12'
+  },
+  {
+    // a CHD keeps no session gap (about 11,400 sectors), so session 2 is read that much too early
+    id: 'multisession', warn: true,
+    when: function (c) { return c.sys !== 'jagcd' && c.disc && c.disc.sessions > 1; },
+    text: function (c) {
+      return 'This disc has ' + c.disc.sessions + ' sessions. Its CHD doesn\u2019t keep where each starts, so emulators read the data after the first session from the wrong place' +
+        (/^(dc|naomi2?)$/.test(c.sys) ? ', except Flycast builds from September 2026 on, which guess it for MIL-CDs.' : '.') + ' Keep the original files too.';
+    },
+    src: 'docs/chd/optical-media.md §3.2, §3.5; docs/chd/ecosystem-sony-dreamcast.md §5.1 (Flycast 0abac34)'
+  },
+  {
+    // chdman stores MODE2/2048 and MODE2/2324 tracks as MODE2_FORM1 and MODE2_FORM2, which Flycast refuses
+    id: 'dc-mode2-form', sys: ['dc', 'naomi', 'naomi2'], warn: true,
+    when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return /^MODE2\/(2048|2324)$/.test(t.mode); }); },
+    text: 'Flycast can\u2019t load CHDs with MODE2/2048 or MODE2/2324 tracks, as this disc has (chdman stores them as Mode 2 Form 1 and Form 2). Keep the original files for Flycast.',
+    src: 'docs/chd/ecosystem-sony-dreamcast.md §5.1 (core/imgread/chd.cpp: track types)'
+  },
+  {
+    // a PlayStation disc is Mode 2 (XA); a 2,048-byte copy has lost its Form 2 sectors and headers
+    id: 'ps1-cooked', sys: ['ps1'], warn: true,
+    when: function (c) {
+      var j = c.job;
+      return (j.src === 'iso' && !j.autoCue && !j.files.some(function (f) { return f.ecm || f.pbp; })) ||
+        (c.disc && c.disc.tracks.some(function (t) { return /\/2048$/.test(t.mode) || t.mode === 'MODE1'; }));
+    },
+    text: 'This is a 2,048-byte copy of a PlayStation disc, without its raw sectors: the videos and sound stored in them may be missing, and Beetle PSX can\u2019t load its CHD (it takes only raw Mode 2 tracks). Convert the .bin and .cue dump instead, if you have it.',
+    src: 'docs/chd/ecosystem-sony-dreamcast.md §2.3 (Beetle PSX accepts MODE2_RAW and AUDIO only)'
+  },
+  {
+    // Genesis Plus GX stops its track list at the first data track after track 1
+    id: 'segacd-data-tracks', sys: ['segacd'], warn: true,
+    when: function (c) { return c.disc && c.disc.tracks.slice(1).some(function (t) { return t.mode !== 'AUDIO'; }); },
+    text: function (c) {
+      var t = c.disc.tracks.slice(1).find(function (x) { return x.mode !== 'AUDIO'; });
+      return 'Genesis Plus GX reads a Sega CD disc\u2019s tracks only up to the first data track after track 1, here track ' + t.no + ', so it misses the tracks from there on.';
+    },
+    src: 'docs/chd/ecosystem-other.md §2.1 (cdd.c: every later track must be AUDIO)'
+  },
+  {
+    id: 'segacd-long', sys: ['segacd'],
+    when: function (c) { return c.disc && discMinutes(c.job) >= 80; },
+    text: function (c) {
+      var m = discMinutes(c.job);
+      return 'PicoDrive doesn\u2019t load Sega CD images of 80 minutes or more, and this one is ' + Math.floor(m) + ' minutes long' + (m > 100 ? '; Genesis Plus GX takes up to 100.' : '. Genesis Plus GX takes up to 100.');
+    },
+    src: 'docs/chd/ecosystem-other.md §2.1 (over 100 minutes rejected), §2.2 (80 minutes or more rejected)'
+  },
+  {
+    // libretro BlastEm reads PGTYPE backwards: a stored pregap (V...) is taken as virtual (from its code)
+    id: 'segacd-index0', sys: ['segacd'],
+    when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return t.no > 1 && 0 in t.index; }); },
+    text: 'libretro BlastEm may start this disc\u2019s music tracks 2 seconds late: it misreads where their pregaps (kept in the CHD) end. Genesis Plus GX, PicoDrive and jgenesis read them right.',
+    src: 'docs/chd/ecosystem-other.md §0 finding 3, §2.3 (chdimage.c: fake_pregap when PGTYPE starts with V)'
+  },
+  {
+    // Beetle Saturn, Kronos and Yabause take every pregap as stored and leave postgaps out of the image
+    id: 'saturn-gapcmd', sys: ['saturn'], warn: true,
+    when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return t.pregapCmd || t.postgap; }); },
+    text: 'Beetle Saturn, Kronos and Yabause read the tracks after a PREGAP or POSTGAP line from the wrong place, and this cue sheet has one. A Redump dump (with INDEX 00 lines instead) doesn\u2019t have this problem.',
+    src: 'docs/chd/ecosystem-other.md §3.1 to §3.3 (PGTYPE ignored, postgap ignored)'
+  },
+  {
+    // the Beetle PCE family, Beetle PC-FX, Geargrafx and Beetle PSX count a postgap into the file offset
+    id: 'postgap', sys: ['pcecd', 'pcfx', 'ps1'], warn: true,
+    when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return t.postgap; }); },
+    text: function (c) {
+      return { pcecd: 'Beetle PCE and Geargrafx', pcfx: 'Beetle PC-FX', ps1: 'Beetle PSX' }[c.sys] + ' read the tracks after a POSTGAP line from the wrong place, and this cue sheet has one (chdman keeps no postgap data).';
+    },
+    src: 'docs/chd/ecosystem-other.md §4.1 to §4.3 (fileOffset += postgap); docs/chd/ecosystem-sony-dreamcast.md §2.3'
+  },
+  {
+    // ares drops a virtual pregap of track 2 or later from its TOC
+    id: 'ares-pregap', sys: ['pcecd', 'segacd', 'ps1'],
+    when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return t.no > 1 && t.pregapCmd; }); },
+    text: 'ares leaves this disc\u2019s PREGAP lines out of its track list, so the tracks after one start earlier there than on the disc.',
+    src: 'docs/chd/ecosystem-other.md §11.2 (a virtual pregap on track 2 or later is dropped)'
+  },
+  {
+    // NeoCD takes MODE1 and AUDIO tracks only, and misreads virtual pregaps from track 3 on
+    id: 'ngcd-layout', sys: ['ngcd'], warn: true,
+    when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return /^MODE2/.test(t.mode) || (t.no > 2 && t.pregapCmd); }); },
+    text: function (c) {
+      return c.disc.tracks.some(function (t) { return /^MODE2/.test(t.mode); })
+        ? 'NeoCD can\u2019t load this CHD: it takes only Mode 1 data tracks, and this disc has a Mode 2 one.'
+        : 'NeoCD reads the tracks after a PREGAP line from track 3 on from the wrong place, and this cue sheet has one.';
+    },
+    src: 'docs/chd/ecosystem-other.md §5.1 (cdromtoc.cpp: track types, pregap heuristic)'
   }
 ];
 // what the rules look at: the job's system and identification, its cue sheet or TOC, the settings
@@ -10491,6 +10591,8 @@ function quirks(job) {
 }
 function quirkAct(job, act) { return quirks(job).some(function (q) { return q.act === act; }); }
 // the layout of the CD a cue sheet or TOC describes (cueModel), kept with the job; null for other jobs
+// how long a CD job's disc is, in minutes (its track files, as raw sectors)
+function discMinutes(job) { return jobInputBytes(job) / 2352 / 75 / 60; }
 function discModel(job) {
   if (job.kind !== 'create' || (job.disc !== 'cd' && job.disc !== 'gdrom') || (job.src !== 'cue' && job.src !== 'toc') || !job.descText) return null;
   if (job.discModelOf !== job.descText) { job.discModelOf = job.descText; job.discModelVal = job.src === 'cue' ? cueModel(job.descText) : tocModel(job.descText); }
@@ -10667,9 +10769,16 @@ function identNote(job) {
   }
   if (damage) box.append(el('div', { class: 'small ident-damaged', style: 'margin-top:4px;color:var(--warn)' }, damage));
   if (profile(id.sys).note) box.append(el('div', { class: 'small ident-note', style: 'margin-top:4px' }, profile(id.sys).note));
-  quirks(job).forEach(function (q) {
-    if (q.text) box.append(el('div', { class: 'small compat-note', 'data-quirk': q.id, style: 'margin-top:4px' + (q.warn ? ';color:var(--warn)' : '') }, q.text));
-  });
+  // what emulators make of this disc (quirks.js): warnings shown, notes grouped when there are more than 2
+  var qs = quirks(job).filter(function (q) { return q.text; });
+  var qnote = function (q) { return el('div', { class: 'small compat-note', 'data-quirk': q.id, style: 'margin-top:4px' + (q.warn ? ';color:var(--warn)' : '') }, q.text); };
+  var notes = qs.filter(function (q) { return !q.warn; });
+  qs.filter(function (q) { return q.warn; }).forEach(function (q) { box.append(qnote(q)); });
+  if (notes.length > 2) {
+    var grp = el('details', { class: 'compat-notes', style: 'margin-top:4px' }, el('summary', { class: 'small' }, 'Emulator notes (' + notes.length + ')'));
+    notes.forEach(function (q) { grp.append(qnote(q)); });
+    box.append(grp);
+  } else notes.forEach(function (q) { box.append(qnote(q)); });
   return box;
 }
 function safeName(s) { return String(s || '').replace(/[\/:*?"<>|]+/g, '_').trim(); }
@@ -10729,7 +10838,7 @@ var PROFILES = {
   '3do': { noZstd: 'Opera (RetroArch)' },
   cd32: { noZstd: 'WinUAE' },
   cdtv: { noZstd: 'WinUAE' },
-  jagcd: { noMister: true, note: 'Jaguar CD emulators may not load this CHD: BigPEmu doesn\u2019t take CHDs, and Virtual Jaguar (RetroArch) needs session data that chdman 0.289 doesn\u2019t write. Keep the original files too.' },
+  jagcd: { noMister: true },
   pc: { keep: true, hint: 'DOSBox Pure opens only uncompressed CHDs (No compression).' },
   gc: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },
   wii: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },

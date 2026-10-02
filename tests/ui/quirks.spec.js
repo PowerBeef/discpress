@@ -1,6 +1,9 @@
 // The per-console and per-disc rules (app/quirks.js) and the compression warnings (PROFILES): settings
 // that would make a CHD some emulators can't load are left out or warned about, never applied silently.
+import fs from 'node:fs';
+import path from 'node:path';
 import { test, expect, fixture } from '../support/app.js';
+import { FIXTURES } from '../support/paths.js';
 import { nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
 
 async function card(app, key, title) {
@@ -87,4 +90,26 @@ test('the rules’ notes carry their ids', async ({ app }) => {
   await expect(ps2.locator('.compat-note')).toHaveAttribute('data-quirk', 'ps2-cd-audio');
   const dc = await card(app, 'dreamcast-cdr', 'dc cdr');
   await expect(dc.locator('.compat-note')).toHaveAttribute('data-quirk', 'dc-cd-gaps');
+});
+
+// more than 2 notes go into one group ("Emulator notes (n)"); warnings stay in view. An 85-minute Sega
+// CD disc (its audio track a sparse file) with a stored and a virtual pregap: three notes, one warning
+test('more than two notes are grouped, warnings stay in view', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'long scd');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'ninjas (Track 1).bin'), path.join(dir, 'long (Track 1).bin'));
+  fs.copyFileSync(path.join(FIXTURES, 'ninjas (Track 3).bin'), path.join(dir, 'long (Track 3).bin'));
+  const audio = path.join(dir, 'long (Track 2).bin');
+  if (!fs.existsSync(audio)) { const fd = fs.openSync(audio, 'w'); fs.ftruncateSync(fd, 85 * 60 * 75 * 2352); fs.closeSync(fd); }
+  fs.copyFileSync(path.join(FIXTURES, 'ninjas.cue'), path.join(dir, 'long.cue'));
+  fs.writeFileSync(path.join(dir, 'long.cue'), fs.readFileSync(path.join(dir, 'long.cue'), 'latin1').replace(/ninjas/g, 'long'), 'latin1');
+  await app.open();
+  await app.add(['long.cue', 'long (Track 1).bin', 'long (Track 2).bin', 'long (Track 3).bin'].map(n => `gen/long scd/${n}`));
+  const c = app.job('long');
+  await app.settled(c);
+  const group = c.locator('details.compat-notes');
+  await expect(group.locator('summary')).toHaveText('Emulator notes (3)');
+  expect(await group.locator('[data-quirk]').evaluateAll(ns => ns.map(n => n.dataset.quirk))).toEqual(['segacd-long', 'segacd-index0', 'ares-pregap']);
+  await expect(group.locator('[data-quirk="segacd-long"]')).toContainText('this one is 85 minutes long');
+  await expect(c.locator('.note.ident > [data-quirk="segacd-data-tracks"]')).toBeVisible();
 });

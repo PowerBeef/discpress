@@ -59,10 +59,12 @@ test('a truncated image gets a warning', async ({ app }) => {
 });
 
 // chdman 0.289 never finishes on a descriptor it reads as having no tracks (and writes outside its
-// track table for a track number outside 1-99); the app refuses those and says why instead
+// track table for a track number outside 1-99), and refuses CD+G tracks; the app refuses those and says why instead
 for (const [name, text, why] of [
   ['no tracks', 'FILE "lone.bin" BINARY\r\n', 'This CUE file lists no tracks.'],
   ['track zero', 'FILE "lone.bin" BINARY\r\n  TRACK 00 MODE2/2352\r\n    INDEX 01 00:00:00\r\n', 'Track numbers go from 01 to 99'],
+  // CD+G (karaoke graphics): chdman 0.289 refuses it ("Unsupported format"; engine.spec.js)
+  ['karaoke', 'FILE "lone.bin" BINARY\r\n  TRACK 01 MODE2/2352\r\n    INDEX 01 00:00:00\r\n  TRACK 02 CDG\r\n    INDEX 01 00:02:00\r\n', 'Track 2 is a CD+G track (karaoke graphics), which chdman 0.289 can\u2019t convert.'],
 ]) {
   test(`a descriptor chdman can't convert is refused: ${name}`, async ({ app }) => {
     const file = name + (text.startsWith('CD_ROM') ? '.toc' : '.cue');
