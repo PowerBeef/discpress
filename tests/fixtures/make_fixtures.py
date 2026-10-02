@@ -532,6 +532,74 @@ fixture('ngcd-mode2', {
 }, add=['ngcd mode2.cue', 'ngcd mode2 (Track 1).bin', 'ngcd mode2 (Track 2).bin'], job='create', disc='cd', command='createcd',
    sys='ngcd', ident='none', name='ngcd mode2', warning='NeoCD can’t load this CHD', quirks=['ngcd-layout'])
 
+# ---------------------------------------------------------------- consoles told apart by their discs' markers
+def area(off_bytes):  # a system area (sectors 0-15) with these bytes at these offsets
+    b = bytearray(16 * 2048)
+    for off, v in off_bytes.items():
+        b[off:off + len(v)] = v
+    return bytes(b)
+
+def data_cue(name, mode='MODE1/2352'):
+    return lambda: cue([(name + '.bin', mode, 0)])
+
+def data_fixture(key, name, iso, sys, mode=1, **info):
+    fixture(key, {name + '.cue': data_cue(name, 'MODE%d/2352' % mode), name + '.bin': lambda: g.raw_sectors(iso(), mode)},
+            add=[name + '.cue', name + '.bin'], job='create', disc='cd', command='createcd', sys=sys, ident='none', name=name, **info)
+
+# a PC Engine CD whose data track also has an ISO 9660 volume: its boot sector (sector 1) says so first
+data_fixture('pcecd-iso', 'pce iso', lambda: g.pad_sectors(g.iso9660({'GAME.DAT': g.filler(128 << 10, 171)}, 'PCEGAME', '',
+             area({2048 + 0x20: b'PC Engine CD-ROM SYSTEM'}))), 'pcecd')
+data_fixture('pcfx-iso', 'pcfx iso', lambda: g.pad_sectors(g.iso9660({'GAME.DAT': g.filler(128 << 10, 172)}, 'PCFXGAME', '',
+             area({0: b'PC-FX:Hu_CD-ROM '}))), 'pcfx')
+# CD32.TM makes a CD32 disc whatever its system id says (CDTV here)
+data_fixture('cd32-cdtvid', 'cd32 cdtvid', lambda: g.pad_sectors(g.iso9660({'CD32.TM': b'TM', 'S/STARTUP-SEQUENCE': b'game\n',
+             'GAME': g.filler(64 << 10, 173)}, 'CD32GAME', 'CDTV')), 'cd32')
+# an Amiga disc with a startup sequence and no trademark file: CD32 (MPF's rule); with CDTV.TM: CDTV
+data_fixture('cd32-startup', 'cd32 startup', lambda: g.pad_sectors(g.iso9660({'S/STARTUP-SEQUENCE': b'game\n',
+             'GAME': g.filler(64 << 10, 174)}, 'AMIGAGAME', 'AMIGA')), 'cd32')
+data_fixture('cdtv-tm', 'cdtv tm', lambda: g.pad_sectors(g.iso9660({'CDTV.TM': b'TM', 'S/STARTUP-SEQUENCE': b'game\n',
+             'GAME': g.filler(64 << 10, 175)}, 'CDTVGAME', 'AMIGA')), 'cdtv')
+# a Neo Geo CD known by its text files (MPF), without IPL.TXT
+data_fixture('ngcd-abs', 'ngcd abs', lambda: g.pad_sectors(g.iso9660({'ABS.TXT': b'abstract', 'BIB.TXT': b'bibliography',
+             'CPY.TXT': b'copyright', 'PROG.PRG': g.filler(64 << 10, 176)}, 'NEOGEO')), 'ngcd')
+# a CD-i Bridge disc, and a Video CD (one too, with its VCD and MPEGAV folders): CD-i, and video
+data_fixture('cdi-bridge', 'cdi bridge', lambda: g.pad_sectors(g.iso9660({'CDI/CDI_APP': g.filler(64 << 10, 177)}, 'CDIGAME',
+             'CD-RTOS CD-BRIDGE')), 'cdi', mode=2)
+data_fixture('vcd', 'video cd', lambda: g.pad_sectors(g.iso9660({'VCD/INFO.VCD': b'VIDEO_CD' + bytes(2040), 'MPEGAV/AVSEQ01.DAT': g.filler(64 << 10, 178),
+             'CDI/CDI_VCD.APP': b'app'}, 'VIDEOCD', 'CD-RTOS CD-BRIDGE')), 'vcd', mode=2)
+fixture('dvd-video', {
+    'film.iso': lambda: g.pad_sectors(g.iso9660({'VIDEO_TS/VIDEO_TS.IFO': g.filler(64 << 10, 179), 'AUDIO_TS/README': b''}, 'FILM')),
+}, add=['film.iso'], job='create', disc='dvd', command='createdvd', sys='video', ident='none', name='film')
+# a UMD Video: UMD_DATA.BIN and a UMD_VIDEO folder, no PSP_GAME (PPSSPP plays games only)
+fixture('umd-video', {
+    'umd film.iso': lambda: g.pad_sectors(g.iso9660({'UMD_DATA.BIN': b'UVXX-99999|0000000000000000|0001|G', 'UMD_VIDEO/PLAYLIST.UMD': g.filler(64 << 10, 180)},
+                                                    'UMDFILM', 'PSP GAME')),
+}, add=['umd film.iso'], job='create', disc='dvd', command='createdvd', sys='psp', ident='none', name='umd film',
+   warning='This is a UMD Video (a film), not a game', quirks=['umd-video'])
+# PS2 discs without a database entry: a DVD has a UDF volume as well, whatever its size; a CD has ISO 9660 only
+def ps2_iso(boot, udf):
+    return g.pad_sectors(g.iso9660({'SYSTEM.CNF': ('BOOT2 = cdrom0:\\%s;1\r\nVER = 1.00\r\nVMODE = NTSC\r\n' % boot).encode(), boot: exe(boot)},
+                                   'PS2GAME', 'PLAYSTATION', udf=udf))
+fixture('ps2-dvd-small', {'ps2 small dvd.iso': lambda: ps2_iso('SLUS_299.98', True)}, add=['ps2 small dvd.iso'], job='create', disc='dvd',
+        command='createdvd', sys='ps2', serial='SLUS-29998', ident='none', name='ps2 small dvd')
+fixture('ps2-cd-iso', {'ps2 cd.iso': lambda: ps2_iso('SLUS_299.97', False)}, add=['ps2 cd.iso'], job='create', disc='cd',
+        command='createcd', sys='ps2', serial='SLUS-29997', ident='none', name='ps2 cd')
+
+# a Jaguar CD: audio tracks only, in two sessions; the second session's first track holds the boot
+# header, byte-swapped as in the image's audio
+def jag_boot():
+    head = b'ATARI APPROVED DATA HEADER ATRI ' * 4
+    raw = bytearray(g.audio(300, 181))
+    raw[2352 * 2 + 100:2352 * 2 + 100 + len(head)] = bytes(b for i in range(0, len(head), 2) for b in (head[i + 1], head[i]))
+    return bytes(raw)
+fixture('jagcd', {
+    'jaguar.cue': lambda: text_cue(['REM SESSION 01', 'FILE "jaguar (Track 1).bin" BINARY', '  TRACK 01 AUDIO', '    INDEX 01 00:00:00',
+                                    'REM SESSION 02', 'FILE "jaguar (Track 2).bin" BINARY', '  TRACK 02 AUDIO', '    INDEX 01 00:00:00']),
+    'jaguar (Track 1).bin': lambda: g.audio(300, 182),
+    'jaguar (Track 2).bin': jag_boot,
+}, add=['jaguar.cue', 'jaguar (Track 1).bin', 'jaguar (Track 2).bin'], job='create', disc='cd', command='createcd', sys='jagcd',
+   ident='none', name='jaguar', warning='Jaguar CD emulators may not load this CHD', quirks=['jagcd-sessions'])
+
 # ---------------------------------------------------------------- unrecognized / other types
 fixture('homebrew-iso', {
     'homebrew.iso': lambda: g.pad_sectors(g.iso9660({'README.TXT': b'hello', 'GAME.DAT': g.filler(3 << 20, 71)}, 'HOMEBREW')),

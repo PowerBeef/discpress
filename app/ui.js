@@ -1095,7 +1095,8 @@ function applyIdent(job, starting) {
     // the system settles the type (unless the user picked one) (the "Create as" choice then moves into Options)
     var bySystem = true, pf = profile(id.sys);
     if (id.sys === 'ps2') {
-      var cdGame = id.entry ? id.entry.ext === 'bin' : (job.isoSize || job.files[0].file.size) < 800 * 1048576;
+      // a DVD's UDF volume, else a size no CD has (identification: hasUdf)
+      var cdGame = id.entry ? id.entry.ext === 'bin' : !(id.detected && id.detected.udf) && (job.isoSize || job.files[0].file.size) < 800 * 1048576;
       job.ps2dvd = !cdGame;
       // AetherSX2 and NetherSX2 (Android) read CD CHDs only (Settings)
       job.disc = cdGame || settings.ps2dvd === 'cd' ? 'cd' : 'dvd';
@@ -1245,6 +1246,8 @@ var PROFILES = {
   cd32: { noZstd: 'WinUAE' },
   cdtv: { noZstd: 'WinUAE' },
   jagcd: { noMister: true },
+  vcd: { keep: true, note: 'This is a Video CD, not a game: video players don\u2019t open CHDs, so keep the original files to watch it.' },
+  video: { keep: true, note: 'This is a video disc, not a game: video players don\u2019t open CHDs, so keep the original files to watch it.' },
   pc: { keep: true, hint: 'DOSBox Pure opens only uncompressed CHDs (No compression).' },
   gc: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },
   wii: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },
