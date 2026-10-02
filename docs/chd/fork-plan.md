@@ -302,6 +302,26 @@ Deferred, with the reason:
 - **`.7z` and `.rar`.** 7z's solid LZMA2 blocks need a whole decoder and archive reader; rar has no free decoder. The card asks for zip or plain files.
 - **MDF/MDS.** Rare in the research; revisit on demand.
 
+### Milestone 6: detection that knows the game (research of 2026-10-02)
+
+Identification picked settings per console and from the cue sheet's text, never per game, and named some discs wrongly. The audit (code, `docs/chd/`, and the emulators' own sources and trackers) found:
+- **Wrong or missing names.** Sega's US first-party discs say MK-51064 where Redump lists 51064 (91 Dreamcast, 120 Saturn and 126 Sega CD rows), so the US disc got the European name, and Sega CD discs none. Sega headers' disc numbers weren't read: 146 Saturn and 81 Dreamcast serials are shared by the discs of a set, so Disc 2 was named Disc 1 and playlists broke. An exact serial won even when its size disagreed, and regions were ignored.
+- **CHDs that won't load.** "Keep the cue sheet" writes a tag Kronos, Yabause and jgenesis reject (Saturn, Sega CD); renaming NAOMI discs breaks MAME's and Flycast's romset lookup; Zstd warnings were missing for PS2, Dreamcast, NAOMI and PC-FX.
+- **Discs 0.289 mishandles without a word**: multi-session discs, CD+G tracks, cooked PS1 ISOs, cue layouts specific emulators misread.
+- **Detection gaps**: Jaguar CD and PC-98 never detected, PC Engine discs with an ISO 9660 volume taken for PC discs, CD32 and CDTV checked in the wrong order, video discs not recognized.
+
+None of the steps changes the CHDs Discpress writes by default. The only automatic changes allowed are dropping an opt-in flag that makes a CHD unbootable (which gives the default output), choosing the CHD type, and refusing inputs 0.289 mishandles; everything else is a note or a warning. Each step is one pull request.
+
+**Status: step 1 done** (tests: the `dc-firstparty`, `saturn-firstparty`, `segacd-firstparty`, `saturn-disc1`, `saturn-disc2`, `dc-disc2`, `ps1-size-rank` and `saturn-other-region` fixtures, and `identify.spec.js`).
+
+1. **Correct names.** A serial's key drops Sega's `MK` (`canonKey`); base keys also cover Sega's two-part suffixes (4432-50) and Sony serials with letters after the number (SLUS-01272GH). A disc is also looked up without the version suffix it carries (T-93175-00) and, for PlayStation discs, under its boot file's name (`serialCandidates`). The Saturn's and Dreamcast's IP.BIN give the disc of a set (CD-2/3, GD-ROM2/2) and the area symbols, the Sega CD's system area its region. Releases are ranked: the disc's number in its set first, then a matching size, then how the serial matched (exact, trimmed, base), then whether the release's region fits the disc's; a release found only under a base serial for another region names nothing. Lettered sets (Disc A, Disc B) get playlists too.
+2. **A rule table** (`app/quirks.js`) for per-console and per-disc rules, each with a stable id: Saturn and Sega CD jobs leave out `--keepcue` and say why, NAOMI results keep their romset names, the Zstd warnings cover PS2, Dreamcast, NAOMI and PC-FX, and the MiSTer preset warns where MiSTer has no core.
+3. **Disc-layout rules**: CD+G tracks refused, multi-session discs, MODE2 Dreamcast tracks, cooked PS1 ISOs, and the cue layouts that Sega CD, Saturn, PC Engine, PS1 and Neo Geo CD emulators misread.
+4. **Detection gaps**: PC Engine and PC-FX discs with ISO 9660 volumes, CD32 before CDTV, Neo Geo CD's other files, Jaguar CD (its header on an audio track of session 2), CD-i Bridge, Video CD, UMD Video, PS2 CD or DVD from UDF descriptors, every NRG track. Some markers follow MPF (MIT).
+5. **Per-game facts** (`db/facts/`, kept by hand with sources): LibCrypt PAL games without an `.sbi`, Saturn games that need a cartridge, `.lsd` files paired like `.sbi`, and a set missing discs.
+
+Deferred: naming GameCube, Wii, Xbox and PS3 discs (+530 KB of database, and their emulators don't take CHDs); checksumming CHD tracks while identifying (Verify does); FM Towns, X68000 and other PC sub-platforms; session and index metadata (`CHSE`/`CHIX`), which needs a MAME newer than 0.289.
+
 ## 5. Test and verification strategy
 
 - **Oracles.** Each output is checked against a set of oracles, not one:

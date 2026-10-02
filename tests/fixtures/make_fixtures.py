@@ -296,6 +296,10 @@ fixture('ps3-iso', {
 }, add=['ps3game.iso'], job='create', disc='dvd', command='createdvd', sys='ps3', serial='BLUS-30001', ident='none', name='ps3game')
 
 # ---------------------------------------------------------------- Sega
+# Sega's system areas: the Saturn's IP.BIN has the serial at 0x20, the disc of the set (CD-1/1) at 0x38,
+# the area symbols at 0x40 and the title at 0x60; the Dreamcast's the disc (crc GD-ROM1/1) at 0x20, the
+# areas at 0x30, the serial at 0x40 and the title at 0x80; the Sega CD's the serial at 0x180, the
+# region at 0x1F0
 def ipbin(magic, serial_off, serial, title_off, title, extra=None):
     b = bytearray(16 * 2048)
     b[0:16] = magic
@@ -310,7 +314,7 @@ fixture('saturn', {
     'albert odyssey.cue': lambda: cue([('albert odyssey.bin', 'MODE1/2352', 0)]),
     'albert odyssey.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(
         {'0.BIN': g.filler(1 << 20, 41), 'ABS.TXT': b'fixture'}, 'ALBERT', 'SEGA SEGASATURN',
-        ipbin(b'SEGA SEGASATURN ', 0x20, b'T-12705H  ', 0x60, b'ALBERT ODYSSEY', {0x10: b'SEGA TP T-127   '}))), 1),
+        ipbin(b'SEGA SEGASATURN ', 0x20, b'T-12705H  ', 0x60, b'ALBERT ODYSSEY', {0x10: b'SEGA TP T-127   ', 0x38: b'CD-1/1  ', 0x40: b'U         '}))), 1),
 }, add=['albert odyssey.cue', 'albert odyssey.bin'], job='create', disc='cd', command='createcd', sys='saturn', serial='T-12705H',
    ident='serial', name='Albert Odyssey - Legend of Eldean (USA)')
 
@@ -320,7 +324,7 @@ fixture('saturn-region', {
     'alien trilogy.cue': lambda: cue([('alien trilogy.bin', 'MODE1/2352', 0)]),
     'alien trilogy.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(
         {'0.BIN': g.filler(256 << 10, 42)}, 'ALIEN', 'SEGA SEGASATURN',
-        ipbin(b'SEGA SEGASATURN ', 0x20, b'T-8113H   ', 0x60, b'ALIEN TRILOGY', {0x10: b'SEGA TP T-81    '}))), 1),
+        ipbin(b'SEGA SEGASATURN ', 0x20, b'T-8113H   ', 0x60, b'ALIEN TRILOGY', {0x10: b'SEGA TP T-81    ', 0x38: b'CD-1/1  ', 0x40: b'U         '}))), 1),
 }, add=['alien trilogy.cue', 'alien trilogy.bin'], job='create', disc='cd', command='createcd', sys='saturn', serial='T-8113H',
    ident='serial', name='Alien Trilogy (USA)')
 
@@ -328,7 +332,7 @@ fixture('segacd', {
     'ax101.cue': lambda: cue([('ax101.bin', 'MODE1/2352', 0), ('ax101 audio.bin', 'AUDIO', 150)]),
     'ax101.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(
         {'MAIN.PRG': g.filler(768 << 10, 51)}, 'AX101', '',
-        ipbin(b'SEGADISCSYSTEM  ', 0x180, b'GM T-86015 -00', 0x150, b'A/X-101'))), 1),
+        ipbin(b'SEGADISCSYSTEM  ', 0x180, b'GM T-86015 -00', 0x150, b'A/X-101', {0x1F0: b'U  '}))), 1),
     'ax101 audio.bin': lambda: g.audio(300, 52, silence=150),
 }, add=['ax101.cue', 'ax101.bin', 'ax101 audio.bin'], job='create', disc='cd', command='createcd', sys='segacd', serial='T-86015',
    ident='serial', name='A-X-101 (USA)')
@@ -339,7 +343,7 @@ fixture('dreamcast-gdi', {
     'track02.raw': lambda: g.audio(302, 61),
     'track03.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(
         {'1ST_READ.BIN': g.filler(2 << 20, 62)}, 'AEROWINGS', '',
-        ipbin(b'SEGA SEGAKATANA ', 0x40, b'T-40201N  ', 0x80, b'AEROWINGS', {0x10: b'SEGA ENTERPRISES', 0x30: b'GD-ROM1/1       '}))), 1, 45000),
+        ipbin(b'SEGA SEGAKATANA ', 0x40, b'T-40201N  ', 0x80, b'AEROWINGS', {0x10: b'SEGA ENTERPRISES', 0x20: b'0000 GD-ROM1/1  ', 0x30: b'U       '}))), 1, 45000),
 }, add=['aerowings.gdi', 'track01.bin', 'track02.raw', 'track03.bin'], job='create', disc='gdrom', command='createcd', sys='dc',
    serial='T-40201N', ident='serial', name='AeroWings (USA)')
 
@@ -360,7 +364,7 @@ fixture('dreamcast-cdr', {
     'dc cdr (Track 1).bin': lambda: g.audio(300, 72),
     'dc cdr (Track 2).bin': lambda: g.raw_sectors(bytes(150 * 2048) + g.pad_sectors(g.iso9660(
         {'1ST_READ.BIN': g.filler(512 << 10, 73)}, 'HOMEBREW', '',
-        ipbin(b'SEGA SEGAKATANA ', 0x40, b'T0000     ', 0x80, b'HOMEBREW', {0x10: b'SEGA ENTERPRISES', 0x30: b'CD-ROM1/1       '}))), 1, 300),
+        ipbin(b'SEGA SEGAKATANA ', 0x40, b'T0000     ', 0x80, b'HOMEBREW', {0x10: b'SEGA ENTERPRISES', 0x20: b'0000 CD-ROM1/1  ', 0x30: b'JUE     '}))), 1, 300),
 }, add=['dc cdr.cue', 'dc cdr (Track 1).bin', 'dc cdr (Track 2).bin'], job='create', disc='cd', command='createcd', sys='dc',
    serial='T0000', ident='none', name='dc cdr')
 
@@ -371,7 +375,7 @@ fixture('naomi2-gdi', {
     'spikers02.raw': lambda: g.audio(302, 65),
     'spikers03.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(
         {'1ST_READ.BIN': g.filler(1 << 20, 66)}, 'SPIKERS', '',
-        ipbin(b'SEGA SEGAKATANA ', 0x40, b'GDS-0014  ', 0x80, b'BEACH SPIKERS', {0x10: b'SEGA ENTERPRISES', 0x30: b'NAOMI           '}))), 1, 45000),
+        ipbin(b'SEGA SEGAKATANA ', 0x40, b'GDS-0014  ', 0x80, b'BEACH SPIKERS', {0x10: b'SEGA ENTERPRISES', 0x20: b'0000 GD-ROM1/1  ', 0x30: b'JUE     ', 0x38: b'NAOMI   '}))), 1, 45000),
 }, add=['spikers.gdi', 'spikers01.bin', 'spikers02.raw', 'spikers03.bin'], job='create', disc='gdrom', command='createcd', sys='naomi2',
    serial='GDS-0014', ident='serial', name='Beach Spikers - Virtua Beach Volleyball (World) (En,Ja)')
 
@@ -388,9 +392,65 @@ fixture('dreamcast-cue', {
     'aerowings (Track 2).bin': lambda: g.audio(302, 63, silence=150),
     'aerowings (Track 3).bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(
         {'1ST_READ.BIN': g.filler(2 << 20, 64)}, 'AEROWINGS', '',
-        ipbin(b'SEGA SEGAKATANA ', 0x40, b'T-40201N  ', 0x80, b'AEROWINGS', {0x10: b'SEGA ENTERPRISES', 0x30: b'GD-ROM1/1       '}))), 1, 45000),
+        ipbin(b'SEGA SEGAKATANA ', 0x40, b'T-40201N  ', 0x80, b'AEROWINGS', {0x10: b'SEGA ENTERPRISES', 0x20: b'0000 GD-ROM1/1  ', 0x30: b'U       '}))), 1, 45000),
 }, add=['aerowings.cue', 'aerowings (Track 1).bin', 'aerowings (Track 2).bin', 'aerowings (Track 3).bin'], job='create', disc='gdrom',
    command='createcd', sys='dc', serial='T-40201N', ident='serial', name='AeroWings (USA)')
+
+# Sega's US first-party discs say MK-51064, MK-81064 or MK-4432 where Redump lists 51064, 81064 and 4432
+# (and the European releases as MK-51064-50): the US release, not the European one
+def gd_fixture(key, stem, serial, title, device, area, seed, **info):
+    fixture(key, {
+        stem + '.gdi': lambda: ('3\r\n1 0 4 2352 %s01.bin 0\r\n2 450 0 2352 %s02.raw 0\r\n3 45000 4 2352 %s03.bin 0\r\n' % (stem, stem, stem)).encode(),
+        stem + '01.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660({'README.TXT': b'fixture'}, title[:8].decode())), 1, 0),
+        stem + '02.raw': lambda: g.audio(302, seed),
+        stem + '03.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(
+            {'1ST_READ.BIN': g.filler(1 << 20, seed + 1)}, title[:8].decode(), '',
+            ipbin(b'SEGA SEGAKATANA ', 0x40, serial.ljust(10), 0x80, title,
+                  {0x10: b'SEGA ENTERPRISES', 0x20: device.ljust(16), 0x30: area.ljust(8)}))), 1, 45000),
+    }, add=[stem + '.gdi', stem + '01.bin', stem + '02.raw', stem + '03.bin'], job='create', disc='gdrom', command='createcd',
+       sys='dc', serial=serial.decode(), **info)
+
+
+def saturn_fixture(key, stem, serial, title, device, area, seed, **info):
+    fixture(key, {
+        stem + '.cue': lambda: cue([(stem + '.bin', 'MODE1/2352', 0)]),
+        stem + '.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(
+            {'0.BIN': g.filler(256 << 10, seed)}, title[:8].decode(), 'SEGA SEGASATURN',
+            ipbin(b'SEGA SEGASATURN ', 0x20, serial.ljust(10), 0x60, title,
+                  {0x10: b'SEGA ENTERPRISES', 0x38: device.ljust(8), 0x40: area.ljust(10)}))), 1),
+    }, add=[stem + '.cue', stem + '.bin'], job='create', disc='cd', command='createcd', sys='saturn', serial=serial.decode(), **info)
+
+
+gd_fixture('dc-firstparty', 'wheeler', b'MK-51064', b'18 WHEELER', b'0000 GD-ROM1/1', b'U', 131,
+           ident='serial', name='18 Wheeler - American Pro Trucker (USA)')
+saturn_fixture('saturn-firstparty', 'amok', b'MK-81064', b'AMOK', b'CD-1/1', b'U', 133, ident='serial', name='Amok (USA)')
+fixture('segacd-firstparty', {
+    'batman cd.cue': lambda: cue([('batman cd.bin', 'MODE1/2352', 0)]),
+    'batman cd.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(
+        {'MAIN.PRG': g.filler(256 << 10, 135)}, 'BATMAN', '',
+        ipbin(b'SEGADISCSYSTEM  ', 0x180, b'GM MK-4432 -00', 0x150, b'THE ADVENTURES OF BATMAN & ROBIN', {0x1F0: b'U  '}))), 1),
+}, add=['batman cd.cue', 'batman cd.bin'], job='create', disc='cd', command='createcd', sys='segacd', serial='MK-4432',
+   ident='serial', name='Adventures of Batman and Robin, The (USA)')
+
+# discs of a set share their serial (T-21301G is 3x3 Eyes' three discs): the disc's header says which it is
+saturn_fixture('saturn-disc1', '3x3 eyes 1', b'T-21301G', b'3X3 EYES', b'CD-1/3', b'J', 137,
+               ident='serial', name='3x3 Eyes - Kyuusei Koushu S (Japan) (Disc 1)')
+saturn_fixture('saturn-disc2', '3x3 eyes 2', b'T-21301G', b'3X3 EYES', b'CD-2/3', b'J', 139,
+               ident='serial', name='3x3 Eyes - Kyuusei Koushu S (Japan) (Disc 2)')
+gd_fixture('dc-disc2', 'nightmare', b'T-15117N', b'ALONE IN THE DARK', b'0000 GD-ROM2/2', b'U', 141,
+           ident='serial', name='Alone in the Dark - The New Nightmare (USA) (Disc 2)')
+
+# a Japanese disc whose serial the database lists only as a European release's base (T-99990-50): not that game
+saturn_fixture('saturn-other-region', 'other region', b'T-99990', b'OTHER REGION', b'CD-1/1', b'J', 145,
+               testdb=True, ident='none', name='other region')
+
+# a PS1 disc whose serial (SLES-99980) names one release exactly and, as a base serial, another
+# (SLES-999802) of its data track's size: the size wins (Redump's Asterix, SLES-01748 and SLES-017482)
+fixture('ps1-size-rank', {
+    'size rank.cue': lambda: cue([('size rank.bin', 'MODE2/2352', 0)]),
+    'size rank.bin': lambda: g.raw_sectors(ps1_iso('SLES_999.80', 'SIZERANK', 1, 143), 2),
+}, add=['size rank.cue', 'size rank.bin'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLES-99980',
+   testdb=True, ident='serial+size', name='Size Rank Game (Europe) (De,Es) (Rev 1)')
 
 # ---------------------------------------------------------------- unrecognized / other types
 fixture('homebrew-iso', {
@@ -606,10 +666,15 @@ ui = open(os.path.join(OUT, 'umd.iso'), 'rb').read()  # the ISO inside the umd.*
 xb = open(os.path.join(OUT, 'xa.bin'), 'rb').read()   # the image inside xa.bin.ecm
 mb = open(os.path.join(OUT, 'mgs disc1 (Track 1).bin'), 'rb').read()
 mb = mb[:-1] + bytes([mb[-1] ^ 1])  # a game of the same size as mgs disc1's data track, not the same data
+sr = open(os.path.join(OUT, 'size rank.bin'), 'rb').read()
+sr = sr[:-1] + bytes([sr[-1] ^ 1])  # the size of size rank.bin, not its data
 with open(os.path.join(OUT, 'testdb.json'), 'w') as f:
     json.dump({'ps1': [row('Checksum Verified Game (USA)', 'SLUS-99999', vb, 'bin'), row('Checksum Verified ECM Game (USA)', 'SLUS-99998', xb, 'bin'),
-                       row('Same Size Game (USA)', 'SLUS-99997', mb, 'bin')],
-               'psp': [row('Checksum Verified PSP Game (USA)', 'ULUS-99999', ui, 'iso')]}, f)
+                       row('Same Size Game (USA)', 'SLUS-99997', mb, 'bin'),
+                       row('Size Rank Game (Europe) (En,Fr)', 'SLES-99980', sr + bytes(2352), 'bin'),
+                       row('Size Rank Game (Europe) (De,Es) (Rev 1)', 'SLES-999802', sr, 'bin')],
+               'psp': [row('Checksum Verified PSP Game (USA)', 'ULUS-99999', ui, 'iso')],
+               'saturn': [row('Other Region Game (Europe)', 'T-99990-50', bytes(2352), 'bin')]}, f)
 
 with open(os.path.join(OUT, 'manifest.json'), 'w') as f:
     json.dump(manifest, f, indent=1)

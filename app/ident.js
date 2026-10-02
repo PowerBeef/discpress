@@ -23,10 +23,51 @@ function sysColor(s) { return SYS_COLORS[s] || null; }
 function sysShort(s) { return SYSTEMS[s] ? SYSTEMS[s][0] : ''; }
 function sysName(s) { return SYSTEMS[s] ? SYSTEMS[s][1] : ''; }
 function normSerial(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+// a serial's key in the database. Sega's first-party discs say MK-51064 (Dreamcast), MK-81064 (Saturn)
+// or MK-4432 (Sega CD) where Redump lists the US release as 51064 and the others as MK-51064-50: one key
+var SEGA_SYS = /^(saturn|segacd|dc|naomi2?)$/;
+function canonKey(sys, s) {
+  var k = normSerial(s);
+  return SEGA_SYS.test(sys) && /^MK\d/.test(k) ? k.slice(2) : k;
+}
+function sameSerial(sys, a, b) { var k = canonKey(sys, a); return !!k && k === canonKey(sys, b); }
+// the keys to look a disc's serial up under: its own; without a version suffix the disc carries and
+// Redump leaves out (Sega CD's T-93175-00); for PlayStation discs, the boot file's name as it is
+// (LSP_200.110, DTL_S30.30: serials of other shapes than SLUS-00594)
+function serialCandidates(det) {
+  var out = [];
+  var add = function (s, how) { if (s && !out.some(function (c) { return canonKey(det.sys, c.serial) === canonKey(det.sys, s); })) out.push({ serial: s, how: how }); };
+  add(det.serial, 'serial');
+  var m = /^(.+?)[-\s]+\d{1,2}$/.exec(det.serial || '');
+  if (m && /\d/.test(m[1])) add(m[1], 'trim');
+  if (det.boot) add(det.boot, 'boot');
+  return out;
+}
+
+// a release's disc number from its name ("(Disc 2)", "(Disc B)"), or 0
+function discNo(name) {
+  var m = /\((?:Disc|Disk) (\d+|[A-Z])\)/.exec(name || '');
+  return !m ? 0 : /\d/.test(m[1]) ? +m[1] : m[1].charCodeAt(0) - 64;
+}
+// the area symbols (Sega's) of the regions a release's name gives in its first parentheses
+var REGION_AREA = [
+  [/^(Japan)$/, 'J'], [/^(USA|Canada)$/, 'U'], [/^(Brazil)$/, 'BU'], [/^(Korea)$/, 'KJ'], [/^(Asia)$/, 'TAJ'],
+  [/^(Taiwan|Hong Kong|China)$/, 'TJ'], [/^(Latin America|Mexico|Argentina)$/, 'LU'], [/^(World)$/, 'JTUBKAEL'],
+  [/^(Europe|Germany|France|Italy|Spain|UK|Netherlands|Sweden|Scandinavia|Australia|New Zealand|Portugal|Russia|Greece|Poland|Denmark|Norway|Finland|Belgium|Austria|Switzerland|Ireland)$/, 'E']
+];
+// 1 if the release may be the disc of these area symbols (or its name gives no region), else 0
+function regionFits(name, area) {
+  var m = /\(([^)]*)\)/.exec(name || ''), letters = '';
+  if (m) m[1].split(/,\s*/).forEach(function (w) { REGION_AREA.forEach(function (r) { if (r[0].test(w)) letters += r[1]; }); });
+  if (!letters) return 1;
+  for (var i = 0; i < letters.length; i++) if (area.indexOf(letters[i]) >= 0) return 1;
+  return 0;
+}
 
 var GameDB = {
-  // bySerial: exact serials; bySerialBase: serials with a suffix (T-8113H-50) under their base (T-8113H)
-  loading: null, version: '', bySerial: new Map(), bySerialBase: new Map(), bySize: new Map(), count: 0,
+  // bySerial: exact serials; bySerialBase: serials with a suffix (T-8113H-50) under their base (T-8113H).
+  // Keys are 'sys:' + canonKey
+  loading: null, version: '', bySerial: new Map(), bySerialBase: new Map(), bySize: new Map(), count: 0, systems: [],
   ready: function () {
     if (!this.loading) this.loading = this._load();
     return this.loading;
@@ -38,7 +79,9 @@ var GameDB = {
     var data = JSON.parse(new TextDecoder().decode(bytes));
     this.version = data.version;
     var self = this;
-    Object.keys(data.systems).forEach(function (sys) {
+    this.systems = Object.keys(data.systems);
+    this.systems.forEach(function (sys) {
+      var key = function (s) { var k = canonKey(sys, s); return k ? sys + ':' + k : ''; };
       data.systems[sys].split('\n').forEach(function (line) {
         if (!line) return;
         var f = line.split('\t');
@@ -51,11 +94,17 @@ var GameDB = {
             if (!l) map.set(k, l = []);
             if (l.indexOf(e) < 0) l.push(e);
           };
-          add(self.bySerial, normSerial(e.serial));
+          add(self.bySerial, key(e.serial));
           var parts = e.serial.split(/[-\s]/);
-          if (parts.length > 2) add(self.bySerialBase, normSerial(parts[0] + parts[1]));
+          if (parts.length > 2) add(self.bySerialBase, key(parts[0] + parts[1]));
           // Redump's release suffixes (SCES-53449/ANZ, UCES-00786/E): the disc itself says SCES-53449
-          if (e.serial.indexOf('/') > 0) add(self.bySerialBase, normSerial(e.serial.split('/')[0]));
+          if (e.serial.indexOf('/') > 0) add(self.bySerialBase, key(e.serial.split('/')[0]));
+          // Sega's region and disc suffixes on two-part serials (4432-50, MK81064-50)
+          var sg = SEGA_SYS.test(sys) && /^(.+)[-\s]\d{1,2}$/.exec(e.serial);
+          if (sg) add(self.bySerialBase, key(sg[1]));
+          // Sony serials with letters or a digit after the number (SLUS-01272GH, SLES-017482): the disc says SLUS-01272
+          var sn = /^([A-Z]{4}\d{5})[A-Z0-9]+$/.exec(normSerial(e.serial));
+          if (sn) add(self.bySerialBase, key(sn[1]));
         }
         var s = self.bySize.get(e.size);
         if (!s) self.bySize.set(e.size, s = []);
@@ -64,15 +113,20 @@ var GameDB = {
     });
     return this;
   },
+  // the releases listed under this serial (base: those under it as a base serial), on one system, or
+  // on any system when sys isn't given
+  lookup: function (serial, sys, base) {
+    var map = base ? this.bySerialBase : this.bySerial;
+    var one = function (s) { var k = canonKey(s, serial); return k && map.get(s + ':' + k) || []; };
+    if (sys) return one(sys);
+    var out = [];
+    this.systems.forEach(function (s) { out = out.concat(one(s)); });
+    return out;
+  },
   // releases with this serial; regional variants (same base, extra suffix) only when none match exactly
   serial: function (serial, sys) {
-    var k = normSerial(serial);
-    var pick = function (map) {
-      var l = map.get(k) || [];
-      return sys ? l.filter(function (e) { return e.sys === sys; }) : l;
-    };
-    var exact = pick(this.bySerial);
-    return exact.length ? exact : pick(this.bySerialBase);
+    var exact = this.lookup(serial, sys, false);
+    return exact.length ? exact : this.lookup(serial, sys, true);
   },
   size: function (n) { return this.bySize.get(n) || []; }
 };
@@ -303,6 +357,8 @@ function parseSfo(b) {
   }
   return res;
 }
+// a boot file's name without its folder and version (cdrom:\LSP_200.110;1 -> LSP_200.110)
+function bootName(path) { return String(path).trim().replace(/^.*[\\\/:]/, '').replace(/;.*$/, '').toUpperCase(); }
 function psSerial(path) {
   var n = path.replace(/^.*[\\\/:]/, '').replace(/;.*$/, '').toUpperCase();
   var m = /^([A-Z]{4})[_-]?(\d{3})\.?(\d{2})/.exec(n);
@@ -325,19 +381,33 @@ async function detectXbox(rd) {
   }
   return null;
 }
+function sega(r, device, area) {
+  var d = /(\d)\s*\/\s*(\d)/.exec(device);
+  if (d && +d[1] >= 1 && +d[1] <= +d[2]) r.disc = { n: +d[1], of: +d[2] };
+  var a = area.replace(r.sys === 'saturn' ? /[^JTUBKAEL]/g : /[^JUE]/g, '');
+  if (a) r.area = a.split('').filter(function (c, i, all) { return all.indexOf(c) === i; }).join('');
+  return r;
+}
 async function detectTrack(rd) {
   var s0 = await rd.read(0);
   if (!s0) return null;
   var h = asc(s0, 0, 16);
-  if (h === 'SEGA SEGASATURN ') return { sys: 'saturn', serial: clean(asc(s0, 0x20, 10)), title: clean(asc(s0, 0x60, 112)) };
+  // Sega's headers (IP.BIN, Saturn and Dreamcast; the Sega CD's system area) also say which disc of a
+  // set this is (CD-2/3, GD-ROM1/2) and where it may be sold (area symbols: J, U, E, and the Saturn's
+  // T, B, K, A, L)
+  if (h === 'SEGA SEGASATURN ') {
+    return sega({ sys: 'saturn', serial: clean(asc(s0, 0x20, 10)), title: clean(asc(s0, 0x60, 112)) }, asc(s0, 0x38, 8), asc(s0, 0x40, 10));
+  }
   if (h === 'SEGA SEGAKATANA ') {
-    var hw = clean(asc(s0, 0x30, 16));
-    var arcade = clean(asc(s0, 0x10, 16)) + ' ' + hw;
-    return { sys: /NAOMI\s*2/i.test(arcade) ? 'naomi2' : /NAOMI/i.test(arcade) ? 'naomi' : 'dc', serial: clean(asc(s0, 0x40, 10)), title: clean(asc(s0, 0x80, 128)) };
+    var serial = clean(asc(s0, 0x40, 10));
+    // NAOMI GD-ROMs carry NAOMI in their header, and serials of their own (GDL-0001, GDS-0014)
+    var arcade = clean(asc(s0, 0x10, 0x50));
+    var naomi = /NAOMI/i.test(arcade) || /^GD[LS]-?\d{4}/.test(serial);
+    return sega({ sys: /NAOMI\s*2/i.test(arcade) ? 'naomi2' : naomi ? 'naomi' : 'dc', serial: serial, title: clean(asc(s0, 0x80, 128)) }, asc(s0, 0x20, 16), asc(s0, 0x30, 8));
   }
   if (/^SEGADISCSYSTEM|^SEGABOOTDISC|^SEGA-CD|^SEGA_CD/.test(h)) {
     var m = /^\s*(?:GM|AI|OS|BR)?\s*([A-Z0-9][A-Z0-9-]*)/.exec(asc(s0, 0x180, 14));
-    return { sys: 'segacd', serial: m ? m[1] : '', title: clean(asc(s0, 0x150, 48)) || clean(asc(s0, 0x120, 48)) };
+    return sega({ sys: 'segacd', serial: m ? m[1] : '', title: clean(asc(s0, 0x150, 48)) || clean(asc(s0, 0x120, 48)) }, '', asc(s0, 0x1F0, 3));
   }
   if (s0[0] === 1 && asc(s0, 1, 5) === 'ZZZZZ' && s0[6] === 1) return { sys: '3do', title: clean(asc(s0, 0x28, 32)) };
   if (u32be(s0, 0x1C) === 0xC2339F3D) return { sys: 'gc', serial: clean(asc(s0, 0, 6)), title: clean(asc(s0, 0x20, 64)) };
@@ -372,8 +442,8 @@ async function detectTrack(rd) {
     if (files.has('SYSTEM.CNF')) {
       var cnf = new TextDecoder().decode(await isoFile(rd, files.get('SYSTEM.CNF'), 2048));
       var b2 = /BOOT2\s*=\s*([^\r\n]+)/i.exec(cnf), b1 = /BOOT\s*=\s*([^\r\n]+)/i.exec(cnf);
-      if (b2) return { sys: 'ps2', serial: psSerial(b2[1].trim()), title: volId };
-      if (b1) return { sys: 'ps1', serial: psSerial(b1[1].trim()) || (exe ? psSerial(exe) : ''), title: volId };
+      if (b2) return { sys: 'ps2', serial: psSerial(b2[1].trim()), boot: bootName(b2[1]), title: volId };
+      if (b1) return { sys: 'ps1', serial: psSerial(b1[1].trim()) || (exe ? psSerial(exe) : ''), boot: bootName(b1[1]), title: volId };
     }
     if (/PLAYSTATION/i.test(sysId)) return { sys: 'ps1', serial: exe ? psSerial(exe) : '', title: volId };
     if (files.has('PS3_DISC.SFB') || files.has('PS3_GAME')) {
@@ -562,7 +632,7 @@ async function nrgTracks(file) {
 // (console, serial, sizes), so a conversion can start while the checksum confirms the release
 async function identifyJob(job, onStatus, onProvisional) {
   await GameDB.ready();
-  var det = null, sizes = [], dataSizes = [], exact = null, cands = [], damaged = '';
+  var det = null, sizes = [], dataSizes = [], exact = null, damaged = '';
   var chd = null, ecm = null;
   try {
     if (job.kind === 'chd') {
@@ -638,25 +708,19 @@ async function identifyJob(job, onStatus, onProvisional) {
   return result(exact, false);
 
   function result(exact, checking) {
-    var entry = null, method = '';
+    var entry = null, method = '', pick;
     if (exact) {
       entry = exact[0];
-      if (det && det.serial && exact.length > 1) entry = exact.find(function (e) { return normSerial(e.serial) === normSerial(det.serial); }) || entry;
+      if (det && det.serial && exact.length > 1) entry = exact.find(function (e) { return sameSerial(e.sys, e.serial, det.serial); }) || entry;
       method = 'hash';
       // one checksum listed under several names (the same dump released twice): the choice stays
       var hn = exact.map(function (e) { return e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
       if (hn.length > 1) entry = Object.assign({}, entry, { alternatives: hn });
-    } else if (det && det.serial && (GameDB.serial(det.serial, det.sys).length || GameDB.serial(det.serial).length)) {
-      cands = GameDB.serial(det.serial, det.sys);
-      if (!cands.length) cands = GameDB.serial(det.serial);
-      var bySz = cands.filter(function (e) { return sizes.indexOf(e.size) >= 0; });
-      var pick = bySz.length ? bySz : cands;
-      if (pick.length) {
-        var names = pick.map(function (e) { return e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
-        entry = pick[0];
-        method = names.length > 1 ? 'serial-ambiguous' : bySz.length ? 'serial+size' : 'serial';
-        if (names.length > 1) entry = Object.assign({}, pick[0], { alternatives: names });
-      }
+    } else if (det && (det.serial || det.boot) && (pick = bySerial()).length) {
+      var names = pick.map(function (c) { return c.e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
+      entry = pick[0].e;
+      method = names.length > 1 ? 'serial-ambiguous' : pick[0].size ? 'serial+size' : 'serial';
+      if (names.length > 1) entry = Object.assign({}, entry, { alternatives: names });
     } else if (job.kind === 'chd' && det && !det.weak && dataSizes.length) {
       // CHD of a recognized console's disc without a readable serial: a unique size match of a data
       // track is still a strong hint. Not without the console: among 40,000 discs, an audio track or a
@@ -672,6 +736,43 @@ async function identifyJob(job, onStatus, onProvisional) {
       name: entry ? entry.name : '', serial: (det && det.serial) || (entry && entry.serial) || '',
       headerTitle: det && det.title || '', checking: checking, damaged: damaged
     };
+  }
+  // the releases the disc's serial names, best first: those on the disc's console (any console when
+  // none is), of the disc's number in a set (Disc 2 of 3), then by size (a matching track), how the
+  // serial matched (exactly, then without a suffix, then as a base serial) and whether the release's
+  // region is one the disc may be sold in. Only those that rank first
+  function bySerial() {
+    var cs = serialCandidates(det), hits = [];
+    var collect = function (sys) {
+      cs.forEach(function (c, ci) {
+        if (!sys && c.how === 'boot') return;
+        [false, true].forEach(function (base) {
+          GameDB.lookup(c.serial, sys, base).forEach(function (e) {
+            var kind = (base ? 2 : ci ? 1 : 0), had = hits.find(function (h) { return h.e === e; });
+            if (had) had.kind = Math.min(had.kind, kind);
+            else hits.push({ e: e, kind: kind });
+          });
+        });
+      });
+    };
+    collect(det.sys);
+    if (/^naomi2?$/.test(det.sys)) collect(det.sys === 'naomi' ? 'naomi2' : 'naomi');
+    if (!hits.length) collect(null);
+    if (!hits.length) return [];
+    if (det.disc && det.disc.of > 1) {
+      var same = hits.filter(function (h) { return discNo(h.e.name) === det.disc.n; });
+      if (same.length) hits = same;
+    }
+    hits.forEach(function (h) {
+      h.size = sizes.indexOf(h.e.size) >= 0;
+      h.region = det.area ? regionFits(h.e.name, det.area) : 1;
+      h.score = [h.size ? 0 : 1, h.kind, 2 - h.region];
+    });
+    var cmp = function (a, b) { for (var i = 0; i < 3; i++) if (a.score[i] !== b.score[i]) return a.score[i] - b.score[i]; return 0; };
+    var best = hits.slice().sort(cmp)[0];
+    // a release found only under its base serial, for another region than the disc's: not this disc
+    if (!best.size && best.kind === 2 && best.region === 0) return [];
+    return hits.filter(function (h) { return !cmp(h, best); });
   }
 }
 

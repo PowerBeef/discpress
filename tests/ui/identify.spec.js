@@ -269,3 +269,49 @@ test('an ECM image found damaged while checking against the database says so', a
   await app.settled(card);
   await expect(card.locator('.ident-damaged')).toContainText('"xa.bin.ecm" is damaged: the image rebuilt from it doesn’t match the checksum it ends with.');
 });
+
+// How a serial names a release (milestone 6): a release of the disc's size wins over the one its serial
+// names exactly (Redump's Asterix: SLES-01748, and SLES-017482 for the Rev 1 disc that says SLES-01748)
+test('a release of the disc’s size wins over the exact serial', async ({ app }) => {
+  const sr = fixture('ps1-size-rank');
+  await app.open({ testdb: true });
+  await app.add(sr.add);
+  const card = app.job('size rank');
+  await app.settled(card);
+  await expect(card.locator('.ident-name')).toHaveText(sr.name);
+  await expect(card.locator('.ident-how')).toHaveText('Matched by serial number and size');
+  await expect(card.locator('.note.ident')).toHaveAttribute('data-method', 'serial+size');
+});
+
+// a disc for Japan whose serial the database has only as a European release's base serial: not named
+test('a release for another region than the disc’s doesn’t name it', async ({ app }) => {
+  const or = fixture('saturn-other-region');
+  await app.open({ testdb: true });
+  await app.add(or.add);
+  const card = app.job('other region');
+  await app.settled(card);
+  await expect(card.locator('.note.ident')).toHaveAttribute('data-region', 'J');
+  await expect(card.locator('.ident-name')).toHaveCount(0);
+  await expect(card.locator('.note.ident')).toContainText('Not in the Redump database');
+});
+
+// Sega's headers say which disc of a set this is: a Saturn game's two discs are named apart, and get a playlist
+test('the discs of a Saturn set are told apart by their headers and get a playlist', async ({ app, page }) => {
+  const d1 = fixture('saturn-disc1'), d2 = fixture('saturn-disc2');
+  await app.open();
+  await app.add(d1.add.concat(d2.add));
+  const one = app.job('3x3 eyes 1'), two = app.job('3x3 eyes 2');
+  await app.settled(one);
+  await app.settled(two);
+  await expect(one.locator('.note.ident')).toHaveAttribute('data-disc', '1/3');
+  await expect(two.locator('.note.ident')).toHaveAttribute('data-disc', '2/3');
+  await expect(two.locator('.ident-name')).toHaveText(d2.name);
+  await app.run(one);
+  await app.run(two);
+  await expect(one.locator('.playlist')).toContainText('A game on 2 discs.');
+  const [dl] = await Promise.all([page.waitForEvent('download'), one.locator('.playlist button').click()]);
+  expect(dl.suggestedFilename()).toBe('3x3 Eyes - Kyuusei Koushu S (Japan).m3u');
+  const p = test.info().outputPath('set.m3u');
+  await dl.saveAs(p);
+  expect(fs.readFileSync(p, 'utf8')).toBe(`${d1.name}.chd\n${d2.name}.chd\n`);
+});
