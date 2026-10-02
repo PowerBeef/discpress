@@ -107,7 +107,8 @@ function fileReader(file, start, sectorSize, stride) {
 // a worker that opens images for reading (the reader role) as msg says; request(q) asks it for data.
 // If the worker dies or stops answering (a read taking over a minute), every request waiting on it
 // and every later one fails, so identification reports an error instead of waiting forever
-function readerWorker(msg, timeout) {
+// onScan: how far a worker scanning an ECM image got (0..1); each report restarts the timeout
+function readerWorker(msg, timeout, onScan) {
   return Engine.ready().then(function () {
     return new Promise(function (resolve, reject) {
       var w = new Worker(Engine.url), seq = 0, waiting = {}, dead = null, ready = false;
@@ -140,6 +141,10 @@ function readerWorker(msg, timeout) {
         } else if (m.type === 'sector') {
           var r = waiting[m.id]; delete waiting[m.id];
           if (r) { clearTimeout(r.timer); r.resolve(m.data); }
+        } else if (m.type === 'scan' && !ready) {
+          clearTimeout(timer);
+          timer = setTimeout(function () { fail(new Error('timeout')); }, timeout || 30000);
+          if (onScan) onScan(m.done / m.total);
         } else if (m.type === 'fatal') fail(new Error(m.message));
       };
       w.onerror = function (e) { e.preventDefault && e.preventDefault(); fail(new Error(e.message || 'worker error')); };
@@ -159,8 +164,8 @@ function chdReader(file, ciso, parent) {
 // a stand-in for the image it holds that reads like a file (size, slice(a, b).arrayBuffer(), and pack:
 // {file, how}, what checksums it), or null if it can't be read; and close().
 // files: the job's file entries ({file, ecm} or {file, pbp})
-function ecmImages(files) {
-  return readerWorker({ type: 'reader', ecm: files.map(function (f) { return f.pbp ? { blob: f.file, pbp: f.pbp } : f.file; }) }, 180000).then(function (r) {
+function ecmImages(files, onScan) {
+  return readerWorker({ type: 'reader', ecm: files.map(function (f) { return f.pbp ? { blob: f.file, pbp: f.pbp } : f.file; }) }, 180000, onScan).then(function (r) {
     var views = files.map(function (f, i) {
       var size = r.info.sizes[i];
       return size == null ? null : {
@@ -583,8 +588,9 @@ async function identifyJob(job, onStatus, onProvisional) {
       // ECM images and PS1 PBP files: a worker rebuilds the images they hold
       var ecms = job.files.filter(function (f) { return f.ecm || f.pbp; }), images = null;
       if (ecms.length) {
-        onStatus && onStatus(job.src === 'pbp' ? 'Reading the PBP file\u2026' : 'Reading the ECM image' + (ecms.length > 1 ? 's' : '') + '\u2026', 0);
-        var ei = await ecmImages(ecms);
+        var reading = job.src === 'pbp' ? 'Reading the PBP file\u2026' : 'Reading the ECM image' + (ecms.length > 1 ? 's' : '') + '\u2026';
+        onStatus && onStatus(reading, 0);
+        var ei = await ecmImages(ecms, function (f) { if (onStatus) onStatus(reading, f); });
         ecm = ei;
         images = new Map();
         ecms.forEach(function (f, i) { if (ei.views[i]) { images.set(f, ei.views[i]); f.imageSize = ei.views[i].size; } });

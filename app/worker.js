@@ -341,6 +341,8 @@ function EcmStore(base, label) {
     return buf[p - bufAt];
   };
   var mark = function (o, i, type, left) { cpOut.push(o); cpIn.push(i); cpType.push(type); cpLeft.push(left); next = o + ECM_WINDOW; };
+  // the scan reads the whole file when its chunks are short: the page shows how far it got (every 1%, from 8 MB)
+  var step = Math.max(size / 100, 8 << 20), report = step;
   for (;;) {
     if (out >= next) mark(out, pos, 0, 0);
     var at = pos, c = byteAt(pos++), type = c & 3, n = (c >> 2) & 31, bits = 5;
@@ -358,6 +360,7 @@ function EcmStore(base, label) {
     for (var u = Math.ceil((next - out) / osz); u < count; u = Math.ceil((next - out) / osz)) mark(out + u * osz, pos + u * isz, type, count - u);
     pos += count * isz;
     out += count * osz;
+    if (pos >= report) { report = pos + step; postMessage({ type: 'scan', done: pos, total: size }); }
   }
   if (cpOut[cpOut.length - 1] !== out) mark(out, at, 0, 0);
   if (pos + 4 > size) throw fail('it ends before its checksum');
@@ -986,6 +989,7 @@ function setupParallel(M, ports) {
       if (m.type === 'error') { helperDown(h, m.message); return; }
       if (h.dead) return; // a result it sent before failing: its batches were given to the others
       if (m.type === 'dresult') {
+        if (!h.dsent[m.id]) return; // not a batch this helper has (anything else would be a fault)
         delete h.dsent[m.id];
         h.inflight--;
         rdResult(m);
@@ -994,9 +998,18 @@ function setupParallel(M, ports) {
         return;
       }
       if (m.type !== 'result') return;
+      // results go into chdman's work items only for the batch this helper was given, item by item:
+      // an answer for another batch, or for other items, would write over hunks it doesn't hold
+      var sentB = h.sent[m.id];
+      if (!sentB) return;
+      var items = m.items, meta = m.meta, sha1 = m.sha1, out = m.out, o = 0;
+      for (var q = 0, total = 0; q < sentB.n; q++) {
+        var qlen = meta[q * 3 + 1] >>> 0;
+        total += qlen;
+        if (items.length !== sentB.n || items[q] !== sentB.items[q] || qlen > hunkbytes || total > out.length) { helperDown(h, 'it answered for other hunks, or with more data than a hunk'); return; }
+      }
       delete h.sent[m.id];
       h.inflight--;
-      var items = m.items, meta = m.meta, sha1 = m.sha1, out = m.out, o = 0;
       for (var i = 0; i < items.length; i++) {
         var c = meta[i * 3], len = meta[i * 3 + 1] >>> 0, crc = meta[i * 3 + 2] >>> 0;
         var heap = M.HEAPU8;
@@ -1193,6 +1206,7 @@ async function runHelper(msg) {
         }
         var out = new Uint8Array(total), o = 0;
         parts.forEach(function (p) { out.set(p, o); o += p.length; });
+        if (msg.lie) m.items[0] += 64; // a test (DEBUG.failHelpers 'lie'): an answer for another hunk
         port.postMessage({ type: 'result', id: m.id, items: m.items, meta: meta, sha1: sha1, out: out },
           [m.items.buffer, meta.buffer, sha1.buffer, out.buffer]);
       }

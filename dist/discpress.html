@@ -731,6 +731,7 @@ body { overflow-x: clip; }
   <h2>Game identification and renaming</h2>
   <p>Every disc you add is examined to find its console (PlayStation 1/2/PSP, Saturn, Sega CD, Dreamcast, PC Engine CD, PC-FX, Neo Geo CD, 3DO, CD-i, Amiga CD32/CDTV, NAOMI, GameCube, Wii, Xbox, PS3 and more) and its serial number, read from the disc's own boot files and headers.</p>
   <p>The game is then looked up in a built-in copy of the <a href="https://redump.org" target="_blank" rel="noopener">Redump</a> database (about 42,000 discs, via <a href="https://github.com/libretro/libretro-database" target="_blank" rel="noopener">libretro-database</a>, version 2026.08.01). When a track's size and CRC-32 checksum match, the dump is an exact, verified copy; otherwise the serial number is used. Results are named after the official title, for example <code>Metal Gear Solid (USA) (Disc 1) (Rev 1).chd</code>. You can turn this off in Settings or type your own name in Options.</p>
+  <p>Each finished CHD has a <b>Verify</b> button: it reads the CHD back and checks it holds exactly the data it was made from. Settings → <i>Verify each new CHD after creating it</i> does it every time, and it is done by itself when a helper thread fails during a conversion.</p>
   <p>For existing <code>.chd</code> files, choose <b>Rename</b> to save a copy with the official name. <b>Verify</b> checks the CHD's own checksums, then compares it with Redump without extracting it: the file the built-in database lists for the disc (its ISO, its only <code>.bin</code>, or its main data track) must have Redump's size and CRC-32.</p>
   <p>To check <i>every</i> track, add Redump's or No-Intro's DAT files for your consoles (the <code>.dat</code> or <code>.xml</code>, or its <code>.zip</code>), or add them in Settings → <i>Your DAT files</i>. They are kept in the browser. Each disc is then checked against them before converting, and each CHD after <b>Verify</b>: when every track matches a game in a DAT, the card says it is verified and the result is named after that game.</p>
 </div>
@@ -6925,6 +6926,9 @@ SOFTWARE.</div>
     <div class="field"><label class="check"><input type="checkbox" id="setKeepCue"> Keep the cue sheet in CD CHDs</label>
       <span class="hint">Extracting as Redump then gives back the very same cue sheet, with what CHDs don't otherwise keep (CATALOG, FLAGS, ISRC, extra indexes). The CHD's checksums stay the same and emulators ignore the sheet, but the file is no longer byte for byte desktop chdman's.</span>
     </div>
+    <div class="field"><label class="check"><input type="checkbox" id="setVerify"> Verify each new CHD after creating it</label>
+      <span class="hint">Reads the CHD back and checks it holds exactly the data it was made from. Takes a little longer. It is also done when a helper thread fails during a conversion, and each finished CHD has a Verify button.</span>
+    </div>
     <label class="field"><span>PlayStation 2 DVD games</span>
       <select id="setPs2Dvd"><option value="dvd">DVD CHDs (PCSX2 and most emulators)</option><option value="cd">CD CHDs (for AetherSX2 and NetherSX2 on Android)</option></select>
       <span class="hint">AetherSX2 and NetherSX2 can’t read DVD CHDs. Games on CD always become CD CHDs.</span>
@@ -7309,6 +7313,8 @@ function EcmStore(base, label) {
     return buf[p - bufAt];
   };
   var mark = function (o, i, type, left) { cpOut.push(o); cpIn.push(i); cpType.push(type); cpLeft.push(left); next = o + ECM_WINDOW; };
+  // the scan reads the whole file when its chunks are short: the page shows how far it got (every 1%, from 8 MB)
+  var step = Math.max(size / 100, 8 << 20), report = step;
   for (;;) {
     if (out >= next) mark(out, pos, 0, 0);
     var at = pos, c = byteAt(pos++), type = c & 3, n = (c >> 2) & 31, bits = 5;
@@ -7326,6 +7332,7 @@ function EcmStore(base, label) {
     for (var u = Math.ceil((next - out) / osz); u < count; u = Math.ceil((next - out) / osz)) mark(out + u * osz, pos + u * isz, type, count - u);
     pos += count * isz;
     out += count * osz;
+    if (pos >= report) { report = pos + step; postMessage({ type: 'scan', done: pos, total: size }); }
   }
   if (cpOut[cpOut.length - 1] !== out) mark(out, at, 0, 0);
   if (pos + 4 > size) throw fail('it ends before its checksum');
@@ -7954,6 +7961,7 @@ function setupParallel(M, ports) {
       if (m.type === 'error') { helperDown(h, m.message); return; }
       if (h.dead) return; // a result it sent before failing: its batches were given to the others
       if (m.type === 'dresult') {
+        if (!h.dsent[m.id]) return; // not a batch this helper has (anything else would be a fault)
         delete h.dsent[m.id];
         h.inflight--;
         rdResult(m);
@@ -7962,9 +7970,18 @@ function setupParallel(M, ports) {
         return;
       }
       if (m.type !== 'result') return;
+      // results go into chdman's work items only for the batch this helper was given, item by item:
+      // an answer for another batch, or for other items, would write over hunks it doesn't hold
+      var sentB = h.sent[m.id];
+      if (!sentB) return;
+      var items = m.items, meta = m.meta, sha1 = m.sha1, out = m.out, o = 0;
+      for (var q = 0, total = 0; q < sentB.n; q++) {
+        var qlen = meta[q * 3 + 1] >>> 0;
+        total += qlen;
+        if (items.length !== sentB.n || items[q] !== sentB.items[q] || qlen > hunkbytes || total > out.length) { helperDown(h, 'it answered for other hunks, or with more data than a hunk'); return; }
+      }
       delete h.sent[m.id];
       h.inflight--;
-      var items = m.items, meta = m.meta, sha1 = m.sha1, out = m.out, o = 0;
       for (var i = 0; i < items.length; i++) {
         var c = meta[i * 3], len = meta[i * 3 + 1] >>> 0, crc = meta[i * 3 + 2] >>> 0;
         var heap = M.HEAPU8;
@@ -8161,6 +8178,7 @@ async function runHelper(msg) {
         }
         var out = new Uint8Array(total), o = 0;
         parts.forEach(function (p) { out.set(p, o); o += p.length; });
+        if (msg.lie) m.items[0] += 64; // a test (DEBUG.failHelpers 'lie'): an answer for another hunk
         port.postMessage({ type: 'result', id: m.id, items: m.items, meta: meta, sha1: sha1, out: out },
           [m.items.buffer, meta.buffer, sha1.buffer, out.buffer]);
       }
@@ -8582,7 +8600,7 @@ var HOSTED_URL = 'https://powerbeef.github.io/discpress/';
 var iosThreadCap = isIOS && !(/iPad/.test(navigator.userAgent) || navigator.platform === 'MacIntel') ? 4 : 0;
 var maxThreads = Math.min(cores, 16);
 // threads: 'auto' (measured per device, see Tuning) or a fixed number of compression threads
-var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false, notify: false, ps2dvd: 'dvd' };
+var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false, notify: false, ps2dvd: 'dvd', verifyAfter: false };
 var outDir = null; // folder picked for direct writing (not persisted)
 try {
   var saved = JSON.parse(localStorage.getItem('chdman-web-settings') || '{}');
@@ -8861,8 +8879,9 @@ var Engine = {
           var hw = new Worker(self.url), ch = new MessageChannel();
           hw.onmessage = function (e) { if (e.data && e.data.type === 'fatal') helperFailed(e.data.message); };
           hw.onerror = function (e) { helperFailed(e.message || 'failed to start'); };
-          // (tests: DEBUG.failHelpers makes helpers fail as a miscompiling WebAssembly engine does)
-          self.post(hw, { type: 'helper', port: ch.port2, fail: o.debugFail === 'all' || (o.debugFail === 'one' && i === 0) }, [ch.port2]);
+          // (tests: DEBUG.failHelpers makes helpers fail as a miscompiling WebAssembly engine does; 'lie': the
+          // first one answers for other hunks than it was given)
+          self.post(hw, { type: 'helper', port: ch.port2, fail: o.debugFail === 'all' || (o.debugFail === 'one' && i === 0), lie: o.debugFail === 'lie' && i === 0 }, [ch.port2]);
           helpers.push(hw);
           ports.push(ch.port1);
         } catch (e) { break; }
@@ -8875,6 +8894,7 @@ var Engine = {
         else if (m.type === 'stage-ack') { var a = ackWait; ackWait = null; if (a) a(); }
         else if (m.type === 'line') o.onLine && o.onLine(m.stream, m.text);
         else if (m.type === 'progress') o.onProgress && o.onProgress(m.text);
+        else if (m.type === 'scan') o.onScan && o.onScan(m.done / m.total);
         else if (m.type === 'notice') o.onNotice && o.onNotice(m);
         else if (m.type === 'storage') o.onStorage && o.onStorage(m.mode);
         else if (m.type === 'fatal') { cleanup(); if (sink) sink.abort(); reject(new Error(m.message)); }
@@ -9599,7 +9619,8 @@ function fileReader(file, start, sectorSize, stride) {
 // a worker that opens images for reading (the reader role) as msg says; request(q) asks it for data.
 // If the worker dies or stops answering (a read taking over a minute), every request waiting on it
 // and every later one fails, so identification reports an error instead of waiting forever
-function readerWorker(msg, timeout) {
+// onScan: how far a worker scanning an ECM image got (0..1); each report restarts the timeout
+function readerWorker(msg, timeout, onScan) {
   return Engine.ready().then(function () {
     return new Promise(function (resolve, reject) {
       var w = new Worker(Engine.url), seq = 0, waiting = {}, dead = null, ready = false;
@@ -9632,6 +9653,10 @@ function readerWorker(msg, timeout) {
         } else if (m.type === 'sector') {
           var r = waiting[m.id]; delete waiting[m.id];
           if (r) { clearTimeout(r.timer); r.resolve(m.data); }
+        } else if (m.type === 'scan' && !ready) {
+          clearTimeout(timer);
+          timer = setTimeout(function () { fail(new Error('timeout')); }, timeout || 30000);
+          if (onScan) onScan(m.done / m.total);
         } else if (m.type === 'fatal') fail(new Error(m.message));
       };
       w.onerror = function (e) { e.preventDefault && e.preventDefault(); fail(new Error(e.message || 'worker error')); };
@@ -9651,8 +9676,8 @@ function chdReader(file, ciso, parent) {
 // a stand-in for the image it holds that reads like a file (size, slice(a, b).arrayBuffer(), and pack:
 // {file, how}, what checksums it), or null if it can't be read; and close().
 // files: the job's file entries ({file, ecm} or {file, pbp})
-function ecmImages(files) {
-  return readerWorker({ type: 'reader', ecm: files.map(function (f) { return f.pbp ? { blob: f.file, pbp: f.pbp } : f.file; }) }, 180000).then(function (r) {
+function ecmImages(files, onScan) {
+  return readerWorker({ type: 'reader', ecm: files.map(function (f) { return f.pbp ? { blob: f.file, pbp: f.pbp } : f.file; }) }, 180000, onScan).then(function (r) {
     var views = files.map(function (f, i) {
       var size = r.info.sizes[i];
       return size == null ? null : {
@@ -10075,8 +10100,9 @@ async function identifyJob(job, onStatus, onProvisional) {
       // ECM images and PS1 PBP files: a worker rebuilds the images they hold
       var ecms = job.files.filter(function (f) { return f.ecm || f.pbp; }), images = null;
       if (ecms.length) {
-        onStatus && onStatus(job.src === 'pbp' ? 'Reading the PBP file\u2026' : 'Reading the ECM image' + (ecms.length > 1 ? 's' : '') + '\u2026', 0);
-        var ei = await ecmImages(ecms);
+        var reading = job.src === 'pbp' ? 'Reading the PBP file\u2026' : 'Reading the ECM image' + (ecms.length > 1 ? 's' : '') + '\u2026';
+        onStatus && onStatus(reading, 0);
+        var ei = await ecmImages(ecms, function (f) { if (onStatus) onStatus(reading, f); });
         ecm = ei;
         images = new Map();
         ecms.forEach(function (f, i) { if (ei.views[i]) { images.set(f, ei.views[i]); f.imageSize = ei.views[i].size; } });
@@ -11521,6 +11547,7 @@ function renderResult(job) {
       box.append(el('div', { class: 'note ok' }, el('b', null, 'Extracted ' + plural(job.outputs.length, 'file') + '. '), job.outputs.length > 1 ? 'Keep them together in one folder.' : ''));
     }
     box.append(outs);
+    if (job.kind === 'create' && job.outputs.some(function (o) { return /\.chd$/i.test(o.name); })) box.append(verifyRow(job));
     if (job.outputs.length > 1 && job.outputs[0].kind !== 'disk') {
       var row = el('div', { class: 'row end' });
       row.append(saveButton(job.outputs, function () { downloadMany([job]); }, true));
@@ -11799,6 +11826,8 @@ async function runJobNow(job) {
   job.retryLog = null;
   job.outputs = [];
   job.redump = null;
+  job.verify = null;
+  job.helperStopped = false;
   refreshJob(job, false);
   setProgress(job, null, 'Starting…');
   try { if (await stopped(Engine.ready())) return; }
@@ -11828,6 +11857,7 @@ async function runJobNow(job) {
     if (main && !(await confirmReplace(outDir, [main].concat(sideNames)))) { job.state = 'canceled'; refreshJob(job, true); return; }
     if (job.aborted) { job.state = 'canceled'; if (jobs.indexOf(job) >= 0) refreshJob(job, true); return; }
   }
+  if (!confirmMemory(memoryNeed(spec))) { job.state = 'canceled'; refreshJob(job, true); return; }
   if (spec.rename) {
     var nm = outBase(job) + '.chd', src = job.files[0].file;
     try {
@@ -11896,7 +11926,9 @@ async function runJobNow(job) {
     onNotice: function (m) {
       if (m.level !== 'debug') appendLog(job, m.message);
       if (m.level === 'error') { toast(m.message, 'err'); workerError = workerError || m.message; }
+      if (/^A helper thread stopped/.test(m.message)) job.helperStopped = true;
     },
+    onScan: function (f) { setProgress(job, null, 'Reading the ECM image\u2026 ' + Math.floor(f * 100) + '%'); },
     onStorage: function (mode) {
       job.storage = mode;
       if (spec.outMode === 'opfs' && mode === 'mem') { Store.available = false; updateChips(); }
@@ -11920,6 +11952,13 @@ async function runJobNow(job) {
       if (job.kind === 'create' && job.sbi) await addSbi(job, spec);
       if (job.identState === 'done') renameOutputs(job); // the checksum finished while converting
       Recovery.finished(job);
+      // a helper that failed (or a run that had to start again) means this browser's WebAssembly engine
+      // misbehaved: the result is read back before anything else runs, as the setting asks for every one
+      if (job.kind === 'create' && (settings.verifyAfter || job.helperStopped || job.engineRetried)) {
+        job.verifyWhy = settings.verifyAfter ? '' : 'A helper thread failed during the conversion, so the CHD was checked.';
+        refreshJob(job, true);
+        await verifyResult(job);
+      }
     } else {
       job.state = 'error';
       if (res.readFail) { job.errorText = readFailHint(res.error); Store.removeJob(job.id); refreshJob(job, true); return; }
@@ -11953,6 +11992,75 @@ async function runJobNow(job) {
   }
   job.engineRetried = false;
   refreshJob(job, true);
+}
+
+// Results kept in memory (no private storage: a page opened as a file in Chrome or Edge, an older
+// browser, or the setting) can be more than a page can hold, and a page that runs out of memory is
+// closed with everything in it. A job whose results could be that large asks first.
+// memoryNeed: about how much a run keeps in memory (its results, at most the size of what it reads,
+// and copies of inputs chdman changes in place); confirmMemory: true to go on
+function memoryNeed(spec) {
+  if (spec.outMode !== 'mem' || spec.rename) return 0;
+  var n = spec.slots ? spec.expected || 0 : 0;
+  (spec.writable || []).forEach(function (w) { n += w.blob.size; });
+  return n;
+}
+function memoryLimit() { return DEBUG.memMax || (isMobile ? 1 : 2) * 1073741824; }
+function confirmMemory(bytes) {
+  if (!(bytes > memoryLimit())) return true;
+  return confirm('This browser keeps results in memory here, and this one could take about ' + fmtBytes(bytes) +
+    ': more than the page may be able to hold. If the browser closes the page, the work is lost.\n\n' +
+    keepResultsAdvice() + '\n\nConvert anyway?');
+}
+
+// Verify for a finished CHD: chdman verify reads it back (helper workers decompress, as for Verify on a
+// .chd) and checks the data's SHA-1 against the one recorded from the input while it was made.
+// Runs from the card's button, after every conversion with the setting, and by itself after a conversion
+// during which a helper failed. job.verify: {state: 'running' | 'ok' | 'failed', pct, text}
+async function verifyResult(job) {
+  var out = job.outputs.find(function (o) { return /\.chd$/i.test(o.name); });
+  if (!out || (job.verify && job.verify.state === 'running')) return;
+  job.verify = { state: 'running', pct: 0 };
+  refreshJob(job, true);
+  var lines = [], file;
+  try {
+    file = out.kind === 'disk' ? await (await outDir.getFileHandle(out.name)).getFile() : await outputFile(job, out);
+    job.verify.run = Engine.run({
+      jobId: job.id + '-verify', args: ['verify', '-i', '/in/' + out.name], inputs: [{ name: out.name, blob: file }], writable: [],
+      slots: 0, helpers: readHelpers(), outMode: 'mem',
+      onLine: function (s, t) { lines.push(t); },
+      onProgress: function (t) {
+        var m = /([\d.]+)% complete/.exec(t);
+        if (!m || !job.verify) return;
+        job.verify.pct = parseFloat(m[1]);
+        var n = job.ui && job.ui.verifyText;
+        if (n) n.textContent = 'Verifying\u2026 ' + Math.floor(job.verify.pct) + '%';
+      },
+      onNotice: function (m) { if (m.level === 'error') lines.push(m.message); }
+    });
+    var res = await job.verify.run.promise;
+    var why = lines.filter(function (l) { return /error|failed|mismatch|invalid|incorrect/i.test(l); }).slice(-2).join(' ');
+    job.verify = res.code === 0 ? { state: 'ok' } : { state: 'failed', text: why || res.error || 'chdman exited with code ' + res.code };
+  } catch (e) {
+    job.verify = e.canceled ? null : { state: 'failed', text: readFailHint(e.message) };
+  }
+  appendLog(job, job.verify ? (job.verify.state === 'ok' ? 'Verified: the CHD holds exactly the data it was made from.' : 'Verification failed: ' + job.verify.text) : 'Verification canceled.');
+  if (jobs.indexOf(job) >= 0) refreshJob(job, true);
+}
+function verifyRow(job) {
+  var v = job.verify, row = el('div', { class: 'row verify-row' });
+  if (!v) {
+    row.append(el('button', { class: 'btn sm', onclick: function () { verifyResult(job); } }, icon('i-check'), 'Verify'),
+      el('span', { class: 'small muted' }, 'Read the CHD back and check it holds exactly the data it was made from.'));
+    return row;
+  }
+  if (v.state === 'running') {
+    job.ui.verifyText = el('span', { class: 'small muted', role: 'status' }, 'Verifying\u2026 ' + Math.floor(v.pct || 0) + '%');
+    row.append(job.ui.verifyText, el('button', { class: 'btn sm', onclick: function () { if (v.run) v.run.cancel(); } }, 'Stop'));
+    return row;
+  }
+  if (v.state === 'ok') return el('div', { class: 'note ok verify-note' }, el('b', null, '\u2713 Verified. '), 'The CHD holds exactly the data it was made from.' + (job.verifyWhy ? ' ' + job.verifyWhy : ''));
+  return el('div', { class: 'note err verify-note' }, el('b', null, 'Verification failed. '), v.text + ' Don\u2019t keep this CHD: convert the disc again' + (job.helperStopped || job.verifyWhy ? ', in an up-to-date browser.' : '.'));
 }
 
 // WebAssembly traps, which the conversion itself can't cause: some browsers' compilers (the optimizing tier
@@ -12715,18 +12823,23 @@ async function cliRun() {
     }
   } catch (e) { toast(e.message, 'err'); return; }
   if (!args.length) return;
-  // the last command's results give way to this one's (only one command's results are shown)
-  if (cli.last) {
-    if (unsaved(cli.last) && !confirm('The last command\u2019s results haven\u2019t been saved. Run this one and delete them?')) return;
-    Store.removeJob(cli.last.id);
-    cli.last = null;
-  }
   var writable = [], inputs = [];
   var writeTarget = args.find(function (a) { return /^\/out\//.test(a) && cli.files.some(function (f) { return '/out/' + f.name === a; }); });
   cli.files.forEach(function (f) {
     if (writeTarget === '/out/' + f.name) writable.push({ name: f.name, blob: f });
     else inputs.push({ name: f.name, blob: f });
   });
+  // results kept in memory, as for a conversion: ask first when they could be too large (what it reads,
+  // twice that for an extraction, and the copies of inputs chdman changes)
+  var cliOut = /^(info|listtemplates|verify|addmeta|delmeta|dumpmeta)$/.test(args[0]) ? 0 : (/^extract/.test(args[0]) ? 2 : 1) * inputs.reduce(function (n, i) { return n + i.blob.size; }, 0);
+  var cliMem = !(settings.storage === 'folder' && outDir) && (settings.storage === 'memory' || !Store.available);
+  if (!confirmMemory(memoryNeed({ outMode: cliMem ? 'mem' : 'opfs', slots: cliOut ? 1 : 0, expected: cliOut, writable: writable }))) return;
+  // the last command's results give way to this one's (only one command's results are shown)
+  if (cli.last) {
+    if (unsaved(cli.last) && !confirm('The last command\u2019s results haven\u2019t been saved. Run this one and delete them?')) return;
+    Store.removeJob(cli.last.id);
+    cli.last = null;
+  }
   var res = $('#cliResult'), con = $('#cliConsole'), outs = $('#cliOuts'), prog = $('#cliProg');
   res.hidden = false;
   con.textContent = '$ ' + (c ? c.display : $('#cliText').value.trim()) + '\n';
@@ -13179,6 +13292,8 @@ function init() {
       refreshJob(j, true);
     });
   });
+  $('#setVerify').checked = !!settings.verifyAfter;
+  $('#setVerify').addEventListener('change', function (e) { settings.verifyAfter = e.target.checked; saveSettings(); });
   $('#setKeepCue').checked = !!settings.keepCue;
   $('#setKeepCue').addEventListener('change', function (e) {
     settings.keepCue = e.target.checked; saveSettings();
