@@ -29,6 +29,50 @@ def gzip_fixed(data):
             struct.pack('<II', zlib.crc32(data) & 0xffffffff, len(data) & 0xffffffff))
 
 
+# what is known of particular games (db/facts/*.tsv, see db/facts/README.md): validated against the
+# database, embedded as {fact: {sys: [serial keys]}} (keys as canonKey in ident.js makes them)
+FACTS = {'libcrypt'}
+SEGA = {'saturn', 'segacd', 'dc', 'naomi', 'naomi2'}
+
+
+def canon_key(sys_, serial):
+    k = re.sub('[^A-Z0-9]', '', serial.upper())
+    return k[2:] if sys_ in SEGA and re.match(r'MK\d', k) else k
+
+
+def game_facts(db):
+    keys = {}
+    for sys_, rows in db['systems'].items():
+        ks = keys[sys_] = set()
+        for line in rows.split('\n'):
+            f = line.split('\t')
+            if len(f) > 1 and f[1]:
+                ks.add(canon_key(sys_, f[1]))
+                ks.add(canon_key(sys_, f[1].split('/')[0]))
+                parts = re.split(r'[-\s]', f[1])
+                if len(parts) > 2:
+                    ks.add(canon_key(sys_, parts[0] + parts[1]))
+    out = {}
+    fdir = os.environ.get('DISCPRESS_FACTS_DIR') or os.path.join(ROOT, 'db', 'facts')  # (the tests' bad facts)
+    for name in sorted(os.listdir(fdir)) if os.path.isdir(fdir) else []:
+        if not name.endswith('.tsv'):
+            continue
+        for n, line in enumerate(rd(os.path.join(fdir, name)).split('\n'), 1):
+            if not line.strip() or line.startswith('#'):
+                continue
+            where = 'db/facts/%s:%d' % (name, n)
+            f = line.split('\t')
+            assert len(f) == 5, where + ': 5 tab-separated fields (sys, serial, fact, value, source)'
+            sys_, serial, fact, value, source = f
+            assert sys_ in keys, where + ': no system ' + sys_ + ' in the database'
+            assert canon_key(sys_, serial) in keys[sys_], where + ': no ' + serial + ' in the database for ' + sys_
+            assert fact in FACTS, where + ': unknown fact ' + fact
+            assert value == '1', where + ': value must be 1'
+            assert source.strip(), where + ': no source'
+            out.setdefault(fact, {}).setdefault(sys_, set()).add(canon_key(sys_, serial))
+    return {fact: {s: sorted(v) for s, v in by.items()} for fact, by in out.items()}
+
+
 def pack(path):
     raw = rd(path, 'rb')
     return base64.b64encode(gzip_fixed(raw)).decode(), len(raw)
@@ -65,7 +109,9 @@ helpc = rd(os.path.join(A, 'help.html')).replace('/*PATCH*/', html.escape(patch)
 ui_src = rd(os.path.join(A, 'ui.js'))
 for k in ('/*IDENT*/', '/*QUIRKS*/'):
     assert ui_src.count(k) == 1, k + ' in app/ui.js'
-ui = inline_script(ui_src.replace('/*IDENT*/', rd(os.path.join(A, 'ident.js'))).replace('/*QUIRKS*/', rd(os.path.join(A, 'quirks.js'))),
+ui_src = ui_src.replace('/*IDENT*/', rd(os.path.join(A, 'ident.js'))).replace('/*QUIRKS*/', rd(os.path.join(A, 'quirks.js')))
+assert ui_src.count('/*GAMEFACTS*/{}') == 1, '/*GAMEFACTS*/{} in app/ident.js'
+ui = inline_script(ui_src.replace('/*GAMEFACTS*/{}', json.dumps(game_facts(json.loads(db_json)), sort_keys=True, separators=(',', ':'))),
                    'app/ui.js + app/ident.js + app/quirks.js')
 style = rd(os.path.join(A, 'style.css'))
 assert '</style' not in style.lower(), '</style in app/style.css'

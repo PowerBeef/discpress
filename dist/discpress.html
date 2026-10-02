@@ -723,7 +723,7 @@ body { overflow-x: clip; }
   <p class="small muted">A <code>.zip</code> works like the files inside it: add the zip of a game (or several), and its cue sheet finds its tracks inside. Files stored in the zip are read in place; compressed ones are unpacked first into the browser's private storage and checked against the zip's checksum. <code>.7z</code> and <code>.rar</code> can't be read: unpack them, or zip them again.</p>
   <p class="small muted">A PlayStation <code>EBOOT.PBP</code> (made with popstation for a PSP or PS Vita) converts to a CD CHD: each disc in it gets its own card, named after the game in the file. PlayStation Store downloads are encrypted and can't be read.</p>
   <p class="small muted">DiscJuggler <code>.cdi</code>, Alcohol 120% <code>.mds</code>/<code>.mdf</code> and <code>.isz</code> images get a card that says why they can't be converted and what to do instead. Emulators that play <code>.cdi</code> images (Flycast, Redream) load them directly, so keep those as they are.</p>
-  <p class="small muted">The type and hunk size are set from the console once the game is identified. Compression stays chdman's default, which every emulator reads; the page warns when the <i>Zstd</i> or <i>MiSTer</i> preset isn't readable by a console's emulators (Saturn, 3DO, Sega CD, PC Engine CD, Amiga, PlayStation, PS2, Dreamcast, NAOMI, PC-FX). NAOMI GD-ROMs keep their file's name, which MAME and Flycast look for in the game's romset. GameCube, Wii, Xbox and PS3 emulators don't load CHDs at all, and the page says so. It also says when a common emulator can't load a CHD of the disc: PCSX2 plays only the first track of a PS2 CD with music tracks, Flycast 2.7 and earlier can't load CD-based Dreamcast discs whose tracks have pregaps, a disc with two sessions is read from the wrong place, a 2,048-byte PlayStation ISO has lost data, and some Saturn, Sega CD, PC Engine, PlayStation and Neo Geo CD emulators misread particular cue sheets. Cue sheets with CD+G (karaoke) tracks are refused: chdman 0.289 can't convert them. For MiSTer FPGA, choose the <i>For MiSTer FPGA</i> compression preset (Zstd and FLAC with small hunks, which MiSTer reads fast enough); the page says when MiSTer has no core for the console.</p>
+  <p class="small muted">The type and hunk size are set from the console once the game is identified. Compression stays chdman's default, which every emulator reads; the page warns when the <i>Zstd</i> or <i>MiSTer</i> preset isn't readable by a console's emulators (Saturn, 3DO, Sega CD, PC Engine CD, Amiga, PlayStation, PS2, Dreamcast, NAOMI, PC-FX). NAOMI GD-ROMs keep their file's name, which MAME and Flycast look for in the game's romset. GameCube, Wii, Xbox and PS3 emulators don't load CHDs at all, and the page says so. It also says when a common emulator can't load a CHD of the disc: PCSX2 plays only the first track of a PS2 CD with music tracks, Flycast 2.7 and earlier can't load CD-based Dreamcast discs whose tracks have pregaps, a disc with two sessions is read from the wrong place, a 2,048-byte PlayStation ISO has lost data, and some Saturn, Sega CD, PC Engine, PlayStation and Neo Geo CD emulators misread particular cue sheets. Cue sheets with CD+G (karaoke) tracks are refused: chdman 0.289 can't convert them. A PAL PlayStation game protected by LibCrypt warns when its <code>.sbi</code> file wasn't added with it; an <code>.sbi</code> or DuckStation's <code>.lsd</code> is saved next to the CHD under its name. For MiSTer FPGA, choose the <i>For MiSTer FPGA</i> compression preset (Zstd and FLAC with small hunks, which MiSTer reads fast enough); the page says when MiSTer has no core for the console.</p>
   <p class="small muted">Add a PAL PlayStation game's <code>.sbi</code> file (LibCrypt protection data) with its <code>.cue</code> and <code>.bin</code>: it is saved next to the CHD, under the CHD's name, where emulators look for it. A CloneCD dump's <code>.sub</code> holds the same data: for a PlayStation game, the page reads it and saves the <code>.sbi</code> for you. When two or more discs of a game are converted, the first disc's card offers an <code>.m3u</code> playlist: keep it with the CHDs and open it, so the emulator can swap discs.</p>
 </div>
 
@@ -9579,6 +9579,21 @@ function regionFits(name, area) {
   return 0;
 }
 
+// facts about particular games (db/facts/*.tsv, checked and embedded by scripts/assemble.py):
+// {fact: {sys: [serial keys]}}
+var GAME_FACTS = {"libcrypt":{"ps1":["SCES00311","SCES01431","SCES01444","SCES01492","SCES01493","SCES01494","SCES01495","SCES01516","SCES01517","SCES01518","SCES01519","SCES01564","SCES01695","SCES01700","SCES01701","SCES01702","SCES01703","SCES01704","SCES01763","SCES01882","SCES01979","SCES02005","SCES02006","SCES02007","SCES02028","SCES02029","SCES02030","SCES02031","SCES02104","SCES02105","SCES02182","SCES02185","SCES02264","SCES02290","SCES02365","SCES02366","SCES02367","SCES02368","SCES02369","SCES02430","SCES02431","SCES02432","SCES02487","SCES02488","SCES02489","SCES02490","SCES02491","SCES02544","SCES02545","SCES02546","SCES02834","SCES02835","SLES00017","SLES00995","SLES01041","SLES01226","SLES01241","SLES01301","SLES01362","SLES01545","SLES01715","SLES01733","SLES01906","SLES01907","SLES01943","SLES02024","SLES02025","SLES02026","SLES02027","SLES02071","SLES02080","SLES02081","SLES02082","SLES02083","SLES02084","SLES02086","SLES02112","SLES02113","SLES02118","SLES02207","SLES02208","SLES02209","SLES02210","SLES02211","SLES02293","SLES02328","SLES02329","SLES02330","SLES02355","SLES02395","SLES02529","SLES02530","SLES02531","SLES02532","SLES02533","SLES02538","SLES02558","SLES02559","SLES02560","SLES02561","SLES02562","SLES02563","SLES02572","SLES02573","SLES02681","SLES02688","SLES02689","SLES02698","SLES02700","SLES02704","SLES02705","SLES02706","SLES02707","SLES02722","SLES02724","SLES02733","SLES02754","SLES02755","SLES02756","SLES02763","SLES02824","SLES02830","SLES02831","SLES02839","SLES02857","SLES02858","SLES02859","SLES02861","SLES02965","SLES02966","SLES02967","SLES02968","SLES02969","SLES02975","SLES02977","SLES02978","SLES02992","SLES03062","SLES03189","SLES03191","SLES03241","SLES03242","SLES03245","SLES03324","SLES03489","SLES03519","SLES03520","SLES03521","SLES03522","SLES03523","SLES03530","SLES03603","SLES03605","SLES03626","SLES12080","SLES12081","SLES12082","SLES12083","SLES12084","SLES12328","SLES12329","SLES12330","SLES12558","SLES12559","SLES12560","SLES12561","SLES12562","SLES12965","SLES12966","SLES12967","SLES12968","SLES12969","SLES22080","SLES22081","SLES22082","SLES22083","SLES22084","SLES22328","SLES22329","SLES22330","SLES22965","SLES22966","SLES22967","SLES22968","SLES22969","SLES32080","SLES32081","SLES32082","SLES32083","SLES32084","SLES32965","SLES32966","SLES32967","SLES32968","SLES32969"]}};
+var GameFacts = {
+  // the facts known of a disc of this system and these serials (the disc's and its release's)
+  of: function (sys, serials) {
+    var out = {};
+    Object.keys(GAME_FACTS).forEach(function (fact) {
+      var list = (GAME_FACTS[fact] || {})[sys];
+      if (list && serials.some(function (s) { return s && list.indexOf(canonKey(sys, s)) >= 0; })) out[fact] = true;
+    });
+    return out;
+  }
+};
+
 var GameDB = {
   // bySerial: exact serials; bySerialBase: serials with a suffix (T-8113H-50) under their base (T-8113H).
   // Keys are 'sys:' + canonKey
@@ -9643,7 +9658,20 @@ var GameDB = {
     var exact = this.lookup(serial, sys, false);
     return exact.length ? exact : this.lookup(serial, sys, true);
   },
-  size: function (n) { return this.bySize.get(n) || []; }
+  size: function (n) { return this.bySize.get(n) || []; },
+  // how many discs a game's set has: the disc numbers of the names that read as this one up to its
+  // "(Disc N)" ("(Disc 3) (Special CD-ROM)" and "(Disc 1) (Rev 1)" count too; 0 when the database lists none)
+  discCount: function (sys, name) {
+    var key = function (n) { return n.replace(/ \((?:Disc|Disk) (?:\d+|[A-Z])\).*$/, ''); }, nos = new Set(), self = this;
+    if (!this.byName) {
+      this.byName = new Map();
+      this.bySize.forEach(function (l) {
+        l.forEach(function (e) { var k = e.sys + '|' + key(e.name), a = self.byName.get(k); if (!a) self.byName.set(k, a = []); if (a.indexOf(e.name) < 0) a.push(e.name); });
+      });
+    }
+    (this.byName.get(sys + '|' + key(name)) || []).forEach(function (n) { var d = discNo(n); if (d) nos.add(d); });
+    return nos.size;
+  }
 };
 
 /* ---------- sector readers ---------- */
@@ -10533,6 +10561,14 @@ var QUIRKS = [
     src: 'docs/chd/ecosystem-sony-dreamcast.md §5.1 (flycast #906)'
   },
   {
+    // a PAL PlayStation disc protected by LibCrypt (db/facts/libcrypt.tsv), without its .sbi or .lsd
+    // (paired by name: sbiJob) or a CloneCD .sub to make one from (scanSub)
+    id: 'libcrypt-missing', sys: ['ps1'], warn: true,
+    when: function (c) { return c.facts.libcrypt && !c.job.sbi && !c.job.subFile; },
+    text: 'This game is protected by LibCrypt: without its .sbi file next to the CHD, emulators stop it partway or make it misbehave. Add the game\u2019s .sbi file (Redump has one for each protected disc) with its other files, and it is saved with the CHD, under its name.',
+    src: 'db/facts/libcrypt.tsv'
+  },
+  {
     // a UMD Video (UMD_DATA.BIN and a UMD_VIDEO folder, no PSP_GAME): a film, which PPSSPP doesn't play
     id: 'umd-video', sys: ['psp'], warn: true,
     when: function (c) { return !!c.det.video; },
@@ -10638,7 +10674,9 @@ var QUIRKS = [
 // what the rules look at: the job's system and identification, its cue sheet or TOC, the settings
 function quirkCtx(job) {
   var id = job.ident || {};
-  return { job: job, id: id, sys: id.sys || '', det: id.detected || {}, disc: discModel(job), keepCue: keepCueWanted(job) };
+  var det = id.detected || {};
+  return { job: job, id: id, sys: id.sys || '', det: det, disc: discModel(job), keepCue: keepCueWanted(job),
+    facts: id.sys ? GameFacts.of(id.sys, [det.serial, id.serial, id.entry && id.entry.serial]) : {} };
 }
 // the rules that apply to a job: [{id, act, warn, text}]
 function quirks(job) {
@@ -10698,6 +10736,7 @@ async function pumpIdentify() {
           job.ident = keepPick(job, provisional);
           job.identState = 'checking';
           applyIdent(job);
+          detachSbi(job);
           scanSub(job);
           job.identKnownResolve();
           if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
@@ -10708,6 +10747,7 @@ async function pumpIdentify() {
       keepPick(job, job.ident);
       job.identState = 'done';
       applyIdent(job);
+      detachSbi(job);
       scanSub(job);
       if (job.subScan) await job.subScan;
       await datCheck(job);
@@ -10848,7 +10888,7 @@ function safeName(s) { return String(s || '').replace(/[\/:*?"<>|]+/g, '_').trim
    ============================================================ */
 var jobs = [];
 var looseFiles = [];      // files not claimed by any job yet
-var looseSbi = [];        // .sbi files (PS1 LibCrypt data) waiting for their game's job
+var looseSbi = [];        // .sbi and .lsd files (PS1 LibCrypt data) waiting for their game's job
 var seen = new Set();     // dedupe (name+size+mtime)
 // the path counts: generic track names (every GDI has track01.bin) can match in name, size and date,
 // on FAT/exFAT cards especially, across the games of one folder
@@ -11306,8 +11346,8 @@ async function addEntriesNow(entries) {
       } else {
         job2 = newJob({ kind: 'create', src: 'img', lone: true, title: t, files: [{ file: file, name: name }], disc: x === 'raw' || x === 'bin' ? 'raw' : 'hd', choices: ['hd', 'raw', 'dvd'] });
       }
-    } else if (x === 'sbi') {
-      looseSbi.push(e); // paired with its game below
+    } else if (x === 'sbi' || x === 'lsd') {
+      looseSbi.push(e); // paired with its game below (an .lsd: the same data, DuckStation's other format)
       continue;
     } else if (UNSUPPORTED[x]) {
       // an Alcohol 120% image is one card, for its .mds (its .mdf beside it says the same)
@@ -11330,7 +11370,7 @@ async function addEntriesNow(entries) {
   // it by name (DuckStation, Beetle PSX, SwanStation, PCSX ReARMed, MiSTer)
   looseSbi = looseSbi.filter(function (e) {
     var job = sbiJob(e, created.concat(jobs));
-    if (job) { job.sbi = { file: e.file, name: base(e.path) }; if (job.el && created.indexOf(job) < 0) refreshJob(job, true); return false; }
+    if (job) { job.sbi = { file: e.file, name: base(e.path), ext: ext(e.path), entry: e }; if (job.el && created.indexOf(job) < 0) refreshJob(job, true); return false; }
     if (fresh.indexOf(e) >= 0) ignored.push(base(e.path));
     return true;
   });
@@ -11817,6 +11857,7 @@ function renderControls(job) {
     if (job.ui.optsOpen) det.open = true;
     det.addEventListener('toggle', function () { job.ui.optsOpen = det.open; });
     box.append(det);
+    if (job.sbiDetached && !job.sbi) box.append(el('p', { class: 'small muted sbi-note', style: 'margin:0' }, job.sbiDetached + ' isn\u2019t saved with this CHD: it holds LibCrypt data for PlayStation discs, and this is a ' + sysName(job.ident.sys) + ' disc.'));
     if (job.sbi) box.append(el('p', { class: 'small muted sbi-note', style: 'margin:0' }, job.sbi.fromSub
       ? 'Its LibCrypt data (' + plural(job.sbi.count, 'protected sector') + ', read from the .sub file) is saved with the CHD as an .sbi file, under the CHD\u2019s name.'
       : 'Its LibCrypt data (' + job.sbi.name + ') is saved with the CHD, under the CHD\u2019s name.'));
@@ -11920,6 +11961,13 @@ function renderResult(job) {
     }
     var set = discSet(job);
     if (set && set.discs[0].job === job) box.append(playlistRow(set));
+    // a disc of a set whose other discs aren't here yet (the database knows how many there are)
+    var me = discOf(job), total = me && job.ident && job.ident.sys ? GameDB.discCount(job.ident.sys, job.outputs[0].name.replace(/\.chd$/i, '')) : 0;
+    if (me && total > (set ? set.discs.length : 1) && (!set || set.discs[0].job === job)) {
+      box.append(el('div', { class: 'note set-note', 'data-quirk': 'set-incomplete' }, set
+        ? 'The playlist has ' + set.discs.length + ' of this game\u2019s ' + total + ' discs: convert the others to add them.'
+        : 'Disc ' + me.n + ' of ' + total + ' of this game: convert the other discs too, and a playlist (.m3u) for them is offered here.'));
+    }
   }
 }
 
@@ -12218,7 +12266,7 @@ async function runJobNow(job) {
   var spec = buildJob(job);
   if (settings.storage === 'folder' && outDir && (spec.rename || spec.outMode === 'stream')) {
     var oi = spec.args.indexOf('-o'), main = spec.rename ? outBase(job) + '.chd' : oi >= 0 ? spec.args[oi + 1].replace(/^.*\//, '') : '';
-    var sideNames = !spec.rename && job.kind === 'create' && job.sbi ? [outBase(job) + '.sbi'] : [];
+    var sideNames = !spec.rename && job.kind === 'create' && job.sbi ? [outBase(job) + '.' + (job.sbi.ext || 'sbi')] : [];
     if (main && !(await confirmReplace(outDir, [main].concat(sideNames)))) { job.state = 'canceled'; refreshJob(job, true); return; }
     if (job.aborted) { job.state = 'canceled'; if (jobs.indexOf(job) >= 0) refreshJob(job, true); return; }
   }
@@ -12443,6 +12491,15 @@ var ENGINE_HINT = isIOS ? 'This is a fault in the browser engine of this iOS ver
    emulators: "SBI\0", then per sector its absolute time (BCD minutes, seconds, frames: the .img's
    sector n is at n + 150), type 1 and the 10 bytes of Q without the CRC (DuckStation's LoadSBI). */
 var SUB_MAX_BAD = 200; // more than LibCrypt ever uses: a damaged .sub, not a protection
+// an .sbi or .lsd paired by name with a disc that turns out not to be a PlayStation one: LibCrypt data
+// belongs to PS1 discs only, so it isn't saved with this CHD, and waits for another disc of its name
+function detachSbi(job) {
+  if (!job.sbi || job.sbi.fromSub || !job.ident || !job.ident.sys || job.ident.sys === 'ps1' || job.ident.sys === 'pc') return;
+  if (job.state === 'running' || job.state === 'done') return;
+  job.sbiDetached = job.sbi.name;
+  if (job.sbi.entry) looseSbi.push(job.sbi.entry);
+  job.sbi = null;
+}
 function scanSub(job) {
   if (!job.subFile || job.subScan || (job.sbi && !job.sbi.fromSub) || !job.ident || job.ident.sys !== 'ps1') return;
   job.subScan = sbiFromSub(job.subFile).then(function (r) {
@@ -12485,7 +12542,7 @@ async function sbiFromSub(file) {
 }
 
 async function addSbi(job, spec) {
-  var nm = outBase(job) + '.sbi', f = job.sbi.file;
+  var nm = outBase(job) + '.' + (job.sbi.ext || 'sbi'), f = job.sbi.file;
   if (spec.outMode === 'stream' && outDir) {
     try {
       var w = await (await outDir.getFileHandle(nm, { create: true })).createWritable();

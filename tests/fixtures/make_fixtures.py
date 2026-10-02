@@ -600,6 +600,14 @@ fixture('jagcd', {
 }, add=['jaguar.cue', 'jaguar (Track 1).bin', 'jaguar (Track 2).bin'], job='create', disc='cd', command='createcd', sys='jagcd',
    ident='none', name='jaguar', warning='Jaguar CD emulators may not load this CHD', quirks=['jagcd-sessions'])
 
+# a PAL PlayStation disc protected by LibCrypt (db/facts/libcrypt.tsv), added without its .sbi
+fixture('ps1-libcrypt-missing', {
+    'anstoss.cue': lambda: cue([('anstoss.bin', 'MODE2/2352', 0)]),
+    'anstoss.bin': lambda: g.raw_sectors(ps1_iso('SLES_025.63', 'ANSTOSS', 1, 191), 2),
+    'anstoss lc.sbi': lambda: b'SBI\x00' + bytes([0x00, 0x04, 0x00, 1]) + bytes(10),
+}, add=['anstoss.cue', 'anstoss.bin'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLES-02563',
+   ident='serial', name='Anstoss - Premier Manager (Germany)', warning='This game is protected by LibCrypt', quirks=['libcrypt-missing'])
+
 # ---------------------------------------------------------------- unrecognized / other types
 fixture('homebrew-iso', {
     'homebrew.iso': lambda: g.pad_sectors(g.iso9660({'README.TXT': b'hello', 'GAME.DAT': g.filler(3 << 20, 71)}, 'HOMEBREW')),

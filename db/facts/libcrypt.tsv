@@ -1,0 +1,197 @@
+# PAL PlayStation discs protected by LibCrypt: emulators need the disc's .sbi (or its subchannel) to run them.
+# sys	serial	fact	value	source
+ps1	SCES-00311	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Medievil
+ps1	SCES-01431	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Disney'S Tarzan
+ps1	SCES-01444	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Jackie Chan Stuntmaster
+ps1	SCES-01492	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Medievil
+ps1	SCES-01493	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Medievil
+ps1	SCES-01494	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Medievil
+ps1	SCES-01495	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Medievil
+ps1	SCES-01516	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Disney'S Tarzan
+ps1	SCES-01517	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Disney'S Tarzan
+ps1	SCES-01518	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Disney'S Tarzan
+ps1	SCES-01519	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Disney'S Tarzan
+ps1	SCES-01564	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Ape Escape
+ps1	SCES-01695	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Disney'S Story Studio - Mulan
+ps1	SCES-01700	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): This Is Football
+ps1	SCES-01701	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Le Monde Des Blues - Le Jeu Officiel De L'Equipe De France
+ps1	SCES-01702	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Fussball Live
+ps1	SCES-01703	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): This Is Football
+ps1	SCES-01704	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Esto Es Futbol
+ps1	SCES-01763	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Speed Freaks
+ps1	SCES-01882	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): This Is Football
+ps1	SCES-01979	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Formula One 99
+ps1	SCES-02005	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Disney'S Mulan
+ps1	SCES-02006	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Disney'S Libro Animato Creativo - Mulan
+ps1	SCES-02007	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Disney'S Mulan
+ps1	SCES-02028	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Ape Escape
+ps1	SCES-02029	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Ape Escape
+ps1	SCES-02030	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Ape Escape
+ps1	SCES-02031	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Ape Escape
+ps1	SCES-02104	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Spyro 2 - Gateway To Glimmer
+ps1	SCES-02105	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Ctr - Crash Team Racing (Edc Version)
+ps1	SCES-02182	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Disney'S Tarzan
+ps1	SCES-02185	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Disney'S Tarzan
+ps1	SCES-02264	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Disney'S Verhalenstudio - Mulan
+ps1	SCES-02290	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Space Debris
+ps1	SCES-02365	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Barbie - Race & Ride
+ps1	SCES-02366	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Barbie - Aventure Equestre
+ps1	SCES-02367	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Barbie - Race & Ride
+ps1	SCES-02368	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Barbie - Race & Ride
+ps1	SCES-02369	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Barbie - Race & Ride
+ps1	SCES-02430	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Space Debris
+ps1	SCES-02431	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Space Debris
+ps1	SCES-02432	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Space Debris
+ps1	SCES-02487	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Barbie - Super Sports
+ps1	SCES-02488	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Barbie - Sports Extreme
+ps1	SCES-02489	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Barbie - Super Sports
+ps1	SCES-02490	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Barbie - Super Sports
+ps1	SCES-02491	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Barbie - Super Sports
+ps1	SCES-02544	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Medievil 2
+ps1	SCES-02545	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Medievil 2
+ps1	SCES-02546	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Medievil 2
+ps1	SCES-02834	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Crash Bash
+ps1	SCES-02835	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Spyro - Year Of The Dragon (V.1.0)
+ps1	SLES-00017	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Prince Naseem Boxing
+ps1	SLES-00995	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Ronaldo V-Football
+ps1	SLES-01041	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Hogs Of War
+ps1	SLES-01226	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Actua Ice Hockey 2
+ps1	SLES-01241	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Gekido - Urban Fighters
+ps1	SLES-01301	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Legacy Of Kain - Soul Reaver
+ps1	SLES-01362	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Le Mans 24 Hours
+ps1	SLES-01545	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Michelin Rally Masters - Race Of Champions
+ps1	SLES-01715	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Eagle One Harrier Attack
+ps1	SLES-01733	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Uefa Striker
+ps1	SLES-01906	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Mission Impossible
+ps1	SLES-01907	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): V-Rally - Championship Edition 2
+ps1	SLES-01943	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Radikal Bikers
+ps1	SLES-02024	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Legacy Of Kain - Soul Reaver
+ps1	SLES-02025	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Legacy Of Kain - Soul Reaver
+ps1	SLES-02026	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Legacy Of Kain - Soul Reaver
+ps1	SLES-02027	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Legacy Of Kain - Soul Reaver
+ps1	SLES-02071	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Urban Chaos
+ps1	SLES-02080	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-02081	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-02082	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-02083	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-02084	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-02086	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): N-Gen Racing
+ps1	SLES-02112	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Saga Frontier 2
+ps1	SLES-02113	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Saga Frontier 2
+ps1	SLES-02118	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Saga Frontier 2
+ps1	SLES-02207	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Dino Crisis
+ps1	SLES-02208	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Dino Crisis
+ps1	SLES-02209	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Dino Crisis
+ps1	SLES-02210	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Dino Crisis
+ps1	SLES-02211	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Dino Crisis
+ps1	SLES-02293	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Canal+ Premier Manager
+ps1	SLES-02328	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Galerians
+ps1	SLES-02329	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Galerians
+ps1	SLES-02330	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Galerians
+ps1	SLES-02355	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Urban Chaos
+ps1	SLES-02395	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Michelin Rally Masters - Race Of Champions
+ps1	SLES-02529	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Resident Evil 3 - Nemesis
+ps1	SLES-02530	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Resident Evil 3 - Nemesis
+ps1	SLES-02531	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Resident Evil 3 - Nemesis
+ps1	SLES-02532	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Resident Evil 3 - Nemesis
+ps1	SLES-02533	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Resident Evil 3 - Nemesis
+ps1	SLES-02538	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Ea Sports Superbike 2000
+ps1	SLES-02558	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Parasite Eve Ii
+ps1	SLES-02559	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Parasite Eve Ii
+ps1	SLES-02560	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Parasite Eve Ii
+ps1	SLES-02561	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Parasite Eve Ii
+ps1	SLES-02562	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Parasite Eve Ii
+ps1	SLES-02563	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Anstoss - Premier Manager
+ps1	SLES-02572	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Toca - World Touring Cars
+ps1	SLES-02573	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Toca - World Touring Cars
+ps1	SLES-02681	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Ronaldo V-Football
+ps1	SLES-02688	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Theme Park World
+ps1	SLES-02689	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Need For Speed - Porsche 2000
+ps1	SLES-02698	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Resident Evil 3 - Nemesis
+ps1	SLES-02700	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Need For Speed - Porsche 2000
+ps1	SLES-02704	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Uefa Euro 2000
+ps1	SLES-02705	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Uefa Euro 2000
+ps1	SLES-02706	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Uefa Euro 2000
+ps1	SLES-02707	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Uefa Euro 2000
+ps1	SLES-02722	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): F1 2000
+ps1	SLES-02724	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): F1 2000
+ps1	SLES-02733	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Walt Disney'S World Quest - Magical Racing Tour
+ps1	SLES-02754	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Vagrant Story
+ps1	SLES-02755	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Vagrant Story
+ps1	SLES-02756	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Vagrant Story
+ps1	SLES-02763	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Sno-Cross Championship Racing
+ps1	SLES-02824	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Rc Revenge
+ps1	SLES-02830	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Moho
+ps1	SLES-02831	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Technomage - Die Rueckkehr Der Ewigkeit
+ps1	SLES-02839	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Mike Tyson Boxing
+ps1	SLES-02857	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Sydney 2000
+ps1	SLES-02858	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Sydney 2000
+ps1	SLES-02859	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Sydney 2000
+ps1	SLES-02861	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Sydney 2000
+ps1	SLES-02965	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-02966	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-02967	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-02968	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-02969	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-02975	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Lma Manager 2001
+ps1	SLES-02977	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Bdfl Manager 2001
+ps1	SLES-02978	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Football Manager Campionato 2001
+ps1	SLES-02992	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Premier Manager 2000
+ps1	SLES-03062	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Fussball Manager 2001
+ps1	SLES-03189	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Disney'S 102 Dalmatians - Puppies To The Rescue
+ps1	SLES-03191	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Disney'S 102 Dalmatians - Puppies To The Rescue
+ps1	SLES-03241	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Technomage - Return Of Eternity
+ps1	SLES-03242	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Technomage - En Quete De L'Eternite
+ps1	SLES-03245	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Technomage - De Terugkeer Der Eeuwigheid
+ps1	SLES-03324	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Asterix - Mega Madness
+ps1	SLES-03489	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): The Italian Job
+ps1	SLES-03519	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Men In Black - The Series - Crashdown
+ps1	SLES-03520	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Men In Black - The Series - Crashdown
+ps1	SLES-03521	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Men In Black - The Series - Crashdown
+ps1	SLES-03522	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Men In Black - The Series - Crashdown
+ps1	SLES-03523	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Men In Black - The Series - Crashdown
+ps1	SLES-03530	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Lucky Luke - Western Fever
+ps1	SLES-03603	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Lma Manager 2002
+ps1	SLES-03605	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Bdfl Manager 2002
+ps1	SLES-03626	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): The Italian Job
+ps1	SLES-12080	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-12081	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-12082	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-12083	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-12084	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-12328	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Galerians
+ps1	SLES-12329	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Galerians
+ps1	SLES-12330	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Galerians
+ps1	SLES-12558	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Parasite Eve Ii
+ps1	SLES-12559	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Parasite Eve Ii
+ps1	SLES-12560	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Parasite Eve Ii
+ps1	SLES-12561	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Parasite Eve Ii
+ps1	SLES-12562	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Parasite Eve Ii
+ps1	SLES-12965	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-12966	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-12967	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-12968	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-12969	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-22080	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-22081	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-22082	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-22083	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-22084	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-22328	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Galerians
+ps1	SLES-22329	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Galerians
+ps1	SLES-22330	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Galerians
+ps1	SLES-22965	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-22966	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-22967	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-22968	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-22969	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-32080	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-32081	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-32082	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-32083	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-32084	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Viii
+ps1	SLES-32965	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-32966	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-32967	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-32968	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
+ps1	SLES-32969	libcrypt	1	psxdatacenter.com/sbifiles.html (2026-10-02): Final Fantasy Ix
