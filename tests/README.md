@@ -32,9 +32,18 @@ does all of this when a session starts.
 | `npm run bench:dev -- --compare latest` | benchmark the current `app/` and compare with the last run |
 
 Environment: `DISCPRESS_HTML` picks the page (relative to the repo root), `WORKERS` the number of
-parallel test workers (default 2), `CHDMAN` a native chdman binary, `REGEN_FIXTURES=1` rebuilds fixtures.
+parallel test workers (default 2), `CHDMAN` a native chdman binary, `REGEN_FIXTURES=1` rebuilds fixtures, `REQUIRE_NATIVE=1` fails the run without both native references (see In CI).
 Outside CI a test server already running on `PORT` (default 4173) is reused; its `/healthz` names the page
 it serves, and the run stops if that isn't the page `DISCPRESS_HTML` picks (stop it, or use another `PORT`).
+
+## In CI
+
+`.github/workflows/ci.yml` runs the whole suite on every push to `main` and every pull request, on
+`dist/discpress.html`, after building both references (`scripts/build-upstream.sh`, cached, and
+`scripts/build-native.sh`). It sets `REQUIRE_NATIVE=1`, which makes the run fail before any test if
+`build/chdman-0.289` or a current `build/chdman-native` is missing: without them the byte-for-byte
+checks skip. Set it locally too to be sure a run compared everything. The same workflow runs
+`scripts/check-dist.sh`, `scripts/engine-diff.sh --check` and `scripts/check-licenses.sh`.
 
 ## How correctness is checked
 

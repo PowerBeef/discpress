@@ -22,8 +22,9 @@ python3 scripts/extract-build.py --if-stale
 # unmodified chdman 0.289 built from the MAME release (needs to fetch MAME): the reference for
 # byte-for-byte checks
 [ -x build/chdman-0.289 ] || scripts/build-upstream.sh || echo "warning: could not build upstream chdman 0.289" >&2
-# the engine built natively (no download): the fallback reference, and tests/ui/engine.spec.js
-[ -x build/chdman-native ] || scripts/build-native.sh || echo "warning: could not build the engine natively" >&2
+# the engine built natively (no download): the fallback reference, and tests/ui/engine.spec.js, which
+# skips when it is older than engine/ (make rebuilds only what changed)
+scripts/build-native.sh || echo "warning: could not build the engine natively" >&2
 # neither: the distro's (older) chdman
 if [ ! -x build/chdman-0.289 ] && [ ! -x build/chdman-native ]; then
   command -v chdman >/dev/null || { sudo -n apt-get install -y -q mame-tools || apt-get install -y -q mame-tools; } >/dev/null 2>&1 || true

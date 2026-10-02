@@ -1,0 +1,84 @@
+# Checks every push to main and every pull request:
+# - checks: dist/discpress.html is what the sources make (scripts/check-dist.sh, as a release does),
+#   and engine/ holds only permissively licensed MAME code (scripts/check-licenses.sh);
+# - tests: the whole UI suite (tests/README.md) on dist/discpress.html, against unmodified chdman
+#   0.289 built from the MAME release and the engine built natively. REQUIRE_NATIVE makes the run fail
+#   if either is missing, rather than skip the byte-for-byte checks.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: dist/discpress.html is what the sources make
+        run: ./scripts/check-dist.sh
+      - name: Only permissively licensed MAME code in engine/
+        run: ./scripts/check-licenses.sh
+
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: numpy, for the synthetic test discs
+        run: pip install numpy
+
+      # unmodified MAME 0.289 and chdman built from it: the reference the tests compare with
+      - name: Cache MAME 0.289 and its chdman
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party/mame
+            build/chdman-0.289
+          key: mame-0.289-${{ runner.os }}-${{ hashFiles('scripts/fetch-mame.sh', 'scripts/build-upstream.sh', 'wasm/**') }}
+      - name: Unmodified chdman 0.289
+        run: '[ -x build/chdman-0.289 ] || ./scripts/build-upstream.sh'
+      - name: engine/mame-0.289.diff is up to date
+        run: ./scripts/engine-diff.sh --check
+      - name: The engine built natively
+        run: ./scripts/build-native.sh
+
+      - name: Playwright and Chromium
+        working-directory: tests
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Synthetic test discs
+        run: python3 tests/fixtures/make_fixtures.py
+      - name: UI tests
+        working-directory: tests
+        env:
+          REQUIRE_NATIVE: '1'
+        run: npm test
+      - name: Report of a failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            tests/.cache/report
+            tests/.cache/test-results
+          retention-days: 14
