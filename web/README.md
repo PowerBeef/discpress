@@ -25,4 +25,4 @@ The icons are rendered from the logo in `app/index.html` (the `icon` link): `ico
 as is, `icon-maskable-512.png` and `apple-touch-icon.png` (180 × 180) with the background filling the square.
 
 One-time setup, in the repository's settings: Pages → Build and deployment → Source: **GitHub Actions**.
-Releases run the workflow on `main`, which the `github-pages` environment allows by default.
+Releases run the workflow on `main`, which the `github-pages` environment allows by default. The site is deployed only for the newest version: re-running an older release's workflow fixes that release and leaves the site alone (`scripts/newest-release.sh`).
