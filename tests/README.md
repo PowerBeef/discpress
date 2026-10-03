@@ -25,14 +25,14 @@ does all of this when a session starts.
 | `npm run test:dev` | the same against a page assembled from the current `app/` and `db/` (with `build/`'s wasm, taken first from `dist/discpress.html` when that is newer and differs) |
 | `npx playwright test ui/convert.spec.js` | one file; add `-g "ps2"` to filter by test name |
 | `npx playwright test --project=iphone` | one project: `desktop`, `file-url`, `iphone`, `android`, `layout` |
-| `EXTRA_BROWSERS=1 npx playwright test --project=webkit` | real WebKit and Firefox too (`webkit`, `iphone-webkit`, `firefox`), once installed: `PLAYWRIGHT_BROWSERS_PATH=<dir> npx playwright install webkit firefox` and `npx playwright install-deps webkit firefox`, with Chromium linked into `<dir>`. Playwright's Linux WebKit has no `navigator.storage` and fails navigations while offline, so the private-storage tests and the offline reload skip there; `engine.spec` runs in the Chromium projects only |
+| `EXTRA_BROWSERS=1 npx playwright test --project=webkit` | real WebKit and Firefox too (`webkit`, `iphone-webkit`, `firefox`), once installed: `PLAYWRIGHT_BROWSERS_PATH=<dir> npx playwright install webkit firefox` and `npx playwright install-deps webkit firefox`, with Chromium linked into `<dir>`. Playwright's Linux WebKit has no `navigator.storage` and fails navigations while offline, so the private-storage tests and the offline reload skip there; `engine.spec` and `facts.spec` run in the Chromium projects only |
 | `npm run report` | open the HTML report of the last run (traces and screenshots of failures) |
 | `npm run bench -- --quick` | quick benchmark on the small fixtures (about 1.5 minutes) |
 | `npm run bench` | full benchmark on large generated images (300 MB CD, 1 GB DVD) |
 | `npm run bench:dev -- --compare latest` | benchmark the current `app/` and compare with the last run |
 
 Environment: `DISCPRESS_HTML` picks the page (relative to the repo root), `WORKERS` the number of
-parallel test workers (default 2), `CHDMAN` a native chdman binary, `REGEN_FIXTURES=1` rebuilds fixtures, `REQUIRE_NATIVE=1` fails the run without both native references (see In CI).
+parallel test workers (default 2), `CHDMAN` a native chdman binary, `DISCPRESS_FIXTURES` the fixtures folder (default `.cache/fixtures/`), `REGEN_FIXTURES=1` rebuilds fixtures, `REQUIRE_NATIVE=1` fails the run without both native references (see In CI).
 Outside CI a test server already running on `PORT` (default 4173) is reused; its `/healthz` names the page
 it serves, and the run stops if that isn't the page `DISCPRESS_HTML` picks (stop it, or use another `PORT`).
 
@@ -71,10 +71,10 @@ when `engine/` or `wasm/` change, and weekly. Leaks unmodified chdman 0.289 has 
 
 `fixtures/make_fixtures.py` generates synthetic discs into `.cache/fixtures/` (deterministic,
 about a second): ISO 9660 file systems, raw CD sectors with valid EDC/ECC (Mode 1 and Mode 2),
-CD audio, a CloneCD image, a cdrdao TOC and a Nero image (compared with the engine's native build, `engine: true`, or a cue twin, since chdman 0.289 reads their pregaps wrongly), a PlayStation disc booting `PSX.EXE`, a NAOMI 2 GD-ROM, compressed ISOs (CSO v1 and v2, ZSO; the generator has its own LZ4 encoder), ECM images (the generator's encoder writes the same bytes as the ecm tools' `bin2ecm`, including Mode 2 Form 2 sectors and silence stored as sectors), cue sheets chdman 0.289 misreads (each with a plain twin), cue sheets with more than a CHD's tracks hold (CATALOG, FLAGS, ISRC, INDEX 02, `CDI/2352`), and console boot headers for PlayStation, PS2, PSP, Saturn, Sega CD and Dreamcast (GDI).
+CD audio, a CloneCD image, a cdrdao TOC and a Nero image (compared with the engine's native build, `engine: true`, or a cue twin, since chdman 0.289 reads their pregaps wrongly), a PlayStation disc booting `PSX.EXE`, a NAOMI 2 GD-ROM, compressed ISOs (CSO v1 and v2, ZSO; the generator has its own LZ4 encoder), ECM images (the generator's encoder writes the same bytes as the ecm tools' `bin2ecm`, including Mode 2 Form 2 sectors and silence stored as sectors), cue sheets chdman 0.289 misreads (each with a plain twin), cue sheets with more than a CHD's tracks hold (CATALOG, FLAGS, ISRC, INDEX 02, `CDI/2352`), console boot headers for every console the page recognizes (PlayStation, PS2 on CD and DVD, PSP and UMD Video, Saturn, Sega CD, Dreamcast, NAOMI, PC Engine CD, PC-FX, Neo Geo CD, 3DO, CD-i and CD-i Bridge, CD32 and CDTV, Jaguar CD, Xbox 360, PS3, Video CD, DVD-Video), Sega first-party serials, discs of a set and releases told apart by size and region, PlayStation EBOOT.PBP files, LibCrypt discs (with an `.sbi`, a CloneCD `.sub`, or neither), multi-session discs, the layouts the rules in `app/quirks.js` look at, a music CD and a hard disk image.
 They carry serial numbers of real games, so identification can be tested against the built-in
 Redump database, but contain no game data. `manifest.json` lists each fixture with the job and
-identification the app should produce. `--bench` adds large, realistic images for benchmarks.
+identification the app should produce, the name a result keeps (`out`) and the rule ids its card must show (`quirks`). `--bench` adds large, realistic images for benchmarks.
 The two `codec mix` images change content every hunk (data, noise, and audio in both byte orders),
 so that each codec wins, loses and stops early in turn.
 
@@ -96,6 +96,13 @@ game database when it is requested as `/discpress.html?testdb=1` (`app.open({ te
 | `tuning` | the automatic thread count: one-off speed test on the first conversion, reuse, not capped by the reported core count, manual override, Measure again |
 | `gdrom` | Dreamcast GD-ROM layout from a `.gdi` and a Redump cue: no pregaps, track 3 at LBA 45000 |
 | `engine` | the engine's own command line against unmodified chdman 0.289: the 0.289 defects it fixes, identical CHDs when codec trials stop early, and the checksums and codecs of the codec plan |
+| `profiles` | settings picked from the console (`PROFILES`): type and hunk size (PSP 2,048), Zstd warnings, the PS2 DVD-as-CD setting, Xbox 360 and PS3 notes, `.sbi` files (also made from a CloneCD `.sub`), `.m3u` playlists (lettered discs too), the PCSX2 and Flycast notes, the MiSTer preset |
+| `quirks` | the rules in `app/quirks.js`: Saturn and Sega CD leave out `--keepcue`, NAOMI keeps its name, Zstd and MiSTer warnings for PS2, Dreamcast, NAOMI and PC-FX, `data-quirk` ids, more than two notes grouped, the LibCrypt warning until an `.sbi` or `.lsd` is added, an `.sbi` of another console left out, a set's "Disc 1 of 3" note |
+| `facts` | `scripts/assemble.py` refuses a `db/facts` line with an unknown system, serial or fact, or without a source |
+| `zip` | `.zip` input: stored and deflated entries, zip64, entries it refuses, no private storage |
+| `pbp` | PS1 `EBOOT.PBP` files: one card per disc, files it refuses |
+| `dat` | DAT files: every track matched before converting and after Verify, verified discs named after them, kept for later visits |
+| `verify` | Verify on a finished card, the verify-after setting, verify by itself after a helper failed (or lied), the question before results too large for memory |
 | `advanced` | the Advanced tab: form, text commands, validation, listtemplates |
 | `edge-cases` | missing tracks, lone tracks, duplicates, unsupported files, descriptors and CloneCD images chdman can't convert, truncated images, compressed ISOs (as a CD, not one at all, damaged), DVD/CD switch, cancel, remove |
 | `fallbacks` | no SIMD, no OPFS, memory-only, input staging and page streaming (iOS web views, also of a compressed ISO), single core |

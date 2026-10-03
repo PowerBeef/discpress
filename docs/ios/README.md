@@ -27,7 +27,7 @@ A user converted Crisis Core (PSP, a 1.6 GB `.iso`) on an iPhone in Sitecase, an
 
 A page can't tell in advance whether downloads work; the best hint is an iOS user agent without the `Safari/` token (a web view), which the page already uses for its layout.
 
-**iOS Safari can't run a local HTML file.** Tapping it in Files shows a Quick Look preview without JavaScript, Safari isn't offered to open it, and `file://` doesn't open. That's why the README sends iPhone users to viewer apps. ([hosting.md](hosting.md) §1)
+**iOS Safari can't run a local HTML file.** Tapping it in Files shows a Quick Look preview without JavaScript, Safari isn't offered to open it, and `file://` doesn't open. That's why the README used to send iPhone users to viewer apps; it now sends them to the online version in Safari. ([hosting.md](hosting.md) §1)
 
 **So the page has to be served from https for iPhone users to use Safari.** GitHub Pages is free, can be deployed from the existing release workflow, and needs no special headers, since Discpress uses no SharedArrayBuffer. Added to the Home Screen, it runs as a web app, and on iOS 26 every site added there opens as a web app by default. Home-screen web apps are exempt from Safari's 7-day storage deletion and can get persistent storage. ([hosting.md](hosting.md))
 
@@ -50,7 +50,7 @@ A page can't tell in advance whether downloads work; the best hint is an iOS use
   - Safari deletes a site's storage after 7 days without a visit.
   - In viewer apps, every `file://` page shares one origin.
 - **Picked files.** iOS copies each picked file into the host app's temporary folder, and it can be deleted while the page still reads it. That is a plausible cause of the "worker can't read the file" failures already seen in viewer apps.
-- **After a reload.** Discpress deletes the previous session's files in private storage (`Store.cleanupStale`), and nothing on the page lists them any more. So a CHD that was finished but not yet saved when iOS reloaded the page is lost.
+- **After a reload.** Discpress deletes the previous session's files in private storage (`Store.cleanupStale`), and nothing on the page lists them any more. So a CHD that was finished but not yet saved when iOS reloaded the page is lost. (Fixed since: `Recovery`, Phase 2, step 4.)
 
 **Routes other than Safari** ([apps-and-native.md](apps-and-native.md)):
 
@@ -68,7 +68,7 @@ A page can't tell in advance whether downloads work; the best hint is an iOS use
 - An identified PSP game is a DVD CHD, and the other type moves into Options.
 - On iPhone and iPad, results over 512 MB skip the share sheet and download instead: that works in Safari, but not in Sitecase.
 
-### Phase 1: an https copy for Safari (the main fix): done, deploys with the next release
+### Phase 1: an https copy for Safari (the main fix): done
 
 **Status.**
 - `release.yml` has a `pages` job that publishes the release file as `index.html` at https://powerbeef.github.io/discpress/, next to `web/` (`sw.js`, `manifest.webmanifest`, icons) and `discpress.html.sha256`, which the release also carries.
@@ -77,13 +77,13 @@ A page can't tell in advance whether downloads work; the best hint is an iOS use
 - In an iPhone/iPad app's web view, a notice (`#iosTip`) points big games to the online version.
 - README and Help send iPhone users to Safari.
 - Tests: `tests/ui/hosted.spec.js`, `tests/ui/mobile.spec.js`.
-- **One-time setup left:** Settings → Pages → Source: GitHub Actions.
+- Pages is set up (Settings → Pages → Source: GitHub Actions), and every release deploys there.
 
 The plan as it was:
 
 1. **Publish the release file** byte for byte on GitHub Pages as `index.html`. Deploy it from a second job in `.github/workflows/release.yml` (a separate workflow triggered by the release would never run: [hosting.md](hosting.md) §2.1). Then:
    - enable Pages with source "GitHub Actions";
-   - give the `github-pages` environment an allowed-tag rule for `v*`;
+   - give the `github-pages` environment an allowed-tag rule for `v*` (superseded: a tag's run reruns itself on `main`, which the environment allows; `web/README.md`);
    - optionally add a custom domain. `powerbeef.github.io` is shared with every other PowerBeef project site, and so is its storage.
 2. **Keep "nothing is uploaded" checkable.** Add a `Content-Security-Policy` meta tag with `connect-src 'none'` to `app/index.html` (it covers both the file and the hosted copy), and publish the file's SHA-256 with each release so anyone can compare the hosted copy.
 3. **Make it an offline home-screen web app.** Add a manifest, icons and a small service worker that caches the one file and switches to a new version only when no job is running. The single-file download stays the main release for desktop and Android.

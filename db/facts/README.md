@@ -1,13 +1,14 @@
 # Facts about particular games
 
 Tab-separated files, one fact per line: `sys`, `serial`, `fact`, `value` and `source`. Lines starting with `#` are comments. `scripts/assemble.py` checks every line and embeds the facts in the page (`GAME_FACTS` in `app/ident.js`). It refuses:
+- a line that isn't 5 tab-separated fields;
 - a system the database doesn't have;
 - a serial the database doesn't list for that system (as `canonKey` makes it: Sega's `MK-` dropped, Redump's suffixes as base serials);
 - an unknown fact;
 - a value other than `1`;
 - a line without a source.
 
-So after `scripts/update-db.sh`, a release whose serial left the database stops the build until its line is fixed or removed.
+A new kind of fact also needs its name in `FACTS` in `scripts/assemble.py`, and a rule or note that uses it. So after `scripts/update-db.sh`, a release whose serial left the database stops the build until its line is fixed or removed.
 
 | File | Fact | What the page does with it |
 |---|---|---|

@@ -12,7 +12,9 @@ This is the synthesis of the research dossier in this folder (see [README.md](RE
 | E | [history-community.md](history-community.md) |
 | G | [encoders.md](encoders.md) |
 
-## 1. Where Discpress stands today
+## 1. Where Discpress stood at the research (1.2.0)
+
+This section describes the app as the research found it. Since then the engine has become the fork in `engine/` (milestone 1) and the promise below holds again; the table at the start of the roadmap (§4) says where each milestone stands.
 
 **Engine.** Up to 1.2.0, Discpress compiled MAME's chdman from a pinned MAME **master** commit, `76c7d19` (0.289 plus 1,167 commits, including output-changing ones); 1.2.1 pins the `mame0289` release tag instead (milestone 0). On top sits a 130-line patch that farms hunk compression out to helper Web Workers, with Asyncify yielding to JavaScript. The engine is driven through `callMain`, and progress is scraped from text (B §6).
 
@@ -113,6 +115,17 @@ Discpress knows the system of every job, so policies can be **system-aware**. Ex
 
 Effort estimates assume one developer working with the existing test harness.
 
+| Milestone | Status |
+|---|---|
+| 0. Correctness hotfix | Shipped in 1.2.1 |
+| 1. The engine fork | Steps 1 and 4 done; step 2 partly (Asyncify gone; progress events and push input open); step 3 open (native thread pool) |
+| 2. Performance | 2.1, 2.3, 2.4, 2.5, 2.6 and 2.8 done, 2.2 in part |
+| 3. Fidelity and verification | Redump-exact extraction and most parser fixes done; Verify compares with Redump (step 2 in part); session geometry open (milestone 7) |
+| 4. More inputs | CloneCD, CSO/ZSO and ECM done (PBP and `.zip` in milestone 5) |
+| 5. What users ask for | Done (1.5.0) |
+| 6. Detection that knows the game | Done (1.7.0) |
+| 7. Layouts each emulator reads right | Planned (no new engine) |
+
 ### Milestone 0: correctness hotfix (days)
 
 This affects users today, so it ships as its own small release before any fork work.
@@ -149,24 +162,24 @@ This affects users today, so it ships as its own small release before any fork w
 
 ### Milestone 1: the engine fork (1–2 weeks)
 
-**Status: step 1 done.**
+**Status: steps 1 and 4 done, step 2 in part, step 3 open** (the steps are the numbered list below).
 - The engine is in `engine/` (see `engine/README.md`): 75 MAME 0.289 source files and their headers, with the browser patch applied as ordinary code.
 - The unused utf8proc-backed functions are gone, and so are disasmintf, nanosvg, expat and the unused LZMA/7z files.
 - It builds without a MAME checkout. The objects are byte-identical to the old build's (except `unicode.o`), and the build stays reproducible.
 - The tests now compare with unmodified chdman 0.289 (`scripts/build-upstream.sh`).
 
-**Step 2 (Asyncify) done.**
+**Step 2: Asyncify gone.**
 - The compressing commands are C++20 coroutines, so the page drives them step by step (`chdman_begin`/`chdman_resume`) and the whole CLI keeps working, the Advanced tab included.
 - Asyncify is gone from the build, so the wasm and its glue are smaller.
 - Natively, output, messages and exit codes match upstream.
 - Still to do in step 2: structured progress events and the push-input API that would retire `FileReaderSync` and the iOS staging protocol.
 
-**Step 3, the defect fixes: done** (see `engine/README.md`).
+**Step 4, the defect fixes: done** (see `engine/README.md`).
 - `verify` exits 1 on a mismatch.
 - `copy x→x` no longer destroys the input; no output is ever written over an input.
 - `extractcd` of a non-CD, and `-us 0`/`-ss 0`, are errors, not crashes.
 - `dumpmeta` keeps stdout clean.
-- Still open: the `-np 1` busy-wait and a native thread pool without the 16-thread cap. Both matter for the native CLI only.
+- Still open: the `-np 1` busy-wait and step 3's native thread pool without the 16-thread cap. Both matter for the native CLI only.
 
 1. **Extract `engine/`.** Take the 78-object closure (B §7.1) at the reference tag, re-apply `mame.patch` as ordinary code, and drop `disasmintf`, `nanosvg`, expat and the unused LZMA/7z files. Fix `THIRD_PARTY_NOTICES.md`.
 2. **Library API instead of `callMain`.** `chd_file_compressor` is already a resumable state machine (`compress_begin`/`compress_continue`). Expose:
@@ -230,7 +243,7 @@ Numbers are single-core CPU unless noted (measurements §1–2, G §11–12).
 | 2.5 | **Codec plan per track type**: data tracks `cdlz`(+`cdzl`), audio tracks `cdfl`; DVD without generic FLAC, or with a FLAC-0 probe | C | 2.0× CD data (+0.22%), **2.8× CD audio (±0)**, 1.55× DVD (+0.06%) |
 | 2.6 | libdeflate-9 in place of zlib-9 for the deflate trial | C | Deflate 2–3× faster at equal size |
 | 2.7 | "Smallest" preset: LZMA fb 273/mc 1000, libdeflate-12, FLAC `-p` | C | Measured −0.47% (CD) and −0.84% (DVD) at about 2.5× CPU; up to −5% on very compressible data (G) |
-| 2.8 | Parallel decompression for extract, verify, identification and parent walk | R (read only) | Today these are single-threaded at 45–50 MB/s native: 4–8× on typical devices |
+| 2.8 | Parallel decompression for extract, verify, identification and parent walk | R (read only) | Were single-threaded at 45–50 MB/s native: 4–8× on typical devices (done in the page for extract and verify) |
 | 2.9 | Per-system hunk-size policy (for example PS2 DVD at 16 KiB) | X | −9% (16 KiB) to −16% (64 KiB) on DVD; costs random-read latency; MAME needs 2048 |
 
 Presets:
@@ -247,7 +260,7 @@ Presets:
    - Store CATALOG, ISRC, FLAGS, INDEX ≥ 2, the original track-type string and the original cue text as **non-checksummed metadata**, appended after the CD tags. The CHD SHA-1 is unchanged and every reader ignores them (C §2, §7).
    - Extract with CRLF line endings and Redump naming.
    - This lifts cue reproducibility from 77% of 72,022 Redump cues to about 100%.
-2. **Verify inside the CHD.** Hash each track range straight from the CHD, with audio swapped back to little-endian and stored pregaps included, and match it against a per-track Redump DB. This extends `db/mkdb.py`, which today keeps only the first ROM per game. It also gives the app a "Verified dump" badge with no extraction step (C §7.2, D1 §2.1).
+2. **Verify inside the CHD.** Hash each track range straight from the CHD, with audio swapped back to little-endian and stored pregaps included, and match it against a per-track Redump DB. This extends `db/mkdb.py`, which today keeps only the first ROM per game. It also gives the app a "Verified dump" badge with no extraction step (C §7.2, D1 §2.1). **Status: in part.** Verify compares the file the built-in database lists with Redump (`extractcd --redump` into checksums), and a user's DAT files check every track (milestone 5, step 4); the built-in database still keeps one file per game.
 3. **Fix the cue/TOC/NRG parser bugs** (C §12), each with a synthetic fixture. **Status:** B3 (no tracks, or tracks without data), B4 (100 tracks), B5 (MOTOROLA, audio and data), B6 (a shared file after another file, or before one) and B7 (several tracks in one `.wav`) are fixed, with fixtures that have plain twins; 5,676 real Redump cue sheets still give upstream's CHDs. So is B18 (CHDs of a few hunks that can't be read). Malformed input is an error instead of a crash, a hang or silent damage: track lines before the first `TRACK` in a cue or TOC, a missing GDI track file, NRG images that crashed or hung 0.289, an output that is also a track file, and `extractcd` of a damaged CHD (`tests/ui/engine.spec.js`). B8 (EAC gaps at the end of the previous file: the track is read in two pieces), B9 (NRG tracks start at their INDEX 00 and keep their pregap), B10 (`parse_iso` also checks the sync pattern) and B11 (cdrdao TOCs read as cdrdao reads them: START, PREGAP, ZERO, SILENCE, several files per track, no length) are fixed too, each giving the CHD of the same disc as a cue sheet that 0.289 reads right; so is B16 (`extractdvd` of a CD is an error). These change the CHDs of inputs 0.289 read wrong, among them the `ps1-nrg` and `ps1-toc` fixtures, whose audio pregap is now stored as in `mgs disc1.cue`. TOCs also read `.wav` files as WAVE and pad a last partial sector with zeros, as cdrdao does. B12 is fixed: `extractcd`'s `.toc` no longer writes `ZERO` before a pregap the CHD holds, so every CD fixture reads back from its TOC as the same CHD, byte for byte; this changes the `.toc` output of CHDs with a stored pregap by that one line. B13 is fixed too: `cdrom_file`'s logical reads, which no chdman command uses but the page's identification does, read each pregap from its own track and a gap the CHD doesn't hold as zeros, and every chdman output stays the same. B19: every GD-ROM output reads back (`.gdi` and `.cue` as the same CHD, `--redump` as Redump's files), and `.toc`, which can't describe a GD-ROM, is refused. B20 and B21: cue sheets with INDEX points out of order or tracks without data, and TOC statements past their files, huge numbers, samples in sub-channel tracks and ZERO in another mode are errors; a `.wav`'s `#offset` is where its header is, as in cdrdao. B15 is MAME's DVD reader, not chdman, and B14 doesn't apply to 0.289.
    - MOTOROLA audio double-swapped;
    - shared-file offsets;
@@ -257,23 +270,23 @@ Presets:
    - `parse_iso` mis-typing;
    - cdrdao TOC semantics;
    - 0-track hang and 100-track crash.
-4. **Session geometry.** Store the lead-out/lead-in gap as non-checksummed metadata, and fix the `CHSE` metadata-order fragility (C §3.3). Report both upstream.
+4. **Session geometry.** Store the lead-out/lead-in gap as non-checksummed metadata, and fix the `CHSE` metadata-order fragility (C §3.3). Report both upstream. (Milestone 7, steps 2 and 4, plans this per console.)
 
 ### Milestone 4: more inputs (ongoing, by demand)
 
-**Status: CloneCD (single-session), CSO/ZSO and ECM done.**
+**Status: CloneCD (single-session), CSO/ZSO and ECM done; PS1 `EBOOT.PBP` and `.zip` came with milestone 5.**
 - CloneCD: the page turns a `.ccd` into a cue sheet for its `.img` (`ccdToCue`). The `.sub` is noted and left out; subchannel ingest stays tier X. Multi-session, scrambled and track-list-less (CloneCD 2) files are refused with the reason.
 - CSO v1 and v2 and ZSO (maxcso's formats, for PSP and PS2): the job worker hands chdman the ISO inside, decompressing blocks as they are read (`CisoStore`), so the CHD is the one chdman makes from that ISO. Identification reads the ISO the same way, and its checksum is the ISO's. A damaged block stops the job with its number.
 - Found on the way: 0.289's `createraw`/`createhd`/`createdvd` ignore input read errors and write a CHD they can't open. The engine now stops with an error (`tests/ui/engine.spec.js`).
 - ECM (`.bin.ecm`, the ecm tools' format; common in PS1 collections, and emulators don't read it): an ECM image stands for the file it packs, the track a cue sheet, GDI or CloneCD `.ccd` names, or a lone `.bin`. The job worker rebuilds the image as chdman reads it (`EcmStore`, `wasm/ecm.cpp`), so the CHD is the one chdman makes from the unpacked image. It rebuilds ECC with the engine's `ecc_generate`, which works a word at a time since 2.2. The image's EDC, at the end of the file, is checked when the image is read in order, so a damaged file stops the job instead of making a CHD of the wrong data. Identification reads the image through a worker, and the checksum that confirms the release is the image's. The fixture encoder writes the same bytes as the ecm tools' `bin2ecm` (checked with a local build of it, not part of the repository).
 
 Priority order (C §9):
-1. CloneCD `.ccd/.img/.sub`, which also enables subchannel ingest for LibCrypt and CD+G;
-2. DiscJuggler `.cdi` for Dreamcast homebrew and MIL-CD;
+1. CloneCD `.ccd/.img/.sub`, which also enables subchannel ingest for LibCrypt and CD+G (done for single-session images; LibCrypt's `.sbi` is made from the `.sub` since milestone 5);
+2. DiscJuggler `.cdi` for Dreamcast homebrew and MIL-CD (deferred in milestone 5: refused with the reason);
 3. ECM (done);
 4. FLAC, WAV or AIFF audio referenced from cues;
 5. CSO/ZSO → DVD (done);
-6. MDS/MDF;
+6. MDS/MDF (deferred in milestone 5: refused with the reason);
 7. fuller NRG support.
 
 **Subchannel ingest** writes `SUBTYPE:RW_RAW`, i.e. tier X, because Beetle cores and Flycast ≤ 2.7 refuse such discs. Offer it per system (PS1 LibCrypt, CD+G), with warnings. Keep recommending `.sbi` sidecars for PS1 by default.
@@ -312,7 +325,7 @@ Identification picked settings per console and from the cue sheet's text, never 
 
 None of the steps changes the CHDs Discpress writes by default. The only automatic changes allowed are dropping an opt-in flag that makes a CHD unbootable (which gives the default output), choosing the CHD type, and refusing inputs 0.289 mishandles; everything else is a note or a warning. Each step is one pull request.
 
-**Status: done** (steps 1 to 5; Saturn cartridges deferred, below) (tests: the `dc-firstparty`, `saturn-firstparty`, `segacd-firstparty`, `saturn-disc1`, `saturn-disc2`, `dc-disc2`, `ps1-size-rank` and `saturn-other-region` fixtures for step 1; `quirks.spec.js`; the `segacd-layout`, `saturn-pregap-cmd`, `dc-mode2-2048`, `dc-multisession`, `ps1-postgap` and `ngcd-mode2` fixtures, whose manifest entries list the rules their cards show, for step 3; `pcecd-iso`, `pcfx-iso`, `cd32-cdtvid`, `cd32-startup`, `cdtv-tm`, `ngcd-abs`, `cdi-bridge`, `vcd`, `dvd-video`, `umd-video`, `ps2-dvd-small`, `ps2-cd-iso` and `jagcd` for step 4).
+**Status: done** (Discpress 1.7.0; steps 1 to 5; Saturn cartridges deferred, below) (tests: the `dc-firstparty`, `saturn-firstparty`, `segacd-firstparty`, `saturn-disc1`, `saturn-disc2`, `dc-disc2`, `ps1-size-rank` and `saturn-other-region` fixtures for step 1; `quirks.spec.js`; the `segacd-layout`, `saturn-pregap-cmd`, `dc-mode2-2048`, `dc-multisession`, `ps1-postgap` and `ngcd-mode2` fixtures, whose manifest entries list the rules their cards show, for step 3; `pcecd-iso`, `pcfx-iso`, `cd32-cdtvid`, `cd32-startup`, `cdtv-tm`, `ngcd-abs`, `cdi-bridge`, `vcd`, `dvd-video`, `umd-video`, `ps2-dvd-small`, `ps2-cd-iso` and `jagcd` for step 4).
 
 1. **Correct names.** A serial's key drops Sega's `MK` (`canonKey`); base keys also cover Sega's two-part suffixes (4432-50) and Sony serials with letters after the number (SLUS-01272GH). A disc is also looked up without the version suffix it carries (T-93175-00) and, for PlayStation discs, under its boot file's name (`serialCandidates`). The Saturn's and Dreamcast's IP.BIN give the disc of a set (CD-2/3, GD-ROM2/2) and the area symbols, the Sega CD's system area its region. Releases are ranked: the disc's number in its set first, then a matching size, then how the serial matched (exact, trimmed, base), then whether the release's region fits the disc's; a release found only under a base serial for another region names nothing. Lettered sets (Disc A, Disc B) get playlists too.
 2. **A rule table** (`app/quirks.js`) for per-console and per-disc rules, each with a stable id: Saturn and Sega CD jobs leave out `--keepcue` and say why (its `CUES` tag is fatal to Kronos, Yabause and jgenesis, which fail on any metadata tag but a track's: [ecosystem-other.md](ecosystem-other.md) §0), NAOMI results keep their romset names, the Zstd warnings cover PS2 (AetherSX2), Dreamcast and NAOMI (Flycast before 2.3) and PC-FX (Beetle PC-FX before 2026-08), and apply to the MiSTer preset too, which also warns where MiSTer has no core (Dreamcast, NAOMI, PS2, PC-FX, Jaguar CD, PC-98). The PCSX2 and Flycast notes of milestone 5 moved into the table.
@@ -339,7 +352,7 @@ None of the steps changes the CHDs Discpress writes by default. The only automat
    - A disc of a set says how many discs the set has (from the database's names) until all of them are converted.
    - **Deferred:** Saturn games that need a RAM cartridge, until a primary source is checked (Mednafen's database is GPL, so a checklist only).
 
-Deferred: naming GameCube, Wii, Xbox and PS3 discs (+530 KB of database, and their emulators don't take CHDs); checksumming CHD tracks while identifying (Verify does); FM Towns, X68000 and other PC sub-platforms; session and index metadata (`CHSE`/`CHIX`), which needs a MAME newer than 0.289.
+Deferred: naming GameCube, Wii, Xbox and PS3 discs (+530 KB of database, and their emulators don't take CHDs); checksumming CHD tracks while identifying (Verify does); a PC-98 detector (PC-98 discs are found by size and CRC-32 only); FM Towns, X68000 and other PC sub-platforms; session and index metadata (`CHSE`/`CHIX`), which needs a MAME newer than 0.289.
 
 ### Milestone 7: layouts each emulator reads right (decision of 2026-10-03)
 
@@ -368,7 +381,7 @@ The CHD's SHA-1 then differs from chdman's for the same input, which MAME's soft
    - Redump-style cue sheets (INDEX 00, no PREGAP or POSTGAP lines) are unchanged, and so is their CHD.
    - The `saturn-gapcmd`, `postgap`, `ares-pregap` and `ngcd-layout` warnings become fixes.
 2. **The Jaguar CD session tag** (`CHSE`, as MAME after 0.289 writes it), only for Jaguar CD (about 1.5 person-weeks).
-   - Virtual Jaguar refuses a Jaguar CD CHD without it, so all 38 Redump Jaguar CDs would load (not yet checked in Virtual Jaguar itself).
+   - Virtual Jaguar refuses a Jaguar CD CHD without it, so every Jaguar CD (27 in the built-in database) would load (not yet checked in Virtual Jaguar itself).
    - It must never be written for Saturn or Sega CD: Kronos, Yabause and jgenesis refuse any CHD that has it.
    - The `jagcd-sessions` warning then names only BigPEmu, which takes no CHDs.
 3. **An opt-in mode for Flycast 2.7 and earlier** (about 1 person-week).

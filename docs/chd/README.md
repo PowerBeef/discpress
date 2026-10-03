@@ -16,7 +16,7 @@ This is research done on 2026-09-27 to prepare a hard fork of MAME's `chdman` fo
 
 | Document | What it covers |
 |---|---|
-| [fork-plan.md](fork-plan.md) | **The synthesis:** the compatibility contract, output tiers, and a milestone roadmap with measured gains |
+| [fork-plan.md](fork-plan.md) | **The synthesis:** the compatibility contract, output tiers, and a milestone roadmap with measured gains and each milestone's status (milestones 0, 5 and 6 done, 1 to 4 mostly, 7 planned) |
 | [measurements.md](measurements.md) | Per-codec economics, codec-selection policies, encoder variants, hunk sizes, the 0.289 drift, native vs wasm |
 | [format.md](format.md) (lane A) | Byte-level spec of CHD V1–V5 (headers, maps, metadata, hashes), every codec, and what decoders let an encoder change (tested with MAME, five libchdr versions and chd-rs) |
 | [chdman-internals.md](chdman-internals.md) (lane B) | Every command and option, the compression pipeline and threading, performance, defects, the Discpress wasm patch, licensing of every file |
@@ -86,7 +86,7 @@ Hostile CHDs are a risk too: a malformed FLAC hunk hangs MAME's decoder, and a s
 - The Convert tab refuses descriptors with no tracks or out-of-range track numbers, and repairs BOM, encoding, line endings and keyword case.
 - It skips binary `.toc` files, and lone `.bin`/raw `.iso` images get a generated cue.
 - A watchdog stops any run whose progress reads `nan%`, in the Advanced tab too.
-- Hardening against hostile CHDs is left to the fork (milestone 1).
+- Hardening against hostile CHDs was left to the fork; the engine fixes 0.289's crashes on bad input (`engine/README.md`), and `.github/workflows/sanitizers.yml` runs its tests under ASan, LSan and UBSan.
 
 ---
 
@@ -134,7 +134,7 @@ There are serial bottlenecks too:
 - MAME's SHA-1 runs at about 80 MB/s in wasm (about 150 MB/s native), for the whole-image hash on one thread (the engine's runs at 650 MB/s since milestone 2.1);
 - `-np N` gives N−1 workers, capped at 16;
 - `-np 1` busy-waits;
-- verify and extract are single-threaded.
+- verify and extract are single-threaded (in the page they use several cores since milestone 2.8).
 
 ### Compatible ways to shrink files are small, except hunk size (A, G, measurements)
 
@@ -178,7 +178,7 @@ Larger hunks are the only big lever, and every reader decodes them. But MAME's o
 ### Platform (G)
 
 - The SIMD build doubles FLAC speed and does nothing for the LZ codecs.
-- JSPI is Baseline since 2026-09-14, so Asyncify can go. It becomes unnecessary once the engine is a library.
+- JSPI is Baseline since 2026-09-14, so Asyncify can go. (It went: the engine's commands are C++20 coroutines, milestone 1.)
 - Shared-memory threads are impossible from `file://`.
 - WebGPU is not a fit.
 - Safari reports only 4 or 8 cores, so measuring throughput, as Discpress's tuner does, is the right approach.
@@ -192,7 +192,7 @@ Larger hunks are the only big lever, and every reader decodes them. But MAME's o
    - LZMA level 8;
    - honest identity wording;
    - input guard rails.
-2. **Hard-fork chdman's minimal BSD-3 closure** (78 files) into `engine/`, exposed as a library that the browser drives directly, with no `callMain` or Asyncify, and with an explicit compatibility contract and output tiers: reference, compatible and extended.
+2. **Hard-fork chdman's minimal BSD-3 closure** (78 objects; 75 MAME source files in the end) into `engine/`, exposed as a library that the browser drives directly, with no `callMain` or Asyncify, and with an explicit compatibility contract and output tiers: reference, compatible and extended.
 3. **Take the free speed.** Fast hashing, early abort, a per-track codec plan and parallel decoding give a 1.5–2.8× faster "compatible" mode.
 4. **Add fidelity features:** Redump-exact extraction and verification, the parser fixes, and new input formats.
 5. **Test every output** against several independent readers, not just the build it came from.

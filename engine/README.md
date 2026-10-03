@@ -7,7 +7,8 @@ The paths mirror MAME's, so every file can be compared with its original. **[`ma
 - **Browser build**, under `#ifdef __EMSCRIPTEN__`:
   - helper-worker hooks in `chd_file_compressor` (`chd.cpp`, `chd.h`);
   - `chd_file::wasm_read_ahead`, which reads a window of stored hunks in one go for `verify` and the extract commands, hands the compressed ones to helper workers, and lets `read_hunk` take them from memory (with the usual CRC check);
-  - verify and extract read in 8 MB buffers instead of 32 MB.
+  - verify and extract read in 8 MB buffers instead of 32 MB;
+  - compression and `read_ahead` also wait while results streamed into a folder are waiting to be written (`wasm_out_full`, `chdman.cpp`).
 - **Resumable commands (`chdman.cpp`):**
   - The commands that compress (`createraw`, `createhd`, `createcd`, `createdvd`, `createld`, `copy`) and `compress_common` are C++20 coroutines (`chdman_task`). So are `verify`, `extractraw`, `extracthd`, `extractdvd` and `extractcd`, which pause while helpers decompress what they are about to read (`read_ahead`).
   - `main` is split into `chdman_start` (parse the command line) and `chdman_continue`.
@@ -66,6 +67,7 @@ The paths mirror MAME's, so every file can be compared with its original. **[`ma
 | `3rdparty/lzma/C` (`LzmaEnc`, `LzmaDec`, `LzFind`, `CpuArch`) | LZMA SDK 23.01, as bundled by MAME | public domain ([`lzma-sdk.txt`](mame/3rdparty/lzma/DOC/lzma-sdk.txt)) |
 | `3rdparty/flac` (libFLAC, 14 files) | FLAC 1.4.3, as bundled by MAME | BSD-3-Clause, Xiph.Org ([`COPYING.Xiph`](mame/3rdparty/flac/COPYING.Xiph)) |
 | `3rdparty/zstd/lib` | Zstandard 1.5.5, as bundled by MAME | BSD-3-Clause, chosen from its BSD/GPLv2 dual license ([`LICENSE`](mame/3rdparty/zstd/LICENSE)) |
+| `../libdeflate` (outside `mame/`) | libdeflate 1.24's compressor, for `--libdeflate` | MIT ([`COPYING`](libdeflate/COPYING)) |
 | `../libm` (outside `mame/`) | `cosf` and `log` from Arm optimized-routines, for libFLAC | MIT ([`LICENSE`](libm/LICENSE)) |
 
 MAME as a whole is GPL-2.0-or-later, but every MAME file here carries a BSD-3-Clause header (`md5.h`: public domain), so the whole engine is under permissive licenses. The MAME copyright holders are named in each file's header.
