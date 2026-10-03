@@ -2,7 +2,8 @@
 import { test, expect, manifest, fixture } from '../support/app.js';
 import { engineReference, info, nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
 
-const SYSTEM_BADGE = { ps1: 'PS1', ps2: 'PS2', psp: 'PSP', saturn: 'SAT', segacd: 'SCD', dc: 'DC' };
+const SYSTEM_BADGE = { ps1: 'PS1', ps2: 'PS2', psp: 'PSP', saturn: 'SAT', segacd: 'SCD', dc: 'DC', pcecd: 'PCE', pcfx: 'PC-FX',
+  ngcd: 'NGCD', cd32: 'CD32', cdtv: 'CDTV', jagcd: 'JAG', cdi: 'CD-i', vcd: 'VCD', video: 'VIDEO' };
 
 /** The CHD from the app must equal what desktop chdman makes from the same files. */
 function expectSameAsNative(outPath, command, input, extra = []) {

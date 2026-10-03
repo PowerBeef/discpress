@@ -9,6 +9,7 @@ var SYSTEMS = {
   cdtv: ['CDTV', 'Commodore CDTV'], jagcd: ['JAG', 'Atari Jaguar CD'], naomi: ['NAOMI', 'Sega NAOMI (GD-ROM)'],
   naomi2: ['NAOMI2', 'Sega NAOMI 2 (GD-ROM)'], pc98: ['PC-98', 'NEC PC-98'], gc: ['GC', 'Nintendo GameCube'],
   wii: ['Wii', 'Nintendo Wii'], xbox: ['XBOX', 'Microsoft Xbox or Xbox 360'], ps3: ['PS3', 'Sony PlayStation 3'],
+  vcd: ['VCD', 'Video CD'], video: ['VIDEO', 'Video disc (DVD-Video, Blu-ray, Photo CD)'],
   pc: ['DATA', 'Data disc (PC or unknown system)']
 };
 var SYS_COLORS = {
@@ -388,6 +389,26 @@ function sega(r, device, area) {
   if (a) r.area = a.split('').filter(function (c, i, all) { return all.indexOf(c) === i; }).join('');
   return r;
 }
+// a UDF volume (BEA01, NSR02 or NSR03 descriptors after the ISO 9660 ones): a DVD's, as on PS2 DVDs;
+// PS2 CDs have ISO 9660 only
+async function hasUdf(rd) {
+  for (var lba = 17; lba < 33; lba++) {
+    var b = null;
+    try { b = await rd.read(lba); } catch (e) { /* past the end */ }
+    if (!b) return false;
+    if (/^(BEA01|NSR02|NSR03)$/.test(asc(b, 1, 5))) return true;
+  }
+  return false;
+}
+// a Jaguar CD's boot track holds "ATARI APPROVED DATA HEADER ATRI" in audio sectors, in either byte order;
+// file: its track file, at: where the track starts in it
+var JAG_MARK = 'ATARI APPROVED DATA HEADER ATRI';
+async function detectJaguar(file, at) {
+  var b = new Uint8Array(await file.slice(at, at + 32 * 2352).arrayBuffer());
+  var s = asc(b, 0, b.length), w = '';
+  for (var i = 0; i + 1 < b.length; i += 2) w += String.fromCharCode(b[i + 1], b[i]);
+  return s.indexOf(JAG_MARK) >= 0 || w.indexOf(JAG_MARK) >= 0;
+}
 async function detectTrack(rd) {
   var s0 = await rd.read(0);
   if (!s0) return null;
@@ -413,6 +434,13 @@ async function detectTrack(rd) {
   if (u32be(s0, 0x1C) === 0xC2339F3D) return { sys: 'gc', serial: clean(asc(s0, 0, 6)), title: clean(asc(s0, 0x20, 64)) };
   if (u32be(s0, 0x18) === 0x5D1C9EA3) return { sys: 'wii', serial: clean(asc(s0, 0, 6)), title: clean(asc(s0, 0x20, 64)) };
 
+  // PC Engine / PC-FX boot sectors: before the ISO 9660 volume some of these discs also have
+  for (var l = 0; l < 16; l++) {
+    var b = l === 0 ? s0 : await rd.read(l);
+    if (!b) break;
+    if (asc(b, 0x20, 23) === 'PC Engine CD-ROM SYSTEM') return { sys: 'pcecd' };
+    if (asc(b, 0, 15) === 'PC-FX:Hu_CD-ROM') return { sys: 'pcfx' };
+  }
   var pvd = await rd.read(16);
   if (pvd && asc(pvd, 1, 5) === 'CD-I ') return { sys: 'cdi', title: clean(asc(pvd, 40, 32)) };
   if (pvd && asc(pvd, 1, 5) === 'CD001') {
@@ -420,7 +448,8 @@ async function detectTrack(rd) {
     var files = new Map();
     try { files = await isoDir(rd, u32le(pvd, 158), u32le(pvd, 166)); } catch (e) { /* ignore */ }
     if (files.has('UMD_DATA.BIN') || /^PSP GAME/.test(sysId)) {
-      var r = { sys: 'psp', title: volId };
+      // a UMD Video (a film) has UMD_DATA.BIN too, but a UMD_VIDEO folder instead of PSP_GAME
+      var r = { sys: 'psp', title: volId, video: files.has('UMD_VIDEO') && !files.has('PSP_GAME') };
       try {
         if (files.has('UMD_DATA.BIN')) r.serial = new TextDecoder().decode(await isoFile(rd, files.get('UMD_DATA.BIN'), 64)).split('|')[0].trim();
         var pg = files.get('PSP_GAME');
@@ -442,7 +471,7 @@ async function detectTrack(rd) {
     if (files.has('SYSTEM.CNF')) {
       var cnf = new TextDecoder().decode(await isoFile(rd, files.get('SYSTEM.CNF'), 2048));
       var b2 = /BOOT2\s*=\s*([^\r\n]+)/i.exec(cnf), b1 = /BOOT\s*=\s*([^\r\n]+)/i.exec(cnf);
-      if (b2) return { sys: 'ps2', serial: psSerial(b2[1].trim()), boot: bootName(b2[1]), title: volId };
+      if (b2) return { sys: 'ps2', serial: psSerial(b2[1].trim()), boot: bootName(b2[1]), title: volId, udf: await hasUdf(rd) };
       if (b1) return { sys: 'ps1', serial: psSerial(b1[1].trim()) || (exe ? psSerial(exe) : ''), boot: bootName(b1[1]), title: volId };
     }
     if (/PLAYSTATION/i.test(sysId)) return { sys: 'ps1', serial: exe ? psSerial(exe) : '', title: volId };
@@ -458,18 +487,27 @@ async function detectTrack(rd) {
       } catch (e) { /* ignore */ }
       return r3;
     }
-    if (files.has('IPL.TXT')) return { sys: 'ngcd', title: volId };
-    if (/CDTV/i.test(sysId)) return { sys: 'cdtv', title: volId };
+    // Video CDs (a VCD folder: MPF) and CD-i Bridge discs, which Video CDs are too (CD-RTOS CD-BRIDGE, a CDI folder)
+    if (files.has('VCD') || files.has('MPEGAV')) return { sys: 'vcd', title: volId };
+    if (/CD-RTOS CD-BRIDGE/i.test(sysId) && files.has('CDI') && !files.has('PHOTO_CD')) return { sys: 'cdi', title: volId };
+    // Neo Geo CD: IPL.TXT, or (MPF) the disc's text files
+    if (files.has('IPL.TXT') || ['ABS.TXT', 'BIB.TXT', 'CPY.TXT'].filter(function (n) { return files.has(n); }).length >= 2) return { sys: 'ngcd', title: volId };
+    // CDTV and CD32 share the Amiga's S/STARTUP-SEQUENCE; a CDTV disc has CDTV.TM (MPF)
+    if (files.has('CDTV.TM')) return { sys: 'cdtv', title: volId };
     if (files.has('CD32.TM') || /CD32/i.test(sysId)) return { sys: 'cd32', title: volId };
+    if (/CDTV/i.test(sysId)) return { sys: 'cdtv', title: volId };
+    if (files.has('S') && files.get('S').dir) {
+      var sdir = new Map();
+      try { sdir = await isoDir(rd, files.get('S').lba, files.get('S').size); } catch (e) { /* ignore */ }
+      if (sdir.has('STARTUP-SEQUENCE')) return { sys: 'cd32', title: volId };
+    }
     // a full Xbox dump starts with a video partition, which reads as ISO 9660
-    return (await detectXbox(rd)) || { sys: 'pc', title: volId, weak: true };
-  }
-  // PC Engine / PC-FX boot sectors
-  for (var l = 0; l < 16; l++) {
-    var b = l === 0 ? s0 : l === 16 ? pvd : await rd.read(l);
-    if (!b) break;
-    if (asc(b, 0x20, 23) === 'PC Engine CD-ROM SYSTEM') return { sys: 'pcecd' };
-    if (asc(b, 0, 15) === 'PC-FX:Hu_CD-ROM') return { sys: 'pcfx' };
+    var xbox = await detectXbox(rd);
+    if (xbox) return xbox;
+    // video discs (MPF): not games
+    var video = files.has('BDMV') ? 'Blu-ray' : files.has('HVDVD_TS') ? 'HD DVD' : files.has('AUDIO_TS') && files.get('AUDIO_TS').size && !files.has('VIDEO_TS') ? 'DVD-Audio' : files.has('VIDEO_TS') ? 'DVD-Video' : files.has('PHOTO_CD') ? 'Photo CD' : '';
+    if (video) return { sys: 'video', title: volId, video: video };
+    return { sys: 'pc', title: volId, weak: true };
   }
   return detectXbox(rd);
 }
@@ -509,18 +547,19 @@ function tocModel(text) {
 // data tracks + hashable files of a "create" job; images: the stand-ins for its ECM files (ecmImages);
 // nrg: the tracks of a Nero image (nrgTracks)
 function probePlan(job, images, nrg) {
-  var readers = [], hashes = [];
+  var readers = [], hashes = [], audio = [];
   var fileOf = function (f) { return f && (f.ecm || f.pbp ? images && images.get(f) : f.file); };
   var byName = function (n) {
     var lc = base(n).toLowerCase();
     return fileOf(job.files.find(function (x) { return x.name.toLowerCase() === lc || (x.ref && base(x.ref).toLowerCase() === lc); }));
   };
   if (job.src === 'cue' && job.descText) {
-    var cur = null, curMode = null, fileTracks = [];
+    var cur = null, curMode = null, fileTracks = [], session = 1;
     job.descText.split(/\r?\n/).forEach(function (ln) {
       var m, fw = refWord('cue', ln);
       if (fw) { cur = byName(fw.text); fileTracks.push({ file: cur, tracks: [] }); }
-      else if ((m = /^\s*TRACK\s+(\d+)\s+(\S+)/i.exec(ln))) { curMode = m[2].toUpperCase(); fileTracks.length && fileTracks[fileTracks.length - 1].tracks.push({ no: +m[1], mode: curMode, index: 0 }); }
+      else if ((m = /^\s*REM\s+SESSION\s+0*(\d+)/i.exec(ln))) session = +m[1];
+      else if ((m = /^\s*TRACK\s+(\d+)\s+(\S+)/i.exec(ln))) { curMode = m[2].toUpperCase(); fileTracks.length && fileTracks[fileTracks.length - 1].tracks.push({ no: +m[1], mode: curMode, index: 0, session: session }); }
       else if ((m = /^\s*INDEX\s+01\s+(\S+)/i.exec(ln))) { var ft = fileTracks[fileTracks.length - 1]; if (ft && ft.tracks.length) ft.tracks[ft.tracks.length - 1].index = msfFrames(m[1]); }
     });
     fileTracks.forEach(function (ft) {
@@ -532,6 +571,15 @@ function probePlan(job, images, nrg) {
         readers.push(fileReader(ft.file, t.index * ss, ss));
       });
     });
+    // a disc of audio tracks only: a Jaguar CD's boot track is the first of its last session (Redump
+    // marks the sessions), or else track 2
+    var all = [];
+    fileTracks.forEach(function (ft) { ft.tracks.forEach(function (t) { if (ft.file) all.push({ file: ft.file, t: t }); }); });
+    if (all.length > 1 && all.every(function (x) { return x.t.mode === 'AUDIO'; })) {
+      var last = all[all.length - 1].t.session;
+      var boot = last > 1 ? all.find(function (x) { return x.t.session === last; }) : all[1];
+      audio.push({ file: boot.file, at: boot.t.index * 2352 });
+    }
   } else if (job.src === 'toc' && job.descText) {
     // where the engine finds each track (cdrdao's grammar, cdrom_file::parse_toc): a track is a run of
     // pieces, files and zeros (ZERO, SILENCE, PREGAP); INDEX 01 is at START, else at its first frame.
@@ -618,14 +666,14 @@ function probePlan(job, images, nrg) {
     hashes.push({ file: job.files[0].file, track: 0, size: job.isoSize, ciso: true });
   } else if (job.files.length === 1) {
     var f1 = fileOf(job.files[0]), x = ext(job.files[0].name);
-    if (!f1) return { readers: readers, hashes: hashes };
+    if (!f1) return { readers: readers, hashes: hashes, audio: audio };
     hashes.push({ file: f1, track: 0 });
     if (job.autoCue) readers.push(fileReader(f1, 0, /2048/.test(job.autoCue) ? 2048 : 2352));
     else if (x === 'iso' || x === 'cdr' || x === 'toast' || x === 'bin' || x === 'img') readers.push(fileReader(f1, 0, job.disc === 'cd' && job.syncMode ? 2352 : 2048));
   } else {
     job.files.forEach(function (f) { if (fileOf(f)) hashes.push({ file: fileOf(f), track: 0 }); });
   }
-  return { readers: readers, hashes: hashes };
+  return { readers: readers, hashes: hashes, audio: audio };
 }
 
 // the tracks of a Nero 5.5 or later image (.nrg), as the engine reads them (cdrom_file::parse_nero):
@@ -700,6 +748,10 @@ async function identifyJob(job, onStatus, onProvisional) {
       for (var i = 0; i < plan.readers.length && (!det || det.weak); i++) {
         var d = await detectTrack(plan.readers[i]);
         if (d && (!det || !d.weak)) det = d;
+      }
+      // a disc without data tracks: a Jaguar CD's header is in an audio track
+      for (var a = 0; a < plan.audio.length && !det; a++) {
+        try { if (await detectJaguar(plan.audio[a].file, plan.audio[a].at)) det = { sys: 'jagcd' }; } catch (e) { /* unreadable */ }
       }
       if (chd) { chd.close(); chd = null; }
       if (ecm) { ecm.close(); ecm = null; }

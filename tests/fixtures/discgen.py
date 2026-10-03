@@ -277,9 +277,11 @@ def _dirrec(name, lba, size, is_dir):
     return r + bytes(ln - len(r))
 
 
-def iso9660(files, volume_id='DISC', system_id='', system_area=b''):
+def iso9660(files, volume_id='DISC', system_id='', system_area=b'', udf=False):
     """Build an ISO 9660 image (bytes) from {path: bytes}; directories are implied
-    by '/' in paths. `system_area` (up to 32 KiB) fills sectors 0-15, e.g. an IP.BIN."""
+    by '/' in paths. `system_area` (up to 32 KiB) fills sectors 0-15, e.g. an IP.BIN.
+    `udf`: also the volume recognition sequence of a UDF bridge disc (BEA01, NSR02 and TEA01 in
+    sectors 18-20, as DVDs have; no UDF file system behind it)."""
     tree = {'': {}}
     for path, data in files.items():
         parts = path.upper().split('/')
@@ -288,7 +290,8 @@ def iso9660(files, volume_id='DISC', system_id='', system_area=b''):
             tree['/'.join(parts[:d - 1])][parts[d - 1]] = ('dir', '/'.join(parts[:d]))
         tree['/'.join(parts[:-1])][parts[-1]] = ('file', data)
     dirs = sorted(tree, key=lambda p: (p.count('/') if p else -1, p))
-    dir_lba, lba = {}, 20
+    pt = 21 if udf else 18  # the path tables' sectors (L, then M)
+    dir_lba, lba = {}, pt + 2
     for d in dirs:
         dir_lba[d] = lba
         lba += 1
@@ -315,7 +318,7 @@ def iso9660(files, volume_id='DISC', system_id='', system_area=b''):
         assert len(recs) <= SECTOR, 'directory too large for this simple writer'
         img[dir_lba[d] * SECTOR:dir_lba[d] * SECTOR + len(recs)] = recs
 
-    # path tables (L at 18, M at 19)
+    # path tables (L, then M)
     num = {d: i + 1 for i, d in enumerate(dirs)}
     lt, mt = b'', b''
     for d in dirs:
@@ -324,8 +327,8 @@ def iso9660(files, volume_id='DISC', system_id='', system_area=b''):
         pad = b'\x00' if len(nm) % 2 else b''
         lt += bytes([len(nm), 0]) + dir_lba[d].to_bytes(4, 'little') + parent.to_bytes(2, 'little') + nm + pad
         mt += bytes([len(nm), 0]) + dir_lba[d].to_bytes(4, 'big') + parent.to_bytes(2, 'big') + nm + pad
-    img[18 * SECTOR:18 * SECTOR + len(lt)] = lt
-    img[19 * SECTOR:19 * SECTOR + len(mt)] = mt
+    img[pt * SECTOR:pt * SECTOR + len(lt)] = lt
+    img[(pt + 1) * SECTOR:(pt + 1) * SECTOR + len(mt)] = mt
 
     pvd = bytearray(SECTOR)
     pvd[0:7] = b'\x01CD001\x01'
@@ -336,8 +339,8 @@ def iso9660(files, volume_id='DISC', system_id='', system_area=b''):
     pvd[124:128] = _both16(1)
     pvd[128:132] = _both16(SECTOR)
     pvd[132:140] = _both32(len(lt))
-    pvd[140:144] = (18).to_bytes(4, 'little')
-    pvd[148:152] = (19).to_bytes(4, 'big')
+    pvd[140:144] = pt.to_bytes(4, 'little')
+    pvd[148:152] = (pt + 1).to_bytes(4, 'big')
     pvd[156:190] = _dirrec(b'\x00', dir_lba[''], SECTOR, True)
     pvd[190:813] = b' ' * 623
     for o in (813, 830, 847, 864):
@@ -345,6 +348,9 @@ def iso9660(files, volume_id='DISC', system_id='', system_area=b''):
     pvd[881] = 1
     img[16 * SECTOR:17 * SECTOR] = pvd
     img[17 * SECTOR:17 * SECTOR + 7] = b'\xffCD001\x01'
+    if udf:
+        for i, ident in enumerate((b'BEA01', b'NSR02', b'TEA01')):
+            img[(18 + i) * SECTOR:(18 + i) * SECTOR + 7] = b'\x00' + ident + b'\x01'
     return bytes(img)
 
 

@@ -39,6 +39,13 @@ var QUIRKS = [
     src: 'docs/chd/ecosystem-sony-dreamcast.md §5.1 (flycast #906)'
   },
   {
+    // a UMD Video (UMD_DATA.BIN and a UMD_VIDEO folder, no PSP_GAME): a film, which PPSSPP doesn't play
+    id: 'umd-video', sys: ['psp'], warn: true,
+    when: function (c) { return !!c.det.video; },
+    text: 'This is a UMD Video (a film), not a game: PPSSPP doesn\u2019t play UMD Video discs.',
+    src: 'PPSSPP plays PSP games only (UMD_DATA.BIN with PSP_GAME)'
+  },
+  {
     // every Jaguar CD is multi-session (Redump: 38 of 38); 0.289 writes no session data
     id: 'jagcd-sessions', sys: ['jagcd'], warn: true,
     when: function () { return true; },
