@@ -285,6 +285,9 @@ h2, h3 { font-family: var(--display); letter-spacing: -.01em; }
 .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px 14px; align-items: start; }
 .fields > .field.wide { grid-column: 1 / -1; }
 .fields > .check { align-self: end; }
+/* the Advanced tab's on/off options: a row each, after the fields that take a value */
+#cliOpts > .check { grid-column: 1 / -1; order: 1; }
+.flag { white-space: nowrap; }
 .field { display: grid; gap: 5px; min-width: 0; }
 .field > span { font: 700 0.6875rem/1.3 var(--mono); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); }
 .field > span.hint, .field .hint { font: 400 0.7812rem/1.4 var(--body); text-transform: none; letter-spacing: 0; color: var(--muted); }
@@ -299,6 +302,8 @@ button:focus-visible, a:focus-visible { outline: 3px solid var(--cyan); outline-
 .check { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
 .check input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
 
+/* the emulator notes a card groups: same disclosure triangle as the others, in sentence case */
+details.compat-notes > summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 8px; min-height: 32px; user-select: none; }
 details.opts > summary, details.log > summary { cursor: pointer; font: 800 0.8125rem/1 var(--display); color: var(--muted); list-style: none; display: inline-flex; align-items: center; gap: 8px; min-height: 32px; user-select: none; text-transform: uppercase; letter-spacing: .05em; }
 details > summary::-webkit-details-marker { display: none; }
 details > summary::before { content: ""; width: 0; height: 0; border-left: 6px solid currentColor; border-top: 5px solid transparent; border-bottom: 5px solid transparent; transition: transform .15s; }
@@ -476,7 +481,7 @@ dialog .dbody { padding: 6px 20px 22px; display: grid; gap: 16px; }
   .btn.sm { min-height: 42px; }
   .seg button { min-height: 44px; }
   .icon-btn { width: 44px; height: 44px; }
-  details.opts > summary, details.log > summary { min-height: 44px; }
+  details.opts > summary, details.log > summary, details.compat-notes > summary { min-height: 44px; }
 }
 /* very narrow phones (iPhone SE 1st gen, small Androids, split screen) */
 @media (max-width: 360px) {
@@ -521,6 +526,10 @@ dialog .dbody { padding: 6px 20px 22px; display: grid; gap: 16px; }
   .logo { width: 32px; height: 32px; }
   .tab { min-height: 30px; }
 }
+/* phones in landscape: the start screen's button in view without scrolling (the picture goes) */
+@media (max-height: 440px) and (orientation: landscape) { #tab-convert:not(.has-jobs) .drop-art { display: none; } }
+/* landscape phones: the slim tabs stay comfortable to tap */
+@media (pointer: coarse) and (max-height: 520px) { .tab { min-height: 36px; } }
 /* hide the floating bar while typing on touch devices so it never covers the field */
 html.kb-open .dock { display: none; }
 dialog { max-height: min(calc(var(--app-h, 100vh) * .88), 760px); }

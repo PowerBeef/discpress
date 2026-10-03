@@ -16,12 +16,14 @@ const SIZES = {
   'iphone-se': chromium(devices['iPhone SE']),
   'iphone-15-pro-max': chromium(devices['iPhone 15 Pro Max']),
   'pixel-7': chromium(devices['Pixel 7']),
+  'phone-landscape': chromium(devices['iPhone 15 Pro landscape']),
   'ipad': chromium(devices['iPad (gen 7)']),
+  'ipad-landscape': chromium(devices['iPad (gen 7) landscape']),
   'laptop': chromium({ ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } }),
   'desktop-wide': chromium({ ...devices['Desktop Chrome'], viewport: { width: 1920, height: 1080 } }),
 };
 
-async function shot(page, size, theme, screen) {
+async function shot(page, size, theme, screen, touch) {
   const dir = path.join(CACHE, 'screens', size);
   fs.mkdirSync(dir, { recursive: true });
   await page.evaluate(() => document.querySelectorAll('#toasts .toast').forEach(t => t.remove()));
@@ -31,11 +33,13 @@ async function shot(page, size, theme, screen) {
   const style = await page.addStyleTag({ content: '#dock{display:none!important}' });
   await page.screenshot({ path: path.join(dir, `${theme}-${screen}-full.png`), fullPage: true, animations: 'disabled' });
   await style.evaluate(n => n.remove());
+  // a full-page screenshot turns Chromium's touch emulation off ((pointer: coarse) stops matching): turn it back on
+  if (touch) await (await page.context().newCDPSession(page)).send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
 }
 
 async function check(page, size, theme, screen, touch) {
   await page.waitForTimeout(150); // let transitions settle
-  await shot(page, size, theme, screen);
+  await shot(page, size, theme, screen, touch);
   const r = await overflowReport(page);
   expect(r.offenders, `${size} ${theme} ${screen}: elements outside the viewport`).toEqual([]);
   expect(r.scrollWidth, `${size} ${theme} ${screen}: page scrolls sideways`).toBeLessThanOrEqual(r.viewport);

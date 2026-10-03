@@ -110,7 +110,7 @@ game database when it is requested as `/discpress.html?testdb=1` (`app.open({ te
 | `recovery` | results kept from an earlier visit (listed after a reload, saved, deleted) and a conversion stopped by a reload; where results live in memory (also from `file://`, where Chrome gives no private storage), which results a reload lost |
 | `folder` | writing results into a folder (a fake File System Access folder): a file already there is replaced only if the user agrees, and never deleted by a cancel; a cancel leaves no new file |
 | `hosted` | the online version (`web/`), on desktop and emulated phones: manifest, icons, service worker, working offline, opening from its saved copy on a slow network or when the site answers with an error, a copy without `web/`'s files; the Content Security Policy blocks network requests |
-| `layout` | 7 screen sizes × light/dark × 5 screens: no horizontal overflow; screenshots in `.cache/screens/` |
+| `layout` | 9 screen sizes (from a 320-pixel phone to a 1920-pixel desktop, phones and tablets in both orientations) × light/dark × 5 screens: no horizontal overflow, tap targets under 32 pixels noted; screenshots in `.cache/screens/` |
 | `a11y` | axe-core audit of every screen in both themes; serious problems fail |
 
 A bug found but not fixed yet can be pinned in the relevant spec with `test.fail(true, 'why')`: the
