@@ -341,6 +341,50 @@ None of the steps changes the CHDs Discpress writes by default. The only automat
 
 Deferred: naming GameCube, Wii, Xbox and PS3 discs (+530 KB of database, and their emulators don't take CHDs); checksumming CHD tracks while identifying (Verify does); FM Towns, X68000 and other PC sub-platforms; session and index metadata (`CHSE`/`CHIX`), which needs a MAME newer than 0.289.
 
+### Milestone 7: layouts each emulator reads right (decision of 2026-10-03)
+
+**Decision: no new conversion engine.** The question was whether replacing chdman with a CHD writer of our own would make discs work better in their emulators. The assessment (code, these documents, and experiments with unmodified chdman 0.289 on the synthetic test discs) found:
+- **Size:** at most about 1% smaller files within the codecs every reader decodes: −0.5% on CD and −0.8% on DVD with better encoders (measurements §3), −1.4% on DVD with zopfli at 30–60 times the CPU time. The fork can take those encoders. Larger hunks (−9% to −16% on DVD) are already a setting.
+- **Speed:** nothing left to gain. The engine already beats 0.289 by 1.6× with the default (same bytes, checked with `cmp`), 2.8× with the codec plan and 4× with `cdzl,cdfl` and libdeflate (native, 4 threads, the benchmark CD). LZMA's time is in its match finder, which doesn't vectorize.
+- **Compatibility:** nothing that rewriting the cue sheet in front of the fork can't do. Unmodified chdman 0.289 produced every layout below from a rewritten cue sheet: a PREGAP line stored as data (`PGTYPE:VAUDIO`), a session gap stored as frames, a MODE2/2048 track relabelled MODE1 (same data SHA-1), a pregap absorbed into the previous track.
+- **Cost:** about 8 to 12 person-weeks to get back to today's output. It would also lose the byte-for-byte oracle and the "chdman 0.289" trust.
+
+What keeps discs from working is mostly the readers (§3, [ecosystem-other.md](ecosystem-other.md) §15.4, [ecosystem-sony-dreamcast.md](ecosystem-sony-dreamcast.md) §5.1), not chdman's encoder, and some limits are the format's own (session geometry; PCSX2 reading track 1 only). So this milestone keeps the fork and lets particular consoles' CHDs move away from 0.289's layout, where it is broken for their emulators.
+
+Every rule of this milestone:
+- applies only to the consoles it names;
+- is labelled tier X on the card;
+- is tested against models of the readers it targets (§5);
+- is undone when extracting (step 5).
+
+The CHD's SHA-1 then differs from chdman's for the same input, which MAME's software lists and DAT tools see. The data the disc holds is unchanged. No emulator was run for this assessment: what a reader does comes from its code, as these documents describe it, and each step below checks it on the emulator before it ships where it can.
+
+**Status: planned.**
+
+1. **PREGAP and POSTGAP lines stored as real silent frames** for Saturn, Sega CD, PC Engine CD, PC-FX, Neo Geo CD and PS1 (about 1 to 1.5 person-weeks).
+   - The page rewrites such a cue sheet before chdman reads it: a PREGAP line becomes zero frames in the track, with INDEX 00 and 01; a POSTGAP line becomes zero frames at the track's end. The zeros come from a file in the worker's filesystem.
+   - Beetle Saturn, Kronos, Yabause, Ymir, jgenesis and NeoCD, which take every pregap as stored, then place the following tracks correctly, and ares keeps them.
+   - The Beetle PCE, PC-FX and PSX cores and Geargrafx count a postgap into the file offset. Storing it should fix them too, but that is unchecked in those cores.
+   - Redump-style cue sheets (INDEX 00, no PREGAP or POSTGAP lines) are unchanged, and so is their CHD.
+   - The `saturn-gapcmd`, `postgap`, `ares-pregap` and `ngcd-layout` warnings become fixes.
+2. **The Jaguar CD session tag** (`CHSE`, as MAME after 0.289 writes it), only for Jaguar CD (about 1.5 person-weeks).
+   - Virtual Jaguar refuses a Jaguar CD CHD without it, so all 38 Redump Jaguar CDs would load (not yet checked in Virtual Jaguar itself).
+   - It must never be written for Saturn or Sega CD: Kronos, Yabause and jgenesis refuse any CHD that has it.
+   - The `jagcd-sessions` warning then names only BigPEmu, which takes no CHDs.
+3. **An opt-in mode for Flycast 2.7 and earlier** (about 1 person-week).
+   - MODE2/2048 tracks are written as MODE1 (same data SHA-1), and a MIL-CD's pregaps are absorbed into the previous track, as Flycast up to 2.7 needs `PREGAP:0`.
+   - It changes the Redump track checksums of those discs (89 MIL-CDs in Redump), so it is never the default. It matters less once Flycast 2.8 ships, since its master reads chdman's layout.
+4. **Session gaps stored as silent frames for PC Enhanced CDs** (161 Redump discs; about 1 person-week).
+   - The gap of about 11,400 frames becomes zero frames at the end of the first session's last track, so emulators that read the disc as one session (DOSBox-X, 86Box, MAME) find the second session's data where it is. The zero hunks cost almost nothing.
+   - Unchecked in DOSBox-X and 86Box.
+5. **A record of each change inside the CHD** (about 1 to 2 person-weeks).
+   - Non-checksummed metadata, like `--keepcue`'s `CUES` tag, lists what steps 1 to 4 changed.
+   - `extractcd --redump` reads it and gives back the original files byte for byte, so the Redump bins, Verify's Redump comparison and the DAT check keep working.
+
+Needed by every step: reader models in the tests (a Flycast 2.7 model, "assume stored", "V means virtual", wildcard metadata; §5), and fixtures for each rule checked against them and against the extracted files.
+
+Separate from the engine question, and only as users ask: writers for other formats, starting with CSO/ZSO for real PSP and PS2 hardware (about 1 person-week; the page already reads both), then PBP for PS1 on PSP and Vita, and Xbox ISO for xemu (1 to 2 each). RVZ for Dolphin (5 to 8, with licence and key questions) only if Dolphin users ask, since Dolphin converts to RVZ itself.
+
 ## 5. Test and verification strategy
 
 - **Oracles.** Each output is checked against a set of oracles, not one:
