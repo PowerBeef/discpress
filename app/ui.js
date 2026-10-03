@@ -3437,7 +3437,7 @@ function cliRender() {
     if (type === 'file') {
       fld = selectField(label + '  (-' + d[0] + ')', fileOpts, cli.vals[key] || '', function (v) { set(v); if (key === 'input') cliRender(); });
     } else if (type === 'bool') {
-      fld = el('label', { class: 'check' }, el('input', { type: 'checkbox', checked: !!cli.vals[key], onchange: function (e) { set(e.target.checked); if (key === 'fix') cliPreview(); } }), d[1] + '  (-' + d[0] + ')');
+      fld = el('label', { class: 'check' }, el('input', { type: 'checkbox', checked: !!cli.vals[key], onchange: function (e) { set(e.target.checked); if (key === 'fix') cliPreview(); } }), el('span', null, d[1] + '  ', el('span', { class: 'flag' }, '(-' + d[0] + ')')));
     } else if (type === 'out') {
       var def = key === 'output' ? cliDefaultOut() : '';
       if (key === 'output' && cli.outAuto) cli.vals.output = def;
