@@ -86,6 +86,12 @@ def inline_script(src, what):
     return src
 
 
+db_raw = rd(DB, 'rb')
+db_json = gzip.decompress(db_raw)
+dbver = json.loads(db_json)['version']
+# Checked first, so a bad fact is reported even where there is no build (CI tests the committed page).
+facts = game_facts(json.loads(db_json))
+
 # The worker is the Emscripten glue followed by our worker code.
 wsrc = inline_script(rd(os.path.join(B, 'chdman.js')) + '\n' + rd(os.path.join(A, 'worker.js')),
                      'the worker source (build/chdman.js + app/worker.js)')
@@ -102,16 +108,13 @@ for path, name, label in [(os.path.join(W, 'wasm_helper.cpp'), 'wasm_helper.cpp'
     patch += '\n--- /dev/null\n+++ %s (%s)\n' % (name, label)
     patch += ''.join('+' + l + '\n' for l in rd(path).splitlines())
 
-db_raw = rd(DB, 'rb')
-db_json = gzip.decompress(db_raw)
-dbver = json.loads(db_json)['version']
 helpc = rd(os.path.join(A, 'help.html')).replace('/*PATCH*/', html.escape(patch)).replace('/*DBVER*/', 'version ' + html.escape(dbver))
 ui_src = rd(os.path.join(A, 'ui.js'))
 for k in ('/*IDENT*/', '/*QUIRKS*/'):
     assert ui_src.count(k) == 1, k + ' in app/ui.js'
 ui_src = ui_src.replace('/*IDENT*/', rd(os.path.join(A, 'ident.js'))).replace('/*QUIRKS*/', rd(os.path.join(A, 'quirks.js')))
 assert ui_src.count('/*GAMEFACTS*/{}') == 1, '/*GAMEFACTS*/{} in app/ident.js'
-ui = inline_script(ui_src.replace('/*GAMEFACTS*/{}', json.dumps(game_facts(json.loads(db_json)), sort_keys=True, separators=(',', ':'))),
+ui = inline_script(ui_src.replace('/*GAMEFACTS*/{}', json.dumps(facts, sort_keys=True, separators=(',', ':'))),
                    'app/ui.js + app/ident.js + app/quirks.js')
 style = rd(os.path.join(A, 'style.css'))
 assert '</style' not in style.lower(), '</style in app/style.css'
