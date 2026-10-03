@@ -39,6 +39,14 @@ var QUIRKS = [
     src: 'docs/chd/ecosystem-sony-dreamcast.md §5.1 (flycast #906)'
   },
   {
+    // a PAL PlayStation disc protected by LibCrypt (db/facts/libcrypt.tsv), without its .sbi or .lsd
+    // (paired by name: sbiJob) or a CloneCD .sub to make one from (scanSub)
+    id: 'libcrypt-missing', sys: ['ps1'], warn: true,
+    when: function (c) { return c.facts.libcrypt && !c.job.sbi && !c.job.subFile; },
+    text: 'This game is protected by LibCrypt: without its .sbi file next to the CHD, emulators stop it partway or make it misbehave. Add the game\u2019s .sbi file (Redump has one for each protected disc) with its other files, and it is saved with the CHD, under its name.',
+    src: 'db/facts/libcrypt.tsv'
+  },
+  {
     // a UMD Video (UMD_DATA.BIN and a UMD_VIDEO folder, no PSP_GAME): a film, which PPSSPP doesn't play
     id: 'umd-video', sys: ['psp'], warn: true,
     when: function (c) { return !!c.det.video; },
@@ -144,7 +152,9 @@ var QUIRKS = [
 // what the rules look at: the job's system and identification, its cue sheet or TOC, the settings
 function quirkCtx(job) {
   var id = job.ident || {};
-  return { job: job, id: id, sys: id.sys || '', det: id.detected || {}, disc: discModel(job), keepCue: keepCueWanted(job) };
+  var det = id.detected || {};
+  return { job: job, id: id, sys: id.sys || '', det: det, disc: discModel(job), keepCue: keepCueWanted(job),
+    facts: id.sys ? GameFacts.of(id.sys, [det.serial, id.serial, id.entry && id.entry.serial]) : {} };
 }
 // the rules that apply to a job: [{id, act, warn, text}]
 function quirks(job) {

@@ -41,9 +41,9 @@ export default defineConfig({
     // Real WebKit (Safari's engine) and Firefox, when installed: EXTRA_BROWSERS=1 (tests/README.md);
     // not engine.spec, which runs native chdman only (in parallel, its runs would share output files)
     ...(process.env.EXTRA_BROWSERS ? [
-      { name: 'webkit', use: { ...devices['Desktop Safari'] }, testIgnore: /(layout|mobile|engine)\.spec/ },
+      { name: 'webkit', use: { ...devices['Desktop Safari'] }, testIgnore: /(layout|mobile|engine|facts)\.spec/ },
       { name: 'iphone-webkit', use: { ...devices['iPhone 13'] }, testMatch: /(smoke|mobile|hosted)\.spec/ },
-      { name: 'firefox', use: { ...devices['Desktop Firefox'] }, testIgnore: /(layout|mobile|engine)\.spec/ },
+      { name: 'firefox', use: { ...devices['Desktop Firefox'] }, testIgnore: /(layout|mobile|engine|facts)\.spec/ },
     ] : []),
   ],
 });

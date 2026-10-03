@@ -1045,6 +1045,7 @@ async function pumpIdentify() {
           job.ident = keepPick(job, provisional);
           job.identState = 'checking';
           applyIdent(job);
+          detachSbi(job);
           scanSub(job);
           job.identKnownResolve();
           if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
@@ -1055,6 +1056,7 @@ async function pumpIdentify() {
       keepPick(job, job.ident);
       job.identState = 'done';
       applyIdent(job);
+      detachSbi(job);
       scanSub(job);
       if (job.subScan) await job.subScan;
       await datCheck(job);
@@ -1195,7 +1197,7 @@ function safeName(s) { return String(s || '').replace(/[\/:*?"<>|]+/g, '_').trim
    ============================================================ */
 var jobs = [];
 var looseFiles = [];      // files not claimed by any job yet
-var looseSbi = [];        // .sbi files (PS1 LibCrypt data) waiting for their game's job
+var looseSbi = [];        // .sbi and .lsd files (PS1 LibCrypt data) waiting for their game's job
 var seen = new Set();     // dedupe (name+size+mtime)
 // the path counts: generic track names (every GDI has track01.bin) can match in name, size and date,
 // on FAT/exFAT cards especially, across the games of one folder
@@ -1653,8 +1655,8 @@ async function addEntriesNow(entries) {
       } else {
         job2 = newJob({ kind: 'create', src: 'img', lone: true, title: t, files: [{ file: file, name: name }], disc: x === 'raw' || x === 'bin' ? 'raw' : 'hd', choices: ['hd', 'raw', 'dvd'] });
       }
-    } else if (x === 'sbi') {
-      looseSbi.push(e); // paired with its game below
+    } else if (x === 'sbi' || x === 'lsd') {
+      looseSbi.push(e); // paired with its game below (an .lsd: the same data, DuckStation's other format)
       continue;
     } else if (UNSUPPORTED[x]) {
       // an Alcohol 120% image is one card, for its .mds (its .mdf beside it says the same)
@@ -1677,7 +1679,7 @@ async function addEntriesNow(entries) {
   // it by name (DuckStation, Beetle PSX, SwanStation, PCSX ReARMed, MiSTer)
   looseSbi = looseSbi.filter(function (e) {
     var job = sbiJob(e, created.concat(jobs));
-    if (job) { job.sbi = { file: e.file, name: base(e.path) }; if (job.el && created.indexOf(job) < 0) refreshJob(job, true); return false; }
+    if (job) { job.sbi = { file: e.file, name: base(e.path), ext: ext(e.path), entry: e }; if (job.el && created.indexOf(job) < 0) refreshJob(job, true); return false; }
     if (fresh.indexOf(e) >= 0) ignored.push(base(e.path));
     return true;
   });
@@ -2164,6 +2166,7 @@ function renderControls(job) {
     if (job.ui.optsOpen) det.open = true;
     det.addEventListener('toggle', function () { job.ui.optsOpen = det.open; });
     box.append(det);
+    if (job.sbiDetached && !job.sbi) box.append(el('p', { class: 'small muted sbi-note', style: 'margin:0' }, job.sbiDetached + ' isn\u2019t saved with this CHD: it holds LibCrypt data for PlayStation discs, and this is a ' + sysName(job.ident.sys) + ' disc.'));
     if (job.sbi) box.append(el('p', { class: 'small muted sbi-note', style: 'margin:0' }, job.sbi.fromSub
       ? 'Its LibCrypt data (' + plural(job.sbi.count, 'protected sector') + ', read from the .sub file) is saved with the CHD as an .sbi file, under the CHD\u2019s name.'
       : 'Its LibCrypt data (' + job.sbi.name + ') is saved with the CHD, under the CHD\u2019s name.'));
@@ -2267,6 +2270,13 @@ function renderResult(job) {
     }
     var set = discSet(job);
     if (set && set.discs[0].job === job) box.append(playlistRow(set));
+    // a disc of a set whose other discs aren't here yet (the database knows how many there are)
+    var me = discOf(job), total = me && job.ident && job.ident.sys ? GameDB.discCount(job.ident.sys, job.outputs[0].name.replace(/\.chd$/i, '')) : 0;
+    if (me && total > (set ? set.discs.length : 1) && (!set || set.discs[0].job === job)) {
+      box.append(el('div', { class: 'note set-note', 'data-quirk': 'set-incomplete' }, set
+        ? 'The playlist has ' + set.discs.length + ' of this game\u2019s ' + total + ' discs: convert the others to add them.'
+        : 'Disc ' + me.n + ' of ' + total + ' of this game: convert the other discs too, and a playlist (.m3u) for them is offered here.'));
+    }
   }
 }
 
@@ -2565,7 +2575,7 @@ async function runJobNow(job) {
   var spec = buildJob(job);
   if (settings.storage === 'folder' && outDir && (spec.rename || spec.outMode === 'stream')) {
     var oi = spec.args.indexOf('-o'), main = spec.rename ? outBase(job) + '.chd' : oi >= 0 ? spec.args[oi + 1].replace(/^.*\//, '') : '';
-    var sideNames = !spec.rename && job.kind === 'create' && job.sbi ? [outBase(job) + '.sbi'] : [];
+    var sideNames = !spec.rename && job.kind === 'create' && job.sbi ? [outBase(job) + '.' + (job.sbi.ext || 'sbi')] : [];
     if (main && !(await confirmReplace(outDir, [main].concat(sideNames)))) { job.state = 'canceled'; refreshJob(job, true); return; }
     if (job.aborted) { job.state = 'canceled'; if (jobs.indexOf(job) >= 0) refreshJob(job, true); return; }
   }
@@ -2790,6 +2800,15 @@ var ENGINE_HINT = isIOS ? 'This is a fault in the browser engine of this iOS ver
    emulators: "SBI\0", then per sector its absolute time (BCD minutes, seconds, frames: the .img's
    sector n is at n + 150), type 1 and the 10 bytes of Q without the CRC (DuckStation's LoadSBI). */
 var SUB_MAX_BAD = 200; // more than LibCrypt ever uses: a damaged .sub, not a protection
+// an .sbi or .lsd paired by name with a disc that turns out not to be a PlayStation one: LibCrypt data
+// belongs to PS1 discs only, so it isn't saved with this CHD, and waits for another disc of its name
+function detachSbi(job) {
+  if (!job.sbi || job.sbi.fromSub || !job.ident || !job.ident.sys || job.ident.sys === 'ps1' || job.ident.sys === 'pc') return;
+  if (job.state === 'running' || job.state === 'done') return;
+  job.sbiDetached = job.sbi.name;
+  if (job.sbi.entry) looseSbi.push(job.sbi.entry);
+  job.sbi = null;
+}
 function scanSub(job) {
   if (!job.subFile || job.subScan || (job.sbi && !job.sbi.fromSub) || !job.ident || job.ident.sys !== 'ps1') return;
   job.subScan = sbiFromSub(job.subFile).then(function (r) {
@@ -2832,7 +2851,7 @@ async function sbiFromSub(file) {
 }
 
 async function addSbi(job, spec) {
-  var nm = outBase(job) + '.sbi', f = job.sbi.file;
+  var nm = outBase(job) + '.' + (job.sbi.ext || 'sbi'), f = job.sbi.file;
   if (spec.outMode === 'stream' && outDir) {
     try {
       var w = await (await outDir.getFileHandle(nm, { create: true })).createWritable();

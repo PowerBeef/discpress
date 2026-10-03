@@ -113,3 +113,54 @@ test('more than two notes are grouped, warnings stay in view', async ({ app }) =
   await expect(group.locator('[data-quirk="segacd-long"]')).toContainText('this one is 85 minutes long');
   await expect(c.locator('.note.ident > [data-quirk="segacd-data-tracks"]')).toBeVisible();
 });
+
+// Facts about particular games (db/facts): LibCrypt games without their .sbi warn; the .sbi (or DuckStation's
+// .lsd) is saved with the CHD under its name; one paired with a disc of another console waits for its own
+test('a LibCrypt game warns until its .sbi or .lsd is added, which is then saved under the CHD’s name', async ({ app }) => {
+  const fx = fixture('ps1-libcrypt-missing');
+  await app.open();
+  const c = await card(app, 'ps1-libcrypt-missing', 'anstoss');
+  await expect(c.locator('[data-quirk="libcrypt-missing"]')).toContainText('This game is protected by LibCrypt');
+  for (const sidecar of ['sbi', 'lsd']) {
+    const dir = path.join(FIXTURES, 'gen', 'lc-' + sidecar);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.copyFileSync(path.join(FIXTURES, 'anstoss lc.sbi'), path.join(dir, `anstoss.${sidecar}`));
+    if (sidecar === 'lsd') {
+      await app.open();
+      await app.add(fx.add);
+    }
+    await app.add([`gen/lc-${sidecar}/anstoss.${sidecar}`]);
+    const job = app.job('anstoss');
+    await app.settled(job);
+    await expect(job.locator('[data-quirk="libcrypt-missing"]')).toHaveCount(0);
+    await expect(job.locator('.sbi-note')).toContainText(`anstoss.${sidecar}`);
+    await app.run(job);
+    const outs = await app.downloads(job);
+    expect(outs.map(o => o.name)).toEqual([`${fx.name}.chd`, `${fx.name}.${sidecar}`]);
+  }
+});
+
+test('an .sbi paired with a disc of another console isn’t saved with its CHD', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'sbi-saturn');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const f of ['albert odyssey.cue', 'albert odyssey.bin']) fs.copyFileSync(path.join(FIXTURES, f), path.join(dir, f));
+  fs.copyFileSync(path.join(FIXTURES, 'anstoss lc.sbi'), path.join(dir, 'albert odyssey.sbi'));
+  await app.open();
+  await app.add(['albert odyssey.cue', 'albert odyssey.bin', 'albert odyssey.sbi'].map(n => 'gen/sbi-saturn/' + n));
+  const c = app.job('albert odyssey');
+  await app.settled(c);
+  await expect(c.locator('.sbi-note')).toHaveText('albert odyssey.sbi isn’t saved with this CHD: it holds LibCrypt data for PlayStation discs, and this is a Sega Saturn disc.');
+  await app.run(c);
+  expect((await app.downloads(c)).map(o => o.name)).toEqual(['Albert Odyssey - Legend of Eldean (USA).chd']);
+});
+
+test('a disc of a set says how many discs the set has until all are converted', async ({ app }) => {
+  await app.open();
+  const one = await card(app, 'saturn-disc1', '3x3 eyes 1');
+  await app.run(one);
+  await expect(one.locator('[data-quirk="set-incomplete"]')).toHaveText('Disc 1 of 3 of this game: convert the other discs too, and a playlist (.m3u) for them is offered here.');
+  const two = await card(app, 'saturn-disc2', '3x3 eyes 2');
+  await app.run(two);
+  await expect(one.locator('[data-quirk="set-incomplete"]')).toHaveText('The playlist has 2 of this game’s 3 discs: convert the others to add them.');
+  await expect(two.locator('[data-quirk="set-incomplete"]')).toHaveCount(0);
+});

@@ -93,7 +93,7 @@ The standard tool for making CHDs is **chdman**, a command-line program from the
 
 **Ready for your emulator** (see [below](#ready-for-your-emulator))
 
-- **LibCrypt `.sbi` files** for PAL PlayStation games: one you add is saved next to the CHD under its name, and for a CloneCD dump the page makes it from the `.sub` file.
+- **LibCrypt `.sbi` files** for PAL PlayStation games: one you add (or DuckStation's `.lsd`) is saved next to the CHD under its name, for a CloneCD dump the page makes it from the `.sub` file, and a protected game added without one says so.
 - **`.m3u` playlists** for games on several discs, so the emulator can swap them.
 - **Warnings where an emulator can't load the result**, and settings that suit the console's emulators.
 
@@ -182,7 +182,7 @@ The right CHD type and hunk size for each console, compression that every emulat
 | A NAOMI GD-ROM | Keeps its file's name, which MAME and Flycast look for in the game's romset |
 | A PS2 game on CD with music tracks | Notes that PCSX2 plays only the first track of a CD CHD |
 | A CD-based Dreamcast disc with pregaps | Notes that Flycast 2.7 and earlier can't load it |
-| A PAL PlayStation game with LibCrypt | Saves its `.sbi` under the CHD's name, where DuckStation, Beetle PSX, SwanStation, PCSX ReARMed and MiSTer look for it |
+| A PAL PlayStation game with LibCrypt | Saves its `.sbi` under the CHD's name, where DuckStation, Beetle PSX, SwanStation, PCSX ReARMed and MiSTer look for it, and warns when it is missing |
 | Two or more discs of a game | Offers an `.m3u` playlist on the first disc's card |
 | PS2 DVD games for AetherSX2 or NetherSX2 | Settings → *PlayStation 2 DVD games* makes CD CHDs |
 | MiSTer FPGA | *For MiSTer FPGA*: Zstd and FLAC in 4-sector hunks; warns for consoles MiSTer has no core for |

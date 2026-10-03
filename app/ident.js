@@ -65,6 +65,21 @@ function regionFits(name, area) {
   return 0;
 }
 
+// facts about particular games (db/facts/*.tsv, checked and embedded by scripts/assemble.py):
+// {fact: {sys: [serial keys]}}
+var GAME_FACTS = /*GAMEFACTS*/{};
+var GameFacts = {
+  // the facts known of a disc of this system and these serials (the disc's and its release's)
+  of: function (sys, serials) {
+    var out = {};
+    Object.keys(GAME_FACTS).forEach(function (fact) {
+      var list = (GAME_FACTS[fact] || {})[sys];
+      if (list && serials.some(function (s) { return s && list.indexOf(canonKey(sys, s)) >= 0; })) out[fact] = true;
+    });
+    return out;
+  }
+};
+
 var GameDB = {
   // bySerial: exact serials; bySerialBase: serials with a suffix (T-8113H-50) under their base (T-8113H).
   // Keys are 'sys:' + canonKey
@@ -129,7 +144,20 @@ var GameDB = {
     var exact = this.lookup(serial, sys, false);
     return exact.length ? exact : this.lookup(serial, sys, true);
   },
-  size: function (n) { return this.bySize.get(n) || []; }
+  size: function (n) { return this.bySize.get(n) || []; },
+  // how many discs a game's set has: the disc numbers of the names that read as this one up to its
+  // "(Disc N)" ("(Disc 3) (Special CD-ROM)" and "(Disc 1) (Rev 1)" count too; 0 when the database lists none)
+  discCount: function (sys, name) {
+    var key = function (n) { return n.replace(/ \((?:Disc|Disk) (?:\d+|[A-Z])\).*$/, ''); }, nos = new Set(), self = this;
+    if (!this.byName) {
+      this.byName = new Map();
+      this.bySize.forEach(function (l) {
+        l.forEach(function (e) { var k = e.sys + '|' + key(e.name), a = self.byName.get(k); if (!a) self.byName.set(k, a = []); if (a.indexOf(e.name) < 0) a.push(e.name); });
+      });
+    }
+    (this.byName.get(sys + '|' + key(name)) || []).forEach(function (n) { var d = discNo(n); if (d) nos.add(d); });
+    return nos.size;
+  }
 };
 
 /* ---------- sector readers ---------- */
