@@ -219,11 +219,11 @@ body { font-family: var(--display); color: var(--text); -webkit-font-smoothing: 
 <!-- FEATURES -->
 <div class="scene feat" id="features"><div class="grid">
   <div class="f"><div class="top"><div class="icon" style="background:var(--accent)"><svg><use href="#i-chip"/></svg></div><h3>chdman, improved</h3></div><p>Our own fork of MAME 0.289’s chdman: faster, bugs fixed. Same CHD files and checksums as the desktop tool.</p></div>
-  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-3)"><svg><use href="#i-tag"/></svg></div><h3>Knows your games</h3></div><p>Reads the disc, finds the console and serial, and names it from 42,000 Redump entries.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-3)"><svg><use href="#i-tag"/></svg></div><h3>Knows your games</h3></div><p>Reads the disc for its console, serial, disc number and region, and names it from 42,000 Redump entries.</p></div>
   <div class="f"><div class="top"><div class="icon" style="background:var(--accent-2)"><svg><use href="#i-bolt"/></svg></div><h3>Multi-core fast</h3></div><p>Compression runs on every CPU core, with SIMD when your browser supports it.</p></div>
   <div class="f"><div class="top"><div class="icon" style="background:var(--cyan)"><svg><use href="#i-phone"/></svg></div><h3>Made for phones</h3></div><p>Fits any screen, notch and text size. Save to Files on iPhone, dark mode included.</p></div>
   <div class="f"><div class="top"><div class="icon" style="background:#b69cff"><svg><use href="#i-stack"/></svg></div><h3>Big discs welcome</h3></div><p>Results stream to disk, not memory, so multi-gigabyte DVD images work too.</p></div>
-  <div class="f"><div class="top"><div class="icon" style="background:#7be3a3"><svg><use href="#i-lock"/></svg></div><h3>Totally private</h3></div><p>Nothing leaves your device. It even works offline, straight from your Files app.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:#7be3a3"><svg><use href="#i-lock"/></svg></div><h3>Totally private</h3></div><p>Nothing leaves your device, and it works offline: downloaded, or installed from the web.</p></div>
   <div class="f"><div class="top"><div class="icon" style="background:#7be3a3"><svg><use href="#i-shield"/></svg></div><h3>Checks your dumps</h3></div><p>Add Redump or No-Intro DAT files and every track is checked, before converting and after.</p></div>
   <div class="f"><div class="top"><div class="icon" style="background:var(--accent-2)"><svg><use href="#i-box"/></svg></div><h3>Opens what you have</h3></div><p>Zips, PS1 EBOOT.PBP, ECM, CSO and ZSO, CloneCD and Nero images, unpacked as they’re read.</p></div>
   <div class="f"><div class="top"><div class="icon" style="background:var(--accent)"><svg><use href="#i-pad"/></svg></div><h3>Ready to play</h3></div><p>LibCrypt .sbi and .m3u playlists made for you, a MiSTer preset, and a warning when an emulator can’t load it.</p></div>
@@ -241,12 +241,15 @@ body { font-family: var(--display); color: var(--text); -webkit-font-smoothing: 
 
 <!-- EMULATORS -->
 <div class="scene feat" id="emulators"><div class="grid">
-  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-3)"><svg><use href="#i-alert"/></svg></div><h3>Warns in time</h3></div><p>Says when an emulator can’t read Zstd, or load a disc like this one, before you convert.</p></div>
-  <div class="f"><div class="top"><div class="icon" style="background:#b69cff"><svg><use href="#i-key"/></svg></div><h3>LibCrypt .sbi</h3></div><p>Saved next to a PAL PlayStation CHD under its name, or made from a CloneCD .sub.</p></div>
-  <div class="f"><div class="top"><div class="icon" style="background:var(--cyan)"><svg><use href="#i-list"/></svg></div><h3>.m3u playlists</h3></div><p>For games on several discs, so the emulator can swap them.</p></div>
-  <div class="f"><div class="top"><div class="icon" style="background:var(--accent)"><svg><use href="#i-chip"/></svg></div><h3>MiSTer preset</h3></div><p>Zstd and FLAC in small hunks, fast enough for MiSTer’s CD cores.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--cyan)"><svg><use href="#i-disc"/></svg></div><h3>The right CHD</h3></div><p>CD or DVD, and the hunk size each console’s emulators want, set when the game is recognized.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:#7be3a3"><svg><use href="#i-check"/></svg></div><h3>Boots as it should</h3></div><p>Saturn and Sega CD CHDs skip the cue sheet their emulators reject; NAOMI GD-ROMs keep their romset name.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-3)"><svg><use href="#i-alert"/></svg></div><h3>Warns in time</h3></div><p>Says when an emulator can’t read Zstd, or misreads a disc’s sessions, gaps or tracks, before you convert.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:#b69cff"><svg><use href="#i-key"/></svg></div><h3>LibCrypt .sbi</h3></div><p>Saved next to a PAL PlayStation CHD, made from a CloneCD .sub, and asked for when a protected game has none.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--cyan)"><svg><use href="#i-list"/></svg></div><h3>Whole sets</h3></div><p>An .m3u playlist for games on several discs, and a note of the discs a set still needs.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent)"><svg><use href="#i-chip"/></svg></div><h3>MiSTer preset</h3></div><p>Zstd and FLAC in small hunks, fast enough for MiSTer’s CD cores, and a warning where it has none.</p></div>
   <div class="f"><div class="top"><div class="icon" style="background:#7be3a3"><svg><use href="#i-phone"/></svg></div><h3>Android PS2</h3></div><p>CD CHDs of DVD games, the only kind AetherSX2 and NetherSX2 read.</p></div>
-  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-2)"><svg><use href="#i-info"/></svg></div><h3>Says what won’t</h3></div><p>GameCube, Wii, Xbox and PS3 discs are recognized, with a note that their emulators skip CHDs.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-2)"><svg><use href="#i-info"/></svg></div><h3>Says what won’t</h3></div><p>GameCube, Wii, Xbox, PS3 and video discs are recognized, with a note that their players skip CHDs.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--surface-2)"><svg style="color:var(--text)"><use href="#i-x"/></svg></div><h3>Refuses what breaks</h3></div><p>Discs chdman 0.289 would store wrong, such as CD+G tracks, get a card that says why instead of a bad CHD.</p></div>
 </div></div>
 
 <!-- SYSTEMS -->
@@ -275,14 +278,14 @@ document.getElementById('showDesk').src = shots + 'desktop-' + theme + '.png';
 document.getElementById('showPhone').src = shots + 'phone-start-' + theme + '.png';
 var C = { ps1: ['#c8c8d4', '#1c1733'], ps2: ['#2f5bd3', '#fff'], psp: ['#26262e', '#fff'], saturn: ['#4a4f63', '#fff'], segacd: ['#1f4ea8', '#fff'],
   dc: ['#ff7a1a', '#1c1733'], naomi: ['#6a4fb8', '#fff'], pcecd: ['#f1ead6', '#1c1733'], pcfx: ['#3a3a44', '#fff'], ngcd: ['#d9b23a', '#1c1733'],
-  '3do': ['#b01e2f', '#fff'], cdi: ['#1c6fb8', '#fff'], cd32: ['#e11d48', '#fff'], cdtv: ['#33333d', '#fff'], hd: ['#13a9ba', '#1c1733'], ld: ['#ffe14d', '#1c1733'] };
+  '3do': ['#b01e2f', '#fff'], cdi: ['#1c6fb8', '#fff'], cd32: ['#e11d48', '#fff'], cdtv: ['#33333d', '#fff'], jagcd: ['#d62828', '#fff'], pc98: ['#5b6b7a', '#fff'], hd: ['#13a9ba', '#1c1733'], ld: ['#ffe14d', '#1c1733'] };
 function chip(k, label) { var s = document.createElement('span'); s.className = 'chip'; s.textContent = label; s.style.background = C[k][0]; s.style.color = C[k][1]; return s; }
 [['ps1', 'PS1'], ['ps2', 'PS2'], ['psp', 'PSP'], ['saturn', 'Saturn'], ['dc', 'Dreamcast'], ['segacd', 'Sega CD']].forEach(function (c) { document.getElementById('heroChips').appendChild(chip(c[0], c[1])); });
-var more = document.createElement('span'); more.className = 'chip'; more.textContent = '+ 10 more'; more.style.background = 'var(--surface)'; more.style.color = 'var(--text)';
+var more = document.createElement('span'); more.className = 'chip'; more.textContent = '+ 12 more'; more.style.background = 'var(--surface)'; more.style.color = 'var(--text)';
 document.getElementById('heroChips').appendChild(more);
 [['ps1', 'PlayStation'], ['ps2', 'PlayStation 2'], ['psp', 'PSP'], ['saturn', 'Saturn'], ['segacd', 'Sega CD · Mega CD'], ['dc', 'Dreamcast'], ['naomi', 'NAOMI'],
  ['pcecd', 'PC Engine CD · TurboGrafx-CD'], ['pcfx', 'PC-FX'], ['ngcd', 'Neo Geo CD'], ['3do', '3DO'], ['cdi', 'CD-i'], ['cd32', 'Amiga CD32'], ['cdtv', 'CDTV'],
- ['hd', 'Arcade hard disks'], ['ld', 'LaserDisc']].forEach(function (c) { document.getElementById('sysWrap').appendChild(chip(c[0], c[1])); });
+ ['jagcd', 'Jaguar CD'], ['pc98', 'PC-98'], ['hd', 'Arcade hard disks'], ['ld', 'LaserDisc']].forEach(function (c) { document.getElementById('sysWrap').appendChild(chip(c[0], c[1])); });
 </script>
 </body>
 </html>
