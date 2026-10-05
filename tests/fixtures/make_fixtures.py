@@ -212,6 +212,22 @@ fixture('ps1-as-iso', {
 }, add=['tnd.iso'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-00975',
    ident='serial', name='007 - Tomorrow Never Dies (USA)', warning='This is a 2,048-byte copy of a PlayStation disc', quirks=['ps1-cooked'])
 
+# the same 2,048-byte copy as a lone .bin (an .img, say): the same warning (audit 2026-10-05, L20). The app
+# writes a MODE1/2048 cue for it; `ref` is that cue for native chdman
+fixture('ps1-cooked-bin', {
+    'cooked.bin': lambda: ps1_iso('SLUS_009.75', 'TND', 1, 151),
+    'cooked ref.cue': lambda: cue([('cooked.bin', 'MODE1/2048', 0)]),
+}, add=['cooked.bin'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-00975', ref='cooked ref.cue',
+   ident='serial', name='007 - Tomorrow Never Dies (USA)', warning='This is a 2,048-byte copy of a PlayStation disc', quirks=['ps1-cooked'])
+
+# a cue sheet with "INDEX 1" for INDEX 01, which chdman reads too: the data track, after a pregap in its
+# file, was read from the file's start and the console missed (audit 2026-10-05, L19)
+fixture('ps1-index1', {
+    'index one.cue': lambda: cue([('index one.bin', 'MODE2/2352', 150)]).replace(b'INDEX 01', b'INDEX 1'),
+    'index one.bin': lambda: g.raw_sectors(bytes(150 * 2048) + ps1_iso('SLUS_012.72', 'TWINE', 1, 153), 2),
+}, add=['index one.cue', 'index one.bin'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-01272',
+   ident='serial', name='007 - The World Is Not Enough (USA)')
+
 # a CD game dumped as raw 2,352-byte sectors but named .iso. Given the .iso, chdman types the track by
 # file size alone: 640 raw sectors are also a whole number of 2,048-byte ones, so it would store the
 # image as 2,048-byte sectors. The app writes a cue with the sectors' own mode instead; `ref` is the
@@ -444,6 +460,12 @@ gd_fixture('dc-disc2', 'nightmare', b'T-15117N', b'ALONE IN THE DARK', b'0000 GD
 # a Japanese disc whose serial the database lists only as a European release's base (T-99990-50): not that game
 saturn_fixture('saturn-other-region', 'other region', b'T-99990', b'OTHER REGION', b'CD-1/1', b'J', 145,
                testdb=True, ident='none', name='other region')
+
+# Sega's publishers gave other games a serial with another suffix: T-25406H is Hexen (USA), T-25406H-50
+# Doom (Europe). A Doom disc with a suffix Redump doesn't list: for Europe, named after Doom (Europe);
+# for the USA, not after Hexen, only offered
+saturn_fixture('saturn-suffix', 'doom eu', b'T-25406H-9', b'DOOM', b'CD-1/1', b'E', 147, ident='serial', name='Doom (Europe) (R)')
+saturn_fixture('saturn-related', 'doom us', b'T-25406H-1', b'DOOM', b'CD-1/1', b'U', 149, ident='none', name='doom us')
 
 # a PS1 disc whose serial (SLES-99980) names one release exactly and, as a base serial, another
 # (SLES-999802) of its data track's size: the size wins (Redump's Asterix, SLES-01748 and SLES-017482)

@@ -3,8 +3,9 @@
 import zlib from 'node:zlib';
 
 /**
- * files: [{ name, data, method = 8, crc?, fakeMethod? }]: `crc` overrides the checksum written (a damaged
- * file), `fakeMethod` the method number the directory claims (the data stays deflated or stored).
+ * files: [{ name, data, method = 8, crc?, fakeMethod?, usize? }]: `crc` overrides the checksum written (a
+ * damaged file), `fakeMethod` the method number the directory claims (the data stays deflated or stored),
+ * `usize` the size it says the file has (less than it inflates to: a zip bomb's lie).
  */
 export function makeZip(files, { zip64 = false, utf8 = true } = {}) {
   const parts = [], central = [];
@@ -14,23 +15,23 @@ export function makeZip(files, { zip64 = false, utf8 = true } = {}) {
     const method = f.method ?? 8;
     const data = method === 8 ? zlib.deflateRawSync(f.data) : f.data;
     const crc = f.crc ?? zlib.crc32(f.data);
-    const shown = f.fakeMethod ?? method;
+    const shown = f.fakeMethod ?? method, usize = f.usize ?? f.data.length;
     const flags = utf8 ? 0x800 : 0;
     const local = Buffer.alloc(30);
     local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(flags, 6); local.writeUInt16LE(shown, 8);
-    local.writeUInt32LE(crc >>> 0, 14); local.writeUInt32LE(data.length, 18); local.writeUInt32LE(f.data.length, 22);
+    local.writeUInt32LE(crc >>> 0, 14); local.writeUInt32LE(data.length, 18); local.writeUInt32LE(usize, 22);
     local.writeUInt16LE(name.length, 26);
     parts.push(local, name, data);
     const extra = zip64 ? Buffer.alloc(28) : Buffer.alloc(0);
     if (zip64) {
       extra.writeUInt16LE(1, 0); extra.writeUInt16LE(24, 2);
-      extra.writeBigUInt64LE(BigInt(f.data.length), 4); extra.writeBigUInt64LE(BigInt(data.length), 12); extra.writeBigUInt64LE(BigInt(offset), 20);
+      extra.writeBigUInt64LE(BigInt(usize), 4); extra.writeBigUInt64LE(BigInt(data.length), 12); extra.writeBigUInt64LE(BigInt(offset), 20);
     }
     const c = Buffer.alloc(46);
     c.writeUInt32LE(0x02014b50, 0); c.writeUInt16LE(45, 4); c.writeUInt16LE(45, 6); c.writeUInt16LE(flags, 8); c.writeUInt16LE(shown, 10);
     c.writeUInt16LE(0x6000, 12); c.writeUInt16LE(0x5b3e, 14); // 12:00, 2025-09-30
     c.writeUInt32LE(crc >>> 0, 16);
-    c.writeUInt32LE(zip64 ? 0xffffffff : data.length, 20); c.writeUInt32LE(zip64 ? 0xffffffff : f.data.length, 24);
+    c.writeUInt32LE(zip64 ? 0xffffffff : data.length, 20); c.writeUInt32LE(zip64 ? 0xffffffff : usize, 24);
     c.writeUInt16LE(name.length, 28); c.writeUInt16LE(extra.length, 30);
     c.writeUInt32LE(zip64 ? 0xffffffff : offset, 42);
     central.push(c, name, extra);

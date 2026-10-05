@@ -270,3 +270,71 @@ test('a write the folder refuses stops the job and leaves no empty file', async 
   await expect(card).toContainText('full');
   await expect.poll(() => page.evaluate(() => [...window.__folder.keys()])).toEqual([]);
 });
+
+// "Save all to folder" with two results of the same name (the same unidentified disc from two folders):
+// the second replaced the first, and both counted as saved (audit 2026-10-05, M1)
+test('saving all into a folder never lets two results of the same name replace each other', async ({ app, page }, testInfo) => {
+  const root = testInfo.outputPath('same names');
+  for (const d of ['A', 'B']) {
+    fs.mkdirSync(path.join(root, d), { recursive: true });
+    for (const f of ['twine.cue', 'twine.bin']) fs.copyFileSync(path.join(FIXTURES, f), path.join(root, d, f));
+  }
+  await page.addInitScript(fakeFolder);
+  await app.open({ settings: { rename: false, threads: 1 } });
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#addFolder')]);
+  await chooser.setFiles(root);
+  await expect(app.jobs()).toHaveCount(2);
+  for (let i = 0; i < 2; i++) {
+    await app.settled(app.jobs().nth(i));
+    await app.run(app.jobs().nth(i));
+  }
+  await page.click('#saveAll');
+  await expect(page.locator('#toasts')).toContainText('Not saved, since another result has the same name: twine.chd');
+  await expect.poll(() => page.evaluate(() => [...window.__folder.keys()])).toEqual(['twine.chd']);
+  // the one not saved still counts as unsaved: Clear finished asks about it
+  const asked = [];
+  page.removeAllListeners('dialog');
+  page.on('dialog', d => { asked.push(d.message()); d.dismiss(); });
+  await page.click('#clearDone');
+  expect(asked.length).toBe(1);
+});
+
+// A result of several files whose last one couldn't be closed (the drive full): the cue sheet written
+// before it stayed, and so did the failed one, empty (audit 2026-10-05, L1)
+test('a result whose last file fails to close leaves none of its files in the folder', async ({ app, page }) => {
+  test.skip(!nativeChdman(), 'needs native chdman to make the CHD');
+  fs.mkdirSync(path.join(FIXTURES, 'gen'), { recursive: true });
+  chdman(['createcd', '-i', 'mgs disc1.cue', '-o', 'gen/mgs-close.chd', '-f']);
+  await page.addInitScript(fakeFolder);
+  await page.addInitScript(() => { // a track file's close fails, as when the drive is full
+    const m = window.__folder, set = m.set.bind(m);
+    m.set = (n, v) => { if (/\.bin$/.test(n) && v && v.length) throw new DOMException('The drive is full', 'QuotaExceededError'); return set(n, v); };
+  });
+  await app.open({ settings: { storage: 'folder', rename: false, threads: 1 } });
+  await app.add(['gen/mgs-close.chd']);
+  const card = app.job('mgs-close');
+  await app.settled(card);
+  await card.locator('.job-foot button.primary').click();
+  await app.waitState(card, 'error', 60_000);
+  await expect(card).toContainText('The drive is full');
+  await expect.poll(() => page.evaluate(() => [...window.__folder.keys()])).toEqual([]);
+});
+
+// An extract into a folder whose helpers had all failed stopped with "Multi-core compression failed" at
+// the first pause for the folder's writes, instead of decompressing by itself (audit 2026-10-05, L25)
+test('an extract into a folder goes on by itself when every helper fails', async ({ app, page }) => {
+  test.skip(!nativeChdman(), 'needs native chdman to make the CHD');
+  fs.mkdirSync(path.join(FIXTURES, 'gen'), { recursive: true });
+  chdman(['createdvd', '-i', 'agent.iso', '-o', 'gen/agent-folder.chd', '-f']);
+  await page.addInitScript(fakeFolder, 25); // slow: the worker pauses for the folder's writes
+  await app.open({ settings: { storage: 'folder', rename: false, threads: 4 }, debug: { failHelpers: 'always', sinkMax: 1 << 20 } });
+  await app.add(['gen/agent-folder.chd']);
+  const card = app.job('agent-folder');
+  await app.settled(card);
+  await card.locator('.seg button', { hasText: 'Extract' }).click();
+  await card.locator('.job-foot button.primary').click();
+  await app.waitState(card, 'done', 90_000);
+  await expect(card.locator('pre.logtext')).toContainText('A helper thread stopped');
+  const size = await page.evaluate(() => window.__folder.has('agent-folder.iso') ? window.__folder.get('agent-folder.iso').length : -1);
+  expect(size).toBe(fs.statSync(path.join(FIXTURES, 'agent.iso')).size);
+});

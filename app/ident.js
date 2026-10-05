@@ -64,6 +64,23 @@ function regionFits(name, area) {
   for (var i = 0; i < letters.length; i++) if (area.indexOf(letters[i]) >= 0) return 1;
   return 0;
 }
+// whether the title in a disc's header may be this release's name: they share a word, and their
+// numbers are the same ("DORIMAGA GD VOL.10" isn't Dorimaga GD Vol. 1, "DOOM" isn't Hexen). True when
+// the header has no title in letters
+var TITLE_STOP = /^(THE|AND|VOL|DISC|DISK|EDITION)$/, ROMAN = { II: '2', III: '3', IV: '4', VI: '6', VII: '7', VIII: '8', IX: '9' };
+function titleWords(s) {
+  return (s || '').toUpperCase().replace(/\([^)]*\)/g, ' ').replace(/'/g, '').replace(/([A-Z])(\d)/g, '$1 $2').replace(/(\d)([A-Z])/g, '$1 $2')
+    .split(/[^A-Z0-9]+/).filter(function (w) { return w && !TITLE_STOP.test(w); })
+    .map(function (w) { return ROMAN[w] || w.replace(/^0+(?=\d)/, ''); });
+}
+function titleFits(title, name) {
+  var t = titleWords(title), n = titleWords(name);
+  var alpha = t.filter(function (w) { return w.length > 1 && /[A-Z]/.test(w); });
+  var num = function (a) { return a.filter(function (w) { return /^\d+$/.test(w); }); };
+  if (!alpha.length) return true;
+  return alpha.some(function (w) { return n.indexOf(w) >= 0; }) &&
+    num(t).every(function (w) { return n.indexOf(w) >= 0; }) && num(n).every(function (w) { return t.indexOf(w) >= 0; });
+}
 
 // facts about particular games (db/facts/*.tsv, checked and embedded by scripts/assemble.py):
 // {fact: {sys: [serial keys]}}
@@ -588,7 +605,7 @@ function probePlan(job, images, nrg) {
       if (fw) { cur = byName(fw.text); fileTracks.push({ file: cur, tracks: [] }); }
       else if ((m = /^\s*REM\s+SESSION\s+0*(\d+)/i.exec(ln))) session = +m[1];
       else if ((m = /^\s*TRACK\s+(\d+)\s+(\S+)/i.exec(ln))) { curMode = m[2].toUpperCase(); fileTracks.length && fileTracks[fileTracks.length - 1].tracks.push({ no: +m[1], mode: curMode, index: 0, session: session }); }
-      else if ((m = /^\s*INDEX\s+01\s+(\S+)/i.exec(ln))) { var ft = fileTracks[fileTracks.length - 1]; if (ft && ft.tracks.length) ft.tracks[ft.tracks.length - 1].index = msfFrames(m[1]); }
+      else if ((m = /^\s*INDEX\s+0*1\s+(\S+)/i.exec(ln))) { var ft = fileTracks[fileTracks.length - 1]; if (ft && ft.tracks.length) ft.tracks[ft.tracks.length - 1].index = msfFrames(m[1]); }
     });
     fileTracks.forEach(function (ft) {
       if (!ft.file) return;
@@ -815,7 +832,7 @@ async function identifyJob(job, onStatus, onProvisional) {
   return result(exact, false);
 
   function result(exact, checking) {
-    var entry = null, method = '', pick;
+    var entry = null, method = '', pick, related = null;
     if (exact) {
       entry = exact[0];
       if (det && det.serial && exact.length > 1) entry = exact.find(function (e) { return sameSerial(e.sys, e.serial, det.serial); }) || entry;
@@ -825,9 +842,12 @@ async function identifyJob(job, onStatus, onProvisional) {
       if (hn.length > 1) entry = Object.assign({}, entry, { alternatives: hn });
     } else if (det && (det.serial || det.boot) && (pick = bySerial()).length) {
       var names = pick.map(function (c) { return c.e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
-      entry = pick[0].e;
-      method = names.length > 1 ? 'serial-ambiguous' : pick[0].size ? 'serial+size' : 'serial';
-      if (names.length > 1) entry = Object.assign({}, entry, { alternatives: names });
+      if (pick.related) { method = 'serial-related'; related = names; }
+      else {
+        entry = pick[0].e;
+        method = names.length > 1 ? 'serial-ambiguous' : pick[0].size ? 'serial+size' : 'serial';
+        if (names.length > 1) entry = Object.assign({}, entry, { alternatives: names });
+      }
     } else if (job.kind === 'chd' && det && !det.weak && dataSizes.length) {
       // CHD of a recognized console's disc without a readable serial: a unique size match of a data
       // track is still a strong hint. Not without the console: among 40,000 discs, an audio track or a
@@ -841,7 +861,7 @@ async function identifyJob(job, onStatus, onProvisional) {
     return {
       sys: sys, detected: det, entry: entry, method: method,
       name: entry ? entry.name : '', serial: (det && det.serial) || (entry && entry.serial) || '',
-      headerTitle: det && det.title || '', checking: checking, damaged: damaged
+      headerTitle: det && det.title || '', checking: checking, damaged: damaged, related: related
     };
   }
   // the releases the disc's serial names, best first: those on the disc's console (any console when
@@ -875,11 +895,18 @@ async function identifyJob(job, onStatus, onProvisional) {
       h.region = det.area ? regionFits(h.e.name, det.area) : 1;
       h.score = [h.size ? 0 : 1, h.kind, 2 - h.region];
     });
+    // a release found only without the disc's suffix or under a base serial, for another region than
+    // the disc's: not this disc
+    hits = hits.filter(function (h) { return h.size || !h.kind || h.region; });
+    if (!hits.length) return [];
     var cmp = function (a, b) { for (var i = 0; i < 3; i++) if (a.score[i] !== b.score[i]) return a.score[i] - b.score[i]; return 0; };
     var best = hits.slice().sort(cmp)[0];
-    // a release found only under its base serial, for another region than the disc's: not this disc
-    if (!best.size && best.kind === 2 && best.region === 0) return [];
-    return hits.filter(function (h) { return !cmp(h, best); });
+    var top = hits.filter(function (h) { return !cmp(h, best); });
+    // ... nor, only suggested, when a Sega header's title isn't the release's: Sega's publishers gave
+    // other games the same serial with another suffix (T-25406H is Hexen, T-25406H-50 Doom). (Not a
+    // PlayStation disc's volume label: ALLSTAR is All Star Action)
+    if (!best.size && best.kind && SEGA_SYS.test(det.sys) && det.title && !top.some(function (h) { return titleFits(det.title, h.e.name); })) top.related = true;
+    return top;
   }
 }
 

@@ -82,7 +82,8 @@ var QUIRKS = [
     id: 'ps1-cooked', sys: ['ps1'], warn: true,
     when: function (c) {
       var j = c.job;
-      return (j.src === 'iso' && !j.autoCue && !j.files.some(function (f) { return f.ecm || f.pbp; })) ||
+      // (a lone .bin or .img of 2,048-byte sectors too)
+      return (j.src === 'iso' && !j.autoCue && !j.files.some(function (f) { return f.ecm || f.pbp; })) || j.autoCue === 'MODE1/2048' ||
         (c.disc && c.disc.tracks.some(function (t) { return /\/2048$/.test(t.mode) || t.mode === 'MODE1'; }));
     },
     text: 'This is a 2,048-byte copy of a PlayStation disc, without its raw sectors: the videos and sound stored in them may be missing, and Beetle PSX can\u2019t load its CHD (it takes only raw Mode 2 tracks). Convert the .bin and .cue dump instead, if you have it.',
@@ -167,7 +168,7 @@ function quirks(job) {
 function quirkAct(job, act) { return quirks(job).some(function (q) { return q.act === act; }); }
 // the layout of the CD a cue sheet or TOC describes (cueModel), kept with the job; null for other jobs
 // how long a CD job's disc is, in minutes (its track files, as raw sectors)
-function discMinutes(job) { return jobInputBytes(job) / 2352 / 75 / 60; }
+function discMinutes(job) { return jobImageBytes(job) / 2352 / 75 / 60; }
 function discModel(job) {
   if (job.kind !== 'create' || (job.disc !== 'cd' && job.disc !== 'gdrom') || (job.src !== 'cue' && job.src !== 'toc') || !job.descText) return null;
   if (job.discModelOf !== job.descText) { job.discModelOf = job.descText; job.discModelVal = job.src === 'cue' ? cueModel(job.descText) : tocModel(job.descText); }

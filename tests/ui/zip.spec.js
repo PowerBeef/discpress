@@ -30,7 +30,7 @@ test('a zipped cue sheet and its tracks (deflated) convert to the CHD of the fil
   if (nativeChdman() && sameVersion()) expect(sha1File(out.path)).toBe(sha1File(reference('createcd', 'mgs disc1.cue')));
 });
 
-test('a stored file in a zip64 archive is read in place, and a removed zip can be added again', async ({ app }) => {
+test('a stored file in a zip64 archive is read in place, and a removed zip can be added again', async ({ app, page }) => {
   const zip = writeZip('agent.zip', [{ name: 'Games/agent.iso', data: read('agent.iso'), method: 0 }], { zip64: true });
   await app.open();
   await app.add([zip]);
@@ -40,6 +40,10 @@ test('a stored file in a zip64 archive is read in place, and a removed zip can b
   await app.run(card);
   const [out] = await app.downloads(card);
   if (nativeChdman() && sameVersion()) expect(sha1File(out.path)).toBe(sha1File(reference('createdvd', 'agent.iso')));
+  // added again while listed: said so, not "Nothing to convert" (audit 2026-10-05, L12)
+  await app.add([zip]);
+  await expect(page.locator('#toasts')).toContainText('That zip is already in the list.');
+  await expect(app.jobs()).toHaveCount(1);
   await card.locator('.job-head button[aria-label^="Remove "]').click();
   await expect(app.jobs()).toHaveCount(0);
   await app.add([zip]);
@@ -51,12 +55,15 @@ test('files a zip can’t give back get a card that says why; the others are add
     { name: 'twine.cue', data: read('twine.cue') }, { name: 'twine.bin', data: read('twine.bin') },
     { name: 'broken.iso', data: read('homebrew.iso'), crc: 0x12345678 },
     { name: 'packed.iso', data: read('homebrew.iso'), fakeMethod: 14 },
+    // said to be 1 KB: unpacking stops there, not at the end (audit 2026-10-05, zip inflation bound)
+    { name: 'bomb.iso', data: read('homebrew.iso'), usize: 1024 },
   ]);
   await app.open();
   await app.add([zip]);
   await expect(app.jobs()).toHaveCount(2);
   const bad = app.job('mixed');
-  await expect(bad.locator('.note.err')).toContainText('2 files in this zip can’t be converted.');
+  await expect(bad.locator('.note.err')).toContainText('3 files in this zip can’t be converted.');
+  await expect(bad.locator('.note.err')).toContainText('bomb.iso is damaged in the zip: it holds more than the zip says');
   await expect(bad.locator('.note.err')).toContainText('broken.iso is damaged in the zip: its checksum doesn’t match');
   await expect(bad.locator('.note.err')).toContainText('packed.iso uses LZMA compression');
   await expect(bad.locator('.job-foot')).toContainText('Can’t convert');
