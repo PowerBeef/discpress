@@ -22,9 +22,10 @@ async function convertAgent(app) {
 test('without WebAssembly SIMD the baseline build is used and gives the same result', async ({ app, page }) => {
   await app.open({ noSimd: true });
   await convertAgent(app);
-  // the build that was loaded has its embedded copy cleared
-  expect(await page.locator('#wasm-base').evaluate(n => n.textContent.length)).toBe(0);
-  expect(await page.locator('#wasm-simd').evaluate(n => n.textContent.length)).toBeGreaterThan(0);
+  // the build that was loaded is marked, and both embedded copies are cleared
+  await expect(page.locator('#wasm-base[data-used]')).toHaveCount(1);
+  await expect(page.locator('#wasm-simd[data-used]')).toHaveCount(0);
+  for (const id of ['#wasm-base', '#wasm-simd']) expect(await page.locator(id).evaluate(n => n.textContent.length)).toBe(0);
 });
 
 // the faster presets use the engine's codec plan and libdeflate, whose output must not depend on SIMD
@@ -48,7 +49,8 @@ test('without SIMD the faster presets give the native engine\'s CHDs', async ({ 
 
 test('with SIMD the SIMD build is used', async ({ app, page }) => {
   await app.open();
-  expect(await page.locator('#wasm-simd').evaluate(n => n.textContent.length)).toBe(0);
+  await expect(page.locator('#wasm-simd[data-used]')).toHaveCount(1);
+  await expect(page.locator('#wasm-base[data-used]')).toHaveCount(0);
 });
 
 test('without private storage (OPFS) results are kept in memory', async ({ app, page }) => {

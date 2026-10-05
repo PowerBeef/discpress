@@ -182,6 +182,21 @@ fixture('ps1-toc', {
 }, add=['mgs disc1.toc', 'mgs disc1 (Track 1).bin', 'mgs disc1 (Track 2).bin'], engine=True, job='create', disc='cd', command='createcd',
    sys='ps1', serial='SLUS-00594', ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'])
 
+# the same disc's TOC with a PREGAP (zeros not in the file) before track 2: the layout rules read TOC files
+# too (ares drops such a pregap: ares-pregap) (audit 2026-10-05, L18)
+fixture('ps1-toc-pregap', {
+    'mgs pregap.toc': lambda: ('CD_ROM_XA\n\nTRACK MODE2_RAW\nDATAFILE "mgs pregap (Track 1).bin"\n\n'
+                               'TRACK AUDIO\nTWO_CHANNEL_AUDIO\nPREGAP 00:02:00\nDATAFILE "mgs pregap (Track 2).bin"\n').encode(),
+    'mgs pregap (Track 1).bin': lambda: g.raw_sectors(mgs_iso(), 2),
+    'mgs pregap (Track 2).bin': lambda: g.audio(225, 6),
+}, add=['mgs pregap.toc', 'mgs pregap (Track 1).bin', 'mgs pregap (Track 2).bin'], engine=True, job='create', disc='cd', command='createcd',
+   sys='ps1', serial='SLUS-00594', ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'],
+   quirks=['ares-pregap'])
+# a PS2 DVD whose SYSTEM.CNF has no boot line: its UDF volume makes it a PS2 disc, not a PS1 one (L23)
+fixture('ps2-noboot', {'noboot.iso': lambda: g.pad_sectors(g.iso9660({'SYSTEM.CNF': b'VER = 1.00\r\nVMODE = NTSC\r\n', 'SLUS_299.96': exe('SLUS_299.96')},
+                                                                       'PS2GAME', 'PLAYSTATION', udf=True))},
+        add=['noboot.iso'], job='create', disc='dvd', command='createdvd', sys='ps2', serial='SLUS-29996', ident='none', name='noboot')
+
 # the engine keeps the Nero image's stored pregap as a cue sheet's INDEX 00 is kept: the CHD of mgs ccd-ref.cue
 # (chdman 0.289 dropped it); the TOC's START is a stored pregap too, and its audio big-endian (cdrdao):
 # compared with the engine's native build (`engine`)
@@ -686,6 +701,11 @@ fixture('ps2-dvd-small', {'ps2 small dvd.iso': lambda: ps2_iso('SLUS_299.98', Tr
         command='createdvd', sys='ps2', serial='SLUS-29998', ident='none', name='ps2 small dvd')
 fixture('ps2-cd-iso', {'ps2 cd.iso': lambda: ps2_iso('SLUS_299.97', False)}, add=['ps2 cd.iso'], job='create', disc='cd',
         command='createcd', sys='ps2', serial='SLUS-29997', ident='none', name='ps2 cd')
+# SLUS-21015 names a CD release (.bin, v1.01) and a DVD one (.iso, v2.01): which isn't proven without the
+# checksum, so the disc's UDF volume makes it a DVD (audit 2026-10-05, L17)
+fixture('ps2-mixed-dvd', {'madagascar.iso': lambda: ps2_iso('SLUS_210.15', True)}, add=['madagascar.iso'], job='create', disc='dvd',
+        command='createdvd', sys='ps2', serial='SLUS-21015', ident='ambiguous',
+        names=['DreamWorks Madagascar (USA) (v1.01)', 'DreamWorks Madagascar (USA) (v2.01)'])
 
 # a Jaguar CD: audio tracks only, in two sessions; the second session's first track holds the boot
 # header, byte-swapped as in the image's audio

@@ -46,10 +46,10 @@ def game_facts(db):
         ks = keys[sys_] = set()
         for line in rows.split('\n'):
             f = line.split('\t')
-            if len(f) > 1 and f[1]:
-                ks.add(canon_key(sys_, f[1]))
-                ks.add(canon_key(sys_, f[1].split('/')[0]))
-                parts = re.split(r'[-\s]', f[1])
+            for serial in (f[1].split('|') if len(f) > 1 and f[1] else []):  # (a release's serials, joined: db/mkdb.py)
+                ks.add(canon_key(sys_, serial))
+                ks.add(canon_key(sys_, serial.split('/')[0]))
+                parts = re.split(r'[-\s]+', serial)
                 if len(parts) > 2:
                     ks.add(canon_key(sys_, parts[0] + parts[1]))
     out = {}

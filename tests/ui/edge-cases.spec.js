@@ -724,3 +724,51 @@ test('the Saved as hint follows the name being typed', async ({ app }) => {
   await expect(field.locator('.hint')).toHaveText('Saved as my_ game.chd');
   await expect(card.locator('code.cmd')).toContainText('my_ game.chd');
 });
+
+// macOS gives file names with decomposed accents (an é as e and a combining accent); a cue sheet
+// written elsewhere names them composed, and the track was "missing" (audit 2026-10-05, L14)
+test('a cue sheet finds a track whose name has decomposed accents, as on macOS', async ({ app, page }) => {
+  // (given as contents: a file whose path has a decomposed name doesn't reach the page through the chooser)
+  await app.open();
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#addFiles')]);
+  await chooser.setFiles([
+    { name: 'cafe.cue', mimeType: 'application/octet-stream', buffer: Buffer.from('FILE "Caf\u00e9.bin" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n') },
+    { name: 'Cafe\u0301.bin', mimeType: 'application/octet-stream', buffer: fs.readFileSync(path.join(FIXTURES, 'twine.bin')) }
+  ]);
+  const card = app.job('cafe');
+  await app.settled(card);
+  await expect(card).toHaveAttribute('data-state', 'ready');
+  await expect(card.locator('.job-title .sub')).toContainText('CUE + 1 track file');
+  await app.run(card);
+});
+
+// "FILE Tony's Game.bin BINARY": an unquoted name with spaces and an apostrophe was read as the missing
+// file "Tonys Game.bin BINARY"; chdman gets a copy with the name in quotes (audit 2026-10-05, L15)
+test('a cue sheet whose FILE name is not in quotes finds its track', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'unquoted');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'twine.bin'), path.join(dir, "Tony's Game.bin"));
+  fs.writeFileSync(path.join(dir, 'tony.cue'), "FILE Tony's Game.bin BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n");
+  await app.open();
+  await app.add(['gen/unquoted/tony.cue', "gen/unquoted/Tony's Game.bin"]);
+  const card = app.job('tony');
+  await app.settled(card);
+  await expect(card).toHaveAttribute('data-state', 'ready');
+  await expect(card).not.toContainText('Missing');
+  await app.run(card);
+});
+
+// Changing the type of CHD put the compression back to the default without a word (audit 2026-10-05):
+// the preset picked stays when the other type has it too
+test('the compression picked stays when the type of CHD changes', async ({ app }) => {
+  await app.open();
+  await app.add(['xgd3.iso']);
+  const card = app.job('xgd3');
+  await app.settled(card);
+  await card.locator('details.opts summary').click();
+  await card.locator('label.field', { hasText: 'Compression' }).locator('select').selectOption({ label: 'Faster to create' });
+  await expect(card.locator('code.cmd')).toContainText('-c zlib,huff');
+  await card.locator('.row', { hasText: 'Create as' }).locator('button', { hasText: 'CD CHD' }).click();
+  await expect(card.locator('code.cmd')).toContainText('chdman createcd');
+  await expect(card.locator('code.cmd')).toContainText('-c cdzl,cdfl');
+});

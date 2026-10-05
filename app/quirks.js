@@ -155,7 +155,7 @@ function quirkCtx(job) {
   var id = job.ident || {};
   var det = id.detected || {};
   return { job: job, id: id, sys: id.sys || '', det: det, disc: discModel(job), keepCue: keepCueWanted(job),
-    facts: id.sys ? GameFacts.of(id.sys, [det.serial, id.serial, id.entry && id.entry.serial]) : {} };
+    facts: id.sys ? GameFacts.of(id.sys, [det.serial, id.serial].concat(id.entry && id.entry.serials || [])) : {} };
 }
 // the rules that apply to a job: [{id, act, warn, text}]
 function quirks(job) {

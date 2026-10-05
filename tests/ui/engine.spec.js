@@ -231,6 +231,23 @@ test('createcd --keepcue keeps the cue sheet, checksums unchanged, and extractcd
   expect(r.err).toContain('--keepcue needs a .cue input file');
 });
 
+// A kept sheet whose TRACK types aren't the CHD's tracks' (edited here, in an uncompressed CHD): extractcd
+// --redump writes the sheet it makes itself, not one that describes another disc (audit 2026-10-05)
+test('extractcd --redump leaves out a kept cue sheet whose track types are not the CHD\'s', () => {
+  const keep = tmp('typed.chd'), plain = tmp('typed plain.chd'), edited = tmp('typed.cue'), mine = tmp('typed out'), made = tmp('typed made');
+  for (const d of [mine, made]) fs.mkdirSync(d, { recursive: true });
+  expect(run(ENGINE, ['createcd', '-i', 'fidelity.cue', '-o', keep, '-f', '--keepcue', '-c', 'none']).code).toBe(0);
+  expect(run(ENGINE, ['createcd', '-i', 'fidelity.cue', '-o', plain, '-f', '-c', 'none']).code).toBe(0);
+  fs.writeFileSync(edited, fs.readFileSync(path.join(FIXTURES, 'fidelity.cue'), 'latin1').replace('TRACK 01 MODE1/2352', 'TRACK 01 MODE2/2352'), 'latin1');
+  expect(run(ENGINE, ['delmeta', '-i', keep, '-t', 'CUES']).code).toBe(0);
+  expect(run(ENGINE, ['addmeta', '-i', keep, '-t', 'CUES', '-vf', edited, '-nocs']).code).toBe(0);
+  const r = run(ENGINE, ['extractcd', '-i', keep, '-o', path.join(mine, 'x.cue'), '--redump']);
+  expect(r.code).toBe(0);
+  expect(r.out.toString()).not.toContain('the one kept when the CHD was made');
+  expect(run(ENGINE, ['extractcd', '-i', plain, '-o', path.join(made, 'x.cue'), '--redump']).code).toBe(0);
+  for (const n of fs.readdirSync(made)) expect(fs.readFileSync(path.join(mine, n)).equals(fs.readFileSync(path.join(made, n))), n).toBe(true);
+});
+
 test('dumpmeta to stdout writes only the metadata', () => {
   const chd = makeChd('createcd', 'twine.cue');
   const up = run(UPSTREAM, ['dumpmeta', '-i', chd, '-t', 'CHT2']);

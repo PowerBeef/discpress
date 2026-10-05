@@ -3,6 +3,10 @@
 
 Usage: db/mkdb.py <path to libretro-database checkout> [output]
 Easiest: scripts/update-db.sh, which fetches libretro-database and runs this.
+
+Each system's rows: name, serial, size, CRC-32, track, extension, tab-separated. A release Redump lists
+under several serials (T-1214M and T-1214M-0, one game entry each with the same file) is one row whose
+serials are joined with '|', in the order the DAT gives them.
 """
 import re, json, os, struct, sys, zlib
 
@@ -27,7 +31,7 @@ tot = 0
 game_re = re.compile(r'^game \($(.*?)^\)$', re.S | re.M)
 for key, fn in SYS:
     txt = open(D + fn, encoding='utf-8').read()
-    rows = []
+    rows, serials = [], {}  # (the same release under another serial: its serial joins the row's)
     for g in game_re.finditer(txt):
         body = g.group(1)
         name = re.search(r'^\s*name "(.*)"$', body, re.M).group(1)
@@ -40,7 +44,14 @@ for key, fn in SYS:
         tm = re.search(r'\(Track 0*(\d+)\)\.\w+$', rname)
         track = tm.group(1) if tm else ''
         e = os.path.splitext(rname)[1][1:].lower()
-        rows.append('\t'.join([name, serial, str(size), crc, track, e]))
+        k = (name, size, crc, track, e)
+        if k in serials:
+            if serial and serial not in serials[k]:
+                serials[k].append(serial)
+            continue
+        serials[k] = [serial] if serial else []
+        rows.append(k)
+    rows = ['\t'.join([n, '|'.join(serials[(n, s, c, t, x)]), str(s), c, t, x]) for n, s, c, t, x in rows]
     out[key] = '\n'.join(rows)
     tot += len(rows)
     print(key, len(rows))

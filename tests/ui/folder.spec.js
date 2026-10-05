@@ -338,3 +338,37 @@ test('an extract into a folder goes on by itself when every helper fails', async
   const size = await page.evaluate(() => window.__folder.has('agent-folder.iso') ? window.__folder.get('agent-folder.iso').length : -1);
   expect(size).toBe(fs.statSync(path.join(FIXTURES, 'agent.iso')).size);
 });
+
+// A download the browser can't report on counted as saved, even when its "Save as" dialog was closed. Large
+// results (here any: DEBUG.savePickerMin) go through the save dialog instead, which says (audit 2026-10-05, L2)
+test('a large result is saved through the save dialog, and one closed without saving stays unsaved', async ({ app, page }) => {
+  await page.addInitScript(() => {
+    window.__saved = [];
+    let closeFirst = true;
+    window.showSaveFilePicker = async ({ suggestedName }) => {
+      if (closeFirst) { closeFirst = false; throw new DOMException('closed', 'AbortError'); }
+      let n = 0;
+      return { name: suggestedName, async createWritable() { return new WritableStream({ write(c) { n += c.byteLength; }, close() { window.__saved.push([suggestedName, n]); } }); } };
+    };
+  });
+  await app.open({ debug: { savePickerMin: 1 } });
+  await app.add(fixture('ps1-single').add);
+  const card = app.job('twine');
+  await app.settled(card);
+  await app.run(card);
+  const asked = [];
+  page.removeAllListeners('dialog');
+  page.on('dialog', d => { asked.push(d.message()); d.dismiss(); });
+  const save = card.locator('.result .out button').first();
+  await save.click(); // the dialog closed without saving
+  await page.click('#clearDone');
+  expect(asked).toHaveLength(1); // still unsaved: asked
+  await save.click();
+  await expect.poll(() => page.evaluate(() => window.__saved)).toHaveLength(1);
+  const [[name, size]] = await page.evaluate(() => window.__saved);
+  expect(name).toMatch(/\.chd$/);
+  expect(size).toBeGreaterThan(0);
+  await page.click('#clearDone');
+  expect(asked).toHaveLength(1); // saved: not asked again
+  await expect(app.jobs()).toHaveCount(0);
+});

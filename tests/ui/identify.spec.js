@@ -84,6 +84,23 @@ test('a card removed while its checksum runs leaves no record of its results', a
   for (const s of Object.values(rec)) expect(Object.keys(s.results || {})).toEqual([]);
 });
 
+// Removing a card while its checksum ran left the checksum running, and every other card waited for it
+// (audit 2026-10-05): it stops, and the next card is identified at once
+test('removing a card stops its checksum, and the next card is identified at once', async ({ app }) => {
+  await app.open({ testdb: true, debug: { crcSlow: 60000 } });
+  await app.add(fx.add);
+  const first = app.job('verified');
+  await expect(first.locator('.ident-check')).toBeVisible();
+  await app.add(['tnd.iso']);
+  const next = app.job('tnd');
+  await expect(next).toBeVisible();
+  await expect(first.locator('.ident-check')).toBeVisible();
+  await expect(next.locator('.note.ident')).toHaveCount(0); // (waiting for the first card's checksum)
+  await first.locator('.job-head button[aria-label^="Remove "]').click();
+  await expect(app.jobs()).toHaveCount(1);
+  await expect(next.locator('.note.ident')).toHaveAttribute('data-method', 'serial', { timeout: 10_000 });
+});
+
 test('a result already saved under the provisional name is not renamed', async ({ app }) => {
   await app.open({ testdb: true, debug: { crcDelay: 6000 } });
   await app.add(fx.add);
@@ -330,6 +347,9 @@ test('a release whose serial is the disc’s without its suffix, of another titl
   await expect(card.locator('.note.ident button', { hasText: 'Use this name' })).toHaveCount(0);
   await expect(other.locator('.ident-name')).toHaveText(eu.name);
   await expect(other.locator('.note.ident')).toHaveAttribute('data-method', 'serial');
+  // which serial found them: the disc's without its suffix; a base serial (T-25406H of T-25406H-50)
+  await expect(card.locator('.note.ident')).toHaveAttribute('data-how', 'trim');
+  await expect(other.locator('.note.ident')).toHaveAttribute('data-how', 'base');
 });
 
 // PC-98 discs have nothing of their own to detect (a PC disc's file system): their size and checksum find them

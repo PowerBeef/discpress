@@ -170,6 +170,8 @@ function CisoStore(base, chunkBytes, label) {
   this.shift = Math.pow(2, h[21]);
   if (!this.bs || this.bs > (1 << 24) || this.bs % 2048) throw new Error('unusual CSO block size ' + this.bs);
   this.nblocks = Math.ceil(this.sizeV / this.bs);
+  // (an index longer than the file, from a damaged header, isn't allocated: it can't be read anyway)
+  if (base.sizeV != null && 24 + (this.nblocks + 1) * 4 > base.sizeV) throw new Error('truncated CSO index');
   var raw = new Uint8Array((this.nblocks + 1) * 4);
   if (base.read(raw, 24, raw.length) !== raw.length) throw new Error('truncated CSO index');
   this.index = new Uint32Array(raw.buffer);
@@ -188,7 +190,8 @@ CisoStore.prototype.damaged = function (b) {
   return { errno: ERR.EIO };
 };
 // the module's memory for n bytes; a failure (the page's memory exhausted) stops the job with a message
-// rather than let it write through a null pointer
+// rather than let it write through a null pointer. (Pointers from the module are used as they come,
+// signed: right while its memory can't grow past 2 GB, MAXIMUM_MEMORY in wasm/link.sh)
 function wasmAlloc(M, n) {
   var p = M._malloc(n);
   if (!p) throw new Error('Out of memory: the browser gave this job no more memory. Close other tabs and try again.');
@@ -518,7 +521,13 @@ OpfsStore.prototype.read = function (dst, pos, len) {
   if (pos >= this.sizeV) return 0;
   len = Math.min(len, this.sizeV - pos);
   this.flushRange(pos, len, null);
-  var n = this.h.read(dst.subarray(0, len), { at: pos });
+  var n;
+  // (the browser's own error, a DOMException, as the file system's: chdman reports a read error)
+  try { n = this.h.read(dst.subarray(0, len), { at: pos }); }
+  catch (e) {
+    postMessage({ type: 'notice', level: 'error', message: 'The browser could not read back "' + this.name + '" from its storage (' + (e && e.name || e) + ').' });
+    throw { errno: ERR.EIO };
+  }
   // below the file's size, a part never written (past the end of what's on disk) reads as zeros, as in POSIX
   if (n < len) dst.fill(0, n, len);
   return len;
@@ -559,7 +568,8 @@ OpfsStore.prototype.write = function (src, pos) {
 };
 OpfsStore.prototype.truncate = function (n) {
   this.flush();
-  this.h.truncate(n);
+  try { this.h.truncate(n); }
+  catch (e) { throw { errno: e && e.name === 'QuotaExceededError' ? ERR.ENOSPC : ERR.EIO }; }
   this.sizeV = n;
 };
 
@@ -860,7 +870,8 @@ async function makeBacking(msg) {
         }
         if (st.deleted || !keep) return;
         if (st instanceof OpfsStore) {
-          try { st.flush(); st.h.flush(); } catch (e) { /* ignore */ }
+          // (the backing's flush, run before, reported a failed write; this one only makes it durable)
+          try { st.flush(); st.h.flush(); } catch (e) { postMessage({ type: 'notice', level: 'info', message: 'Storage: ' + st.name + ' could not be flushed (' + (e && e.name || e) + ').' }); }
           outputs.push({ name: st.name, size: st.sizeV, kind: 'opfs', slot: st.slot.name });
         } else {
           outputs.push({ name: st.name, size: st.sizeV, kind: 'blob', blob: st.toBlob() });
@@ -937,7 +948,7 @@ async function stageInput(msg, index, stages) {
     if (e && typeof e.errno === 'number') throw e; // the copy couldn't be written (storage full): not a read problem
     // async reads fail too: let the page read the file and send it over
     await new Promise(function (resolve, reject) {
-      stageWaiter = { dst: dst, resolve: resolve, reject: reject, size: size, onChunk: function (p) { pos = p; prog(); } };
+      stageWaiter = { dst: dst, resolve: resolve, reject: reject, size: size, at: pos, onChunk: function (p) { pos = p; prog(); } };
       postMessage({ type: 'stage-request', index: index, from: pos });
     });
     stageWaiter = null;
@@ -1571,14 +1582,21 @@ self.onmessage = function (e) {
   var msg = e.data;
   if (msg.type === 'stage-chunk' && stageWaiter) {
     try {
+      // each piece where the last one ended (missing bytes would read as zeros)
+      if (msg.pos !== stageWaiter.at) throw new Error('a piece of the file is missing');
       stageWaiter.dst.write(new Uint8Array(msg.data), msg.pos);
-      stageWaiter.onChunk(msg.pos + msg.data.byteLength);
+      stageWaiter.at = msg.pos + msg.data.byteLength;
+      stageWaiter.onChunk(stageWaiter.at);
       postMessage({ type: 'stage-ack' });
     } catch (err) { stageWaiter.reject(err && typeof err.errno === 'number' ? err : new Error('could not store the copy (' + (err && err.name || err) + ')')); }
     return;
   }
   if (msg.type === 's-ack') { sinkAck(msg.bytes); return; }
-  if (msg.type === 'stage-end' && stageWaiter) { stageWaiter.resolve(); return; }
+  if (msg.type === 'stage-end' && stageWaiter) {
+    if (stageWaiter.at < stageWaiter.size) stageWaiter.reject(new Error('could not store the copy (the page sent only ' + stageWaiter.at + ' of its ' + stageWaiter.size + ' bytes)'));
+    else stageWaiter.resolve();
+    return;
+  }
   if (msg.type === 'stage-fail' && stageWaiter) { stageWaiter.reject(new Error(msg.message)); return; }
   if (msg.type === 'crc') { runCrc(msg).catch(function (err) { postMessage({ type: 'fatal', message: errText(err) }); }); return; }
   var p = msg.type === 'helper' ? runHelper(msg) : msg.type === 'run' ? runJob(msg) : msg.type === 'reader' ? runReader(msg) : null;

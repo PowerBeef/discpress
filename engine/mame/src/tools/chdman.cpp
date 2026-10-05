@@ -1758,18 +1758,21 @@ struct toc_writer
 {
 	util::core_file &file;
 	bool crlf;
+	bool failed = false; // Discpress: a write failed (the caller reports it rather than leave a cut-short file)
 
 	template <typename Format, typename... Params> void printf(Format &&fmt, Params &&...args)
 	{
 		std::string text = util::string_format(std::forward<Format>(fmt), std::forward<Params>(args)...);
-		if (!crlf)
+		if (crlf)
 		{
-			file.puts(text);
-			return;
+			for (size_t pos = 0; (pos = text.find('\n', pos)) != std::string::npos; pos += 2)
+				text.insert(pos, 1, '\r');
 		}
-		for (size_t pos = 0; (pos = text.find('\n', pos)) != std::string::npos; pos += 2)
-			text.insert(pos, 1, '\r');
-		auto const [err, written] = write(file, text.data(), text.size()); // as puts, errors show up when the file is closed
+		// Discpress: written as it is, as puts writes it where a line ends with LF (the file has no BOM),
+		// but with the error puts doesn't give
+		auto const [err, written] = write(file, text.data(), text.size());
+		if (err || (written != text.size()))
+			failed = true;
 	}
 };
 
@@ -1778,6 +1781,28 @@ struct toc_writer
 //  output_track_metadata - output track metadata
 //  to a CUE file
 //-------------------------------------------------
+
+// the type a cue sheet's TRACK line gives a track (Discpress: shared with kept_cue_sheet)
+static std::string cue_track_type(const cdrom_file::track_info &info)
+{
+	switch (info.trktype)
+	{
+		case cdrom_file::CD_TRACK_MODE1:
+		case cdrom_file::CD_TRACK_MODE1_RAW:
+			return string_format("MODE1/%04d", info.datasize);
+
+		case cdrom_file::CD_TRACK_MODE2:
+		case cdrom_file::CD_TRACK_MODE2_FORM1:
+		case cdrom_file::CD_TRACK_MODE2_FORM2:
+		case cdrom_file::CD_TRACK_MODE2_FORM_MIX:
+		case cdrom_file::CD_TRACK_MODE2_RAW:
+			return string_format("MODE2/%04d", info.datasize);
+
+		case cdrom_file::CD_TRACK_AUDIO:
+			return "AUDIO";
+	}
+	return std::string();
+}
 
 void output_track_metadata(int mode, toc_writer &file, int tracknum, const cdrom_file::track_info &info, const std::string &filename, uint32_t frameoffs, uint64_t outputoffs)
 {
@@ -1795,26 +1820,7 @@ void output_track_metadata(int mode, toc_writer &file, int tracknum, const cdrom
 			file.printf("FILE \"%s\" BINARY\n", filename);
 
 		// determine submode
-		std::string tempstr;
-		switch (info.trktype)
-		{
-			case cdrom_file::CD_TRACK_MODE1:
-			case cdrom_file::CD_TRACK_MODE1_RAW:
-				tempstr = string_format("MODE1/%04d", info.datasize);
-				break;
-
-			case cdrom_file::CD_TRACK_MODE2:
-			case cdrom_file::CD_TRACK_MODE2_FORM1:
-			case cdrom_file::CD_TRACK_MODE2_FORM2:
-			case cdrom_file::CD_TRACK_MODE2_FORM_MIX:
-			case cdrom_file::CD_TRACK_MODE2_RAW:
-				tempstr = string_format("MODE2/%04d", info.datasize);
-				break;
-
-			case cdrom_file::CD_TRACK_AUDIO:
-				tempstr.assign("AUDIO");
-				break;
-		}
+		std::string const tempstr = cue_track_type(info);
 
 		// output TRACK entry
 		file.printf("  TRACK %02d %s\n", tracknum + 1, tempstr);
@@ -2962,10 +2968,11 @@ static chdman_task do_extract_raw(parameters_map &params)
 //  become theirs, in order (unless already the same);
 //  anything else stays as it is, with LF line ends
 //  (the writer turns them into CRLF). Empty if the
-//  layout differs.
+//  layout differs, or a TRACK line's type isn't the
+//  track's (track_types: cue_track_type of each).
 //-------------------------------------------------
 
-static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::vector<std::string> &track_filenames)
+static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::vector<std::string> &track_filenames, const std::vector<std::string> &track_types)
 {
 	std::vector<std::string> files;
 	for (size_t i = 0; i < track_filenames.size(); i++)
@@ -3033,6 +3040,18 @@ static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::
 		}
 		else if (keyword(line, at, "TRACK"))
 		{
+			// its number, then its type: the CHD's track's
+			while (at < line.size() && !isspace(uint8_t(line[at])))
+				at++;
+			while (at < line.size() && isspace(uint8_t(line[at])))
+				at++;
+			std::string type;
+			while (at < line.size() && !isspace(uint8_t(line[at])))
+				type += char(std::toupper(uint8_t(line[at++])));
+			if (type.compare(0, 4, "CDI/") == 0) // (a CD-i track: Mode 2, as chdman reads it)
+				type = "MODE2/" + type.substr(4);
+			if (tracks >= track_types.size() || type != track_types[tracks])
+				return std::string();
 			file_tracks++;
 			tracks++;
 		}
@@ -3262,7 +3281,12 @@ static chdman_task do_extract_cd(parameters_map &params)
 		{
 			std::vector<uint8_t> sheet;
 			if (!input_chd.read_metadata(CUE_SHEET_METADATA_TAG, 0, sheet))
-				kept_cue = kept_cue_sheet(sheet, track_filenames);
+			{
+				std::vector<std::string> track_types;
+				for (int t = 0; t < toc.numtrks; t++)
+					track_types.push_back(cue_track_type(toc.tracks[t]));
+				kept_cue = kept_cue_sheet(sheet, track_filenames, track_types);
+			}
 			if (!kept_cue.empty())
 			{
 				util::stream_format(std::cout, "Cue sheet:    the one kept when the CHD was made\n");
@@ -3515,7 +3539,9 @@ static chdman_task do_extract_cd(parameters_map &params)
 			discoffs += trackinfo.padframes;
 		}
 
-		// finish up
+		// finish up (Discpress: a write of the cue sheet, GDI or TOC that failed is an error)
+		if (toc_out.failed || output_toc_file->flush())
+			report_error(1, "Error writing file (%s)", *output_file_str->second);
 		output_bin_file.reset();
 		output_toc_file.reset();
 		util::stream_format(std::cout, "Extraction complete                                    \n");

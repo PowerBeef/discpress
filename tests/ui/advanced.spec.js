@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect } from '../support/app.js';
 import { FIXTURES } from '../support/paths.js';
-import { chdman, nativeChdman, reference, sameVersion, sha1File, sharedCopy, info } from '../support/native.js';
+import { chdman, extract, nativeChdman, reference, sameVersion, sha1File, sharedCopy, info } from '../support/native.js';
 
 async function openCli(app, page) {
   await app.open();
@@ -58,6 +58,23 @@ test('a command whose result may be too large for memory asks before it runs', a
   await expect(page.locator('#cliConsole')).not.toContainText('[exit code');
   expect(await runCli(page)).toContain('[exit code 0]');
   expect(asked).toHaveLength(2);
+});
+
+// A file added under the name of one listed replaced it without a word; a cue sheet chdman can't read as
+// it is gets a pointer to the Convert tab, which corrects it (audit 2026-10-05)
+test('a file of a listed name says it replaced it, and a raw cue sheet chdman can\'t read points to Convert', async ({ app, page }) => {
+  const dir = path.join(FIXTURES, 'gen', 'cli lower');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'twine.bin'), path.join(dir, 'twine.bin'));
+  fs.writeFileSync(path.join(dir, 'lower.cue'), 'file "twine.bin" binary\n  track 01 mode2/2352\n    index 01 00:00:00\n');
+  await openCli(app, page);
+  await addCliFiles(app, ['twine.bin']);
+  await addCliFiles(app, ['gen/cli lower/lower.cue', 'gen/cli lower/twine.bin']);
+  await expect(page.locator('#toasts')).toContainText('Replaced “twine.bin” in the list with the file of the same name just added.');
+  await expect(page.locator('#cliFiles li')).toHaveCount(2);
+  const out = await runCli(page);
+  expect(out).toContain('[exit code 1');
+  expect(out).toContain('Here chdman reads the CUE file as it is. The Convert tab corrects what chdman can’t read');
 });
 
 test('missing required options are reported instead of run', async ({ app, page }) => {
@@ -222,3 +239,125 @@ test('typed commands keep an apostrophe inside a name, typed either way', async 
   expect(await runCli(page)).toContain('[exit code 0]');
   await expect(page.locator('#cliOuts')).toContainText('Tony Hawk’s.chd');
 });
+
+// ---- each command through the form, against desktop chdman (audit 2026-10-05, M10) ----
+
+// every result of the last command, downloaded: [{name, path}]
+async function cliResults(page) {
+  const buttons = page.locator('#cliOuts .out button'), out = [];
+  for (let i = 0; i < await buttons.count(); i++) {
+    const [dl] = await Promise.all([page.waitForEvent('download'), buttons.nth(i).click()]);
+    const p = test.info().outputPath('results', dl.suggestedFilename());
+    await dl.saveAs(p);
+    out.push({ name: dl.suggestedFilename(), path: p });
+  }
+  return out;
+}
+async function pickCommand(page, cmd, fields = {}) {
+  await page.locator('#cliCmd').selectOption(cmd);
+  for (const [label, value] of Object.entries(fields)) {
+    const f = page.locator('#cliOpts label.field', { hasText: label });
+    if (await f.locator('select').count()) await f.locator('select').selectOption(value);
+    else await f.locator('input').fill(value);
+  }
+}
+// a CHD of desktop chdman's, in the fixtures' chd/ folder (for this file's tests)
+function nativeChd(name, command, input, extra = []) {
+  const p = path.join(FIXTURES, 'chd', name);
+  sharedCopy(reference(command, input, extra), p);
+  return { rel: 'chd/' + name, path: p };
+}
+
+test('copy writes <name>-copy.chd, the CHD desktop chdman copies', async ({ app, page }) => {
+  test.skip(!nativeChdman(), 'needs native chdman');
+  const src = nativeChd('copy src.chd', 'createcd', 'twine.cue');
+  await openCli(app, page);
+  await addCliFiles(app, [src.rel]);
+  await pickCommand(page, 'copy', { 'Compression codecs': 'cdzl,cdfl' });
+  await expect(page.locator('#cliPreview')).toHaveText('chdman copy -i "copy src.chd" -o "copy src-copy.chd" -c cdzl,cdfl');
+  expect(await runCli(page)).toContain('[exit code 0]');
+  const [got] = await cliResults(page);
+  expect(got.name).toBe('copy src-copy.chd');
+  const ref = test.info().outputPath('ref.chd');
+  chdman(['copy', '-i', src.path, '-o', ref, '-c', 'cdzl,cdfl']);
+  if (sameVersion()) expect(sha1File(got.path)).toBe(sha1File(ref));
+});
+
+test('dumpmeta writes a tag’s metadata to <name>.bin, as desktop chdman does', async ({ app, page }) => {
+  test.skip(!nativeChdman(), 'needs native chdman');
+  const src = nativeChd('dump src.chd', 'createcd', 'mgs disc1.cue');
+  await openCli(app, page);
+  await addCliFiles(app, [src.rel]);
+  await pickCommand(page, 'dumpmeta', { 'Metadata tag': 'CHT2', 'Metadata index': '1' });
+  expect(await runCli(page)).toContain('[exit code 0]');
+  const [got] = await cliResults(page);
+  expect(got.name).toBe('dump src.bin');
+  const ref = test.info().outputPath('ref.bin');
+  chdman(['dumpmeta', '-i', src.path, '-o', ref, '-t', 'CHT2', '-ix', '1']);
+  expect(fs.readFileSync(got.path)).toEqual(fs.readFileSync(ref));
+});
+
+test('delmeta edits a copy of the CHD in place, exactly like desktop chdman', async ({ app, page }) => {
+  test.skip(!nativeChdman(), 'needs native chdman');
+  const dir = path.join(FIXTURES, 'chd');
+  fs.mkdirSync(dir, { recursive: true });
+  const input = path.join(dir, 'delmeta.chd');
+  sharedCopy(reference('createdvd', 'homebrew.iso', ['-c', 'none']), input);
+  chdman(['addmeta', '-i', input, '-t', 'TEST', '-vt', 'to be removed']);
+  const expected = test.info().outputPath('expected.chd');
+  fs.copyFileSync(input, expected);
+  chdman(['delmeta', '-i', expected, '-t', 'TEST']);
+  await openCli(app, page);
+  await addCliFiles(app, ['chd/delmeta.chd']);
+  await pickCommand(page, 'delmeta', { 'Metadata tag': 'TEST' });
+  expect(await runCli(page)).toContain('[exit code 0]');
+  const [got] = await cliResults(page);
+  expect(got.name).toBe('delmeta.chd');
+  expect(sha1File(got.path)).toBe(sha1File(expected));
+});
+
+test('verify --fix on a sound CHD leaves it as it was', async ({ app, page }) => {
+  test.skip(!nativeChdman(), 'needs native chdman');
+  const src = nativeChd('fix src.chd', 'createdvd', 'homebrew.iso', ['-c', 'none']);
+  await openCli(app, page);
+  await addCliFiles(app, [src.rel]);
+  await pickCommand(page, 'verify');
+  await page.locator('#cliOpts label.check', { hasText: 'Fix the SHA-1' }).locator('input').check();
+  await expect(page.locator('#cliPreview')).toHaveText('chdman verify -i "fix src.chd" -f');
+  expect(await runCli(page)).toContain('[exit code 0]');
+  const [got] = await cliResults(page);
+  expect(sha1File(got.path)).toBe(sha1File(src.path));
+});
+
+// creating a hard disk CHD, and extracting each kind through the form: the files desktop chdman makes
+for (const [label, make, cmd, fields, outName, nativeArgs] of [
+  ['createhd', null, 'createhd', {}, 'arcade.chd', null],
+  ['extractcd (cue/bin)', ['x cd.chd', 'createcd', 'mgs disc1.cue'], 'extractcd', {}, 'x cd.cue', []],
+  ['extractcd (one .bin per track)', ['x cd.chd', 'createcd', 'mgs disc1.cue'], 'extractcd', { sb: true }, 'x cd.cue', ['-sb']],
+  ['extractdvd', ['x dvd.chd', 'createdvd', 'homebrew.iso'], 'extractdvd', {}, 'x dvd.iso', []],
+  ['extracthd', ['x hd.chd', 'createhd', 'arcade.img'], 'extracthd', {}, 'x hd.img', []],
+  ['extractraw', ['x raw.chd', 'createraw', 'arcade.img', ['-hs', '4096', '-us', '512']], 'extractraw', {}, 'x raw.raw', []],
+]) {
+  test(`${label} through the form gives desktop chdman's files`, async ({ app, page }) => {
+    test.skip(!nativeChdman(), 'needs native chdman');
+    await openCli(app, page);
+    let src = null;
+    if (make) {
+      src = nativeChd(make[0], make[1], make[2], make[3] || []);
+      await addCliFiles(app, [src.rel]);
+    } else await addCliFiles(app, ['arcade.img']);
+    await pickCommand(page, cmd);
+    if (fields.sb) await page.locator('#cliOpts label.check', { hasText: 'One .bin file per track' }).locator('input').check();
+    await expect(page.locator('#cliOpts label.field', { hasText: 'Output file name' }).locator('input')).toHaveValue(outName);
+    expect(await runCli(page)).toContain('[exit code 0]');
+    const outs = await cliResults(page);
+    if (!make) {
+      expect(outs.map(o => o.name)).toEqual(['arcade.chd']);
+      if (sameVersion()) expect(sha1File(outs[0].path)).toBe(sha1File(reference('createhd', 'arcade.img')));
+      return;
+    }
+    const x = extract(cmd, src.path, outName, nativeArgs);
+    expect(outs.map(o => o.name).sort()).toEqual(x.files);
+    for (const o of outs) expect(sha1File(o.path), o.name).toBe(sha1File(path.join(x.dir, o.name)));
+  });
+}
