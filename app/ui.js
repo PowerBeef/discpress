@@ -1488,11 +1488,12 @@ var Unzip = {
   // a deflated file unpacked: a File, its CRC-32 checked against the zip's
   unpack: async function (zip, ent, at, onProgress) {
     var stream = zip.slice(at, at + ent.csize).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-    var reader = stream.getReader(), crc = -1, done = 0, parts = [], writer = null, fh = null, id = 'u' + (++this.seq);
+    var reader = stream.getReader(), crc = -1, done = 0, parts = [], writer = null, fh = null, sess = null, id = 'u' + (++this.seq);
     var base_ = ent.name.replace(/^.*\//, '');
     if (Store.available) {
       try {
-        var dir = await (await (await this.root()).getDirectoryHandle(Store.session, { create: true })).getDirectoryHandle(id, { create: true });
+        sess = await (await this.root()).getDirectoryHandle(Store.session, { create: true });
+        var dir = await sess.getDirectoryHandle(id, { create: true });
         fh = await dir.getFileHandle(base_, { create: true });
         if (typeof fh.createWritable !== 'function') throw new Error('no writable streams');
         writer = await fh.createWritable();
@@ -1507,16 +1508,22 @@ var Unzip = {
         // more than the zip says the file holds (a damaged or hostile zip): stopped, not unpacked to the end
         if (done > ent.usize) { reader.cancel().catch(function () {}); throw new Error('it holds more than the zip says'); }
         crc = crc32Update(crc, r.value);
+        // DEBUG.unzipFull (testing): the browser's storage is full once the first piece is written
+        if (writer && DEBUG.unzipFull && done > r.value.length) throw new DOMException('test', 'QuotaExceededError');
         if (writer) await writer.write(r.value); else parts.push(r.value);
         onProgress(done);
       }
       if (writer) await writer.close();
     } catch (e) {
-      if (writer) try { await writer.abort(); } catch (x) { /* ignore */ }
+      // (and the file it was unpacked into goes: nothing is left of it in storage)
+      if (writer) try { await writer.abort(); await sess.removeEntry(id, { recursive: true }); } catch (x) { /* ignore */ }
       if (done > ent.usize) throw new Error(base_ + ' is damaged in the zip: ' + e.message);
       throw new Error(base_ + ' could not be unpacked (' + (e && e.name === 'QuotaExceededError' ? 'the browser\u2019s storage is full' : e && e.message || e) + ')');
     }
-    if (((crc ^ -1) >>> 0) !== ent.crc || done !== ent.usize) throw new Error(base_ + ' is damaged in the zip: its checksum doesn\u2019t match');
+    if (((crc ^ -1) >>> 0) !== ent.crc || done !== ent.usize) {
+      if (writer) try { await sess.removeEntry(id, { recursive: true }); } catch (x) { /* ignore */ }
+      throw new Error(base_ + ' is damaged in the zip: its checksum doesn\u2019t match');
+    }
     var f = writer ? await fh.getFile() : new File(parts, base_, { lastModified: ent.time });
     if (writer) f.unzipDir = id;
     return f;

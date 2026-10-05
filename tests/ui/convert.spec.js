@@ -3,7 +3,8 @@ import { test, expect, manifest, fixture } from '../support/app.js';
 import { engineReference, info, nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
 
 const SYSTEM_BADGE = { ps1: 'PS1', ps2: 'PS2', psp: 'PSP', saturn: 'SAT', segacd: 'SCD', dc: 'DC', pcecd: 'PCE', pcfx: 'PC-FX',
-  ngcd: 'NGCD', cd32: 'CD32', cdtv: 'CDTV', jagcd: 'JAG', cdi: 'CD-i', vcd: 'VCD', video: 'VIDEO' };
+  ngcd: 'NGCD', cd32: 'CD32', cdtv: 'CDTV', jagcd: 'JAG', cdi: 'CD-i', vcd: 'VCD', video: 'VIDEO', naomi: 'NAOMI', naomi2: 'NAOMI2',
+  xbox: 'XBOX', ps3: 'PS3', pc98: 'PC-98', gc: 'GC', wii: 'Wii' };
 
 /** The CHD from the app must equal what desktop chdman makes from the same files. */
 function expectSameAsNative(outPath, command, input, extra = []) {
@@ -31,11 +32,13 @@ for (const fx of manifest().filter(f => f.job === 'create' && !f.bench && !f.tes
     if (fx.ident === 'ambiguous') await expect(card.locator('.ident-how')).toContainText('several versions share it');
     if (fx.ident === 'none') await expect(card.locator('.ident-name')).toHaveCount(0);
     if (fx.warning) await expect(card).toContainText(fx.warning);
-    // quirks: the ids of the rules (app/quirks.js) whose notes the card shows, all of them
-    if (fx.quirks) {
-      await expect(card.locator('[data-quirk]')).toHaveCount(fx.quirks.length);
-      expect((await card.locator('[data-quirk]').evaluateAll(ns => ns.map(n => n.dataset.quirk))).sort()).toEqual([...fx.quirks].sort());
-    }
+    // quirks: the ids of the rules (app/quirks.js) whose notes the card shows, all of them, and none when
+    // the manifest lists none; note: the console's own note (PROFILES), and none without one
+    const quirks = fx.quirks || [];
+    await expect(card.locator('[data-quirk]')).toHaveCount(quirks.length);
+    expect((await card.locator('[data-quirk]').evaluateAll(ns => ns.map(n => n.dataset.quirk))).sort()).toEqual([...quirks].sort());
+    if (fx.note) await expect(card.locator('.ident-note')).toContainText(fx.note);
+    else await expect(card.locator('.ident-note')).toHaveCount(0);
 
     // command and output name
     // (out: a result that keeps its file's name although the game is named, as NAOMI GD-ROMs do)

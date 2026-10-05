@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect, fixture } from '../support/app.js';
 import { FIXTURES } from '../support/paths.js';
-import { engineReference, info, nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
+import { engineReference, info, nativeChdman, reference, sameVersion, sha1File, sharedCopy } from '../support/native.js';
 
 async function convertAgent(app) {
   await app.add(fixture('ps2-dvd').add);
@@ -81,6 +81,23 @@ test('if the worker cannot read them at all, the page streams inputs to it (iOS 
   await app.open({ debug: { stage: 2 } });
   const card = await convertAgent(app);
   await expect(card.locator('pre.logtext')).toContainText('is copied to private storage first');
+});
+
+// Cancel while the page streams an input to the worker: the job stops, and runs again from the start
+// (audit 2026-10-05, M12)
+test('a job canceled while its input is streamed to the worker stops, and runs again', async ({ app }) => {
+  await app.open({ debug: { stage: 2 }, settings: { threads: 1 } });
+  await app.add(fixture('ps2-dvd').add);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await card.locator('.job-foot button.primary').click();
+  await expect(card.locator('pre.logtext')).toContainText('is copied to private storage first', { timeout: 60_000 });
+  await card.locator('.job-foot button.danger', { hasText: 'Cancel' }).click();
+  await app.waitState(card, 'canceled');
+  await card.locator('.job-foot button', { hasText: 'Try again' }).click();
+  await app.run(card);
+  const [out] = await app.downloads(card);
+  if (nativeChdman() && sameVersion()) expect(sha1File(out.path)).toBe(sha1File(reference('createdvd', 'agent.iso')));
 });
 
 test('a compressed ISO the worker cannot read directly is copied, then decompressed as usual', async ({ app }) => {
@@ -167,7 +184,7 @@ test('extract and verify go on when helpers fail: the others, or the job worker,
   test.skip(!nativeChdman(), 'needs native chdman to make the CHD');
   const dir = path.join(FIXTURES, 'chd');
   fs.mkdirSync(dir, { recursive: true });
-  fs.copyFileSync(reference('createdvd', 'agent.iso'), path.join(dir, 'agent-fault.chd'));
+  sharedCopy(reference('createdvd', 'agent.iso'), path.join(dir, 'agent-fault.chd'));
   for (const mode of ['one', 'always']) {
     await app.open({ settings: { threads: 4 }, debug: { failHelpers: mode } });
     await app.add(['chd/agent-fault.chd']);

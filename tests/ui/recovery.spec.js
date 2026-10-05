@@ -35,6 +35,36 @@ test('a finished but unsaved result is listed after a reload, and can be saved o
   await expect(page.locator('#earlier')).toBeHidden();
 });
 
+// Two tabs share the browser's storage. The second one's start-up cleanup must leave the first one's
+// results alone while it is open (it holds its Web Lock), and lists them once it's closed
+test('a second tab leaves an open tab\'s results alone, and lists them once it is closed', async ({ app, page }) => {
+  await app.open();
+  await app.add(fixture('ps1-single').add);
+  const card = app.job('twine');
+  await app.settled(card);
+  await app.run(card);
+  const files = p => p.evaluate(async () => {
+    const work = await (await navigator.storage.getDirectory()).getDirectoryHandle('chdman-work');
+    let n = 0;
+    for await (const [, d] of work.entries()) if (d.kind === 'directory') for await (const [, j] of d.entries()) if (j.kind === 'directory') for await (const f of j.keys()) n += f ? 1 : 0;
+    return n;
+  });
+  const before = await files(page);
+  expect(before).toBeGreaterThan(0);
+  const second = await page.context().newPage();
+  await second.goto(page.url());
+  await expect(second.locator('#chipEngine')).toContainText(/ready/i, { timeout: 60_000 });
+  await expect(second.locator('#earlier')).toBeHidden(); // not an ended visit's
+  expect(await files(second)).toBe(before);
+  await expect(card.locator('.result')).toContainText('Done.');
+  await page.close();
+  await second.reload();
+  await expect(second.locator('#chipEngine')).toContainText(/ready/i, { timeout: 60_000 });
+  await expect(second.locator('#earlier .out')).toHaveCount(1);
+  await expect(second.locator('#earlier')).toContainText('.chd');
+  await second.close();
+});
+
 test('an unsaved result can be deleted from the list', async ({ app, page }) => {
   await app.open();
   await app.add(fixture('ps1-single').add);

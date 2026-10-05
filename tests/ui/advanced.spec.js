@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect } from '../support/app.js';
 import { FIXTURES } from '../support/paths.js';
-import { chdman, nativeChdman, reference, sameVersion, sha1File, info } from '../support/native.js';
+import { chdman, nativeChdman, reference, sameVersion, sha1File, sharedCopy, info } from '../support/native.js';
 
 async function openCli(app, page) {
   await app.open();
@@ -43,6 +43,23 @@ test('the form builds the command and createcd output matches desktop chdman', a
   }
 });
 
+// A command whose results could be too large to keep in memory asks first, as on the Convert tab
+// (memMax lowers the limit); declined, nothing runs (audit 2026-10-05, M12)
+test('a command whose result may be too large for memory asks before it runs', async ({ app, page }) => {
+  await app.open({ noOpfs: true, debug: { memMax: 100000 } });
+  await page.click('.tab[data-tab="cli"]');
+  await addCliFiles(app, ['twine.cue', 'twine.bin']);
+  const asked = [];
+  page.removeAllListeners('dialog');
+  page.on('dialog', d => { asked.push(d.message()); asked.length === 1 ? d.dismiss() : d.accept(); });
+  await page.click('#cliRun');
+  await expect.poll(() => asked.length).toBe(1);
+  expect(asked[0]).toContain('This browser keeps results in memory here');
+  await expect(page.locator('#cliConsole')).not.toContainText('[exit code');
+  expect(await runCli(page)).toContain('[exit code 0]');
+  expect(asked).toHaveLength(2);
+});
+
 test('missing required options are reported instead of run', async ({ app, page }) => {
   await openCli(app, page);
   await page.locator('#cliCmd').selectOption('info');
@@ -80,7 +97,7 @@ for (const [label, input, command, message] of [
     if (input === 'dvd') {
       test.skip(!nativeChdman(), 'needs native chdman to make the CHD');
       fs.mkdirSync(path.join(FIXTURES, 'chd'), { recursive: true });
-      fs.copyFileSync(reference('createdvd', 'agent.iso'), path.join(FIXTURES, 'chd', 'agent-dvd.chd'));
+      sharedCopy(reference('createdvd', 'agent.iso'), path.join(FIXTURES, 'chd', 'agent-dvd.chd'));
       file = 'chd/agent-dvd.chd';
     }
     await openCli(app, page);

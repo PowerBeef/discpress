@@ -70,6 +70,22 @@ test('files a zip can’t give back get a card that says why; the others are add
   await app.settled(app.job('twine'));
 });
 
+// The browser's storage full while a deflated file is unpacked (DEBUG.unzipFull): the card says so, and
+// nothing of the file stays in storage (audit 2026-10-05, M12)
+test('a zip whose files fill the browser’s storage gets a card that says so, and leaves nothing behind', async ({ app, page, browserName }) => {
+  test.skip(browserName === 'webkit', 'Playwright\'s WebKit has no navigator.storage');
+  const fx = fixture('ps1-single');
+  const zip = writeZip('twine full.zip', fx.add.map(n => ({ name: n, data: read(n) })));
+  await app.open({ debug: { unzipFull: true } });
+  await app.add([zip]);
+  await expect(app.job('twine full').locator('.note.err')).toContainText('twine.bin could not be unpacked (the browser’s storage is full)');
+  const left = await page.evaluate(async () => {
+    const files = async d => { let n = 0; for await (const h of d.values()) n += h.kind === 'file' ? 1 : await files(h); return n; };
+    try { return await files(await (await navigator.storage.getDirectory()).getDirectoryHandle('chdman-unzip')); } catch (e) { return 0; }
+  });
+  expect(left).toBe(1); // twine.cue, unpacked; not twine.bin
+});
+
 test('a file that is not a zip gets a card', async ({ app }) => {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'fake.zip'), Buffer.alloc(4096, 7));

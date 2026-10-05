@@ -1,0 +1,11 @@
+# Updates for the GitHub Actions the workflows use: they are pinned by commit (a tag can be moved to
+# other code), and Dependabot proposes the newer commits as pull requests, each checked by CI.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']

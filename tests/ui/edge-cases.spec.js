@@ -377,7 +377,9 @@ test('Cancel stops a job that is still identifying the game', async ({ app }) =>
   await app.waitState(card, 'running');
   await card.locator('.job-foot button.danger', { hasText: 'Cancel' }).click();
   await app.waitState(card, 'canceled', 3000);
-  await app.page.waitForTimeout(6000); // past the identification: it must not start after all
+  // past the identification (the card shows what it found): it must not start after all
+  await expect(card.locator('.note.ident')).toBeVisible({ timeout: 30_000 });
+  await app.page.waitForTimeout(500);
   expect(await card.getAttribute('data-state')).toBe('canceled');
   await card.locator('.job-foot button', { hasText: 'Try again' }).click();
   await app.waitState(card, 'ready');

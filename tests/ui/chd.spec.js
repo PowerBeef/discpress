@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect, fixture } from '../support/app.js';
 import { FIXTURES } from '../support/paths.js';
-import { chdman, engineExtract, extract, info, nativeChdman, reference, sha1File } from '../support/native.js';
+import { chdman, engineExtract, extract, info, nativeChdman, reference, sha1File, sharedCopy } from '../support/native.js';
 
 test.skip(() => !nativeChdman(), 'needs native chdman to make input CHDs');
 
@@ -103,8 +103,7 @@ test('with "keep the cue sheet" on, extracting gives back the dump, CATALOG, FLA
   // the checksums of desktop chdman's CHD, which has no cue sheet
   const ref = info(reference('createcd', 'fidelity.cue')), mine = info(chd.path);
   expect([mine.sha1, mine.dataSha1]).toEqual([ref.sha1, ref.dataSha1]);
-  fs.mkdirSync(path.join(FIXTURES, 'chd'), { recursive: true });
-  fs.copyFileSync(chd.path, path.join(FIXTURES, 'chd', 'fidelity kept.chd'));
+  sharedCopy(chd.path, path.join(FIXTURES, 'chd', 'fidelity kept.chd'));
   const kept = await openChd(app, 'chd/fidelity kept.chd', 'fidelity kept');
   await expect(kept.locator('label.field', { hasText: 'Save as' })).toContainText('the cue sheet kept in this CHD');
   await kept.locator('label.field', { hasText: 'Output name' }).locator('input').fill('fidelity');

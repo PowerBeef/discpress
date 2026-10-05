@@ -779,7 +779,7 @@ body { overflow-x: clip; }
     <li>unused code removed.</li>
   </ul>
   <p>The full list of source changes is below.</p>
-  <p>chdman and the parts of MAME it uses are licensed under the BSD 3-Clause license (copyright Aaron Giles, R. Belmont, Vas Crabb and the MAMEdev team). MAME as a whole is GPL-2.0-or-later. Bundled libraries: zlib (zlib license, © Jean-loup Gailly and Mark Adler), LZMA SDK (public domain, Igor Pavlov), FLAC (BSD 3-Clause, © Josh Coalson, Xiph.Org Foundation), Zstandard (BSD, © Meta Platforms, Inc. and affiliates), MD5 (public domain, Colin Plumb), the FLAC encoder's <code>cosf</code> and <code>log</code> from Arm's optimized-routines (MIT, © Arm Limited), libdeflate's compressor (MIT, © Eric Biggers and Google LLC). Some of the console detection follows the rules of <a href="https://github.com/SabreTools/MPF" target="_blank" rel="noopener">MPF</a>, the Media Preservation Frontend (MIT, © Matt Nadareski), written anew for this page. Discpress is not affiliated with the MAME team.</p>
+  <p>chdman and the parts of MAME it uses are licensed under the BSD 3-Clause license (copyright Aaron Giles, R. Belmont, Vas Crabb and the MAMEdev team). MAME as a whole is GPL-2.0-or-later. Bundled libraries: zlib (zlib license, © Jean-loup Gailly and Mark Adler), LZMA SDK (public domain, Igor Pavlov), FLAC (BSD 3-Clause, © Josh Coalson, Xiph.Org Foundation), Zstandard (BSD, © Meta Platforms, Inc. and affiliates), MD5 (public domain, Colin Plumb), the FLAC encoder's <code>cosf</code> and <code>log</code> from Arm's optimized-routines (MIT, © Arm Limited), libdeflate's compressor (MIT, © Eric Biggers and Google LLC), and the runtime Emscripten compiles in: its JavaScript glue (MIT, © the Emscripten authors), musl libc (MIT, © Rich Felker et al.) and LLVM's libc++, libc++abi and compiler-rt (Apache-2.0 with LLVM exception). Some of the console detection follows the rules of <a href="https://github.com/SabreTools/MPF" target="_blank" rel="noopener">MPF</a>, the Media Preservation Frontend (MIT, © Matt Nadareski), written anew for this page. Discpress is not affiliated with the MAME team.</p>
   <details class="log"><summary>BSD 3-Clause license text</summary>
 <div class="lic">Copyright (c) the respective copyright holders listed above.
 
@@ -825,6 +825,16 @@ BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
 ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.</div>
+  </details>
+  <details class="log"><summary>MIT license text (Emscripten, musl libc)</summary>
+<div class="lic">Copyright (c) 2010-2014 Emscripten authors, see AUTHORS file.
+Copyright © 2005-2020 Rich Felker, et al.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.</div>
   </details>
   <details class="log"><summary>Source changes made to MAME 0.289, and the new files</summary>
 <div class="lic">--- a/3rdparty/flac/src/libFLAC/fixed.c
@@ -11269,11 +11279,12 @@ var Unzip = {
   // a deflated file unpacked: a File, its CRC-32 checked against the zip's
   unpack: async function (zip, ent, at, onProgress) {
     var stream = zip.slice(at, at + ent.csize).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-    var reader = stream.getReader(), crc = -1, done = 0, parts = [], writer = null, fh = null, id = 'u' + (++this.seq);
+    var reader = stream.getReader(), crc = -1, done = 0, parts = [], writer = null, fh = null, sess = null, id = 'u' + (++this.seq);
     var base_ = ent.name.replace(/^.*\//, '');
     if (Store.available) {
       try {
-        var dir = await (await (await this.root()).getDirectoryHandle(Store.session, { create: true })).getDirectoryHandle(id, { create: true });
+        sess = await (await this.root()).getDirectoryHandle(Store.session, { create: true });
+        var dir = await sess.getDirectoryHandle(id, { create: true });
         fh = await dir.getFileHandle(base_, { create: true });
         if (typeof fh.createWritable !== 'function') throw new Error('no writable streams');
         writer = await fh.createWritable();
@@ -11288,16 +11299,22 @@ var Unzip = {
         // more than the zip says the file holds (a damaged or hostile zip): stopped, not unpacked to the end
         if (done > ent.usize) { reader.cancel().catch(function () {}); throw new Error('it holds more than the zip says'); }
         crc = crc32Update(crc, r.value);
+        // DEBUG.unzipFull (testing): the browser's storage is full once the first piece is written
+        if (writer && DEBUG.unzipFull && done > r.value.length) throw new DOMException('test', 'QuotaExceededError');
         if (writer) await writer.write(r.value); else parts.push(r.value);
         onProgress(done);
       }
       if (writer) await writer.close();
     } catch (e) {
-      if (writer) try { await writer.abort(); } catch (x) { /* ignore */ }
+      // (and the file it was unpacked into goes: nothing is left of it in storage)
+      if (writer) try { await writer.abort(); await sess.removeEntry(id, { recursive: true }); } catch (x) { /* ignore */ }
       if (done > ent.usize) throw new Error(base_ + ' is damaged in the zip: ' + e.message);
       throw new Error(base_ + ' could not be unpacked (' + (e && e.name === 'QuotaExceededError' ? 'the browser\u2019s storage is full' : e && e.message || e) + ')');
     }
-    if (((crc ^ -1) >>> 0) !== ent.crc || done !== ent.usize) throw new Error(base_ + ' is damaged in the zip: its checksum doesn\u2019t match');
+    if (((crc ^ -1) >>> 0) !== ent.crc || done !== ent.usize) {
+      if (writer) try { await sess.removeEntry(id, { recursive: true }); } catch (x) { /* ignore */ }
+      throw new Error(base_ + ' is damaged in the zip: its checksum doesn\u2019t match');
+    }
     var f = writer ? await fh.getFile() : new File(parts, base_, { lastModified: ent.time });
     if (writer) f.unzipDir = id;
     return f;
@@ -14049,4 +14066,4 @@ else init();
 </script>
 </body>
 </html>
-<!-- engine sources sha256 2c9ded687250b69d7ccfb7a660931b76b853a7fc9f6ce3875dd41f3eeb10d0df -->
+<!-- engine sources sha256 0b0c9e679ccb8d654aa3d1999c7fae6ef13d3222e203ebc8fcfa15aafa2d44e1 -->

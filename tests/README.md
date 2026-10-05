@@ -32,7 +32,7 @@ does all of this when a session starts.
 | `npm run bench:dev -- --compare latest` | benchmark the current `app/` and compare with the last run |
 
 Environment: `DISCPRESS_HTML` picks the page (relative to the repo root), `WORKERS` the number of
-parallel test workers (default 2), `CHDMAN` a native chdman binary, `DISCPRESS_FIXTURES` the fixtures folder (default `.cache/fixtures/`), `REGEN_FIXTURES=1` rebuilds fixtures, `REQUIRE_NATIVE=1` fails the run without both native references (see In CI).
+parallel test workers (default 2), `CHDMAN` a native chdman binary, `DISCPRESS_FIXTURES` the fixtures folder (default `.cache/fixtures/`), `REGEN_FIXTURES=1` makes every fixture again (`make_fixtures.py --force`; the run does it by itself when the generator changed), `REQUIRE_NATIVE=1` fails the run without both native references (see In CI).
 Outside CI a test server already running on `PORT` (default 4173) is reused; its `/healthz` names the page
 it serves, and the run stops if that isn't the page `DISCPRESS_HTML` picks (stop it, or use another `PORT`).
 
@@ -47,7 +47,9 @@ checks skip. Set it locally too to be sure a run compared everything. The same w
 
 `.github/workflows/sanitizers.yml` runs `ui/engine.spec.js` on the engine built with AddressSanitizer,
 LeakSanitizer and UndefinedBehaviorSanitizer (`scripts/build-sanitized.sh`, `build/chdman-san`), named
-by `CHDMAN_ENGINE`: a sanitizer report in chdman's output fails the test, whatever its exit code. It runs
+by `CHDMAN_ENGINE`: a sanitizer report in chdman's output fails the test, whatever its exit code; a
+`CHDMAN_ENGINE` build that is missing or older than `engine/` or `wasm/` fails the run rather than skip
+every test (so does `REQUIRE_NATIVE` without a current `build/chdman-native`). It runs
 when `engine/` or `wasm/` change, and weekly. Leaks unmodified chdman 0.289 has too are suppressed
 (`support/lsan.supp`, each with how that was checked). Locally:
 `CHDMAN_ENGINE=../build/chdman-san LSAN_OPTIONS=suppressions=$PWD/support/lsan.supp npx playwright test ui/engine.spec.js`.
@@ -71,10 +73,15 @@ when `engine/` or `wasm/` change, and weekly. Leaks unmodified chdman 0.289 has 
 
 `fixtures/make_fixtures.py` generates synthetic discs into `.cache/fixtures/` (deterministic,
 about a second): ISO 9660 file systems, raw CD sectors with valid EDC/ECC (Mode 1 and Mode 2),
-CD audio, a CloneCD image, a cdrdao TOC and a Nero image (compared with the engine's native build, `engine: true`, or a cue twin, since chdman 0.289 reads their pregaps wrongly), a PlayStation disc booting `PSX.EXE`, a NAOMI 2 GD-ROM, compressed ISOs (CSO v1 and v2, ZSO; the generator has its own LZ4 encoder), ECM images (the generator's encoder writes the same bytes as the ecm tools' `bin2ecm`, including Mode 2 Form 2 sectors and silence stored as sectors), cue sheets chdman 0.289 misreads (each with a plain twin), cue sheets with more than a CHD's tracks hold (CATALOG, FLAGS, ISRC, INDEX 02, `CDI/2352`), console boot headers for every console the page recognizes (PlayStation, PS2 on CD and DVD, PSP and UMD Video, Saturn, Sega CD, Dreamcast, NAOMI, PC Engine CD, PC-FX, Neo Geo CD, 3DO, CD-i and CD-i Bridge, CD32 and CDTV, Jaguar CD, Xbox 360, PS3, Video CD, DVD-Video), Sega first-party serials, discs of a set and releases told apart by size and region, PlayStation EBOOT.PBP files, LibCrypt discs (with an `.sbi`, a CloneCD `.sub`, or neither), multi-session discs, the layouts the rules in `app/quirks.js` look at, a music CD and a hard disk image.
+CD audio, a CloneCD image, a cdrdao TOC and a Nero image (compared with the engine's native build, `engine: true`, or a cue twin, since chdman 0.289 reads their pregaps wrongly), a PlayStation disc booting `PSX.EXE`, a NAOMI 2 GD-ROM, compressed ISOs (CSO v1 and v2, ZSO; the generator has its own LZ4 encoder), ECM images (the generator's encoder writes the same bytes as the ecm tools' `bin2ecm`, including Mode 2 Form 2 sectors and silence stored as sectors), cue sheets chdman 0.289 misreads (each with a plain twin), cue sheets with more than a CHD's tracks hold (CATALOG, FLAGS, ISRC, INDEX 02, `CDI/2352`), console boot headers for every console the page recognizes (PlayStation, PS2 on CD and DVD, PSP and UMD Video, Saturn, Sega CD, Dreamcast, NAOMI, PC Engine CD, PC-FX, Neo Geo CD, 3DO, CD-i and CD-i Bridge, CD32 and CDTV, Jaguar CD, Xbox 360, PS3, GameCube, Wii, Video CD, DVD-Video; PC-98, which has no marker, by a test database row), Sega first-party serials, discs of a set and releases told apart by size and region, PlayStation EBOOT.PBP files, LibCrypt discs (with an `.sbi`, a CloneCD `.sub`, or neither), multi-session discs, the layouts the rules in `app/quirks.js` look at, a music CD and a hard disk image.
 They carry serial numbers of real games, so identification can be tested against the built-in
 Redump database, but contain no game data. `manifest.json` lists each fixture with the job and
-identification the app should produce, the name a result keeps (`out`) and the rule ids its card must show (`quirks`). `--bench` adds large, realistic images for benchmarks.
+identification the app should produce, the name a result keeps (`out`), the rule ids its card must show (`quirks`; none when there are none) and the console's own note (`note`; none without one). `--bench` adds large, realistic images for benchmarks.
+`generator.sha256` records which version of `make_fixtures.py` and `discgen.py` made the fixtures: when
+either changes, the next run makes every fixture again (existing files are otherwise kept), and drops
+what was made from the old ones (native chdman's references, which are cached by file name, and the
+CHDs and files tests derived from them). Each run also removes the folders earlier runs extracted
+native CHDs into.
 The two `codec mix` images change content every hunk (data, noise, and audio in both byte orders),
 so that each codec wins, loses and stops early in turn.
 

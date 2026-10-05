@@ -332,6 +332,18 @@ test('a release whose serial is the disc’s without its suffix, of another titl
   await expect(other.locator('.note.ident')).toHaveAttribute('data-method', 'serial');
 });
 
+// PC-98 discs have nothing of their own to detect (a PC disc's file system): their size and checksum find them
+test('a PC-98 disc is found by its size and checksum', async ({ app }) => {
+  const fx = fixture('pc98-iso');
+  await app.open({ testdb: true });
+  await app.add(fx.add);
+  const card = app.job('pc98 game');
+  await app.settled(card);
+  await expect(card.locator('.sysbadge')).toHaveText('PC-98');
+  await expect(card.locator('.ident-name')).toHaveText(fx.name);
+  await expect(card.locator('.note.ident')).toHaveAttribute('data-method', 'hash');
+});
+
 // Sega's headers say which disc of a set this is: a Saturn game's two discs are named apart, and get a playlist
 test('the discs of a Saturn set are told apart by their headers and get a playlist', async ({ app, page }) => {
   const d1 = fixture('saturn-disc1'), d2 = fixture('saturn-disc2');

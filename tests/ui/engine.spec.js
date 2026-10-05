@@ -7,22 +7,21 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { FIXTURES, ROOT } from '../support/paths.js';
+import { engineSourcesNewest } from '../support/native.js';
 
 // CHDMAN_ENGINE: another build of the engine, such as the sanitized one (scripts/build-sanitized.sh)
 const ENGINE = process.env.CHDMAN_ENGINE ? path.resolve(process.env.CHDMAN_ENGINE) : path.join(ROOT, 'build', 'chdman-native');
 const UPSTREAM = path.join(ROOT, 'build', 'chdman-0.289');
 
-function newest(dir) {
-  let t = 0;
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    t = Math.max(t, e.isDirectory() ? newest(p) : fs.statSync(p).mtimeMs);
-  }
-  return t;
-}
 const missing = !fs.existsSync(ENGINE) || !fs.existsSync(UPSTREAM);
+const stale = !missing && fs.statSync(ENGINE).mtimeMs < engineSourcesNewest();
+// a run that asked for a build (CHDMAN_ENGINE: the sanitizer job) or for the references (REQUIRE_NATIVE:
+// CI) fails without it, rather than pass with every test skipped
+if ((process.env.CHDMAN_ENGINE || process.env.REQUIRE_NATIVE) && (missing || stale)) {
+  throw new Error(`${missing ? 'missing' : 'out of date'}: ${missing && !fs.existsSync(UPSTREAM) ? UPSTREAM : ENGINE} (older than engine/ or wasm/: build it again)`);
+}
 test.skip(missing, 'needs build/chdman-native and build/chdman-0.289');
-test.skip(!missing && fs.statSync(ENGINE).mtimeMs < newest(path.join(ROOT, 'engine', 'mame')), 'build/chdman-native is older than engine/: run scripts/build-native.sh');
+test.skip(stale, 'build/chdman-native is older than engine/ or wasm/: run scripts/build-native.sh');
 
 // a sanitized build's report fails the test, whatever chdman's exit code (it often exits 1 here on purpose)
 const SANITIZER = /ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:/;

@@ -12,6 +12,7 @@
 | MD5 (`src/lib/util/md5.h`, libFLAC's `md5.c`) | Public domain | Colin Plumb |
 | [Arm optimized-routines](https://github.com/ARM-software/optimized-routines): `cosf` and `log` for libFLAC ([`engine/libm`](engine/libm/README.md)) | MIT (chosen from MIT OR Apache-2.0 WITH LLVM-exception) | Arm Limited |
 | [libdeflate](https://github.com/ebiggers/libdeflate) v1.24: its compressor, for `--libdeflate` ([`engine/libdeflate`](engine/libdeflate/README.md)) | MIT | Eric Biggers, Google LLC |
+| [Emscripten](https://emscripten.org) 6.0.10's runtime: the JavaScript glue, and the C and C++ libraries compiled into the WebAssembly (musl libc, LLVM's libc++, libc++abi and compiler-rt) | Emscripten: MIT (or University of Illinois/NCSA); musl: MIT; LLVM's libraries: Apache-2.0 WITH LLVM-exception | The Emscripten authors; Rich Felker and musl's contributors; the LLVM project's contributors |
 | [libretro-database](https://github.com/libretro/libretro-database) Redump DATs (`db/db.json.gz`: game names, serials, sizes, CRC-32) | See libretro-database; data from [Redump](http://redump.org) | libretro and Redump contributors |
 | The serials of LibCrypt-protected PAL PlayStation games (`db/facts/libcrypt.tsv`), from [psxdatacenter](https://psxdatacenter.com)'s SBI list | A list of facts, with its source on each line | |
 
