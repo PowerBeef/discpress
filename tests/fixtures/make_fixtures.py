@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the synthetic test and benchmark discs into tests/.cache/fixtures.
 
-Usage: tests/fixtures/make_fixtures.py [--bench] [--cd-mb N] [--dvd-mb N] [--out DIR]
+Usage: tests/fixtures/make_fixtures.py [--force] [--bench] [--cd-mb N] [--dvd-mb N] [--out DIR]
 
 Test fixtures are small (a few MB in total) and cover every input type and every
 console the identifier knows how to recognize. They use serial numbers of real
@@ -10,15 +10,18 @@ but contain no game data. --bench also writes large, realistic images for timing
 
 Writes manifest.json describing each fixture: the files to add, the job the app
 should make from them, and what identification should report. Generation is
-deterministic and skipped for fixtures whose files already exist.
+deterministic and skipped for fixtures whose files already exist, unless --force, or
+unless this script or discgen.py changed since they were made (generator.sha256 in the
+output folder records which made them): then every fixture is made again.
 """
-import argparse, json, os, sys, zlib
+import argparse, hashlib, json, os, sys, zlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import discgen as g
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ap = argparse.ArgumentParser()
 ap.add_argument('--out', default=os.path.join(HERE, '..', '.cache', 'fixtures'))
+ap.add_argument('--force', action='store_true', help='make every fixture again, even those whose files exist')
 ap.add_argument('--bench', action='store_true', help='also make the large benchmark images')
 ap.add_argument('--cd-mb', type=int, default=300, help='benchmark CD size (data + audio)')
 ap.add_argument('--dvd-mb', type=int, default=1024, help='benchmark DVD size')
@@ -26,6 +29,10 @@ args = ap.parse_args()
 OUT = os.path.abspath(args.out)
 os.makedirs(OUT, exist_ok=True)
 manifest = []
+# the generator's own sources: fixtures another version of it made are made again
+GENERATOR = hashlib.sha256(b''.join(open(os.path.join(HERE, n), 'rb').read() for n in ('make_fixtures.py', 'discgen.py'))).hexdigest()
+STAMP = os.path.join(OUT, 'generator.sha256')
+FORCE = args.force or not os.path.exists(STAMP) or open(STAMP).read().strip() != GENERATOR
 
 
 def write(name, data):
@@ -36,7 +43,7 @@ def write(name, data):
 def fixture(key, files, **info):
     """Register a fixture; `files` maps file name -> zero-arg function returning bytes."""
     names = list(files)
-    if not all(os.path.exists(os.path.join(OUT, n)) for n in names):
+    if FORCE or not all(os.path.exists(os.path.join(OUT, n)) for n in names):
         print('generating', key, file=sys.stderr)
         for n, make in files.items():
             write(n, make())
@@ -175,6 +182,21 @@ fixture('ps1-toc', {
 }, add=['mgs disc1.toc', 'mgs disc1 (Track 1).bin', 'mgs disc1 (Track 2).bin'], engine=True, job='create', disc='cd', command='createcd',
    sys='ps1', serial='SLUS-00594', ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'])
 
+# the same disc's TOC with a PREGAP (zeros not in the file) before track 2: the layout rules read TOC files
+# too (ares drops such a pregap: ares-pregap) (audit 2026-10-05, L18)
+fixture('ps1-toc-pregap', {
+    'mgs pregap.toc': lambda: ('CD_ROM_XA\n\nTRACK MODE2_RAW\nDATAFILE "mgs pregap (Track 1).bin"\n\n'
+                               'TRACK AUDIO\nTWO_CHANNEL_AUDIO\nPREGAP 00:02:00\nDATAFILE "mgs pregap (Track 2).bin"\n').encode(),
+    'mgs pregap (Track 1).bin': lambda: g.raw_sectors(mgs_iso(), 2),
+    'mgs pregap (Track 2).bin': lambda: g.audio(225, 6),
+}, add=['mgs pregap.toc', 'mgs pregap (Track 1).bin', 'mgs pregap (Track 2).bin'], engine=True, job='create', disc='cd', command='createcd',
+   sys='ps1', serial='SLUS-00594', ident='ambiguous', names=['Metal Gear Solid (USA) (Disc 1)', 'Metal Gear Solid (USA) (Disc 1) (Rev 1)'],
+   quirks=['ares-pregap'])
+# a PS2 DVD whose SYSTEM.CNF has no boot line: its UDF volume makes it a PS2 disc, not a PS1 one (L23)
+fixture('ps2-noboot', {'noboot.iso': lambda: g.pad_sectors(g.iso9660({'SYSTEM.CNF': b'VER = 1.00\r\nVMODE = NTSC\r\n', 'SLUS_299.96': exe('SLUS_299.96')},
+                                                                       'PS2GAME', 'PLAYSTATION', udf=True))},
+        add=['noboot.iso'], job='create', disc='dvd', command='createdvd', sys='ps2', serial='SLUS-29996', ident='none', name='noboot')
+
 # the engine keeps the Nero image's stored pregap as a cue sheet's INDEX 00 is kept: the CHD of mgs ccd-ref.cue
 # (chdman 0.289 dropped it); the TOC's START is a stored pregap too, and its audio big-endian (cdrdao):
 # compared with the engine's native build (`engine`)
@@ -196,7 +218,7 @@ fixture('ps1-lone-bin', {
 fixture('ps1-slash-serial', {
     'allstar.iso': lambda: ps1_iso('SLES_041.07', 'ALLSTAR', 1, 40),
 }, add=['allstar.iso'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLES-04107',
-   ident='serial', name='All Star Action (Europe) (Disc 1)')
+   ident='serial', name='All Star Action (Europe) (Disc 1)', quirks=['ps1-cooked'])
 
 # a PlayStation CD game stored as a plain 2048-byte .iso: must become a CD CHD, not a DVD one
 # SYSTEM.CNF boots a generic PSX.EXE: the serial is the name of a file in the root (SLUS_009.75)
@@ -205,12 +227,28 @@ def psxexe_iso():
     return g.pad_sectors(g.iso9660({'SYSTEM.CNF': cnf, 'PSX.EXE': exe('SLUS_009.75'), 'SLUS_009.75': b'serial\r\n',
                                     'DATA/MOVIE.STR': g.filler(1 << 20, 91)}, 'TND', 'PLAYSTATION'))
 fixture('ps1-psxexe', {'psxexe.iso': psxexe_iso}, add=['psxexe.iso'], job='create', disc='cd', command='createcd', sys='ps1',
-   serial='SLUS-00975', ident='serial', name='007 - Tomorrow Never Dies (USA)')
+   serial='SLUS-00975', ident='serial', name='007 - Tomorrow Never Dies (USA)', quirks=['ps1-cooked'])
 
 fixture('ps1-as-iso', {
     'tnd.iso': lambda: ps1_iso('SLUS_009.75', 'TND', 1, 14),
 }, add=['tnd.iso'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-00975',
    ident='serial', name='007 - Tomorrow Never Dies (USA)', warning='This is a 2,048-byte copy of a PlayStation disc', quirks=['ps1-cooked'])
+
+# the same 2,048-byte copy as a lone .bin (an .img, say): the same warning (audit 2026-10-05, L20). The app
+# writes a MODE1/2048 cue for it; `ref` is that cue for native chdman
+fixture('ps1-cooked-bin', {
+    'cooked.bin': lambda: ps1_iso('SLUS_009.75', 'TND', 1, 151),
+    'cooked ref.cue': lambda: cue([('cooked.bin', 'MODE1/2048', 0)]),
+}, add=['cooked.bin'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-00975', ref='cooked ref.cue',
+   ident='serial', name='007 - Tomorrow Never Dies (USA)', warning='This is a 2,048-byte copy of a PlayStation disc', quirks=['ps1-cooked'])
+
+# a cue sheet with "INDEX 1" for INDEX 01, which chdman reads too: the data track, after a pregap in its
+# file, was read from the file's start and the console missed (audit 2026-10-05, L19)
+fixture('ps1-index1', {
+    'index one.cue': lambda: cue([('index one.bin', 'MODE2/2352', 150)]).replace(b'INDEX 01', b'INDEX 1'),
+    'index one.bin': lambda: g.raw_sectors(bytes(150 * 2048) + ps1_iso('SLUS_012.72', 'TWINE', 1, 153), 2),
+}, add=['index one.cue', 'index one.bin'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLUS-01272',
+   ident='serial', name='007 - The World Is Not Enough (USA)')
 
 # a CD game dumped as raw 2,352-byte sectors but named .iso. Given the .iso, chdman types the track by
 # file size alone: 640 raw sectors are also a whole number of 2,048-byte ones, so it would store the
@@ -286,14 +324,34 @@ def xgd3_iso():
 
 
 fixture('xbox-xgd3', {'xgd3.iso': xgd3_iso}, add=['xgd3.iso'], job='create', disc='dvd', command='createdvd', sys='xbox',
-        ident='none', name='xgd3')
+        ident='none', name='xgd3', note='Xbox emulators (xemu, Xenia) do not load CHDs.')
+
+# GameCube and Wii discs: their magic numbers (0xC2339F3D at 0x1C, 0x5D1C9EA3 at 0x18) after the game id and
+# before the title. No database rows for them (Dolphin doesn't load CHDs): the console and its note only
+def nintendo_iso(gid, title, magic_at, magic, seed):
+    h = bytearray(0x440)
+    h[0:6] = gid
+    h[magic_at:magic_at + 4] = magic.to_bytes(4, 'big')
+    h[0x20:0x20 + len(title)] = title
+    return bytes(h).ljust(2048, b'\x00') + g.filler((1 << 20) - 2048, seed)
+fixture('gc-iso', {'gc game.iso': lambda: nintendo_iso(b'GXXE01', b'SYNTHETIC GAMECUBE GAME', 0x1C, 0xC2339F3D, 191)},
+        add=['gc game.iso'], job='create', disc='dvd', command='createdvd', sys='gc', serial='GXXE01', ident='none', name='gc game',
+        note='Emulators do not load GameCube/Wii games from CHD.')
+fixture('wii-iso', {'wii game.iso': lambda: nintendo_iso(b'RXXE01', b'SYNTHETIC WII GAME', 0x18, 0x5D1C9EA3, 192)},
+        add=['wii game.iso'], job='create', disc='dvd', command='createdvd', sys='wii', serial='RXXE01', ident='none', name='wii game',
+        note='Emulators do not load GameCube/Wii games from CHD.')
+# a PC-98 disc has nothing of its own to detect (a PC disc's ISO 9660 volume): found by size and checksum
+# only, from a row of the test database (testdb.json)
+fixture('pc98-iso', {'pc98 game.iso': lambda: g.pad_sectors(g.iso9660({'GAME.EXE': g.filler(200 << 10, 193)}, 'PC98GAME'))},
+        add=['pc98 game.iso'], job='create', disc='cd', command='createcd', sys='pc98', testdb=True, ident='hash', name='PC-98 Game (Japan)')
 
 fixture('ps3-iso', {
     'ps3game.iso': lambda: g.pad_sectors(g.iso9660({
         'PS3_DISC.SFB': b'.SFB'.ljust(512, b'\x00'),
         'PS3_GAME/PARAM.SFO': g.sfo({'CATEGORY': 'DG', 'TITLE': 'SYNTHETIC PS3 GAME', 'TITLE_ID': 'BLUS30001'}),
         'PS3_GAME/USRDIR/EBOOT.BIN': g.filler(1 << 20, 73)}, 'PS3VOLUME')),
-}, add=['ps3game.iso'], job='create', disc='dvd', command='createdvd', sys='ps3', serial='BLUS-30001', ident='none', name='ps3game')
+}, add=['ps3game.iso'], job='create', disc='dvd', command='createdvd', sys='ps3', serial='BLUS-30001', ident='none', name='ps3game',
+   note='RPCS3 does not load CHDs.')
 
 # ---------------------------------------------------------------- Sega
 # Sega's system areas: the Saturn's IP.BIN has the serial at 0x20, the disc of the set (CD-1/1) at 0x38,
@@ -335,7 +393,7 @@ fixture('segacd', {
         ipbin(b'SEGADISCSYSTEM  ', 0x180, b'GM T-86015 -00', 0x150, b'A/X-101', {0x1F0: b'U  '}))), 1),
     'ax101 audio.bin': lambda: g.audio(300, 52, silence=150),
 }, add=['ax101.cue', 'ax101.bin', 'ax101 audio.bin'], job='create', disc='cd', command='createcd', sys='segacd', serial='T-86015',
-   ident='serial', name='A-X-101 (USA)')
+   ident='serial', name='A-X-101 (USA)', quirks=['segacd-index0'])
 
 fixture('dreamcast-gdi', {
     'aerowings.gdi': lambda: b'3\r\n1 0 4 2352 track01.bin 0\r\n2 450 0 2352 track02.raw 0\r\n3 45000 4 2352 track03.bin 0\r\n',
@@ -355,7 +413,7 @@ fixture('ps2-cd-audio', {
         'SLUS_299.99': exe('SLUS_299.99')}, 'CDDA', 'PLAYSTATION')), 2),
     'ps2 cdda (Track 2).bin': lambda: g.audio(225, 71, silence=150),
 }, add=['ps2 cdda.cue', 'ps2 cdda (Track 1).bin', 'ps2 cdda (Track 2).bin'], job='create', disc='cd', command='createcd', sys='ps2',
-   serial='SLUS-29999', ident='none', name='ps2 cdda')
+   serial='SLUS-29999', ident='none', name='ps2 cdda', quirks=['ps2-cd-audio'])
 
 # a CD-based Dreamcast disc (a CD-R, as homebrew is): an audio track, then the data track with a stored
 # pregap, which Flycast 2.7 and earlier reject in a CHD; the card says so
@@ -366,7 +424,7 @@ fixture('dreamcast-cdr', {
         {'1ST_READ.BIN': g.filler(512 << 10, 73)}, 'HOMEBREW', '',
         ipbin(b'SEGA SEGAKATANA ', 0x40, b'T0000     ', 0x80, b'HOMEBREW', {0x10: b'SEGA ENTERPRISES', 0x20: b'0000 CD-ROM1/1  ', 0x30: b'JUE     '}))), 1, 300),
 }, add=['dc cdr.cue', 'dc cdr (Track 1).bin', 'dc cdr (Track 2).bin'], job='create', disc='cd', command='createcd', sys='dc',
-   serial='T0000', ident='none', name='dc cdr')
+   serial='T0000', ident='none', name='dc cdr', quirks=['dc-cd-gaps'])
 
 # a NAOMI GD-ROM whose serial the database lists under NAOMI 2: the two share one header layout. Its CHD
 # keeps its file's name (out), which MAME and Flycast look for in the game's romset
@@ -378,7 +436,7 @@ fixture('naomi2-gdi', {
         {'1ST_READ.BIN': g.filler(1 << 20, 66)}, 'SPIKERS', '',
         ipbin(b'SEGA SEGAKATANA ', 0x40, b'GDS-0014  ', 0x80, b'BEACH SPIKERS', {0x10: b'SEGA ENTERPRISES', 0x20: b'0000 GD-ROM1/1  ', 0x30: b'JUE     ', 0x38: b'NAOMI   '}))), 1, 45000),
 }, add=['spikers.gdi', 'spikers01.bin', 'spikers02.raw', 'spikers03.bin'], job='create', disc='gdrom', command='createcd', sys='naomi2',
-   serial='GDS-0014', ident='serial', name='Beach Spikers - Virtua Beach Volleyball (World) (En,Ja)', out='spikers')
+   serial='GDS-0014', ident='serial', name='Beach Spikers - Virtua Beach Volleyball (World) (En,Ja)', out='spikers', quirks=['naomi-name'])
 
 # The Redump layout of a GD-ROM: one .bin per track, track 2's 2-second pregap stored at the start of
 # its file (INDEX 00), and REM lines marking the high-density area, which chdman places at LBA 45000.
@@ -444,6 +502,12 @@ gd_fixture('dc-disc2', 'nightmare', b'T-15117N', b'ALONE IN THE DARK', b'0000 GD
 # a Japanese disc whose serial the database lists only as a European release's base (T-99990-50): not that game
 saturn_fixture('saturn-other-region', 'other region', b'T-99990', b'OTHER REGION', b'CD-1/1', b'J', 145,
                testdb=True, ident='none', name='other region')
+
+# Sega's publishers gave other games a serial with another suffix: T-25406H is Hexen (USA), T-25406H-50
+# Doom (Europe). A Doom disc with a suffix Redump doesn't list: for Europe, named after Doom (Europe);
+# for the USA, not after Hexen, only offered
+saturn_fixture('saturn-suffix', 'doom eu', b'T-25406H-9', b'DOOM', b'CD-1/1', b'E', 147, ident='serial', name='Doom (Europe) (R)')
+saturn_fixture('saturn-related', 'doom us', b'T-25406H-1', b'DOOM', b'CD-1/1', b'U', 149, ident='none', name='doom us')
 
 # a PS1 disc whose serial (SLES-99980) names one release exactly and, as a base serial, another
 # (SLES-999802) of its data track's size: the size wins (Redump's Asterix, SLES-01748 and SLES-017482)
@@ -546,6 +610,58 @@ def data_fixture(key, name, iso, sys, mode=1, **info):
     fixture(key, {name + '.cue': data_cue(name, 'MODE%d/2352' % mode), name + '.bin': lambda: g.raw_sectors(iso(), mode)},
             add=[name + '.cue', name + '.bin'], job='create', disc='cd', command='createcd', sys=sys, ident='none', name=name, **info)
 
+# the same rules on the other consoles and layouts they cover: a Saturn cue sheet's POSTGAP line, a PC Engine
+# CD's and a PC-FX disc's gap lines (Beetle and Geargrafx count a postgap in, ares drops a pregap), a Neo Geo
+# CD's PREGAP line from track 3 on (NeoCD), and a CD-Extra disc (music, then a data session) of no console
+def pce_data(seed, marker):
+    return g.raw_sectors(g.pad_sectors(area(marker) + g.filler(256 << 10, seed)), 1)
+fixture('saturn-postgap-cmd', {
+    'albert postgap.cue': lambda: text_cue([
+        'FILE "albert postgap (Track 1).bin" BINARY', '  TRACK 01 MODE1/2352', '    INDEX 01 00:00:00', '    POSTGAP 00:02:00',
+        'FILE "albert postgap (Track 2).bin" BINARY', '  TRACK 02 AUDIO', '    INDEX 01 00:00:00']),
+    'albert postgap (Track 1).bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(
+        {'0.BIN': g.filler(256 << 10, 194)}, 'ALBERT', 'SEGA SEGASATURN',
+        ipbin(b'SEGA SEGASATURN ', 0x20, b'T-12705H  ', 0x60, b'ALBERT ODYSSEY', {0x10: b'SEGA TP T-127   ', 0x38: b'CD-1/1  ', 0x40: b'U         '}))), 1),
+    'albert postgap (Track 2).bin': lambda: g.audio(225, 195),
+}, add=['albert postgap.cue', 'albert postgap (Track 1).bin', 'albert postgap (Track 2).bin'], job='create', disc='cd',
+   command='createcd', sys='saturn', serial='T-12705H', ident='serial', name='Albert Odyssey - Legend of Eldean (USA)', quirks=['saturn-gapcmd'])
+fixture('pcecd-gaps', {
+    'pce gaps.cue': lambda: text_cue([
+        'FILE "pce gaps (Track 1).bin" BINARY', '  TRACK 01 AUDIO', '    INDEX 01 00:00:00',
+        'FILE "pce gaps (Track 2).bin" BINARY', '  TRACK 02 MODE1/2352', '    PREGAP 00:02:00', '    INDEX 01 00:00:00', '    POSTGAP 00:02:00',
+        'FILE "pce gaps (Track 3).bin" BINARY', '  TRACK 03 AUDIO', '    INDEX 01 00:00:00']),
+    'pce gaps (Track 1).bin': lambda: g.audio(150, 196),
+    'pce gaps (Track 2).bin': lambda: pce_data(197, {2048 + 0x20: b'PC Engine CD-ROM SYSTEM'}),
+    'pce gaps (Track 3).bin': lambda: g.audio(150, 198),
+}, add=['pce gaps.cue', 'pce gaps (Track 1).bin', 'pce gaps (Track 2).bin', 'pce gaps (Track 3).bin'], job='create', disc='cd',
+   command='createcd', sys='pcecd', ident='none', name='pce gaps', warning='Beetle PCE and Geargrafx read the tracks after a POSTGAP line',
+   quirks=['postgap', 'ares-pregap'])
+fixture('pcfx-postgap', {
+    'pcfx postgap.cue': lambda: text_cue([
+        'FILE "pcfx postgap (Track 1).bin" BINARY', '  TRACK 01 AUDIO', '    INDEX 01 00:00:00',
+        'FILE "pcfx postgap (Track 2).bin" BINARY', '  TRACK 02 MODE1/2352', '    INDEX 01 00:00:00', '    POSTGAP 00:02:00']),
+    'pcfx postgap (Track 1).bin': lambda: g.audio(150, 199),
+    'pcfx postgap (Track 2).bin': lambda: pce_data(200, {0: b'PC-FX:Hu_CD-ROM '}),
+}, add=['pcfx postgap.cue', 'pcfx postgap (Track 1).bin', 'pcfx postgap (Track 2).bin'], job='create', disc='cd',
+   command='createcd', sys='pcfx', ident='none', name='pcfx postgap', warning='Beetle PC-FX read the tracks after a POSTGAP line', quirks=['postgap'])
+fixture('ngcd-pregap', {
+    'ngcd pregap.cue': lambda: text_cue([
+        'FILE "ngcd pregap (Track 1).bin" BINARY', '  TRACK 01 MODE1/2352', '    INDEX 01 00:00:00',
+        'FILE "ngcd pregap (Track 2).bin" BINARY', '  TRACK 02 AUDIO', '    INDEX 01 00:00:00',
+        'FILE "ngcd pregap (Track 3).bin" BINARY', '  TRACK 03 AUDIO', '    PREGAP 00:02:00', '    INDEX 01 00:00:00']),
+    'ngcd pregap (Track 1).bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660({'IPL.TXT': b'PROG.PRG,0,0\r\n', 'PROG.PRG': g.filler(128 << 10, 201)}, 'NEOGEO')), 1),
+    'ngcd pregap (Track 2).bin': lambda: g.audio(150, 202),
+    'ngcd pregap (Track 3).bin': lambda: g.audio(150, 203),
+}, add=['ngcd pregap.cue', 'ngcd pregap (Track 1).bin', 'ngcd pregap (Track 2).bin', 'ngcd pregap (Track 3).bin'], job='create', disc='cd',
+   command='createcd', sys='ngcd', ident='none', name='ngcd pregap', warning='NeoCD reads the tracks after a PREGAP line from track 3 on', quirks=['ngcd-layout'])
+fixture('cd-extra', {
+    'cd extra.cue': lambda: text_cue(['REM SESSION 01', 'FILE "cd extra (Track 1).bin" BINARY', '  TRACK 01 AUDIO', '    INDEX 01 00:00:00',
+                                      'REM SESSION 02', 'FILE "cd extra (Track 2).bin" BINARY', '  TRACK 02 MODE1/2352', '    INDEX 01 00:00:00']),
+    'cd extra (Track 1).bin': lambda: g.audio(300, 204),
+    'cd extra (Track 2).bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660({'README.TXT': b'extra', 'VIDEO.MOV': g.filler(64 << 10, 205)}, 'CDEXTRA')), 1),
+}, add=['cd extra.cue', 'cd extra (Track 1).bin', 'cd extra (Track 2).bin'], job='create', disc='cd', command='createcd',
+   ident='none', name='cd extra', warning='so emulators read the data after the first session from the wrong place. Keep', quirks=['multisession'])
+
 # a PC Engine CD whose data track also has an ISO 9660 volume: its boot sector (sector 1) says so first
 data_fixture('pcecd-iso', 'pce iso', lambda: g.pad_sectors(g.iso9660({'GAME.DAT': g.filler(128 << 10, 171)}, 'PCEGAME', '',
              area({2048 + 0x20: b'PC Engine CD-ROM SYSTEM'}))), 'pcecd')
@@ -566,10 +682,11 @@ data_fixture('ngcd-abs', 'ngcd abs', lambda: g.pad_sectors(g.iso9660({'ABS.TXT':
 data_fixture('cdi-bridge', 'cdi bridge', lambda: g.pad_sectors(g.iso9660({'CDI/CDI_APP': g.filler(64 << 10, 177)}, 'CDIGAME',
              'CD-RTOS CD-BRIDGE')), 'cdi', mode=2)
 data_fixture('vcd', 'video cd', lambda: g.pad_sectors(g.iso9660({'VCD/INFO.VCD': b'VIDEO_CD' + bytes(2040), 'MPEGAV/AVSEQ01.DAT': g.filler(64 << 10, 178),
-             'CDI/CDI_VCD.APP': b'app'}, 'VIDEOCD', 'CD-RTOS CD-BRIDGE')), 'vcd', mode=2)
+             'CDI/CDI_VCD.APP': b'app'}, 'VIDEOCD', 'CD-RTOS CD-BRIDGE')), 'vcd', mode=2, note='This is a Video CD, not a game')
 fixture('dvd-video', {
     'film.iso': lambda: g.pad_sectors(g.iso9660({'VIDEO_TS/VIDEO_TS.IFO': g.filler(64 << 10, 179), 'AUDIO_TS/README': b''}, 'FILM')),
-}, add=['film.iso'], job='create', disc='dvd', command='createdvd', sys='video', ident='none', name='film')
+}, add=['film.iso'], job='create', disc='dvd', command='createdvd', sys='video', ident='none', name='film',
+   note='This is a video disc, not a game')
 # a UMD Video: UMD_DATA.BIN and a UMD_VIDEO folder, no PSP_GAME (PPSSPP plays games only)
 fixture('umd-video', {
     'umd film.iso': lambda: g.pad_sectors(g.iso9660({'UMD_DATA.BIN': b'UVXX-99999|0000000000000000|0001|G', 'UMD_VIDEO/PLAYLIST.UMD': g.filler(64 << 10, 180)},
@@ -584,6 +701,11 @@ fixture('ps2-dvd-small', {'ps2 small dvd.iso': lambda: ps2_iso('SLUS_299.98', Tr
         command='createdvd', sys='ps2', serial='SLUS-29998', ident='none', name='ps2 small dvd')
 fixture('ps2-cd-iso', {'ps2 cd.iso': lambda: ps2_iso('SLUS_299.97', False)}, add=['ps2 cd.iso'], job='create', disc='cd',
         command='createcd', sys='ps2', serial='SLUS-29997', ident='none', name='ps2 cd')
+# SLUS-21015 names a CD release (.bin, v1.01) and a DVD one (.iso, v2.01): which isn't proven without the
+# checksum, so the disc's UDF volume makes it a DVD (audit 2026-10-05, L17)
+fixture('ps2-mixed-dvd', {'madagascar.iso': lambda: ps2_iso('SLUS_210.15', True)}, add=['madagascar.iso'], job='create', disc='dvd',
+        command='createdvd', sys='ps2', serial='SLUS-21015', ident='ambiguous',
+        names=['DreamWorks Madagascar (USA) (v1.01)', 'DreamWorks Madagascar (USA) (v2.01)'])
 
 # a Jaguar CD: audio tracks only, in two sessions; the second session's first track holds the boot
 # header, byte-swapped as in the image's audio
@@ -743,7 +865,7 @@ fixture('segacd-ecm', {
     'ax101.bin.ecm': lambda: ecm_of('ax101.bin'),
     'ax101 audio.bin.ecm': lambda: ecm_of('ax101 audio.bin'),
 }, add=['ax101.cue', 'ax101.bin.ecm', 'ax101 audio.bin.ecm'], job='create', disc='cd', command='createcd', sys='segacd',
-   serial='T-86015', ident='serial', name='A-X-101 (USA)')
+   serial='T-86015', ident='serial', name='A-X-101 (USA)', quirks=['segacd-index0'])
 # only the data track packed
 fixture('ps1-ecm-mixed', {
     'mgs disc1 (Track 1).bin.ecm': lambda: ecm_of('mgs disc1 (Track 1).bin'),
@@ -830,8 +952,11 @@ with open(os.path.join(OUT, 'testdb.json'), 'w') as f:
                        row('Size Rank Game (Europe) (En,Fr)', 'SLES-99980', sr + bytes(2352), 'bin'),
                        row('Size Rank Game (Europe) (De,Es) (Rev 1)', 'SLES-999802', sr, 'bin')],
                'psp': [row('Checksum Verified PSP Game (USA)', 'ULUS-99999', ui, 'iso')],
-               'saturn': [row('Other Region Game (Europe)', 'T-99990-50', bytes(2352), 'bin')]}, f)
+               'saturn': [row('Other Region Game (Europe)', 'T-99990-50', bytes(2352), 'bin')],
+               'pc98': [row('PC-98 Game (Japan)', '', open(os.path.join(OUT, 'pc98 game.iso'), 'rb').read(), 'iso')]}, f)
 
 with open(os.path.join(OUT, 'manifest.json'), 'w') as f:
     json.dump(manifest, f, indent=1)
+with open(STAMP, 'w') as f:
+    f.write(GENERATOR + '\n')
 print('%d fixtures in %s' % (len(manifest), OUT))

@@ -68,13 +68,22 @@ export function info(chd) {
   return { raw: out, sha1: kv['SHA1'], dataSha1: kv['Data SHA1'], kv };
 }
 
-function newest(dir) {
-  let t = 0;
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    t = Math.max(t, e.isDirectory() ? newest(p) : fs.statSync(p).mtimeMs);
+let sourcesNewest;
+/**
+ * When the engine's sources last changed: the newest of the files scripts/engine-sources.py lists (engine/
+ * and wasm/, without documentation, engine/FILES and the diff), so a change to engine/libm or wasm/Makefile
+ * marks a native build out of date too, and regenerating the diff doesn't.
+ */
+export function engineSourcesNewest() {
+  if (sourcesNewest === undefined) {
+    const list = execFileSync('python3', [path.join(ROOT, 'scripts', 'engine-sources.py'), '--list'], { encoding: 'utf8' });
+    sourcesNewest = 0;
+    for (const line of list.split('\n')) {
+      const p = line.slice(66); // "<sha256>  <path>"
+      if (p && p !== 'build.sh') sourcesNewest = Math.max(sourcesNewest, fs.statSync(path.join(ROOT, p)).mtimeMs);
+    }
   }
-  return t;
+  return sourcesNewest;
 }
 
 let engineCached;
@@ -85,7 +94,7 @@ let engineCached;
 export function engineChdman() {
   if (engineCached === undefined) {
     const bin = path.join(ROOT, 'build', 'chdman-native');
-    engineCached = fs.existsSync(bin) && fs.statSync(bin).mtimeMs >= newest(path.join(ROOT, 'engine', 'mame')) ? bin : null;
+    engineCached = fs.existsSync(bin) && fs.statSync(bin).mtimeMs >= engineSourcesNewest() ? bin : null;
   }
   return engineCached;
 }
@@ -134,6 +143,17 @@ export function engineExtract(command, chd, outName, extra = []) {
   const dir = fs.mkdtempSync(path.join(CACHE, 'native-x-'));
   execFileSync(bin, [command, '-i', chd, '-o', path.join(dir, outName), ...extra], { cwd: FIXTURES, stdio: ['ignore', 'pipe', 'pipe'] });
   return { dir, files: fs.readdirSync(dir).sort() };
+}
+
+/**
+ * Copy a file to a path that tests of other browsers may use at once (a CHD in the fixtures' chd/):
+ * written aside, then renamed, so no test reads it half written.
+ */
+export function sharedCopy(src, dst) {
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  const part = `${dst}.${process.pid}.tmp`;
+  fs.copyFileSync(src, part);
+  fs.renameSync(part, dst);
 }
 
 export function sha1File(p) {

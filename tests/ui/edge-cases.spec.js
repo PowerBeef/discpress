@@ -377,7 +377,9 @@ test('Cancel stops a job that is still identifying the game', async ({ app }) =>
   await app.waitState(card, 'running');
   await card.locator('.job-foot button.danger', { hasText: 'Cancel' }).click();
   await app.waitState(card, 'canceled', 3000);
-  await app.page.waitForTimeout(6000); // past the identification: it must not start after all
+  // past the identification (the card shows what it found): it must not start after all
+  await expect(card.locator('.note.ident')).toBeVisible({ timeout: 30_000 });
+  await app.page.waitForTimeout(500);
   expect(await card.getAttribute('data-state')).toBe('canceled');
   await card.locator('.job-foot button', { hasText: 'Try again' }).click();
   await app.waitState(card, 'ready');
@@ -458,6 +460,62 @@ test('same-named tracks of the same size and date in two game folders are both u
     sums.push(fs.readFileSync(out.path).subarray(0x54, 0x68).toString('hex')); // the CHD's SHA-1
   }
   expect(sums[0]).not.toBe(sums[1]);
+});
+
+// A descriptor picked on its own (no folder) waits for its tracks. A folder of other games added next
+// gave it the first same-named track of any of them (audit 2026-10-05, H1); a folder of only its tracks
+// still completes it
+async function addLoose(app, files) {
+  const [chooser] = await Promise.all([app.page.waitForEvent('filechooser'), app.page.click('#addFiles')]);
+  await chooser.setFiles(files);
+}
+test('a cue sheet picked on its own does not take a track from another game\'s folder', async ({ app }, testInfo) => {
+  const root = gameFolders(testInfo);
+  const lone = testInfo.outputPath('lone');
+  fs.mkdirSync(lone, { recursive: true });
+  fs.copyFileSync(path.join(root, 'Game A', 'game.cue'), path.join(lone, 'game.cue'));
+  await app.open();
+  await addLoose(app, [path.join(lone, 'game.cue')]);
+  await expect(app.jobs()).toHaveCount(1);
+  await addFolder(app, root);
+  await expect(app.jobs()).toHaveCount(3);
+  const states = await app.jobs().evaluateAll(els => els.map(e => e.getAttribute('data-state')).sort());
+  expect(states).toEqual(['blocked', 'ready', 'ready']);
+  await expect(app.jobs().first()).toHaveAttribute('data-state', 'blocked'); // the one picked on its own
+});
+test('a cue sheet picked on its own takes its tracks from a folder that holds only them', async ({ app }, testInfo) => {
+  const dir = testInfo.outputPath('tracks only');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'twine.bin'), path.join(dir, 'twine.bin'));
+  await app.open();
+  await app.add(['twine.cue']);
+  await expect(app.jobs()).toHaveCount(1);
+  await addFolder(app, dir);
+  await expect(app.jobs()).toHaveCount(1);
+  await app.settled(app.job('twine'));
+  await expect(app.job('twine')).toHaveAttribute('data-state', 'ready');
+});
+
+// "Run again" on a finished card deleted its result without a word, unlike every other button that
+// throws results away (audit 2026-10-05, M3)
+test('Run again asks before throwing away a result that wasn\'t saved', async ({ app, page }) => {
+  await app.open();
+  await app.add(fixture('ps1-single').add);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await app.run(card);
+  const asked = [];
+  page.removeAllListeners('dialog');
+  page.on('dialog', d => { asked.push(d.message()); d.dismiss(); });
+  await card.locator('.job-foot button', { hasText: 'Run again' }).click();
+  expect(asked).toEqual(['Discard the results of the previous run? Download them first if you need them.']);
+  await expect(card).toHaveAttribute('data-state', 'done');
+  await expect(card.locator('.result .out')).toHaveCount(1);
+  // once saved, it starts again without asking
+  await app.downloads(card);
+  await card.locator('.job-foot button', { hasText: 'Run again' }).click();
+  await expect(card).toHaveAttribute('data-state', 'ready');
+  expect(asked).toHaveLength(1);
 });
 
 // the files in the page's private storage (OPFS), as session/job/slot paths
@@ -634,4 +692,83 @@ test('unsupported disc images and archives get a card that explains them', async
   }
   await expect(app.jobs().filter({ hasText: 'RAR archives' })).toHaveCount(1);
   await expect(app.job('shmup').locator('.sub')).toHaveText('.mds file · 4.00 KB');
+});
+
+// A cue sheet naming one file twice, in two spellings ("Twine.bin", "twine.bin", as Windows tools may
+// write it): the second was "missing", its file already taken by the first (audit 2026-10-05, L13). (The
+// engine reads a file named again as the same file, so track 2 starts further in.)
+test('a cue sheet naming a file twice in different case finds it both times', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'case-refs');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'twine.bin'), path.join(dir, 'twine.bin'));
+  fs.writeFileSync(path.join(dir, 'case.cue'), 'FILE "Twine.bin" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\nFILE "twine.bin" BINARY\n  TRACK 02 MODE2/2352\n    INDEX 01 00:00:10\n');
+  await app.open();
+  await app.add(['gen/case-refs/case.cue', 'gen/case-refs/twine.bin']);
+  const card = app.job('case');
+  await app.settled(card);
+  await expect(card).toHaveAttribute('data-state', 'ready');
+  await expect(card).not.toContainText('Missing');
+  await app.run(card);
+});
+
+// The "Saved as" hint under the name field kept the name the card was drawn with (audit 2026-10-05, L16)
+test('the Saved as hint follows the name being typed', async ({ app }) => {
+  await app.open({ settings: { rename: false } });
+  await app.add(fixture('ps1-single').add);
+  const card = app.job('twine');
+  await app.settled(card);
+  await card.locator('details.opts summary').click();
+  const field = card.locator('label.field', { hasText: 'Output name' });
+  await expect(field.locator('.hint')).toHaveText('Saved as twine.chd');
+  await field.locator('input').fill('my: game');
+  await expect(field.locator('.hint')).toHaveText('Saved as my_ game.chd');
+  await expect(card.locator('code.cmd')).toContainText('my_ game.chd');
+});
+
+// macOS gives file names with decomposed accents (an é as e and a combining accent); a cue sheet
+// written elsewhere names them composed, and the track was "missing" (audit 2026-10-05, L14)
+test('a cue sheet finds a track whose name has decomposed accents, as on macOS', async ({ app, page }) => {
+  // (given as contents: a file whose path has a decomposed name doesn't reach the page through the chooser)
+  await app.open();
+  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#addFiles')]);
+  await chooser.setFiles([
+    { name: 'cafe.cue', mimeType: 'application/octet-stream', buffer: Buffer.from('FILE "Caf\u00e9.bin" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n') },
+    { name: 'Cafe\u0301.bin', mimeType: 'application/octet-stream', buffer: fs.readFileSync(path.join(FIXTURES, 'twine.bin')) }
+  ]);
+  const card = app.job('cafe');
+  await app.settled(card);
+  await expect(card).toHaveAttribute('data-state', 'ready');
+  await expect(card.locator('.job-title .sub')).toContainText('CUE + 1 track file');
+  await app.run(card);
+});
+
+// "FILE Tony's Game.bin BINARY": an unquoted name with spaces and an apostrophe was read as the missing
+// file "Tonys Game.bin BINARY"; chdman gets a copy with the name in quotes (audit 2026-10-05, L15)
+test('a cue sheet whose FILE name is not in quotes finds its track', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'unquoted');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'twine.bin'), path.join(dir, "Tony's Game.bin"));
+  fs.writeFileSync(path.join(dir, 'tony.cue'), "FILE Tony's Game.bin BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n");
+  await app.open();
+  await app.add(['gen/unquoted/tony.cue', "gen/unquoted/Tony's Game.bin"]);
+  const card = app.job('tony');
+  await app.settled(card);
+  await expect(card).toHaveAttribute('data-state', 'ready');
+  await expect(card).not.toContainText('Missing');
+  await app.run(card);
+});
+
+// Changing the type of CHD put the compression back to the default without a word (audit 2026-10-05):
+// the preset picked stays when the other type has it too
+test('the compression picked stays when the type of CHD changes', async ({ app }) => {
+  await app.open();
+  await app.add(['xgd3.iso']);
+  const card = app.job('xgd3');
+  await app.settled(card);
+  await card.locator('details.opts summary').click();
+  await card.locator('label.field', { hasText: 'Compression' }).locator('select').selectOption({ label: 'Faster to create' });
+  await expect(card.locator('code.cmd')).toContainText('-c zlib,huff');
+  await card.locator('.row', { hasText: 'Create as' }).locator('button', { hasText: 'CD CHD' }).click();
+  await expect(card.locator('code.cmd')).toContainText('chdman createcd');
+  await expect(card.locator('code.cmd')).toContainText('-c cdzl,cdfl');
 });

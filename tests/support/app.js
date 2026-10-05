@@ -114,9 +114,12 @@ export class App {
     await expect(card.locator('.note', { hasText: /Identifying|Checking against/ })).toHaveCount(0, { timeout: 60_000 });
   }
 
-  async run(card, { expectState = 'done', timeout = 180_000 } = {}) {
+  // (timeout: less than a test's 180 s, so a job that never ends fails here, with the card's text)
+  async run(card, { expectState = 'done', timeout = 150_000 } = {}) {
     await card.locator('.job-foot button.primary').click();
-    const st = await this.waitState(card, ['done', 'error', 'canceled'], timeout);
+    let st;
+    try { st = await this.waitState(card, ['done', 'error', 'canceled'], timeout); }
+    catch (e) { throw new Error(`job still "${await card.getAttribute('data-state')}" after ${timeout / 1000} s:\n${await card.innerText()}`); }
     if (st !== expectState) {
       const text = await card.innerText();
       throw new Error(`job ended "${st}", expected "${expectState}":\n${text}`);

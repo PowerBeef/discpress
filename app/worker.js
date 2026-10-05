@@ -170,6 +170,8 @@ function CisoStore(base, chunkBytes, label) {
   this.shift = Math.pow(2, h[21]);
   if (!this.bs || this.bs > (1 << 24) || this.bs % 2048) throw new Error('unusual CSO block size ' + this.bs);
   this.nblocks = Math.ceil(this.sizeV / this.bs);
+  // (an index longer than the file, from a damaged header, isn't allocated: it can't be read anyway)
+  if (base.sizeV != null && 24 + (this.nblocks + 1) * 4 > base.sizeV) throw new Error('truncated CSO index');
   var raw = new Uint8Array((this.nblocks + 1) * 4);
   if (base.read(raw, 24, raw.length) !== raw.length) throw new Error('truncated CSO index');
   this.index = new Uint32Array(raw.buffer);
@@ -187,11 +189,19 @@ CisoStore.prototype.damaged = function (b) {
   }
   return { errno: ERR.EIO };
 };
+// the module's memory for n bytes; a failure (the page's memory exhausted) stops the job with a message
+// rather than let it write through a null pointer. (Pointers from the module are used as they come,
+// signed: right while its memory can't grow past 2 GB, MAXIMUM_MEMORY in wasm/link.sh)
+function wasmAlloc(M, n) {
+  var p = M._malloc(n);
+  if (!p) throw new Error('Out of memory: the browser gave this job no more memory. Close other tabs and try again.');
+  return p;
+}
 CisoStore.prototype.setModule = function (M) {
   this.M = M;
   this.srcCap = this.bs + 64;
-  this.src = M._malloc(this.srcCap);
-  this.dst = M._malloc(this.bs);
+  this.src = wasmAlloc(M, this.srcCap);
+  this.dst = wasmAlloc(M, this.bs);
 };
 // the block's stored bytes start and length, and how they are stored: 0 raw, 1 deflate, 2 LZ4
 CisoStore.prototype.block = function (b) {
@@ -221,7 +231,7 @@ CisoStore.prototype.chunk = function (c) {
       if (lz4Block(stored, at, at + blk.len, out, o, want) !== want) throw this.damaged(b);
     } else {
       if (!M) throw this.damaged(b);
-      if (blk.len > this.srcCap) { M._free(this.src); this.srcCap = blk.len; this.src = M._malloc(blk.len); }
+      if (blk.len > this.srcCap) { M._free(this.src); this.srcCap = blk.len; this.src = wasmAlloc(M, blk.len); }
       M.HEAPU8.set(stored.subarray(at, at + blk.len), this.src);
       if (M._wasm_inflate_raw(this.src, blk.len, this.dst, want) !== want) throw this.damaged(b);
       out.set(M.HEAPU8.subarray(this.dst, this.dst + want), o);
@@ -276,8 +286,8 @@ function PbpStore(base, pbp, label) {
 PbpStore.prototype.damaged = CisoStore.prototype.damaged;
 PbpStore.prototype.setModule = function (M) {
   this.M = M;
-  this.src = M._malloc(PBP_BLOCK + 64);
-  this.dst = M._malloc(PBP_BLOCK);
+  this.src = wasmAlloc(M, PBP_BLOCK + 64);
+  this.dst = wasmAlloc(M, PBP_BLOCK);
 };
 PbpStore.prototype.block = function (b) {
   for (var i = 0; i < this.cache.length; i++) if (this.cache[i].b === b) return this.cache[i].data;
@@ -387,8 +397,8 @@ EcmStore.prototype.damaged = function (o, why) {
 };
 EcmStore.prototype.setModule = function (M) {
   this.M = M;
-  this.src = M._malloc(Math.max(1, this.maxIn));
-  this.dst = M._malloc(Math.max(1, this.maxOut));
+  this.src = wasmAlloc(M, Math.max(1, this.maxIn));
+  this.dst = wasmAlloc(M, Math.max(1, this.maxOut));
 };
 // the window holding image offset p
 EcmStore.prototype.find = function (p) {
@@ -403,6 +413,8 @@ EcmStore.prototype.find = function (p) {
   return (this.last = lo);
 };
 EcmStore.prototype.window = function (w) {
+  // an image whose checksum didn't match stays damaged: read again, it doesn't give its data
+  if (this.bad) throw this.damaged(0);
   for (var i = 0; i < this.windows.length; i++) if (this.windows[i].w === w) return this.windows[i].data;
   var M = this.M, cp = this.cp, inLen = cp.inp[w + 1] - cp.inp[w], outLen = cp.out[w + 1] - cp.out[w];
   if (!M) throw this.damaged(cp.out[w]);
@@ -411,7 +423,7 @@ EcmStore.prototype.window = function (w) {
   if (cp.out[w] === this.edcAt) {
     this.edc = M._wasm_ecm_edc(this.edc, this.dst, outLen) >>> 0;
     this.edcAt += outLen;
-    if (this.edcAt === this.sizeV && this.edc !== this.edcWant) throw this.damaged(0, 'the image rebuilt from it doesn’t match the checksum it ends with.');
+    if (this.edcAt === this.sizeV && this.edc !== this.edcWant) { this.bad = true; throw this.damaged(0, 'the image rebuilt from it doesn’t match the checksum it ends with.'); }
   }
   var data = M.HEAPU8.slice(this.dst, this.dst + outLen);
   this.windows = [{ w: w, data: data }].concat(this.windows.slice(0, 1));
@@ -509,7 +521,13 @@ OpfsStore.prototype.read = function (dst, pos, len) {
   if (pos >= this.sizeV) return 0;
   len = Math.min(len, this.sizeV - pos);
   this.flushRange(pos, len, null);
-  var n = this.h.read(dst.subarray(0, len), { at: pos });
+  var n;
+  // (the browser's own error, a DOMException, as the file system's: chdman reports a read error)
+  try { n = this.h.read(dst.subarray(0, len), { at: pos }); }
+  catch (e) {
+    postMessage({ type: 'notice', level: 'error', message: 'The browser could not read back "' + this.name + '" from its storage (' + (e && e.name || e) + ').' });
+    throw { errno: ERR.EIO };
+  }
   // below the file's size, a part never written (past the end of what's on disk) reads as zeros, as in POSIX
   if (n < len) dst.fill(0, n, len);
   return len;
@@ -550,7 +568,8 @@ OpfsStore.prototype.write = function (src, pos) {
 };
 OpfsStore.prototype.truncate = function (n) {
   this.flush();
-  this.h.truncate(n);
+  try { this.h.truncate(n); }
+  catch (e) { throw { errno: e && e.name === 'QuotaExceededError' ? ERR.ENOSPC : ERR.EIO }; }
   this.sizeV = n;
 };
 
@@ -768,17 +787,34 @@ function makeFS(FS) {
 
 /* ---------------- output storage ---------------- */
 
+// a file's synchronous access handle. A run started again right after a cancel finds the previous run's
+// handles still being released (the browser frees them after the worker that held them is gone): wait
+// for them for up to about 3 s rather than fall back to memory
+async function openSyncHandle(fh) {
+  for (var tries = 0; ; tries++) {
+    try { return await fh.createSyncAccessHandle(); }
+    catch (e) {
+      if (tries >= 15 || !e || (e.name !== 'NoModificationAllowedError' && e.name !== 'InvalidStateError')) throw e;
+      await new Promise(function (r) { setTimeout(r, 200); });
+    }
+  }
+}
+var memReason = '';
+
 async function makeBacking(msg) {
   var registry = [], slots = [], dir = null;
+  memReason = '';
   if (msg.outMode === 'opfs' && msg.slots > 0) {
     try {
+      // testing: storage that fails, held by another run ('lock') or missing ('other')
+      if (msg.debugStorage) throw new DOMException('test', msg.debugStorage === 'lock' ? 'NoModificationAllowedError' : 'NotSupportedError');
       dir = await navigator.storage.getDirectory();
       var path = msg.dirPath || ['chdman-work', msg.jobId];
       for (var pi = 0; pi < path.length; pi++) dir = await dir.getDirectoryHandle(path[pi], { create: true });
       for (var i = 0; i < msg.slots; i++) {
         var name = 'slot' + i;
         var fh = await dir.getFileHandle(name, { create: true });
-        var handle = await fh.createSyncAccessHandle();
+        var handle = await openSyncHandle(fh);
         var t = handle.truncate(0);
         if (t && typeof t.then === 'function') {
           // early Safari versions only had asynchronous access handles
@@ -791,7 +827,8 @@ async function makeBacking(msg) {
       slots.forEach(function (s) { try { s.handle.close(); } catch (e) { /* ignore */ } });
       slots = [];
       dir = null;
-      postMessage({ type: 'notice', level: 'info', storage: 'mem', message: 'Disk storage unavailable (' + (err && err.name || err) + '); keeping results in memory.' });
+      memReason = err && err.name || String(err);
+      postMessage({ type: 'notice', level: 'info', storage: 'mem', message: 'Disk storage unavailable (' + memReason + '); keeping results in memory.' });
     }
   }
   var streaming = msg.outMode === 'stream', crcOnly = msg.outMode === 'crc';
@@ -833,7 +870,8 @@ async function makeBacking(msg) {
         }
         if (st.deleted || !keep) return;
         if (st instanceof OpfsStore) {
-          try { st.flush(); st.h.flush(); } catch (e) { /* ignore */ }
+          // (the backing's flush, run before, reported a failed write; this one only makes it durable)
+          try { st.flush(); st.h.flush(); } catch (e) { postMessage({ type: 'notice', level: 'info', message: 'Storage: ' + st.name + ' could not be flushed (' + (e && e.name || e) + ').' }); }
           outputs.push({ name: st.name, size: st.sizeV, kind: 'opfs', slot: st.slot.name });
         } else {
           outputs.push({ name: st.name, size: st.sizeV, kind: 'blob', blob: st.toBlob() });
@@ -910,7 +948,7 @@ async function stageInput(msg, index, stages) {
     if (e && typeof e.errno === 'number') throw e; // the copy couldn't be written (storage full): not a read problem
     // async reads fail too: let the page read the file and send it over
     await new Promise(function (resolve, reject) {
-      stageWaiter = { dst: dst, resolve: resolve, reject: reject, size: size, onChunk: function (p) { pos = p; prog(); } };
+      stageWaiter = { dst: dst, resolve: resolve, reject: reject, size: size, at: pos, onChunk: function (p) { pos = p; prog(); } };
       postMessage({ type: 'stage-request', index: index, from: pos });
     });
     stageWaiter = null;
@@ -929,7 +967,7 @@ function setupParallel(M, ports) {
   var helpers = ports.map(function (port, i) { return { port: port, inflight: 0, id: i, dead: false, sent: {}, dsent: {} }; });
   function liveHelpers() { return helpers.filter(function (h) { return !h.dead; }); }
   var hunkbytes = 0, batchSize = 1, scratch = 0, open = null, pending = [], fifo = [], done = new Set();
-  var sleeper = null, seq = 0, failed = null;
+  var sleeper = null, seq = 0, failed = null, closed = false;
   var mc = new MessageChannel(), wakeFn = null;
   mc.port1.onmessage = function () { var w = wakeFn; wakeFn = null; if (w) w(); };
   function wake(w) { wakeFn = w; mc.port2.postMessage(0); }
@@ -972,8 +1010,9 @@ function setupParallel(M, ports) {
     var dlost = Object.keys(h.dsent).map(function (k) { return h.dsent[k]; });
     h.sent = {}; h.dsent = {};
     var left = liveHelpers().length;
-    // (compressing, nothing can take new hunks now: the run stops, and the page runs the job again)
-    if (!left) failed = message;
+    // (compressing, nothing can take new hunks now: the run stops, and the page runs the job again;
+    // an extract or verify decompresses by itself instead)
+    if (!left && M.parActive) failed = message;
     postMessage({ type: 'notice', level: 'info', message: 'A helper thread stopped (' + message + ')' + (left ? '; the ' + (left === 1 ? 'other took' : left + ' others took') + ' over its work.' : '.') });
     pending = lost.concat(pending);
     rd.queue = dlost.filter(function (b) { return b.gen === rd.gen; }).concat(rd.queue);
@@ -989,7 +1028,13 @@ function setupParallel(M, ports) {
       if (m.type === 'error') { helperDown(h, m.message); return; }
       if (h.dead) return; // a result it sent before failing: its batches were given to the others
       if (m.type === 'dresult') {
-        if (!h.dsent[m.id]) return; // not a batch this helper has (anything else would be a fault)
+        var db = h.dsent[m.id];
+        if (!db) return; // not a batch this helper has (anything else would be a fault)
+        // the batch's own hunks, each a hunk long: anything else would count hunks it never had
+        var dm = m.meta, dok = m.ok, dlive = db.gen === rd.gen;
+        var dfit = dm && dok && m.gen === db.gen && dm.length === db.n * 3 && dok.length === db.n && (!dlive || (m.out && m.out.length === db.n * rd.hb));
+        for (var dq = 0; dfit && dq < db.n; dq++) if (dm[dq * 3] !== db.meta[dq * 3]) dfit = false;
+        if (!dfit) { helperDown(h, 'it answered for other hunks'); return; }
         delete h.dsent[m.id];
         h.inflight--;
         rdResult(m);
@@ -998,16 +1043,23 @@ function setupParallel(M, ports) {
         return;
       }
       if (m.type !== 'result') return;
+      // chdman ended (done, or failed): its work items are gone, so nothing more is written to them
+      if (closed) return;
       // results go into chdman's work items only for the batch this helper was given, item by item:
-      // an answer for another batch, or for other items, would write over hunks it doesn't hold
+      // an answer for another batch, or for other items, would write over hunks it doesn't hold. And
+      // each as the compressor gives it: a codec slot that was tried, shorter than a hunk; -1 (stored)
+      // a whole hunk; -2 (a repeat, compressed by chdman itself) nothing
       var sentB = h.sent[m.id];
       if (!sentB) return;
       var items = m.items, meta = m.meta, sha1 = m.sha1, out = m.out, o = 0;
-      for (var q = 0, total = 0; q < sentB.n; q++) {
-        var qlen = meta[q * 3 + 1] >>> 0;
+      var fits = items && meta && sha1 && out && items.length === sentB.n && meta.length === sentB.n * 3 && sha1.length === sentB.n * 20;
+      for (var q = 0, total = 0; fits && q < sentB.n; q++) {
+        var qc = meta[q * 3], qlen = meta[q * 3 + 1] >>> 0;
         total += qlen;
-        if (items.length !== sentB.n || items[q] !== sentB.items[q] || qlen > hunkbytes || total > out.length) { helperDown(h, 'it answered for other hunks, or with more data than a hunk'); return; }
+        fits = items[q] === sentB.items[q] && total <= out.length &&
+          (qc === -2 ? qlen === 0 : qc === -1 ? qlen === hunkbytes : qc >= 0 && qc <= 3 && ((sentB.codecs[q] >> qc) & 1) === 1 && qlen < hunkbytes);
       }
+      if (!fits) { helperDown(h, 'it answered for other hunks, or not as the compressor does'); return; }
       delete h.sent[m.id];
       h.inflight--;
       for (var i = 0; i < items.length; i++) {
@@ -1035,10 +1087,16 @@ function setupParallel(M, ports) {
     // (with 4 KiB DVD hunks, 512 KiB batches meant only two helpers ever had work)
     batchSize = Math.max(1, Math.min(64, Math.floor((512 * 1024) / hb), Math.floor(128 / (2 * helpers.length))));
     scratch = M._malloc(hb + 64);
+    if (!scratch) return false; // no memory for it: chdman compresses by itself
     helpers.forEach(function (h) { h.port.postMessage({ type: 'init', hunkbytes: hb, unitbytes: ub, comps: comps, flags: flags || 0 }); });
     M.parActive = true;
     postMessage({ type: 'notice', level: 'debug', message: 'multi-core compression: ' + helpers.length + ' helper threads, batch ' + batchSize });
     return true;
+  };
+  // chdman has ended: late answers are dropped (their work items no longer exist)
+  M.parClose = function () {
+    closed = true;
+    helpers.forEach(function (h) { h.sent = {}; });
   };
   // codecs: the codec slots the codec plan tries for this hunk, a bit each (15 = all)
   M.parSubmit = function (item, ptr, len, codecs) {
@@ -1153,7 +1211,7 @@ async function runHelper(msg) {
   await loadModule(msg);
   var M = await instantiate({});
   var port = msg.port;
-  var inbuf = 0, outbuf = 0, res = M._malloc(16), sha = M._malloc(32), hb = 0;
+  var inbuf = 0, outbuf = 0, res = wasmAlloc(M, 16), sha = wasmAlloc(M, 32), hb = 0;
   var dinbuf = 0, doutbuf = 0, dhb = 0;
   port.onmessage = function (e) {
     var m = e.data;
@@ -1173,6 +1231,8 @@ async function runHelper(msg) {
         var ok = new Uint8Array(dn), dout = new Uint8Array(dn * dhb), doff = 0;
         for (var di = 0; di < dn; di++) {
           var dlen = dmeta[di * 3 + 2];
+          // (more than a hunk, which a damaged CHD's map can say: not copied, and the job worker reports it)
+          if (dlen > dhb) { doff += dlen; continue; }
           M.HEAPU8.set(ddata.subarray(doff, doff + dlen), dinbuf);
           doff += dlen;
           if (M._wasm_helper_decompress(dmeta[di * 3 + 1], dlen) === 0) {
@@ -1254,24 +1314,28 @@ function sinkAck(bytes) {
 // says the next hunk is in, so the worker keeps receiving their results. Extract and verify pause
 // the same way while helpers decompress the hunks they are about to read (M.rdWait()).
 async function runChdman(M, args) {
-  var argv = M._malloc(4 * (args.length + 2));
+  var argv = wasmAlloc(M, 4 * (args.length + 2));
   ['chdman'].concat(args).forEach(function (a, i) { var p = M.stringToNewUTF8(a); M.HEAPU32[(argv >>> 2) + i] = p; });
   M.HEAPU32[(argv >>> 2) + args.length + 1] = 0;
-  var code = M._chdman_begin(args.length + 1, argv);
-  while (code === -1) {
-    if (sinkFull()) await sinkDrained();
-    if (M.rdBusy && M.rdBusy()) await M.rdWait();
-    else if (M.parWait) await M.parWait();
-    code = M._chdman_resume();
+  try {
+    var code = M._chdman_begin(args.length + 1, argv);
+    while (code === -1) {
+      if (sinkFull()) await sinkDrained();
+      if (M.rdBusy && M.rdBusy()) await M.rdWait();
+      else if (M.parWait) await M.parWait();
+      code = M._chdman_resume();
+    }
+    return code;
+  } finally {
+    if (M.parClose) M.parClose();
   }
-  return code;
 }
 
 async function runJob(msg) {
   if (msg.debugSinkMax) SINK_MAX = msg.debugSinkMax; // testing: a small limit
   await loadModule(msg);
   var backing = await makeBacking(msg);
-  postMessage({ type: 'storage', mode: backing.mode });
+  postMessage({ type: 'storage', mode: backing.mode, reason: memReason });
 
   // copies of inputs chdman must modify in place (verify --fix, addmeta, delmeta)
   var outFiles = [];
@@ -1381,12 +1445,12 @@ async function runReader(msg) {
   FS.mkdir('/in');
   FS.mount(CHDFS, { files: [{ name: msg.name, store: new BlobStore(msg.blob) }].concat((msg.parent ? [{ name: 'parent.chd', store: new BlobStore(msg.parent) }] : [])) }, '/in');
   var path = '/in/' + msg.name, enc = new TextEncoder().encode(path + '\0');
-  var pp = M._malloc(enc.length);
+  var pp = wasmAlloc(M, enc.length);
   M.HEAPU8.set(enc, pp);
   var ppar = 0; // a child CHD's parent (msg.parent), mounted as parent.chd
-  if (msg.parent) { var encp = new TextEncoder().encode('/in/parent.chd\0'); ppar = M._malloc(encp.length); M.HEAPU8.set(encp, ppar); }
+  if (msg.parent) { var encp = new TextEncoder().encode('/in/parent.chd\0'); ppar = wasmAlloc(M, encp.length); M.HEAPU8.set(encp, ppar); }
   var kind = M._wasm_probe_open(pp, ppar);
-  var tracks = [], info = M._malloc(32), buf = M._malloc(2048);
+  var tracks = [], info = wasmAlloc(M, 32), buf = wasmAlloc(M, 2048);
   var n = kind === 1 ? M._wasm_probe_tracks() : 0;
   for (var t = 0; t < n; t++) {
     M._wasm_probe_track_info(t, info);
@@ -1478,7 +1542,7 @@ async function runCrc(msg) {
     try {
       await loadModule(msg);
       M = await instantiate({});
-      if (typeof M._crc32 === 'function') buf = M._malloc(step); else M = null;
+      if (typeof M._crc32 === 'function' && (buf = M._malloc(step))) { /* the module's crc32 */ } else M = null;
     } catch (e) { M = null; }
   }
   // msg.ciso: the checksum of the ISO inside a CSO/ZSO image, which needs the module's inflate;
@@ -1518,14 +1582,21 @@ self.onmessage = function (e) {
   var msg = e.data;
   if (msg.type === 'stage-chunk' && stageWaiter) {
     try {
+      // each piece where the last one ended (missing bytes would read as zeros)
+      if (msg.pos !== stageWaiter.at) throw new Error('a piece of the file is missing');
       stageWaiter.dst.write(new Uint8Array(msg.data), msg.pos);
-      stageWaiter.onChunk(msg.pos + msg.data.byteLength);
+      stageWaiter.at = msg.pos + msg.data.byteLength;
+      stageWaiter.onChunk(stageWaiter.at);
       postMessage({ type: 'stage-ack' });
     } catch (err) { stageWaiter.reject(err && typeof err.errno === 'number' ? err : new Error('could not store the copy (' + (err && err.name || err) + ')')); }
     return;
   }
   if (msg.type === 's-ack') { sinkAck(msg.bytes); return; }
-  if (msg.type === 'stage-end' && stageWaiter) { stageWaiter.resolve(); return; }
+  if (msg.type === 'stage-end' && stageWaiter) {
+    if (stageWaiter.at < stageWaiter.size) stageWaiter.reject(new Error('could not store the copy (the page sent only ' + stageWaiter.at + ' of its ' + stageWaiter.size + ' bytes)'));
+    else stageWaiter.resolve();
+    return;
+  }
   if (msg.type === 'stage-fail' && stageWaiter) { stageWaiter.reject(new Error(msg.message)); return; }
   if (msg.type === 'crc') { runCrc(msg).catch(function (err) { postMessage({ type: 'fatal', message: errText(err) }); }); return; }
   var p = msg.type === 'helper' ? runHelper(msg) : msg.type === 'run' ? runJob(msg) : msg.type === 'reader' ? runReader(msg) : null;

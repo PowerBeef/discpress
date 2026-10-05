@@ -7,22 +7,21 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { FIXTURES, ROOT } from '../support/paths.js';
+import { engineSourcesNewest } from '../support/native.js';
 
 // CHDMAN_ENGINE: another build of the engine, such as the sanitized one (scripts/build-sanitized.sh)
 const ENGINE = process.env.CHDMAN_ENGINE ? path.resolve(process.env.CHDMAN_ENGINE) : path.join(ROOT, 'build', 'chdman-native');
 const UPSTREAM = path.join(ROOT, 'build', 'chdman-0.289');
 
-function newest(dir) {
-  let t = 0;
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-    const p = path.join(dir, e.name);
-    t = Math.max(t, e.isDirectory() ? newest(p) : fs.statSync(p).mtimeMs);
-  }
-  return t;
-}
 const missing = !fs.existsSync(ENGINE) || !fs.existsSync(UPSTREAM);
+const stale = !missing && fs.statSync(ENGINE).mtimeMs < engineSourcesNewest();
+// a run that asked for a build (CHDMAN_ENGINE: the sanitizer job) or for the references (REQUIRE_NATIVE:
+// CI) fails without it, rather than pass with every test skipped
+if ((process.env.CHDMAN_ENGINE || process.env.REQUIRE_NATIVE) && (missing || stale)) {
+  throw new Error(`${missing ? 'missing' : 'out of date'}: ${missing && !fs.existsSync(UPSTREAM) ? UPSTREAM : ENGINE} (older than engine/ or wasm/: build it again)`);
+}
 test.skip(missing, 'needs build/chdman-native and build/chdman-0.289');
-test.skip(!missing && fs.statSync(ENGINE).mtimeMs < newest(path.join(ROOT, 'engine', 'mame')), 'build/chdman-native is older than engine/: run scripts/build-native.sh');
+test.skip(stale, 'build/chdman-native is older than engine/ or wasm/: run scripts/build-native.sh');
 
 // a sanitized build's report fails the test, whatever chdman's exit code (it often exits 1 here on purpose)
 const SANITIZER = /ERROR: AddressSanitizer|ERROR: LeakSanitizer|runtime error:/;
@@ -230,6 +229,23 @@ test('createcd --keepcue keeps the cue sheet, checksums unchanged, and extractcd
   const r = run(ENGINE, ['createcd', '-i', 'aerowings.gdi', '-o', tmp('g.chd'), '-f', '--keepcue']);
   expect(r.code).toBe(1);
   expect(r.err).toContain('--keepcue needs a .cue input file');
+});
+
+// A kept sheet whose TRACK types aren't the CHD's tracks' (edited here, in an uncompressed CHD): extractcd
+// --redump writes the sheet it makes itself, not one that describes another disc (audit 2026-10-05)
+test('extractcd --redump leaves out a kept cue sheet whose track types are not the CHD\'s', () => {
+  const keep = tmp('typed.chd'), plain = tmp('typed plain.chd'), edited = tmp('typed.cue'), mine = tmp('typed out'), made = tmp('typed made');
+  for (const d of [mine, made]) fs.mkdirSync(d, { recursive: true });
+  expect(run(ENGINE, ['createcd', '-i', 'fidelity.cue', '-o', keep, '-f', '--keepcue', '-c', 'none']).code).toBe(0);
+  expect(run(ENGINE, ['createcd', '-i', 'fidelity.cue', '-o', plain, '-f', '-c', 'none']).code).toBe(0);
+  fs.writeFileSync(edited, fs.readFileSync(path.join(FIXTURES, 'fidelity.cue'), 'latin1').replace('TRACK 01 MODE1/2352', 'TRACK 01 MODE2/2352'), 'latin1');
+  expect(run(ENGINE, ['delmeta', '-i', keep, '-t', 'CUES']).code).toBe(0);
+  expect(run(ENGINE, ['addmeta', '-i', keep, '-t', 'CUES', '-vf', edited, '-nocs']).code).toBe(0);
+  const r = run(ENGINE, ['extractcd', '-i', keep, '-o', path.join(mine, 'x.cue'), '--redump']);
+  expect(r.code).toBe(0);
+  expect(r.out.toString()).not.toContain('the one kept when the CHD was made');
+  expect(run(ENGINE, ['extractcd', '-i', plain, '-o', path.join(made, 'x.cue'), '--redump']).code).toBe(0);
+  for (const n of fs.readdirSync(made)) expect(fs.readFileSync(path.join(mine, n)).equals(fs.readFileSync(path.join(made, n))), n).toBe(true);
 });
 
 test('dumpmeta to stdout writes only the metadata', () => {

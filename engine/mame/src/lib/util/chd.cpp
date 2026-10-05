@@ -3638,12 +3638,15 @@ bool chd_file::wasm_read_ahead(uint32_t first, uint32_t count)
 	if (m_wasm_rd == -2)
 		return true;
 
-	// a new window: drop the hunks before it (one read again is read the usual way)
+	// a new window: drop the hunks before it (one read again is read the usual way); a window that
+	// goes back (a GD-ROM's split frames) queues its hunks again, those still kept aside
 	if ((first != m_wasm_first) || (count != m_wasm_count))
 	{
 		m_wasm_first = first;
 		m_wasm_count = count;
 		m_wasm_scan = first;
+		if (first < m_wasm_queued)
+			m_wasm_queued = first;
 		for (auto it = m_wasm_ahead.begin(); it != m_wasm_ahead.end(); )
 		{
 			if (it->first < first)
@@ -3701,10 +3704,12 @@ bool chd_file::wasm_read_ahead(uint32_t first, uint32_t count)
 			if ((type > COMPRESSION_TYPE_3) || !m_decompressor[type] || m_decompressor[type]->lossy())
 				continue;
 			uint32_t const blocklen = get_u24be(&rawmap[1]);
+			if (blocklen > m_compressed.size())
+				continue; // more than a hunk holds (a damaged map): read_hunk will report it
 			uint8_t const *data = span ? (span + (blockoffs - lo)) : nullptr;
 			if (!data)
 			{
-				if ((blocklen > m_compressed.size()) || file_read(blockoffs, &m_compressed[0], blocklen))
+				if (file_read(blockoffs, &m_compressed[0], blocklen))
 					continue; // read_hunk will report it
 				data = &m_compressed[0];
 			}

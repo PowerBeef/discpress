@@ -94,7 +94,11 @@ var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename
 var outDir = null; // folder picked for direct writing (not persisted)
 try {
   var saved = JSON.parse(localStorage.getItem('chdman-web-settings') || '{}');
-  for (var sk in saved) if (sk in settings) settings[sk] = saved[sk];
+  // each stored value of the type of its default (a damaged or foreign one is left out); threads: a
+  // number or 'auto'
+  if (saved && typeof saved === 'object') for (var sk in saved) {
+    if (sk in settings && (typeof saved[sk] === typeof settings[sk] || (sk === 'threads' && (saved[sk] === 'auto' || typeof saved[sk] === 'number')))) settings[sk] = saved[sk];
+  }
 } catch (e) { /* storage may be unavailable */ }
 if (settings.threads !== 'auto') settings.threads = Math.max(1, Math.min(maxThreads, settings.threads | 0 || 1));
 function saveSettings() {
@@ -256,7 +260,7 @@ function makeSink(dir, opts) {
             }
             return dir.getFileHandle(m.name, { create: true });
           })
-          .then(function (fh) { return fh.createWritable({ keepExistingData: false }); })
+          .then(function (fh) { f.made = true; return fh.createWritable({ keepExistingData: false }); })
           .then(function (w) { f.w = w; }).catch(fail);
       } else if (m.type === 's-write') {
         q(m.id, function (f) { return f.w.write({ type: 'write', position: m.pos, data: m.data }); });
@@ -268,19 +272,24 @@ function makeSink(dir, opts) {
       } else if (m.type === 's-close') {
         q(m.id, function (f) { f.closed = true; f.size = m.size; return f.w.close(); });
       } else if (m.type === 's-remove') {
-        q(m.id, function (f) { f.closed = true; return f.w.abort().then(function () { if (!f.existed) return dir.removeEntry(f.name); }).catch(function () {}); });
+        q(m.id, function (f) { f.closed = f.gone = true; return f.w.abort().then(function () { if (!f.existed) return dir.removeEntry(f.name); }).catch(function () {}); });
       }
     },
     finish: function () {
       return Promise.all(Object.keys(files).map(function (k) { return files[k].chain; })).then(function () { if (failed) throw failed; });
     },
     abort: function () {
-      // writes still queued are skipped (a cancel while the last ones are saved: "Saving to folder")
+      // writes still queued are skipped (a cancel while the last ones are saved: "Saving to folder").
+      // Every file this job created goes, written or not (a cue sheet without its track, or the empty
+      // file a close that failed leaves); one that was there before stays as the browser left it
       if (!failed) failed = new Error('canceled');
       Object.keys(files).forEach(function (k) {
         var f = files[k];
-        f.chain = f.chain.then(function () {
-          if (f.w && !f.closed) return f.w.abort().catch(function () {}).then(function () { if (!f.existed) return dir.removeEntry(f.name).catch(function () {}); });
+        f.chain = f.chain.catch(function () {}).then(function () {
+          if (!f.made || f.gone) return;
+          f.gone = true;
+          return (f.closed || !f.w ? Promise.resolve() : f.w.abort().catch(function () {}))
+            .then(function () { if (!f.existed) return dir.removeEntry(f.name).catch(function () {}); });
         }).catch(function () {});
       });
     }
@@ -302,9 +311,11 @@ var Engine = {
     if (!WebAssembly.validate(EH_TEST)) throw new Error('This browser is too old: it lacks WebAssembly exception handling (needs Chrome 95+, Firefox 100+, Safari 15.2+).');
     if (typeof Worker !== 'function') throw new Error('This browser does not support Web Workers.');
     this.simd = WebAssembly.validate(SIMD_TEST);
-    var node = document.getElementById(this.simd ? 'wasm-simd' : 'wasm-base');
+    var node = document.getElementById(this.simd ? 'wasm-simd' : 'wasm-base'), other = document.getElementById(this.simd ? 'wasm-base' : 'wasm-simd');
     var bytes = await gunzip(b64bytes(node.textContent), +node.getAttribute('data-size'));
-    node.textContent = '';
+    // neither embedded copy is needed again (about 1.5 MB of text each): data-used says which one was
+    node.textContent = other.textContent = '';
+    node.setAttribute('data-used', '');
     this.bytes = bytes;
     this.module = await WebAssembly.compile(bytes);
     var src = document.getElementById('worker-src').textContent;
@@ -347,6 +358,8 @@ var Engine = {
     }
     function cleanup() {
       finished = true;
+      // a chunk still waiting for the worker's answer: its staging ends (and lets go of the file)
+      if (ackWait) { var a = ackWait; ackWait = null; a(); }
       if (worker) worker.terminate();
       helpers.forEach(function (h) { h.terminate(); });
       helpers = [];
@@ -386,7 +399,7 @@ var Engine = {
         else if (m.type === 'progress') o.onProgress && o.onProgress(m.text);
         else if (m.type === 'scan') o.onScan && o.onScan(m.done / m.total);
         else if (m.type === 'notice') o.onNotice && o.onNotice(m);
-        else if (m.type === 'storage') o.onStorage && o.onStorage(m.mode);
+        else if (m.type === 'storage') o.onStorage && o.onStorage(m.mode, m.reason);
         else if (m.type === 'fatal') { cleanup(); if (sink) sink.abort(); reject(new Error(m.message)); }
         else if (m.type === 'done') {
           cleanup();
@@ -410,7 +423,7 @@ var Engine = {
       };
       self.post(worker, {
         type: 'run', jobId: o.jobId, dirPath: o.dirPath, args: o.args, inputs: o.inputs || [],
-        writable: o.writable || [], slots: o.slots || 0, outMode: o.outMode || 'mem', ports: ports, debugStage: DEBUG.stage, debugSinkMax: DEBUG.sinkMax
+        writable: o.writable || [], slots: o.slots || 0, outMode: o.outMode || 'mem', ports: ports, debugStage: DEBUG.stage, debugSinkMax: DEBUG.sinkMax, debugStorage: DEBUG.failStorage
       }, ports);
     });
     return {
@@ -444,7 +457,9 @@ var Tuning = {
     try {
       var t = JSON.parse(localStorage.getItem('chdman-web-tuning') || 'null');
       // a result that stopped at a lower limit than today's (1.3.1 tried 2 threads on iPhones) is measured again
-      this.result = t && t.key === this.key() && t.threads >= 1 && !(t.cap < this.cap && t.threads >= t.cap) ? t : null;
+      // (and only a whole one: its threads a whole number within today's limit)
+      this.result = t && typeof t === 'object' && t.key === this.key() && t.threads === (t.threads | 0) && t.threads >= 1 && t.threads <= this.cap &&
+        !(t.cap < this.cap && t.threads >= t.cap) ? t : null;
     } catch (e) { this.result = null; }
   },
   measure: function (onStep) {
@@ -569,22 +584,24 @@ var Store = {
   init: async function () {
     // held while this visit lasts, so other visits can tell it is still open (Recovery)
     if (navigator.locks && navigator.locks.request) {
-      navigator.locks.request('chdman-web-' + this.session, function () { return new Promise(function () {}); });
+      navigator.locks.request('chdman-web-' + this.session, function () { return new Promise(function () {}); }).catch(function () {});
       await sleep(50);
     }
+    var work = null;
     try {
       if (!navigator.storage || !navigator.storage.getDirectory) throw new Error('no private storage');
       var root = await navigator.storage.getDirectory();
-      var work = await root.getDirectoryHandle('chdman-work', { create: true });
+      work = await root.getDirectoryHandle('chdman-work', { create: true });
       this.available = true;
-      await this.cleanupStale(work);
-      await Unzip.cleanup();
-    } catch (e) {
-      this.available = false;
+    } catch (e) { this.available = false; }
+    // (each step on its own: one that fails leaves the others, and the page, working)
+    try {
+      if (work) await this.cleanupStale(work);
       // results in memory (a page opened as a file in Chrome or Edge, older browsers): nothing to keep,
       // but say what an ended visit lost
-      Recovery.settle(Recovery.read(), [], await heldLocks());
-    }
+      else Recovery.settle(Recovery.read(), [], await heldLocks());
+    } catch (e) { /* what an ended visit left stays for the next one */ }
+    if (work) try { await Unzip.cleanup(); } catch (e) { /* ignore */ }
     this.checked = true;
   },
   cleanupStale: async function (work) {
@@ -659,8 +676,24 @@ var Recovery = {
   earlier: [], // [{ session, jobId, title, outputs: [{ name, size, slot, kind, session }] }]
   stopped: [], // titles of jobs that were running when their visit ended
   lost: [], // results an ended visit held only in memory: [{ title, name }]
+  // the records, with only what has the shape this version writes (a damaged or foreign one is no more)
   read: function () {
-    try { var v = JSON.parse(localStorage.getItem(this.KEY) || '{}'); return v && typeof v === 'object' ? v : {}; } catch (e) { return {}; }
+    var v, out = {};
+    try { v = JSON.parse(localStorage.getItem(this.KEY) || '{}'); } catch (e) { return {}; }
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+    Object.keys(v).forEach(function (k) {
+      var rec = v[k], results = {};
+      if (!rec || typeof rec !== 'object') return;
+      var rs = rec.results && typeof rec.results === 'object' ? rec.results : {};
+      Object.keys(rs).forEach(function (id) {
+        var r = rs[id];
+        if (r && typeof r === 'object' && Array.isArray(r.outputs)) {
+          results[id] = { title: String(r.title || ''), outputs: r.outputs.filter(function (o) { return o && typeof o === 'object' && typeof o.name === 'string'; }) };
+        }
+      });
+      out[k] = Object.assign({}, rec, { results: results, running: typeof rec.running === 'string' ? rec.running : null });
+    });
+    return out;
   },
   write: function (all) {
     try {
@@ -796,7 +829,10 @@ function refWord(kind, line) {
   if (kind === 'cue' ? k === 'FILE' : kind === 'toc' && /^(FILE|DATAFILE|AUDIOFILE)$/.test(k)) return w[1];
   return null;
 }
-function parseRefs(kind, text) {
+function refKey(r) { return r.replace(/\\/g, '/').toLowerCase(); }
+// the files a descriptor names, each once (Game.bin and game.bin are one file, as on Windows); all:
+// every reference as written
+function parseRefs(kind, text, all) {
   var refs = [], lines = text.replace(/^﻿/, '').split(/\r?\n/);
   if (kind === 'cue' || kind === 'toc') {
     lines.forEach(function (ln) {
@@ -809,19 +845,23 @@ function parseRefs(kind, text) {
       if (t.length >= 5) refs.push(t[4]);
     });
   }
-  return refs.filter(function (r, i) { return r && refs.indexOf(r) === i; });
+  if (all) return refs.filter(Boolean);
+  var low = refs.map(refKey);
+  return refs.filter(function (r, i) { return r && low.indexOf(low[i]) === i; });
 }
+// map: a reference (lower case, / for \\) -> the file's name; only references that differ are rewritten
 function rewriteRefs(kind, text, map) {
   var lines = text.replace(/^﻿/, '').split(/\r?\n/);
+  var to_ = function (r) { var n = map[refKey(r)]; return n && n !== r ? n : null; };
   return lines.map(function (ln, idx) {
     if (kind === 'cue' || kind === 'toc') {
-      var w = refWord(kind, ln);
-      return w && map[w.text] ? ln.slice(0, w.start) + '"' + map[w.text] + '"' + ln.slice(w.end) : ln;
+      var w = refWord(kind, ln), to = w && to_(w.text);
+      return to ? ln.slice(0, w.start) + '"' + to + '"' + ln.slice(w.end) : ln;
     }
     if (kind === 'gdi' && idx > 0) {
-      var t = tokenize(ln);
-      if (t.length >= 5 && map[t[4]]) {
-        t[4] = /\s/.test(map[t[4]]) ? '"' + map[t[4]] + '"' : map[t[4]];
+      var t = tokenize(ln), tg = t.length >= 5 && to_(t[4]);
+      if (tg) {
+        t[4] = /\s/.test(tg) ? '"' + tg + '"' : tg;
         return t.join(' ');
       }
     }
@@ -847,8 +887,9 @@ function ccdToCue(text, img) {
   text.split(/\r\n|\r|\n/).forEach(function (ln) {
     var m = /^\s*\[([^\]]+)\]\s*$/.exec(ln);
     if (m) { cur = sec[m[1].trim().toUpperCase().replace(/\s+/g, ' ')] = {}; return; }
-    m = /^\s*([^=;]+?)\s*=\s*(.*?)\s*$/.exec(ln);
-    if (m && cur) cur[m[1].toUpperCase().replace(/\s+/g, ' ')] = m[2];
+    // key = value, split on the first "=" (a regex here backtracked for minutes on a long line without one)
+    var eq = ln.indexOf('='), key = eq > 0 ? ln.slice(0, eq).trim() : '';
+    if (key && key.indexOf(';') < 0 && cur) cur[key.toUpperCase().replace(/\s+/g, ' ')] = ln.slice(eq + 1).trim();
   });
   var fail = function (why) { return { text: '', changed: true, problem: why }; };
   if (!sec.CLONECD) return fail('This .ccd file is not a CloneCD control file.');
@@ -882,7 +923,13 @@ function fixDescriptor(kind, text) {
       var m = /^(\s*)(\S+)(.*)$/.exec(ln);
       if (!m) return ln;
       var k = m[2].toUpperCase(), rest = m[3];
-      if (k === 'FILE') rest = rest.replace(/^(\s+(?:"[^"]*"|\S+)\s+)(\S+)/, function (a, pre, type) { return pre + type.toUpperCase(); });
+      if (k === 'FILE') {
+        // a name with spaces or an apostrophe, not in quotes (FILE Tony's Game.bin BINARY): chdman would
+        // split it into words, so its copy gets the name in double quotes
+        var uq = /^(\s+)([^"]+?)(\s+)(BINARY|MOTOROLA|WAVE|MP3|AIFF)(\s*)$/i.exec(rest);
+        if (uq && /[\s']/.test(uq[2]) && !/^'[^']*'$/.test(uq[2])) rest = uq[1] + '"' + uq[2] + '"' + uq[3] + uq[4] + uq[5];
+        rest = rest.replace(/^(\s+(?:"[^"]*"|\S+)\s+)(\S+)/, function (a, pre, type) { return pre + type.toUpperCase(); });
+      }
       else if (k === 'TRACK') {
         rest = rest.toUpperCase();
         tracks++;
@@ -1029,49 +1076,62 @@ async function pumpIdentify() {
   if (!it) return;
   identBusy = true;
   // whatever happens to this job, the queue moves on
+  var job = it.job;
   try {
-    var job = it.job;
-    if (jobs.indexOf(job) >= 0) {
-      job.identState = 'running';
-      job.identStatus = 'Identifying game…';
-      if (job.ui && job.state !== 'running') renderNotes(job);
-      if (DEBUG.identDelay) await sleep(DEBUG.identDelay); // testing: a slow identification
-      try {
-        job.ident = await identifyJob(job, function (msg, p) {
-          job.identStatus = msg + (p ? ' ' + Math.round(p * 100) + '%' : '');
-          var n = job.ui && job.ui.identLine;
-          if (n) n.textContent = job.identStatus;
-        }, function (provisional) {
-          job.ident = keepPick(job, provisional);
-          job.identState = 'checking';
-          applyIdent(job);
-          detachSbi(job);
-          scanSub(job);
-          job.identKnownResolve();
-          if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
-        });
-      } catch (e) {
-        job.ident = { error: e.message, readFail: /I\/O read|NotReadable/i.test(e.message || '') };
-      }
-      keepPick(job, job.ident);
-      job.identState = 'done';
-      applyIdent(job);
-      detachSbi(job);
-      scanSub(job);
-      if (job.subScan) await job.subScan;
-      await datCheck(job);
-      // the checksum finished after the conversion started: name the results after the confirmed release
-      if (job.state === 'done') renameOutputs(job);
-      job.identKnownResolve();
-      if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
-    } else if (job.identKnownResolve) {
-      job.identKnownResolve(); // removed before its turn: a start waiting on it must not wait forever
-    }
+    if (jobs.indexOf(job) >= 0) await identifyOne(job);
+  } catch (e) {
+    // (a bug: the card says what is known)
+    if (!job.ident) job.ident = { error: e.message };
   } finally {
+    if (job.identState !== 'done') {
+      job.identState = 'done';
+      if (job.ui && jobs.indexOf(job) >= 0) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
+    }
+    // a start waiting on it must not wait forever (removed before its turn, too)
+    if (job.identKnownResolve) job.identKnownResolve();
     it.resolve();
     identBusy = false;
     pumpIdentify();
   }
+}
+async function identifyOne(job) {
+  job.identState = 'running';
+  job.identStatus = 'Identifying game…';
+  if (job.ui && job.state !== 'running') renderNotes(job);
+  if (DEBUG.identDelay) await sleep(DEBUG.identDelay); // testing: a slow identification
+  try {
+    job.ident = await identifyJob(job, function (msg, p) {
+      job.identStatus = msg + (p ? ' ' + Math.round(p * 100) + '%' : '');
+      var n = job.ui && job.ui.identLine;
+      if (n) n.textContent = job.identStatus;
+    }, function (provisional) {
+      if (jobs.indexOf(job) < 0) return;
+      job.ident = keepPick(job, provisional);
+      job.identState = 'checking';
+      applyIdent(job);
+      detachSbi(job);
+      scanSub(job);
+      job.identKnownResolve();
+      if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
+    });
+  } catch (e) {
+    job.ident = { error: e.message, readFail: /I\/O read|NotReadable/i.test(e.message || '') };
+  }
+  // removed meanwhile: its results, if any, are gone, and nothing is to be named or recorded
+  if (jobs.indexOf(job) < 0) return;
+  keepPick(job, job.ident);
+  job.identState = 'done';
+  applyIdent(job);
+  detachSbi(job);
+  scanSub(job);
+  if (job.subScan) await job.subScan;
+  // a start waiting for the checksum goes on: the DAT check renames the results when it's done
+  job.identKnownResolve();
+  await datCheck(job);
+  if (jobs.indexOf(job) < 0) return;
+  // the checksum finished after the conversion started: name the results after the confirmed release
+  if (job.state === 'done') renameOutputs(job);
+  if (job.ui) refreshJob(job, job.state !== 'running' && job.state !== 'queued');
 }
 // a version picked under "Which version?" while the checksum ran stays picked, unless the checksum
 // proved another release
@@ -1098,7 +1158,11 @@ function applyIdent(job, starting) {
     var bySystem = true, pf = profile(id.sys);
     if (id.sys === 'ps2') {
       // a DVD's UDF volume, else a size no CD has (identification: hasUdf)
-      var cdGame = id.entry ? id.entry.ext === 'bin' : !(id.detected && id.detected.udf) && (job.isoSize || job.files[0].file.size) < 800 * 1048576;
+      // the release's file type, unless its serial also names a release of the other type (SLUS-21015 has
+      // a .bin and an .iso row) and no checksum proved which: then what the disc is, UDF on a DVD and its size
+      var rows = id.entry && id.method !== 'hash' ? GameDB.lookup(id.entry.serial, 'ps2', false) : [];
+      var mixed = rows.some(function (r) { return r.ext !== rows[0].ext; });
+      var cdGame = id.entry && !mixed ? id.entry.ext === 'bin' : !(id.detected && id.detected.udf) && (job.isoSize || job.files[0].file.size) < 800 * 1048576;
       job.ps2dvd = !cdGame;
       // AetherSX2 and NetherSX2 (Android) read CD CHDs only (Settings)
       job.disc = cdGame || settings.ps2dvd === 'cd' ? 'cd' : 'dvd';
@@ -1140,7 +1204,7 @@ function identNote(job) {
   if (!id.sys) return id.method === 'dat' ? null : el('div', { class: 'note' + (damage ? ' warn' : '') }, damage || 'Not a game Discpress recognizes, so the CHD keeps the file\u2019s name.');
   // (how it was matched, and what the disc's header says, for tests and bug reports)
   var det = id.detected || {};
-  var box = el('div', { class: 'note ident' + (id.name ? ' ok' : ''), 'data-method': id.method || null,
+  var box = el('div', { class: 'note ident' + (id.name ? ' ok' : ''), 'data-method': id.method || null, 'data-how': id.how || null,
     'data-disc': det.disc ? det.disc.n + '/' + det.disc.of : null, 'data-region': det.area || null });
   var sc = sysColor(id.sys);
   var head = el('div', { class: 'ident-head' }, el('span', { class: 'sysbadge', style: sc ? '--sys:' + sc[0] + ';--sys-fg:' + sc[1] : null }, sysShort(id.sys)), el('b', null, sysName(id.sys)));
@@ -1167,6 +1231,15 @@ function identNote(job) {
       box.append(el('div', { class: 'row', style: 'margin-top:4px' },
         el('span', { class: 'small muted' }, 'Saved as \u201c' + outBase(job) + '\u201d.'),
         el('button', { class: 'btn sm', onclick: function () { job.opts.out = id.name; job.outEdited = false; refreshJob(job, true); } }, 'Use this name')));
+    }
+  } else if (id.related) {
+    // a release whose serial is the disc's without its suffix (or its base) but whose name isn't the
+    // header's title: maybe another game (Sega reused serials), so only offered
+    box.append(el('div', { class: 'small ident-related' }, (id.headerTitle ? 'Disc title: ' + id.headerTitle + '. ' : '') +
+      'Not in the Redump database under its own serial number, so the CHD keeps the file\u2019s name. A release with a related serial number: ' + id.related.join('; ') + '.'));
+    if (id.related.length === 1 && !/^(running|queued|done)$/.test(job.state) && outBase(job) !== safeName(id.related[0])) {
+      box.append(el('div', { class: 'row', style: 'margin-top:4px' },
+        el('button', { class: 'btn sm', onclick: function () { job.opts.out = id.related[0]; job.outEdited = true; refreshJob(job, true); } }, 'Use this name')));
     }
   } else {
     box.append(el('div', { class: 'small' }, (id.headerTitle ? 'Disc title: ' + id.headerTitle + '. ' : '') + 'Not in the Redump database, so the CHD keeps the file\u2019s name.'));
@@ -1240,7 +1313,7 @@ var PROFILES = {
   naomi2: { noZstd: 'Flycast before 2.3 (and probably Demul)', noMister: true },
   pcfx: { noZstd: 'Beetle PC-FX before August 2026', noMister: true },
   pc98: { noMister: true },
-  ps1: { noZstd: 'SwanStation (before March 2026)' },
+  ps1: { noZstd: 'SwanStation builds from before about March 2024' },
   saturn: { noZstd: 'Kronos and Yabause' },
   segacd: { noZstd: 'BlastEm (RetroArch)' },
   pcecd: { noZstd: 'Beetle SuperGrafx' },
@@ -1257,6 +1330,7 @@ var PROFILES = {
   ps3: { keep: true, note: 'RPCS3 does not load CHDs. It uses the ISO or the game\u2019s folder.' }
 };
 function profile(sys) { return PROFILES[sys] || {}; }
+function presetsFor(disc) { return PRESETS[disc === 'cd' || disc === 'gdrom' ? 'cd' : disc === 'ld' ? 'ld' : 'other']; }
 
 function newJob(props) {
   var job = Object.assign({
@@ -1269,6 +1343,12 @@ function newJob(props) {
   return job;
 }
 function jobInputBytes(job) { return job.files.reduce(function (s, f) { return s + f.file.size; }, 0); }
+// the size of the image a job's files hold: an ECM image's or a PBP disc's unpacked (the ECM one once
+// identification has scanned it), a compressed ISO's ISO
+function jobImageBytes(job) {
+  if (job.src === 'cso' && job.isoSize) return job.isoSize;
+  return job.files.reduce(function (s, f) { return s + (f.ecm && f.imageSize ? f.imageSize : f.pbp ? f.pbp.sectors * 2352 : f.file.size); }, 0);
+}
 // a job's file for a descriptor's reference: an ECM image stands for the file it holds (Game.bin.ecm
 // for Game.bin), and chdman reads that under the referenced name
 function trackFile(file, path, ref) {
@@ -1279,18 +1359,41 @@ function trackFile(file, path, ref) {
 }
 // the file a descriptor in folder `dir` names as `ref`, among candidates in order of preference: one in
 // the same folder, or in the subfolder the reference names, or picked on its own (no folder); never a
-// same-named file from another folder (another game's track01.bin) or one already claimed
-function pickTrack(cands, dir, ref, claimed) {
+// same-named file from another folder (another game's track01.bin) or one already claimed. A descriptor
+// picked on its own (no folder) may take a file from a folder only when that folder holds no descriptor
+// of its own (`descDirs`) and no other folder offers the same name: a .cue, then the folder of its .bins
+function pickTrack(cands, dir, ref, claimed, descDirs) {
   var free = cands.filter(function (e) { return !claimed.has(e); });
   var rel = ref.replace(/\\/g, '/'), sub = rel.indexOf('/') >= 0 ? dirOf(rel) : null;
-  var want = sub === null ? null : dir ? dir + '/' + sub : sub;
-  return free.find(function (e) { return dirOf(e.path) === dir; }) ||
-    (want === null ? undefined : free.find(function (e) { return dirOf(e.path) === want; })) ||
-    free.find(function (e) { return !dir || dirOf(e.path) === ''; });
+  // (the subfolder a reference names, composed as the folder's name is compared: nameKey)
+  var nfc = function (x) { return x.normalize ? x.normalize('NFC') : x; };
+  var want = sub === null ? null : nfc(dir ? dir + '/' + sub : sub);
+  var hit = free.find(function (e) { return dirOf(e.path) === dir; }) ||
+    (want === null ? undefined : free.find(function (e) { return nfc(dirOf(e.path)) === want; })) ||
+    free.find(function (e) { return dirOf(e.path) === ''; });
+  if (hit || dir) return hit;
+  var orphans = free.filter(function (e) { return !(descDirs && descDirs.has(dirOf(e.path))); });
+  return orphans.length === 1 ? orphans[0] : undefined;
 }
+// the folders that hold a descriptor: their files belong to it, not to a descriptor picked on its own
+function descriptorDirs(entries) {
+  var dirs = new Set();
+  entries.forEach(function (e) { if (/^(cue|gdi|toc|ccd)$/.test(ext(e.path))) dirs.add(dirOf(e.path)); });
+  jobs.forEach(function (j) { if (j.descDir) dirs.add(j.descDir); });
+  return dirs;
+}
+// a file name to compare with another: in lower case, and composed (NFC): macOS gives decomposed names
+// (an é as e and an accent), which a cue sheet written elsewhere doesn't
+function nameKey(s) { s = String(s || ''); return (s.normalize ? s.normalize('NFC') : s).toLowerCase(); }
 function refMatches(e, ref) {
-  var n = base(e.path).toLowerCase(), want = base(ref).toLowerCase();
+  var n = nameKey(base(e.path)), want = nameKey(base(ref));
   return n === want || n === want + '.ecm';
+}
+// entries by their file name (nameKey), so that thousands of files are grouped in linear time
+function nameIndex(entries) {
+  var m = new Map();
+  entries.forEach(function (e) { var k = nameKey(base(e.path)); var l = m.get(k); if (l) l.push(e); else m.set(k, [e]); });
+  return m;
 }
 // the type the file shows on a job's card (bin.ecm for an ECM image of a .bin)
 function fileKind(f) { return f.ecm ? (ext(f.name) ? ext(f.name) + '.' : '') + 'ecm' : ext(f.name); }
@@ -1417,11 +1520,12 @@ var Unzip = {
   // a deflated file unpacked: a File, its CRC-32 checked against the zip's
   unpack: async function (zip, ent, at, onProgress) {
     var stream = zip.slice(at, at + ent.csize).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-    var reader = stream.getReader(), crc = -1, done = 0, parts = [], writer = null, fh = null, id = 'u' + (++this.seq);
+    var reader = stream.getReader(), crc = -1, done = 0, parts = [], writer = null, fh = null, sess = null, id = 'u' + (++this.seq);
     var base_ = ent.name.replace(/^.*\//, '');
     if (Store.available) {
       try {
-        var dir = await (await (await this.root()).getDirectoryHandle(Store.session, { create: true })).getDirectoryHandle(id, { create: true });
+        sess = await (await this.root()).getDirectoryHandle(Store.session, { create: true });
+        var dir = await sess.getDirectoryHandle(id, { create: true });
         fh = await dir.getFileHandle(base_, { create: true });
         if (typeof fh.createWritable !== 'function') throw new Error('no writable streams');
         writer = await fh.createWritable();
@@ -1432,17 +1536,26 @@ var Unzip = {
       for (;;) {
         var r = await reader.read();
         if (r.done) break;
-        crc = crc32Update(crc, r.value);
         done += r.value.length;
+        // more than the zip says the file holds (a damaged or hostile zip): stopped, not unpacked to the end
+        if (done > ent.usize) { reader.cancel().catch(function () {}); throw new Error('it holds more than the zip says'); }
+        crc = crc32Update(crc, r.value);
+        // DEBUG.unzipFull (testing): the browser's storage is full once the first piece is written
+        if (writer && DEBUG.unzipFull && done > r.value.length) throw new DOMException('test', 'QuotaExceededError');
         if (writer) await writer.write(r.value); else parts.push(r.value);
         onProgress(done);
       }
       if (writer) await writer.close();
     } catch (e) {
-      if (writer) try { await writer.abort(); } catch (x) { /* ignore */ }
+      // (and the file it was unpacked into goes: nothing is left of it in storage)
+      if (writer) try { await writer.abort(); await sess.removeEntry(id, { recursive: true }); } catch (x) { /* ignore */ }
+      if (done > ent.usize) throw new Error(base_ + ' is damaged in the zip: ' + e.message);
       throw new Error(base_ + ' could not be unpacked (' + (e && e.name === 'QuotaExceededError' ? 'the browser\u2019s storage is full' : e && e.message || e) + ')');
     }
-    if (((crc ^ -1) >>> 0) !== ent.crc || done !== ent.usize) throw new Error(base_ + ' is damaged in the zip: its checksum doesn\u2019t match');
+    if (((crc ^ -1) >>> 0) !== ent.crc || done !== ent.usize) {
+      if (writer) try { await sess.removeEntry(id, { recursive: true }); } catch (x) { /* ignore */ }
+      throw new Error(base_ + ' is damaged in the zip: its checksum doesn\u2019t match');
+    }
     var f = writer ? await fh.getFile() : new File(parts, base_, { lastModified: ent.time });
     if (writer) f.unzipDir = id;
     return f;
@@ -1456,10 +1569,13 @@ async function zipEntries(e) {
   catch (err) { return { entries: [], problems: ['This zip can\u2019t be read: ' + err.message + '.'], skipped: [] }; }
   var total = 0, doneBefore = 0;
   list.forEach(function (ent) { if (ent.method === 8) total += ent.usize; });
+  // a CloneCD image's .sub goes with its .ccd (a PS1 disc's LibCrypt data is in it): unpacked too
+  var ccds = new Set(list.filter(function (ent) { return /\.ccd$/i.test(ent.name); }).map(function (ent) { return ent.name.replace(/\.ccd$/i, '').toLowerCase(); }));
   for (var i = 0; i < list.length; i++) {
     var ent = list[i], nm = ent.name.replace(/^.*\//, ''), x = ext(nm), path = e.path + '/' + ent.name;
+    var subOfCcd = x === 'sub' && ccds.has(ent.name.replace(/\.sub$/i, '').toLowerCase());
     // what the page would ignore anyway isn't unpacked
-    if (/^\._/.test(nm) || /(^|\/)__MACOSX\//.test(ent.name) || (IGNORE.test(x) && !/^(dat|xml)$/.test(x))) { skipped.push(nm); continue; }
+    if (/^\._/.test(nm) || /(^|\/)__MACOSX\//.test(ent.name) || (IGNORE.test(x) && !/^(dat|xml)$/.test(x) && !subOfCcd)) { skipped.push(nm); continue; }
     if (ent.encrypted) { problems.push(nm + ' is encrypted.'); continue; }
     if (ent.method !== 0 && ent.method !== 8) { problems.push(nm + ' uses ' + (ZIP_METHODS[ent.method] || 'method ' + ent.method) + ' compression, which can\u2019t be read here. Re-zip it with ordinary (Deflate) compression, or unzip it first.'); continue; }
     var head;
@@ -1492,14 +1608,14 @@ function addEntries(entries) {
 }
 async function addEntriesNow(entries) {
   // zips: their files join the list, unpacked if they need it (once per zip)
-  var zipCards = [], zipSkipped = [];
+  var zipCards = [], zipSkipped = [], zipSeen = 0;
   if (entries.some(function (e) { return ext(e.path) === 'zip'; })) {
     var flat = [];
     for (var zi = 0; zi < entries.length; zi++) {
       var ze = entries[zi];
       if (ext(ze.path) !== 'zip') { flat.push(ze); continue; }
       var zkey = fileKey(ze.file, ze.path);
-      if (seen.has(zkey)) continue;
+      if (seen.has(zkey)) { zipSeen++; continue; }
       seen.add(zkey);
       seenKeys.set(ze.file, zkey);
       var zr = await zipEntries(ze);
@@ -1513,7 +1629,11 @@ async function addEntriesNow(entries) {
       }
     }
     entries = flat;
-    if (!entries.length && !zipCards.length) { toast('Nothing to convert in ' + plural(zipSkipped.length, 'file') + ' of the zip.', 'err'); return; }
+    if (!entries.length && !zipCards.length) {
+      if (zipSeen && !zipSkipped.length) toast(zipSeen > 1 ? 'Those zips are already in the list.' : 'That zip is already in the list.');
+      else toast('Nothing to convert in ' + plural(zipSkipped.length, 'file') + ' of the zip.', 'err');
+      return;
+    }
   }
   // macOS keeps metadata in "._name" companion files (on FAT and exFAT drives, and in zips' __MACOSX
   // folders): they share the game files' extensions but aren't games
@@ -1549,16 +1669,16 @@ async function addEntriesNow(entries) {
   if (!fresh.length && !zipCards.length) { toast(entries.length ? 'Those files are already in the list.' : 'Nothing to convert in ' + plural(junk.length, 'file') + '. Add .cue/.bin, .gdi, .iso or .chd files.', entries.length ? null : 'err'); return; }
 
   var created = zipCards.slice(), ignored = junk.slice();
-  var claimed = new Set();
+  var claimed = new Set(), descDirs = descriptorDirs(fresh.concat(looseFiles)), freshByName = nameIndex(fresh);
 
   // 1) new files may complete jobs that were waiting for missing tracks
   jobs.forEach(function (job) {
     if (!job.missing.length || job.state !== 'blocked') return;
     job.missing = job.missing.filter(function (ref) {
-      var want = base(ref).toLowerCase();
-      var cands = fresh.filter(function (e) { return refMatches(e, ref); });
-      cands.sort(function (a, b) { return (base(a.path).toLowerCase() === want ? 0 : 1) - (base(b.path).toLowerCase() === want ? 0 : 1); });
-      var hit = pickTrack(cands, job.descDir || '', ref, claimed);
+      var want = nameKey(base(ref));
+      // (the file itself first, then an ECM image of it)
+      var cands = (freshByName.get(want) || []).concat(freshByName.get(want + '.ecm') || []);
+      var hit = pickTrack(cands, job.descDir || '', ref, claimed, descDirs);
       if (!hit) return true;
       claimed.add(hit);
       job.files.push(trackFile(hit.file, hit.path, ref));
@@ -1568,17 +1688,20 @@ async function addEntriesNow(entries) {
   });
 
   // 2) descriptor files (.cue/.gdi/.toc, and CloneCD .ccd) claim their tracks
-  var pool = looseFiles.concat(fresh);
+  var pool = looseFiles.concat(fresh), poolByName = nameIndex(pool);
   var descs = fresh.filter(function (e) { return /^(cue|gdi|toc|ccd)$/.test(ext(e.path)); });
   for (var i = 0; i < descs.length; i++) {
     var d = descs[i];
     claimed.add(d);
-    var job = await descriptorJob(d, pool, claimed);
+    var job = await descriptorJob(d, poolByName, claimed, descDirs);
     if (job) created.push(job);
     else ignored.push(base(d.path));
   }
+  // what they claimed of the files no job had yet
+  if (claimed.size) looseFiles = looseFiles.filter(function (e) { return !claimed.has(e); });
 
   // 3) everything else
+  var already = 0; // (files whose jobs are all listed: a PBP's discs)
   for (var j = 0; j < fresh.length; j++) {
     var e = fresh[j];
     if (claimed.has(e)) continue;
@@ -1626,11 +1749,18 @@ async function addEntriesNow(entries) {
         job2 = newJob({ kind: 'create', src: 'pbp', title: t, files: [{ file: file, name: name }], disc: 'cd', invalid: true, state: 'error', errorText: pb ? pb.problem : 'This is not a PBP file Discpress can read.' });
       } else {
         var pt = /^eboot$/i.test(t) && safeName(pb.title) || t;
+        // the file added again after one of its discs was removed: the discs still listed aren't added twice
+        var pkey = fileKey(file, e.path), listed = new Set(), pjs = [];
+        jobs.forEach(function (o) { var f0 = o.files[0]; if (o.src === 'pbp' && f0 && f0.pbp && seenKeys.get(f0.file) === pkey) listed.add(f0.pbp.at); });
         for (var pd = 0; pd < pb.discs.length; pd++) {
           var disc_ = pb.discs[pd], dt = pt + (pb.discs.length > 1 ? ' (Disc ' + (pd + 1) + ')' : ''), bin = dt + '.bin';
-          var pj = newJob({ kind: 'create', src: 'pbp', title: dt, files: [{ file: file, name: bin, pbp: { at: disc_.at, sectors: disc_.sectors } }], disc: 'cd', pbpCue: disc_.cue(bin), pbpTracks: disc_.tracks });
-          if (pd < pb.discs.length - 1) { pj.files[0].path = e.path; created.push(pj); } else job2 = pj;
+          if (listed.has(disc_.at)) continue;
+          var pj = newJob({ kind: 'create', src: 'pbp', title: dt, files: [{ file: file, name: bin, pbp: { at: disc_.at, sectors: disc_.sectors }, path: e.path }], disc: 'cd', pbpCue: disc_.cue(bin), pbpTracks: disc_.tracks });
+          pjs.push(pj);
         }
+        if (!pjs.length) { already++; continue; }
+        job2 = pjs.pop();
+        pjs.forEach(function (j) { created.push(j); });
       }
     } else if (x === 'nrg') {
       job2 = newJob({ kind: 'create', src: 'nrg', title: t, files: [{ file: file, name: name }], disc: 'cd' });
@@ -1677,10 +1807,11 @@ async function addEntriesNow(entries) {
 
   // a PS1 disc's LibCrypt data (.sbi) goes next to its CHD, named after it: emulators look for
   // it by name (DuckStation, Beetle PSX, SwanStation, PCSX ReARMed, MiSTer)
+  var made = new Set(created), freshSet = new Set(fresh), byName = looseSbi.length ? jobNameIndex(created.concat(jobs)) : null;
   looseSbi = looseSbi.filter(function (e) {
-    var job = sbiJob(e, created.concat(jobs));
-    if (job) { job.sbi = { file: e.file, name: base(e.path), ext: ext(e.path), entry: e }; if (job.el && created.indexOf(job) < 0) refreshJob(job, true); return false; }
-    if (fresh.indexOf(e) >= 0) ignored.push(base(e.path));
+    var job = sbiJob(e, byName.get(nameKey(stem(e.path))) || []);
+    if (job) { job.sbi = { file: e.file, name: base(e.path), ext: ext(e.path), entry: e }; if (job.el && !made.has(job)) refreshJob(job, true); return false; }
+    if (freshSet.has(e)) ignored.push(base(e.path));
     return true;
   });
   created.forEach(function (job) {
@@ -1689,7 +1820,8 @@ async function addEntriesNow(entries) {
     if (job.kind === 'chd') probeChd(job);
     else scheduleIdentify(job);
   });
-  jobs.forEach(function (job) { if (job.el) refreshJob(job); });
+  // (the new ones were drawn just now)
+  jobs.forEach(function (job) { if (job.el && !made.has(job)) refreshJob(job); });
   linkParents();
   updateDock();
   if (created.length) {
@@ -1701,17 +1833,31 @@ async function addEntriesNow(entries) {
     if (first && first.scrollIntoView) setTimeout(function () { first.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 60);
   } else if (ignored.length) {
     toast('Nothing to convert in ' + plural(ignored.length, 'file') + '. Add .cue/.bin, .gdi, .iso or .chd files.', 'err');
+  } else if (already) {
+    toast('Those files are already in the list.');
   }
 }
 
-// the job an .sbi file belongs to: a CD job not started yet whose cue sheet, image or title has its
-// name ("Game (Europe).sbi" beside "Game (Europe).cue"), in the same folder if one is
-function sbiJob(e, list) {
-  var want = stem(e.path).toLowerCase(), dir = dirOf(e.path);
-  var cands = list.filter(function (j) {
-    if (j.kind !== 'create' || (j.sbi && !j.sbi.fromSub) || j.disc === 'dvd' || (j.state !== 'ready' && j.state !== 'blocked' && j.state !== 'probing')) return false;
+// jobs by the names an .sbi file may have: their title, and their descriptor's and files' names
+function jobNameIndex(list) {
+  var m = new Map();
+  list.forEach(function (j) {
     var names = [j.title, j.descName ? stem(j.descName) : ''].concat(j.files.map(function (f) { return stem(f.name); }));
-    return names.some(function (n) { return n && n.toLowerCase() === want; });
+    names.forEach(function (n) {
+      if (!n) return;
+      var k = nameKey(n), l = m.get(k);
+      if (!l) m.set(k, [j]); else if (l.indexOf(j) < 0) l.push(j);
+    });
+  });
+  return m;
+}
+// the job an .sbi file belongs to, among those of its name (jobNameIndex): a CD job not started yet
+// whose cue sheet, image or title has its name ("Game (Europe).sbi" beside "Game (Europe).cue"), in the
+// same folder if one is
+function sbiJob(e, list) {
+  var dir = dirOf(e.path);
+  var cands = list.filter(function (j) {
+    return !(j.kind !== 'create' || (j.sbi && !j.sbi.fromSub) || j.disc === 'dvd' || (j.state !== 'ready' && j.state !== 'blocked' && j.state !== 'probing'));
   });
   var same = cands.filter(function (j) {
     return (j.descDir != null ? j.descDir : dirOf((j.files[0] && j.files[0].path) || '')) === dir;
@@ -1719,7 +1865,8 @@ function sbiJob(e, list) {
   return (same.length ? same : cands)[0] || null;
 }
 
-async function descriptorJob(d, pool, claimed) {
+// index: the files to take tracks from, by name (nameIndex)
+async function descriptorJob(d, index, claimed, descDirs) {
   var kind = ext(d.path), dec = null;
   try { dec = decodeText(new Uint8Array(await d.file.slice(0, 1 << 20).arrayBuffer())); } catch (e) { /* unreadable */ }
   // not a text file, e.g. a drive's raw table of contents that some dumping tools save as .toc: not a job
@@ -1731,11 +1878,9 @@ async function descriptorJob(d, pool, claimed) {
   var job = newJob({ kind: 'create', src: kind, title: stem(d.path), disc: kind === 'gdi' ? 'gdrom' : 'cd', descFile: d.file, descName: ccd ? stem(d.path) + '.cue' : base(d.path), descText: text, descDirty: !!dec && (dec.recoded || fix.changed), files: [] });
   if (ccd) {
     job.fromCcd = true;
-    var sub = pool.find(function (e) { return !claimed.has(e) && e !== d && base(e.path).toLowerCase() === (stem(d.path) + '.sub').toLowerCase(); });
+    var sub = (index.get(nameKey(stem(d.path) + '.sub')) || []).find(function (e) { return !claimed.has(e) && e !== d; });
     if (sub) {
       claimed.add(sub);
-      var si = looseFiles.indexOf(sub);
-      if (si >= 0) looseFiles.splice(si, 1);
       // a PS1 disc's LibCrypt sectors are in it: once the console is known, they become an .sbi (sbiFromSub)
       job.subFile = sub.file;
       if (!fix.problem) job.warnings.push('The .sub file (subchannel data) isn\u2019t kept in the CHD: CHDs store the disc\u2019s data and audio.');
@@ -1750,24 +1895,31 @@ async function descriptorJob(d, pool, claimed) {
   }
   var dir = job.descDir = dirOf(d.path);
   refs.forEach(function (ref) {
-    var want = base(ref).toLowerCase();
-    var cands = pool.filter(function (e) { return e !== d && base(e.path).toLowerCase() === want; });
+    var want = nameKey(base(ref)), notD = function (e) { return e !== d; };
+    var cands = (index.get(want) || []).filter(notD);
     // or an ECM image of it (Game.bin.ecm for Game.bin)
-    if (!cands.length) cands = pool.filter(function (e) { return e !== d && base(e.path).toLowerCase() === want + '.ecm'; });
+    if (!cands.length) cands = (index.get(want + '.ecm') || []).filter(notD);
     // also steal files from not-yet-started jobs of a lone image (a .bin with a generated cue, an .iso)
     if (!cands.length) {
       jobs.forEach(function (other) {
-        if ((other.lone || (other.src === 'iso' && other.files.length === 1)) && other.state !== 'running' && other.state !== 'queued' && other.state !== 'done' && other.files[0] && other.files[0].name.toLowerCase() === want) {
+        if ((other.lone || (other.src === 'iso' && other.files.length === 1)) && other.state !== 'running' && other.state !== 'queued' && other.state !== 'done' && other.files[0] && nameKey(other.files[0].name) === want) {
           cands.push({ file: other.files[0].file, path: other.files[0].path || other.files[0].name, fromJob: other });
         }
       });
     }
-    var hit = pickTrack(cands, dir, ref, claimed);
+    var hit = pickTrack(cands, dir, ref, claimed, descDirs);
     if (!hit) { job.missing.push(ref); return; }
-    if (hit.fromJob) removeJob(hit.fromJob, true, true);
-    claimed.add(hit);
-    var li = looseFiles.indexOf(hit);
-    if (li >= 0) looseFiles.splice(li, 1);
+    if (hit.fromJob) {
+      // the lone image's .sbi (paired with it by name) comes along, or waits for its job again
+      var other = hit.fromJob;
+      if (other.sbi && !other.sbi.fromSub) {
+        if (!job.sbi) job.sbi = other.sbi;
+        else if (other.sbi.entry) looseSbi.push(other.sbi.entry);
+        other.sbi = null;
+      }
+      removeJob(other, true, true);
+    }
+    claimed.add(hit); // (taken out of looseFiles by the caller)
     job.files.push(trackFile(hit.file, hit.path, ref));
   });
   if (!refs.length && !job.invalid) job.warnings.push('No track files are listed in this ' + kind.toUpperCase() + ' file.');
@@ -1786,9 +1938,8 @@ function finalizeCreateJob(job) {
   if (job.descFile) {
     // make every track reference match the real file names exactly
     var map = {}, changed = false;
-    job.files.forEach(function (f) {
-      if (f.ref && f.ref !== f.name) { map[f.ref] = f.name; changed = true; }
-    });
+    job.files.forEach(function (f) { if (f.ref) map[refKey(f.ref)] = f.name; });
+    parseRefs(job.src, job.descText, true).forEach(function (r) { var n = map[refKey(r)]; if (n && n !== r) changed = true; });
     job.descBlob = changed || job.descDirty ? new Blob([rewriteRefs(job.src, job.descText, map)], { type: 'text/plain' }) : job.descFile;
   }
   if (!job.action) job.action = KIND[job.disc].cmd;
@@ -1900,7 +2051,7 @@ function buildJob(job) {
   var args = [], inputs = [], writable = [], slots = 3, helpers = 0, expected = 0, display = [];
   var o = job.opts, ob = outBase(job);
   function presetFor(disc) {
-    var list = PRESETS[disc === 'cd' || disc === 'gdrom' ? 'cd' : disc === 'ld' ? 'ld' : 'other'];
+    var list = presetsFor(disc);
     return list.find(function (x) { return x[0] === o.preset; }) || list[0];
   }
   if (job.kind === 'create') {
@@ -1942,7 +2093,7 @@ function buildJob(job) {
     slots = 2;
     var nt = threadCount();
     helpers = nt > 1 && c !== 'none' ? nt : 0;
-    expected = jobInputBytes(job);
+    expected = jobImageBytes(job); // (what an ECM, PBP or compressed ISO holds, not its packed size)
   } else {
     var info = job.info || {}, ci = chdInputs(job), name = ci.name;
     inputs = ci.inputs;
@@ -2110,8 +2261,10 @@ function selectField(label, options, value, onchange, hint, disabled) {
 function textField(label, value, onchange, opts) {
   opts = opts || {};
   var i = el('input', { type: opts.type || 'text', value: value || '', placeholder: opts.placeholder || '', inputmode: opts.inputmode, disabled: opts.disabled, autocomplete: 'off', spellcheck: 'false' });
-  i.addEventListener('input', function () { onchange(i.value); });
-  return el('label', { class: 'field' + (opts.wide ? ' wide' : '') }, el('span', null, label), i, opts.hint ? el('span', { class: 'hint' }, opts.hint) : null);
+  // (a hint given as a function follows what is typed: "Saved as …")
+  var live = typeof opts.hint === 'function', hint = opts.hint ? el('span', { class: 'hint' }, live ? opts.hint() : opts.hint) : null;
+  i.addEventListener('input', function () { onchange(i.value); if (live) hint.textContent = opts.hint(); });
+  return el('label', { class: 'field' + (opts.wide ? ' wide' : '') }, el('span', null, label), i, hint);
 }
 
 function renderControls(job) {
@@ -2124,14 +2277,16 @@ function renderControls(job) {
 
   if (job.kind === 'create') {
     var pickDisc = function (v) {
+      // the compression picked stays, if the other type has it too (a DVD has no MiSTer preset)
+      var keep = presetsFor(v).some(function (p) { return p[0] === o.preset; });
       if (job.state === 'done' || job.state === 'error' || job.state === 'canceled') {
         var pending = job.outputs.some(function (x) { return !x.downloaded && x.kind !== 'disk'; });
         if (pending && !confirm('Discard the results of the previous run? Download them first if you need them.')) return;
-        job.disc = v; job.action = KIND[v].cmd; o.preset = 'default'; o.hunk = ''; job.discEdited = true;
+        job.disc = v; job.action = KIND[v].cmd; if (!keep) o.preset = 'default'; o.hunk = ''; job.discEdited = true;
         resetJob(job);
         return;
       }
-      job.disc = v; job.action = KIND[v].cmd; o.preset = 'default'; o.hunk = ''; job.discEdited = true; refresh();
+      job.disc = v; job.action = KIND[v].cmd; if (!keep) o.preset = 'default'; o.hunk = ''; job.discEdited = true; refresh();
     };
     var discChoices = job.choices && job.choices.length > 1 ? job.choices.map(function (k) { return [k, KIND[k].label + ' CHD']; }) : null;
     // an identified game's system settles the type: the choice is in Options instead of up front
@@ -2139,7 +2294,7 @@ function renderControls(job) {
       box.append(el('div', { class: 'row' }, el('span', { class: 'small muted', style: 'font-weight:600' }, 'Create as'), seg(discChoices, job.disc, pickDisc, busy)));
     }
     var disc = job.disc;
-    var presets = PRESETS[disc === 'cd' || disc === 'gdrom' ? 'cd' : disc === 'ld' ? 'ld' : 'other'];
+    var presets = presetsFor(disc);
     var fields = el('div', { class: 'fields' });
     if (discChoices && job.discBySystem) {
       var sys = job.ident.sys, why;
@@ -2161,7 +2316,7 @@ function renderControls(job) {
     var hunks = HUNKS[disc] || [['', 'Automatic']];
     if (hunks.length > 1) fields.append(selectField('Hunk size', hunks, o.hunk || hunks[0][0], function (v) { o.hunk = v; job.hunkEdited = true; soft(); }, disc === 'dvd' ? 'Use 2,048 for PSP games.' : null, busy));
     if (disc === 'raw') fields.append(textField('Unit size (bytes)', o.unit, function (v) { o.unit = v.replace(/[^0-9]/g, ''); soft(); }, { inputmode: 'numeric', disabled: busy }));
-    fields.append(textField('Output name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { hint: 'Saved as ' + outBase(job) + '.chd', disabled: busy, wide: true }));
+    fields.append(textField('Output name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { hint: function () { return 'Saved as ' + outBase(job) + '.chd'; }, disabled: busy, wide: true }));
     var det = el('details', { class: 'opts' }, el('summary', null, 'Options'), fields);
     if (job.ui.optsOpen) det.open = true;
     det.addEventListener('toggle', function () { job.ui.optsOpen = det.open; });
@@ -2197,7 +2352,7 @@ function renderControls(job) {
           'The files of a Redump dump: its cue sheet, and one .bin per track, so they match Redump\u2019s checksums.') : null, busy));
       f2.append(textField('Output name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { disabled: busy }));
     } else if (job.action === 'rename') {
-      f2.append(textField('New name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { hint: 'Saved as ' + outBase(job) + '.chd (the CHD itself is not changed)', disabled: busy }));
+      f2.append(textField('New name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { hint: function () { return 'Saved as ' + outBase(job) + '.chd (the CHD itself is not changed)'; }, disabled: busy }));
     } else if (job.action === 'info') {
       f2.append(el('label', { class: 'check' }, el('input', { type: 'checkbox', checked: o.verbose, disabled: busy, onchange: function (e) { o.verbose = e.target.checked; soft(); } }), 'Show hunk statistics (verbose)'));
     }
@@ -2363,7 +2518,10 @@ function renderFoot(job) {
     f.append(el('button', { class: 'btn danger sm fit', onclick: function () { cancelJob(job); } }, 'Cancel'));
   } else if (job.state === 'done' || job.state === 'error' || job.state === 'canceled') {
     if (job.kind === 'chd' && job.info || job.kind === 'create' && !job.invalid) {
-      f.append(el('button', { class: 'btn' + (job.state === 'done' ? ' sm fit' : ''), onclick: function () { resetJob(job); } }, job.state === 'done' ? 'Run again' : 'Try again'));
+      f.append(el('button', { class: 'btn' + (job.state === 'done' ? ' sm fit' : ''), onclick: function () {
+        if (unsaved(job) && !confirm('Discard the results of the previous run? Download them first if you need them.')) return;
+        resetJob(job);
+      } }, job.state === 'done' ? 'Run again' : 'Try again'));
     }
   }
 }
@@ -2410,7 +2568,7 @@ function updateTabCount() {
 /* ============================================================
    queue
    ============================================================ */
-var queue = [], current = null, wakeLock = null, activeTab = 'convert';
+var queue = [], current = null, wakeLock = null, wakeAsking = false, activeTab = 'convert';
 
 async function ensureFolder() {
   if (settings.storage !== 'folder' || outDir) return true;
@@ -2445,7 +2603,13 @@ async function startAll() {
   jobs.forEach(function (j) { if (j.state === 'ready') { enqueue(j); n++; } });
   if (!n) toast('Nothing ready to start.');
 }
+// a Verify still reading the job's results stops, and its verdict, if any, goes with them
+function stopVerify(job) {
+  if (job.verify && job.verify.run) job.verify.run.cancel();
+  job.verify = null;
+}
 function resetJob(job) {
+  stopVerify(job);
   Store.removeJob(job.id);
   job.outputs = [];
   job.log = [];
@@ -2482,17 +2646,25 @@ function removeJob(job, silent, keepFiles) {
   if (!silent && unsaved(job) && !confirm('Remove "' + job.title + '"? Its results haven\u2019t been saved and will be deleted.')) return;
   if (job.run) job.run.cancel();
   else if (job.state === 'running') abortStart(job);
+  stopVerify(job);
   queue = queue.filter(function (j) { return j !== job; });
   jobs = jobs.filter(function (j) { return j !== job; });
+  // a checksum still running for it stops (unless another card uses the file too)
+  if (/^(running|checking)$/.test(job.identState || '') || job.datState === 'checking') {
+    abortChecksums(job.files.map(function (f) { return f.file; }).filter(function (file) {
+      return !jobs.some(function (o) { return o.files.some(function (x) { return x.file === file; }); });
+    }));
+  }
   if (job.el) job.el.remove();
   Store.removeJob(job.id);
   if (!keepFiles) {
     job.files.forEach(function (f) { forgetFile(f.file); });
     if (job.descFile) forgetFile(job.descFile);
     if (job.sbi) forgetFile(job.sbi.file);
+    if (job.subFile) forgetFile(job.subFile); // a CloneCD image's .sub, added again with it
     // a zip whose files are all gone can be added again; what was unpacked from it is deleted
     var zips = new Set();
-    job.files.concat(job.descFile ? [{ file: job.descFile }] : []).forEach(function (f) { if (f.file.fromZip) zips.add(f.file.fromZip); });
+    job.files.concat(job.descFile ? [{ file: job.descFile }] : [], job.subFile ? [{ file: job.subFile }] : []).forEach(function (f) { if (f.file.fromZip) zips.add(f.file.fromZip); });
     if (job.src === 'zip') zips.add(job.files[0].file);
     zips.forEach(function (z) {
       var inUse = jobs.some(function (o) { return o.files.some(function (f) { return f.file.fromZip === z || f.file === z; }) || (o.descFile && o.descFile.fromZip === z); });
@@ -2512,6 +2684,14 @@ async function pump() {
   current = job;
   acquireWake();
   try { await runJobNow(job); }
+  catch (e) {
+    // (a bug: the card says so, rather than run for ever with a Cancel that does nothing)
+    if (job.state === 'running' || job.state === 'queued') {
+      job.state = 'error';
+      job.errorText = 'Something went wrong in Discpress: ' + (e && e.message || e);
+      if (jobs.indexOf(job) >= 0) refreshJob(job, true);
+    }
+  }
   finally {
     current = null;
     job.run = null;
@@ -2548,7 +2728,7 @@ async function runJobNow(job) {
   job.retryLog = null;
   job.outputs = [];
   job.redump = null;
-  job.verify = null;
+  stopVerify(job);
   job.helperStopped = false;
   refreshJob(job, false);
   setProgress(job, null, 'Starting…');
@@ -2600,7 +2780,7 @@ async function runJobNow(job) {
           return;
         }
         job.folderName = outDir.name;
-        job.outputs = [{ name: nm, size: src.size, kind: 'disk' }];
+        job.outputs = [{ name: nm, size: src.size, kind: 'disk', dir: outDir }];
       } else {
         job.outputs = [{ name: nm, size: src.size, kind: 'blob', blob: src, input: true }]; // the user's own file, renamed
       }
@@ -2620,9 +2800,11 @@ async function runJobNow(job) {
   }
   if (job.aborted) { Recovery.running(null); job.state = 'canceled'; if (jobs.indexOf(job) >= 0) refreshJob(job, true); return; }
   var t0 = performance.now(), phaseStart = t0, lastPhase = '', lastPct = 0, workerError = '';
+  var runDir = outDir; // (the folder written to, should another be picked meanwhile)
+  job.storageRefused = false;
   job.run = Engine.run({
     jobId: job.id, dirPath: Store.claim(job.id), args: spec.args, inputs: spec.inputs, writable: spec.writable,
-    slots: spec.slots, helpers: spec.helpers, outMode: spec.outMode, outDir: outDir, agreed: main ? [main] : [],
+    slots: spec.slots, helpers: spec.helpers, outMode: spec.outMode, outDir: runDir, agreed: main ? [main] : [],
     // tests: 'one' or 'all' helpers fail on the first run, 'always' (all) on every run
     debugFail: DEBUG.failHelpers === 'always' ? 'all' : job.engineRetried ? null : DEBUG.failHelpers,
     onLine: function (s, t) {
@@ -2651,28 +2833,35 @@ async function runJobNow(job) {
       if (/^A helper thread stopped/.test(m.message)) job.helperStopped = true;
     },
     onScan: function (f) { setProgress(job, null, 'Reading the ECM image\u2026 ' + Math.floor(f * 100) + '%'); },
-    onStorage: function (mode) {
+    onStorage: function (mode, reason) {
       job.storage = mode;
-      if (spec.outMode === 'opfs' && mode === 'mem') { Store.available = false; updateChips(); }
+      if (spec.outMode !== 'opfs' || mode !== 'mem') return;
+      // planned on disk, kept in memory after all: the memory question wasn't asked before the run
+      var need = memoryNeed(Object.assign({}, spec, { outMode: 'mem' }));
+      if (!confirmMemory(need)) { job.storageRefused = true; job.run.cancel(); return; }
+      // a file still held by a run that ended (a lock) is a passing problem; anything else stays for the visit
+      if (reason !== 'NoModificationAllowedError' && reason !== 'InvalidStateError') { Store.available = false; updateChips(); }
     }
   });
   job.progressPct = function () { return lastPct; };
   try {
     var res = await job.run.promise;
-    Recovery.running(null);
     job.elapsed = performance.now() - t0;
     if (res.error) appendLog(job, res.error);
     if (res.code === 0) {
       if (job.kind === 'chd' && job.action === 'verify') await redumpCheck(job);
       job.state = 'done';
-      job.folderName = spec.outMode === 'stream' && outDir ? outDir.name : '';
+      job.folderName = spec.outMode === 'stream' && runDir ? runDir.name : '';
       job.outputs = (res.outputs || []).filter(function (o) { return o.name; }).sort(function (a, b) {
         var ea = /\.(cue|gdi|toc)$/i.test(a.name) ? 0 : 1, eb = /\.(cue|gdi|toc)$/i.test(b.name) ? 0 : 1;
         return ea - eb || a.name.localeCompare(b.name, undefined, { numeric: true });
       });
+      job.outputs.forEach(function (o) { if (o.kind === 'disk') o.dir = runDir; });
       if (job.kind === 'chd' && job.action === 'info') job.lastInfo = parseInfo(job.log);
       if (job.kind === 'create' && job.sbi) await addSbi(job, spec);
       if (job.identState === 'done') renameOutputs(job); // the checksum finished while converting
+      // done (a reload from now on loses nothing that ran: the results are recorded instead)
+      Recovery.running(null);
       Recovery.finished(job);
       // a helper that failed (or a run that had to start again) means this browser's WebAssembly engine
       // misbehaved: the result is read back before anything else runs, as the setting asks for every one
@@ -2682,6 +2871,7 @@ async function runJobNow(job) {
         await verifyResult(job);
       }
     } else {
+      Recovery.running(null);
       job.state = 'error';
       if (res.readFail) { job.errorText = readFailHint(res.error); Store.removeJob(job.id); refreshJob(job, true); return; }
       // (a helper that stopped, whose work the others did, isn't why)
@@ -2696,6 +2886,7 @@ async function runJobNow(job) {
   } catch (e) {
     Recovery.running(null);
     if (e.canceled && job.stalled) { job.state = 'error'; job.errorText = STALLED; }
+    else if (e.canceled && job.storageRefused) { job.state = 'error'; job.errorText = 'The browser\u2019s storage wasn\u2019t available for this job, so it stopped rather than keep its results in memory. Try again in a moment.'; }
     else if (e.canceled) { job.state = 'canceled'; }
     else { job.state = 'error'; job.errorText = readFailHint(e.message); appendLog(job, e.message); }
     Store.removeJob(job.id);
@@ -2742,30 +2933,35 @@ function confirmMemory(bytes) {
 async function verifyResult(job) {
   var out = job.outputs.find(function (o) { return /\.chd$/i.test(o.name); });
   if (!out || (job.verify && job.verify.state === 'running')) return;
-  job.verify = { state: 'running', pct: 0 };
+  // (the job may be reset, removed or run again meanwhile: the verdict is then this one's no more)
+  var v = job.verify = { state: 'running', pct: 0 }, verdict;
   refreshJob(job, true);
   var lines = [], file;
   try {
-    file = out.kind === 'disk' ? await (await outDir.getFileHandle(out.name)).getFile() : await outputFile(job, out);
-    job.verify.run = Engine.run({
+    // (in the folder it was written to, even if another one was picked since)
+    file = out.kind === 'disk' ? await (await (out.dir || outDir).getFileHandle(out.name)).getFile() : await outputFile(job, out);
+    if (job.verify !== v) return;
+    v.run = Engine.run({
       jobId: job.id + '-verify', args: ['verify', '-i', '/in/' + out.name], inputs: [{ name: out.name, blob: file }], writable: [],
       slots: 0, helpers: readHelpers(), outMode: 'mem',
       onLine: function (s, t) { lines.push(t); },
       onProgress: function (t) {
         var m = /([\d.]+)% complete/.exec(t);
-        if (!m || !job.verify) return;
-        job.verify.pct = parseFloat(m[1]);
+        if (!m || job.verify !== v) return;
+        v.pct = parseFloat(m[1]);
         var n = job.ui && job.ui.verifyText;
-        if (n) n.textContent = 'Verifying\u2026 ' + Math.floor(job.verify.pct) + '%';
+        if (n) n.textContent = 'Verifying\u2026 ' + Math.floor(v.pct) + '%';
       },
       onNotice: function (m) { if (m.level === 'error') lines.push(m.message); }
     });
-    var res = await job.verify.run.promise;
+    var res = await v.run.promise;
     var why = lines.filter(function (l) { return /error|failed|mismatch|invalid|incorrect/i.test(l); }).slice(-2).join(' ');
-    job.verify = res.code === 0 ? { state: 'ok' } : { state: 'failed', text: why || res.error || 'chdman exited with code ' + res.code };
+    verdict = res.code === 0 ? { state: 'ok' } : { state: 'failed', text: why || res.error || 'chdman exited with code ' + res.code };
   } catch (e) {
-    job.verify = e.canceled ? null : { state: 'failed', text: readFailHint(e.message) };
+    verdict = e.canceled ? null : { state: 'failed', text: readFailHint(e.message) };
   }
+  if (job.verify !== v) return;
+  job.verify = verdict;
   appendLog(job, job.verify ? (job.verify.state === 'ok' ? 'Verified: the CHD holds exactly the data it was made from.' : 'Verification failed: ' + job.verify.text) : 'Verification canceled.');
   if (jobs.indexOf(job) >= 0) refreshJob(job, true);
 }
@@ -2856,7 +3052,7 @@ async function addSbi(job, spec) {
     try {
       var w = await (await outDir.getFileHandle(nm, { create: true })).createWritable();
       await f.stream().pipeTo(w);
-      job.outputs.push({ name: nm, size: f.size, kind: 'disk' });
+      job.outputs.push({ name: nm, size: f.size, kind: 'disk', dir: outDir });
     } catch (e) { appendLog(job, 'The .sbi file could not be written into the folder: ' + e.message); toast('The .sbi file could not be written into the folder.', 'err'); }
   } else {
     job.outputs.push({ name: nm, size: f.size, kind: 'blob', blob: f, input: true });
@@ -2965,7 +3161,8 @@ function datRecheck() {
     if (job.identState !== 'done') return; // checked when identified
     job.dat = null;
     if (job.ui) renderNotes(job);
-    datChain = datChain.then(function () { return datCheck(job); });
+    // (one job's failure doesn't stop the others' checks)
+    datChain = datChain.then(function () { return datCheck(job); }).catch(function (e) { appendLog(job, 'Could not check against the DAT files: ' + (e && e.message || e)); });
   });
 }
 function datNote(job) {
@@ -3038,7 +3235,7 @@ function redumpMatch(job, files) {
   var hits = [];
   files.forEach(function (f) { GameDB.size(f.size).forEach(function (e) { if (e.crc === f.crc) hits.push({ e: e, f: f }); }); });
   if (hits.length) {
-    var hit = hits.find(function (h) { return id.serial && sameSerial(h.e.sys, h.e.serial, id.serial); }) || hits[0];
+    var hit = hits.find(function (h) { return id.serial && hasSerial(h.e, id.serial); }) || hits[0];
     var names = hits.map(function (h) { return h.e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
     job.redump = { match: true, entry: hit.e, track: whole ? '' : trackOf(hit.f.name) };
     // the checksum settles which release it is
@@ -3053,11 +3250,16 @@ function redumpMatch(job, files) {
 }
 
 async function acquireWake() {
-  if (!settings.wake || !('wakeLock' in navigator) || wakeLock) return;
+  if (!settings.wake || !('wakeLock' in navigator) || wakeLock || wakeAsking) return;
+  wakeAsking = true;
   try {
-    wakeLock = await navigator.wakeLock.request('screen');
-    wakeLock.addEventListener('release', function () { wakeLock = null; });
+    var lock = await navigator.wakeLock.request('screen');
+    // the jobs ended while the browser was asking: no lock to keep
+    if (!current) { lock.release().catch(function () {}); return; }
+    wakeLock = lock;
+    lock.addEventListener('release', function () { if (wakeLock === lock) wakeLock = null; });
   } catch (e) { wakeLock = null; }
+  finally { wakeAsking = false; }
 }
 function releaseWake() {
   if (wakeLock) { try { wakeLock.release(); } catch (e) { /* ignore */ } wakeLock = null; }
@@ -3141,7 +3343,9 @@ function renderEarlier() {
       var job = { id: it.jobId, outputs: it.outputs };
       it.outputs.forEach(function (out, i) {
         var btns = el('div', { class: 'row' });
-        btns.append(saveButton([out], function () { saveOutput(job, out); }));
+        // (once saved, it says so: the next visit no longer lists it)
+        btns.append(saveButton([out], function () { Promise.resolve(saveOutput(job, out)).then(renderEarlier); }));
+        if (out.downloaded) btns.prepend(el('span', { class: 'small muted' }, '\u2713 Saved'));
         // one Delete for the job's results together (they are stored together), on its first file
         var n = it.outputs.length;
         if (i === 0) btns.append(el('button', { class: 'btn sm', onclick: async function () {
@@ -3170,7 +3374,29 @@ async function outputFile(job, out) {
   var f = await Store.file(job.id, out.slot, out.session);
   return new File([f], out.name, { type: 'application/octet-stream' });
 }
-async function downloadOutput(job, out) {
+// Results of 1 GB or more are saved through the browser's save dialog where it has one (Chrome and Edge
+// on computers): the page then knows the file was saved, and a dialog closed without saving leaves the
+// result unsaved, where a download it can't follow would count as saved. (DEBUG.savePickerMin: a lower size)
+var SAVE_PICKER_MIN = DEBUG.savePickerMin || 1073741824;
+async function savePicked(job, out) {
+  var handle;
+  try { handle = await window.showSaveFilePicker({ suggestedName: out.name }); }
+  catch (e) {
+    if (e && e.name === 'AbortError') return; // closed: not saved
+    return downloadOutput(job, out, true); // (a name the dialog refuses, say)
+  }
+  try {
+    var f = await outputFile(job, out), w = await handle.createWritable();
+    await f.stream().pipeTo(w);
+    markSaved(job, out);
+    refreshJob(job);
+    toast('Saved \u201c' + handle.name + '\u201d.');
+  } catch (e) {
+    toast('Could not save the result: ' + (e && e.message || e), 'err');
+  }
+}
+async function downloadOutput(job, out, plain) {
+  if (!plain && typeof window.showSaveFilePicker === 'function' && !isMobile && (out.size || 0) >= SAVE_PICKER_MIN) return savePicked(job, out);
   try {
     var f = await outputFile(job, out);
     var url = URL.createObjectURL(f);
@@ -3261,8 +3487,17 @@ async function saveToFolder(list) {
   var dir;
   try { dir = await window.showDirectoryPicker({ mode: 'readwrite', id: 'chdman-out' }); }
   catch (e) { return; }
-  var names = [];
-  list.forEach(function (job) { job.outputs.forEach(function (o) { if (o.kind !== 'disk') names.push(o.name); }); });
+  // two results of the same name would replace each other in the folder: the first job's are saved, a later
+  // job with a name already taken is left for the user to save on its own (renaming a track would break
+  // the cue sheet that names it)
+  var names = [], taken = new Set(), clash = [];
+  list = list.filter(function (job) {
+    var own = job.outputs.filter(function (o) { return o.kind !== 'disk'; }).map(function (o) { return o.name.toLowerCase(); });
+    if (own.some(function (nm) { return taken.has(nm); })) { clash.push(job); return false; }
+    own.forEach(function (nm) { taken.add(nm); });
+    job.outputs.forEach(function (o) { if (o.kind !== 'disk') names.push(o.name); });
+    return true;
+  });
   if (!(await confirmReplace(dir, names))) return;
   var n = 0;
   for (var i = 0; i < list.length; i++) {
@@ -3285,6 +3520,7 @@ async function saveToFolder(list) {
     refreshJob(job);
   }
   if (n) toast('Saved ' + plural(n, 'file') + ' to ' + dir.name + '.');
+  if (clash.length) toast('Not saved, since another result has the same name: ' + clash.map(function (j) { return j.outputs[0] ? j.outputs[0].name : j.title; }).join(', ') + '. Save ' + (clash.length === 1 ? 'it' : 'them') + ' on ' + (clash.length === 1 ? 'its' : 'their') + ' own, or give ' + (clash.length === 1 ? 'it' : 'them') + ' another name and run ' + (clash.length === 1 ? 'it' : 'them') + ' again.', 'err');
 }
 
 /* ============================================================
@@ -3373,6 +3609,18 @@ var OUT_FLAGS = { '-o': 1, '--output': 1, '-ob': 1, '--outputbin': 1 };
 var cli = { cmd: 'createcd', files: [], vals: {}, textMode: false, run: null, last: null, templates: null, outAuto: true };
 
 function cliSpec() { return CMDS.find(function (c) { return c[0] === cli.cmd; }); }
+// files for the Advanced tab (picked or dropped): one of a name already listed replaces it, and says so
+function cliAddFiles(list) {
+  var replaced = [];
+  list.forEach(function (f) {
+    if (cli.files.some(function (x) { return x.name === f.name && x !== f; })) replaced.push(f.name);
+    cli.files = cli.files.filter(function (x) { return x.name !== f.name; });
+    cli.files.push(f);
+  });
+  if (replaced.length) toast(replaced.length > 1 ? 'Replaced ' + replaced.length + ' files of the same names in the list.' : 'Replaced \u201c' + replaced[0] + '\u201d in the list with the file of the same name just added.');
+  cliAutofill();
+  cliRender();
+}
 function cliWritable() { return cli.cmd === 'addmeta' || cli.cmd === 'delmeta' || (cli.cmd === 'verify' && cli.vals.fix); }
 
 function cliInit() {
@@ -3384,15 +3632,6 @@ function cliInit() {
   sel.value = cli.cmd;
   sel.addEventListener('change', function () { cli.cmd = sel.value; cli.vals = {}; cli.outAuto = true; cliAutofill(); cliRender(); });
   $('#cliAdd').addEventListener('click', function () { pickFiles('cliFileInput', cliAddFiles); });
-  function cliAddFiles(list) {
-    list.forEach(function (f) {
-      cli.files = cli.files.filter(function (x) { return x.name !== f.name; });
-      cli.files.push(f);
-    });
-    
-    cliAutofill();
-    cliRender();
-  }
   $('#cliEditToggle').addEventListener('click', function () {
     cli.textMode = !cli.textMode;
     if (cli.textMode) $('#cliText').value = cliCommand().display;
@@ -3608,6 +3847,11 @@ async function cliRun() {
     });
     var r = await cli.run.promise;
     con.textContent += '\n[exit code ' + r.code + (r.error ? ': ' + r.error : '') + ']\n';
+    // chdman reads a descriptor here byte for byte, as the Convert tab doesn't (decodeText, fixDescriptor)
+    var desc = args[0] === 'createcd' && args.find(function (a) { return /\.(cue|toc|gdi)$/i.test(a); });
+    if (r.code !== 0 && desc && /no tracks|parsing input file/i.test(con.textContent)) {
+      con.textContent += 'Here chdman reads the ' + ext(desc).toUpperCase() + ' file as it is. The Convert tab corrects what chdman can\u2019t read (a byte order mark, UTF-16, lower-case keywords): convert this disc there.\n';
+    }
     con.scrollTop = con.scrollHeight;
     prog.hidden = true;
     cjob.outputs = r.code === 0 || (r.outputs || []).length ? (r.outputs || []) : [];
@@ -3945,9 +4189,7 @@ function init() {
     if (!e.dataTransfer) return;
     var entries = await entriesFromDrop(e.dataTransfer);
     if ($('#tab-cli').hidden === false) {
-      entries.forEach(function (x) { cli.files = cli.files.filter(function (f) { return f.name !== x.file.name; }); cli.files.push(x.file); });
-      cliAutofill();
-      cliRender();
+      cliAddFiles(entries.map(function (x) { return x.file; }));
     } else if (entries.length) addEntries(entries);
   });
 
@@ -4006,8 +4248,9 @@ function init() {
   $('#setRename').checked = settings.rename;
   $('#setRename').addEventListener('change', function (e) {
     settings.rename = e.target.checked; saveSettings();
+    // (jobs waiting in the queue too: they haven't started)
     jobs.forEach(function (j) {
-      if (j.state === 'running' || j.state === 'queued' || j.state === 'done' || j.outEdited) return;
+      if (j.state === 'running' || j.state === 'done' || j.outEdited || j.run) return;
       j.opts.out = renameWanted(j) && j.ident && j.ident.name ? j.ident.name : j.title;
       refreshJob(j, true);
     });
@@ -4064,7 +4307,7 @@ function init() {
     var busy = jobs.some(function (j) { return j.state === 'running'; });
     if (busy) { toast('Wait for the running job to finish first.', 'err'); return; }
     if (!confirm('Delete all finished results from browser storage? Download anything you need first.')) return;
-    for (var i = 0; i < jobs.length; i++) if (jobs[i].state === 'done') { await Store.removeJob(jobs[i].id); jobs[i].outputs = []; jobs[i].state = 'ready'; refreshJob(jobs[i], true); }
+    for (var i = 0; i < jobs.length; i++) if (jobs[i].state === 'done') { stopVerify(jobs[i]); await Store.removeJob(jobs[i].id); jobs[i].outputs = []; jobs[i].state = 'ready'; refreshJob(jobs[i], true); }
     if (cli.last && !cli.run) { await Store.removeJob(cli.last.id); cli.last = null; $('#cliOuts').replaceChildren(); }
     var earlier = Recovery.earlier;
     Recovery.earlier = [];

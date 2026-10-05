@@ -20,7 +20,9 @@ fi
 EMSCRIPTEN_VERSION=6.0.10
 EMSCRIPTEN_COMMIT=d6c521a7f05449857c76bd99e396895583cf2083
 have="$(em++ --version)"; have="${have%%$'\n'*}" # its first line
-if [ "$have" = "${have%" $EMSCRIPTEN_VERSION ($EMSCRIPTEN_COMMIT)"}" ] && [ -z "${EMSCRIPTEN_ANY:-}" ]; then
+pinned=1
+[ "$have" = "${have%" $EMSCRIPTEN_VERSION ($EMSCRIPTEN_COMMIT)"}" ] && pinned=
+if [ -z "$pinned" ] && [ -z "${EMSCRIPTEN_ANY:-}" ]; then
   echo "Emscripten $EMSCRIPTEN_VERSION ($EMSCRIPTEN_COMMIT) is required, found: $have" >&2
   echo "Install it: emsdk install $EMSCRIPTEN_VERSION && emsdk activate $EMSCRIPTEN_VERSION (or set EMSCRIPTEN_ANY=1 to try another)" >&2
   exit 1
@@ -49,7 +51,12 @@ if ! diff <(sed 's/nosimd-tmp/chdman/g' nosimd-tmp.js) chdman.js >/dev/null; the
   exit 1
 fi
 rm -f nosimd-tmp.js
-echo "$SOURCES" > engine-sources.sha256
+# Another Emscripten's page records no sources: scripts/check-dist.sh and a release refuse it
+if [ -n "$pinned" ]; then
+  echo "$SOURCES" > engine-sources.sha256
+else
+  echo "warning: built with $have, not Emscripten $EMSCRIPTEN_VERSION: the page is for experiments, and check-dist.sh refuses it" >&2
+fi
 
 echo "==> Assembling"
 python3 "$ROOT/scripts/assemble.py"

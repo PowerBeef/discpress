@@ -15,16 +15,18 @@ on:
 permissions:
   contents: read
 
+# a newer push to a pull request replaces its run; on main every commit's run finishes, since a
+# release needs CI to have passed on its commit
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || 'latest' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   checks:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: dist/discpress.html is what the sources make
         run: ./scripts/check-dist.sh
       - name: Only permissively licensed MAME code in engine/
@@ -34,21 +36,21 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: tests/package-lock.json
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12'
       - name: numpy, for the synthetic test discs
-        run: pip install numpy
+        run: pip install numpy==2.4.6
 
       # unmodified MAME 0.289 and chdman built from it: the reference the tests compare with
       - name: Cache MAME 0.289 and its chdman
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             third_party/mame
@@ -61,11 +63,18 @@ jobs:
       - name: The engine built natively
         run: ./scripts/build-native.sh
 
+      # the browser Playwright downloads, kept between runs (its version is in the lock file)
+      - name: Cache Playwright's Chromium
+        id: pwcache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/package-lock.json') }}
       - name: Playwright and Chromium
         working-directory: tests
         run: |
           npm ci --no-audit --no-fund
-          npx playwright install --with-deps chromium
+          if [ '${{ steps.pwcache.outputs.cache-hit }}' = 'true' ]; then npx playwright install-deps chromium; else npx playwright install --with-deps chromium; fi
       - name: Synthetic test discs
         run: python3 tests/fixtures/make_fixtures.py
       - name: UI tests
@@ -73,9 +82,18 @@ jobs:
         env:
           REQUIRE_NATIVE: '1'
         run: npm test
+      # the layout spec's screenshots of every screen size and theme, for reviewing UI changes
+      - name: Layout screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: layout-screens
+          path: tests/.cache/screens
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Report of a failed run
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-report
           path: |

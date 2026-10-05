@@ -15,10 +15,11 @@ self.addEventListener('activate', function (e) {
 self.addEventListener('fetch', function (e) {
   var req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
-  // one saved copy per file, whatever query string a link added
+  // one saved copy per file, whatever query string a link added (and the page's, as ./ or ./index.html)
   var url = new URL(req.url);
   url.search = '';
   url.hash = '';
+  url.pathname = url.pathname.replace(/\/index\.html$/, '/');
   var nav = req.mode === 'navigate';
   function saved() {
     return caches.match(url.href).then(function (hit) { return hit || (nav ? caches.match('./') : undefined); });
@@ -27,7 +28,7 @@ self.addEventListener('fetch', function (e) {
   var net = fetch(req).then(function (res) {
     if (res.ok) {
       var copy = res.clone();
-      saving = caches.open(CACHE).then(function (c) { return c.put(url.href, copy); });
+      saving = caches.open(CACHE).then(function (c) { return c.put(url.href, copy); }).catch(function () { /* storage full: not saved */ });
     }
     return res;
   });
@@ -38,12 +39,13 @@ self.addEventListener('fetch', function (e) {
     net.then(function (res) {
       // an error page (the site down, a bad deploy) is no better than being offline: the saved copy, if any
       if (res.ok || !nav) return answer(res);
-      saved().then(function (hit) { answer(hit || res); });
+      saved().then(function (hit) { answer(hit || res); }, function () { answer(res); });
     }, function () {
-      saved().then(function (hit) { answer(hit || Response.error()); });
+      // (the saved copies unreadable too: an answer all the same, never a page that loads for ever)
+      saved().then(function (hit) { answer(hit || Response.error()); }, function () { answer(Response.error()); });
     });
     setTimeout(function () {
-      saved().then(function (hit) { if (hit) answer(hit); });
+      saved().then(function (hit) { if (hit) answer(hit); }, function () { /* the network answers */ });
     }, WAIT);
   }));
 });

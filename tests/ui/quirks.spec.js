@@ -94,24 +94,38 @@ test('the rules’ notes carry their ids', async ({ app }) => {
 
 // more than 2 notes go into one group ("Emulator notes (n)"); warnings stay in view. An 85-minute Sega
 // CD disc (its audio track a sparse file) with a stored and a virtual pregap: three notes, one warning
-test('more than two notes are grouped, warnings stay in view', async ({ app }) => {
-  const dir = path.join(FIXTURES, 'gen', 'long scd');
+// a copy of the ninjas Sega CD disc whose audio track lasts this long (a sparse file); its card
+async function longScd(app, name, minutes) {
+  const dir = path.join(FIXTURES, 'gen', name + ' scd');
   fs.mkdirSync(dir, { recursive: true });
-  fs.copyFileSync(path.join(FIXTURES, 'ninjas (Track 1).bin'), path.join(dir, 'long (Track 1).bin'));
-  fs.copyFileSync(path.join(FIXTURES, 'ninjas (Track 3).bin'), path.join(dir, 'long (Track 3).bin'));
-  const audio = path.join(dir, 'long (Track 2).bin');
-  if (!fs.existsSync(audio)) { const fd = fs.openSync(audio, 'w'); fs.ftruncateSync(fd, 85 * 60 * 75 * 2352); fs.closeSync(fd); }
-  fs.copyFileSync(path.join(FIXTURES, 'ninjas.cue'), path.join(dir, 'long.cue'));
-  fs.writeFileSync(path.join(dir, 'long.cue'), fs.readFileSync(path.join(dir, 'long.cue'), 'latin1').replace(/ninjas/g, 'long'), 'latin1');
+  fs.copyFileSync(path.join(FIXTURES, 'ninjas (Track 1).bin'), path.join(dir, name + ' (Track 1).bin'));
+  fs.copyFileSync(path.join(FIXTURES, 'ninjas (Track 3).bin'), path.join(dir, name + ' (Track 3).bin'));
+  const audio = path.join(dir, name + ' (Track 2).bin');
+  if (!fs.existsSync(audio)) { // (made aside and renamed: another browser's run may read it at once)
+    const part = `${audio}.${process.pid}.tmp`, fd = fs.openSync(part, 'w');
+    fs.ftruncateSync(fd, minutes * 60 * 75 * 2352);
+    fs.closeSync(fd);
+    fs.renameSync(part, audio);
+  }
+  fs.writeFileSync(path.join(dir, name + '.cue'), fs.readFileSync(path.join(FIXTURES, 'ninjas.cue'), 'latin1').replace(/ninjas/g, name), 'latin1');
   await app.open();
-  await app.add(['long.cue', 'long (Track 1).bin', 'long (Track 2).bin', 'long (Track 3).bin'].map(n => `gen/long scd/${n}`));
-  const c = app.job('long');
+  await app.add([name + '.cue', ...[1, 2, 3].map(n => `${name} (Track ${n}).bin`)].map(n => `gen/${name} scd/${n}`));
+  const c = app.job(name);
   await app.settled(c);
+  return c;
+}
+test('more than two notes are grouped, warnings stay in view', async ({ app }) => {
+  const c = await longScd(app, 'long', 85);
   const group = c.locator('details.compat-notes');
   await expect(group.locator('summary')).toHaveText('Emulator notes (3)');
   expect(await group.locator('[data-quirk]').evaluateAll(ns => ns.map(n => n.dataset.quirk))).toEqual(['segacd-long', 'segacd-index0', 'ares-pregap']);
-  await expect(group.locator('[data-quirk="segacd-long"]')).toContainText('this one is 85 minutes long');
+  await expect(group.locator('[data-quirk="segacd-long"]')).toContainText('this one is 85 minutes long. Genesis Plus GX takes up to 100.');
   await expect(c.locator('.note.ident > [data-quirk="segacd-data-tracks"]')).toBeVisible();
+});
+// over 100 minutes: Genesis Plus GX doesn't take it either
+test('a Sega CD disc of over 100 minutes is too long for Genesis Plus GX too', async ({ app }) => {
+  const c = await longScd(app, 'longer', 105);
+  await expect(c.locator('[data-quirk="segacd-long"]')).toContainText('this one is 105 minutes long; Genesis Plus GX takes up to 100.');
 });
 
 // Facts about particular games (db/facts): LibCrypt games without their .sbi warn; the .sbi (or DuckStation's

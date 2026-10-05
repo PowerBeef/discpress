@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test, expect, fixture } from '../support/app.js';
 import { FIXTURES } from '../support/paths.js';
 import { nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
+import { makeZip } from '../support/zip.js';
 
 test('an Xbox 360 dump is recognized behind its video partition, with a note that emulators need the ISO', async ({ app }) => {
   await app.open();
@@ -198,7 +199,7 @@ test('PS1 games warn that older SwanStation can’t read the Zstd preset', async
   await card.locator('details.opts summary').click();
   const field = card.locator('label.field', { hasText: 'Compression' });
   await field.locator('select').selectOption('zstd');
-  await expect(field).toContainText('SwanStation (before March 2026) can’t read Zstd CHDs of Sony PlayStation games.');
+  await expect(field).toContainText('SwanStation builds from before about March 2024 can’t read Zstd CHDs of Sony PlayStation games.');
 });
 
 test('a PS1 CloneCD image: LibCrypt sectors in its .sub become an .sbi saved with the CHD', async ({ app }) => {
@@ -212,6 +213,47 @@ test('a PS1 CloneCD image: LibCrypt sectors in its .sub become an .sbi saved wit
   const outs = await app.downloads(card);
   expect(outs.map(o => o.name)).toEqual(['lc.chd', 'lc.sbi']);
   expect(fs.readFileSync(outs[1].path).equals(fs.readFileSync(path.join(FIXTURES, 'lc-expected.sbi')))).toBe(true);
+});
+
+// LibCrypt data that went missing (audit 2026-10-05, M5): a zip's .sub was never unpacked; a CloneCD
+// image removed and added again lost its .sub; an .sbi paired with a lone .bin was lost when its cue came
+test('a zipped PS1 CloneCD image keeps its .sub: the .sbi is made from it', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'lczip');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'lc.zip'), makeZip(['lc.ccd', 'lc.img', 'lc.sub'].map(n => ({ name: n, data: fs.readFileSync(path.join(FIXTURES, n)) }))));
+  await app.open();
+  await app.add(['gen/lczip/lc.zip']);
+  const card = app.job('lc');
+  await app.settled(card);
+  await expect(card.locator('.sbi-note')).toContainText('read from the .sub file');
+});
+test('a PS1 CloneCD image removed and added again still makes its .sbi', async ({ app }) => {
+  const fx = fixture('ps1-libcrypt');
+  await app.open();
+  await app.add(fx.add);
+  await app.settled(app.job('lc'));
+  await app.job('lc').locator('.job-head button[aria-label^="Remove "]').click();
+  await expect(app.jobs()).toHaveCount(0);
+  await app.add(fx.add);
+  const card = app.job('lc');
+  await app.settled(card);
+  await expect(card.locator('.sbi-note')).toContainText('read from the .sub file');
+});
+test('an .sbi paired with a lone .bin goes with it when its cue sheet comes', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'sbi-late-cue');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'anstoss.bin'), path.join(dir, 'anstoss.bin'));
+  fs.copyFileSync(path.join(FIXTURES, 'anstoss.cue'), path.join(dir, 'anstoss.cue'));
+  fs.copyFileSync(path.join(FIXTURES, 'anstoss lc.sbi'), path.join(dir, 'anstoss.sbi'));
+  await app.open();
+  await app.add(['gen/sbi-late-cue/anstoss.bin', 'gen/sbi-late-cue/anstoss.sbi']);
+  await expect(app.jobs()).toHaveCount(1);
+  await app.add(['gen/sbi-late-cue/anstoss.cue']);
+  await expect(app.jobs()).toHaveCount(1);
+  const card = app.job('anstoss');
+  await app.settled(card);
+  await expect(card.locator('.sbi-note')).toContainText('anstoss.sbi');
+  await expect(card).toContainText('CUE + 1 track file');
 });
 
 test('a .sub with far too many damaged sectors makes no .sbi, and the card says why; an .sbi added by hand wins', async ({ app }) => {

@@ -68,6 +68,39 @@ test('converting starts before the checksum finishes, and results are renamed af
   if (nativeChdman()) expect(sha1File(out.path)).toBe(sha1File(reference('createcd', 'verified.cue')));
 });
 
+// A finished card removed while its checksum still ran: the checksum's rename then recorded results
+// already deleted, which the next visit listed under "From your last visit" (audit 2026-10-05, L4)
+test('a card removed while its checksum runs leaves no record of its results', async ({ app, page }) => {
+  await app.open({ testdb: true, debug: { crcDelay: 6000 } });
+  await app.add(fx.add);
+  const card = app.job('verified');
+  await expect(card.locator('.ident-check')).toBeVisible();
+  await card.locator('.job-foot button.primary').click();
+  await app.waitState(card, 'done', 30_000);
+  await card.locator('.job-head button[aria-label^="Remove "]').click(); // (its unsaved results: asked, and accepted)
+  await expect(app.jobs()).toHaveCount(0);
+  await page.waitForTimeout(7000); // the checksum is done
+  const rec = await page.evaluate(() => JSON.parse(localStorage.getItem('chdman-web-sessions') || '{}'));
+  for (const s of Object.values(rec)) expect(Object.keys(s.results || {})).toEqual([]);
+});
+
+// Removing a card while its checksum ran left the checksum running, and every other card waited for it
+// (audit 2026-10-05): it stops, and the next card is identified at once
+test('removing a card stops its checksum, and the next card is identified at once', async ({ app }) => {
+  await app.open({ testdb: true, debug: { crcSlow: 60000 } });
+  await app.add(fx.add);
+  const first = app.job('verified');
+  await expect(first.locator('.ident-check')).toBeVisible();
+  await app.add(['tnd.iso']);
+  const next = app.job('tnd');
+  await expect(next).toBeVisible();
+  await expect(first.locator('.ident-check')).toBeVisible();
+  await expect(next.locator('.note.ident')).toHaveCount(0); // (waiting for the first card's checksum)
+  await first.locator('.job-head button[aria-label^="Remove "]').click();
+  await expect(app.jobs()).toHaveCount(1);
+  await expect(next.locator('.note.ident')).toHaveAttribute('data-method', 'serial', { timeout: 10_000 });
+});
+
 test('a result already saved under the provisional name is not renamed', async ({ app }) => {
   await app.open({ testdb: true, debug: { crcDelay: 6000 } });
   await app.add(fx.add);
@@ -293,6 +326,42 @@ test('a release for another region than the disc’s doesn’t name it', async (
   await expect(card.locator('.note.ident')).toHaveAttribute('data-region', 'J');
   await expect(card.locator('.ident-name')).toHaveCount(0);
   await expect(card.locator('.note.ident')).toContainText('Not in the Redump database');
+});
+
+// a disc whose serial without its suffix is another game's (T-25406H: Hexen; the disc's title is DOOM): not
+// named after it, only offered; a disc for Europe is named after the Doom release its base serial lists
+test('a release whose serial is the disc’s without its suffix, of another title, is only offered', async ({ app }) => {
+  const us = fixture('saturn-related'), eu = fixture('saturn-suffix');
+  await app.open();
+  await app.add(us.add.concat(eu.add));
+  const card = app.job('doom us'), other = app.job('doom eu');
+  await app.settled(card);
+  await app.settled(other);
+  await expect(card.locator('.note.ident')).toHaveAttribute('data-method', 'serial-related');
+  await expect(card.locator('.ident-name')).toHaveCount(0);
+  await expect(card.locator('.ident-related')).toContainText('Disc title: DOOM.');
+  await expect(card.locator('.ident-related')).toContainText('A release with a related serial number: Hexen (USA).');
+  await expect(card.locator('code.cmd')).toContainText('doom us.chd');
+  await card.locator('.note.ident button', { hasText: 'Use this name' }).click();
+  await expect(card.locator('code.cmd')).toContainText('Hexen (USA).chd');
+  await expect(card.locator('.note.ident button', { hasText: 'Use this name' })).toHaveCount(0);
+  await expect(other.locator('.ident-name')).toHaveText(eu.name);
+  await expect(other.locator('.note.ident')).toHaveAttribute('data-method', 'serial');
+  // which serial found them: the disc's without its suffix; a base serial (T-25406H of T-25406H-50)
+  await expect(card.locator('.note.ident')).toHaveAttribute('data-how', 'trim');
+  await expect(other.locator('.note.ident')).toHaveAttribute('data-how', 'base');
+});
+
+// PC-98 discs have nothing of their own to detect (a PC disc's file system): their size and checksum find them
+test('a PC-98 disc is found by its size and checksum', async ({ app }) => {
+  const fx = fixture('pc98-iso');
+  await app.open({ testdb: true });
+  await app.add(fx.add);
+  const card = app.job('pc98 game');
+  await app.settled(card);
+  await expect(card.locator('.sysbadge')).toHaveText('PC-98');
+  await expect(card.locator('.ident-name')).toHaveText(fx.name);
+  await expect(card.locator('.note.ident')).toHaveAttribute('data-method', 'hash');
 });
 
 // Sega's headers say which disc of a set this is: a Saturn game's two discs are named apart, and get a playlist
