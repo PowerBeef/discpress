@@ -39,7 +39,7 @@
 </p>
 
 > [!TIP]
-> **New in 1.7: Discpress knows your games better.** US Sega discs, second discs and regional releases get their right names; Jaguar CD, Video CD and more discs are recognized; and you are warned before you make a CHD your emulator can't play. [See what's new](https://github.com/PowerBeef/discpress/releases/latest).
+> **New in 1.8: the dependable one.** No finished result gets lost, no disc takes another game's tracks or name, and big folders of games are added faster. [See what's new](https://github.com/PowerBeef/discpress/releases/latest).
 
 <img src="docs/brand/divider.png" width="100%" alt="">
 
@@ -82,7 +82,7 @@ There is nothing to install, and your files never leave your device. **Download 
     <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/features-mobile-dark.png">
     <source media="(max-width: 600px)" srcset="docs/brand/features-mobile-light.png">
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/features-dark.png">
-    <img src="docs/brand/features-light.png" width="100%" alt="chdman, improved. Knows your games: console, serial, disc number and region, named from 42,000 Redump entries. Multi-core fast. Made for phones. Big discs welcome. Totally private. Checks your dumps. Opens what you have. Ready to play.">
+    <img src="docs/brand/features-light.png" width="100%" alt="chdman, improved. Knows your games: console, serial, disc number and region, named from over 31,000 Redump discs. Multi-core fast. Made for phones. Big discs welcome. Totally private. Checks your dumps. Opens what you have. Ready to play.">
   </picture>
 </p>
 
@@ -100,7 +100,7 @@ There is nothing to install, and your files never leave your device. **Download 
 
 **Knowing your games**
 
-- **Game recognition.** Discpress reads the disc's own boot files to find the console, the serial number, which disc of a set it is and its region. It then looks the game up in a built-in copy of the [Redump](http://redump.org) database (about 42,000 discs). When the size and CRC-32 match, the dump is marked as verified. When several releases still fit, you choose which one.
+- **Game recognition.** Discpress reads the disc's own boot files to find the console, the serial number, which disc of a set it is and its region. It then looks the game up in a built-in copy of the [Redump](http://redump.org) database (over 31,000 discs). When the size and CRC-32 match, the dump is marked as verified. When several releases still fit, you choose which one.
 - **Official names.** For example `Metal Gear Solid (USA) (Disc 1).chd`. You can also type your own name, turn renaming off, or use **Rename** to fix the name of a CHD you already have.
 - **Your DAT files.** Add Redump or No-Intro DAT files (the `.dat` or `.xml`, or the `.zip` they come in) and every track of a disc is checked against them by size and CRC-32: before converting, and for a CHD after **Verify**, without extracting it. A disc whose every track matches is named after its DAT entry. The DATs are kept in the browser for your next visits.
 - **Verify** checks a CHD's own checksums, then compares it with Redump without extracting it.
@@ -120,7 +120,7 @@ There is nothing to install, and your files never leave your device. **Download 
 
 **Phones, big files and privacy**
 
-- **Big files.** Results are written to the browser's private disk storage, so multi-gigabyte DVD images work, and results not saved yet are still there after a reload. On desktop Chrome and Edge, results can go straight into a folder you choose. (Chrome and Edge give a page opened as a downloaded file no disk storage, so there it keeps results in memory: for big DVD images, choose a folder or use it online.)
+- **Big files.** Results are written to the browser's private disk storage, so multi-gigabyte DVD images work, and results not saved yet are still there after a reload. On desktop Chrome and Edge, results can go straight into a folder you choose, and saving a result of 1 GB or more asks where to put it, so a save you cancel leaves it waiting. (Chrome and Edge give a page opened as a downloaded file no disk storage, so there it keeps results in memory: for big DVD images, choose a folder or use it online.)
 - **Made for phones.** It adapts to any screen, notch, rotation and text size, in light or dark mode, and can be added to the Home Screen. On iPhone and iPad, **Save to Files** uses the share sheet; results over 512 MB are downloaded instead, since the share sheet loads the whole file into memory. If iOS reloads the page before you save, finished results are still there, under **From your last visit**.
 - **Private and offline.** It's one self-contained HTML file with nothing to load from the internet. The online version is that same file: it runs on your device too, and once opened it works offline.
 
@@ -218,7 +218,7 @@ The right CHD type and hunk size for each console, compression that every emulat
 
 | When | What the card says |
 |---|---|
-| Zstd, or the MiSTer preset | Which of the console's emulators can't read it: Kronos and Yabause (Saturn), BlastEm (Sega CD), Beetle SuperGrafx (PC Engine CD), Opera (3DO), WinUAE (CD32, CDTV), SwanStation before March 2026 (PlayStation), AetherSX2 and NetherSX2 (PS2), Flycast before 2.3 (Dreamcast, NAOMI), Beetle PC-FX before August 2026 |
+| Zstd, or the MiSTer preset | Which of the console's emulators can't read it: Kronos and Yabause (Saturn), BlastEm (Sega CD), Beetle SuperGrafx (PC Engine CD), Opera (3DO), WinUAE (CD32, CDTV), SwanStation builds from before about March 2024 (PlayStation), AetherSX2 and NetherSX2 (PS2), Flycast before 2.3 (Dreamcast, NAOMI), Beetle PC-FX before August 2026 |
 | The MiSTer preset, for Dreamcast, NAOMI, PS2, PC-FX, PC-98 or Jaguar CD | That MiSTer has no core that plays them from CHDs |
 | A LibCrypt game without its `.sbi` | That emulators stop it partway, and where to get the file |
 | A 2,048-byte copy of a PlayStation disc | That its videos and sound may be missing and Beetle PSX can't load it: convert the `.bin` and `.cue` dump instead |
@@ -355,7 +355,7 @@ source ~/emsdk/emsdk_env.sh
 - `tests/` has end-to-end UI tests (Playwright) that check every conversion against native chdman, with synthetic disc images of every supported kind, plus conversion benchmarks. CI runs them on every push and pull request (`.github/workflows/ci.yml`). See [`tests/README.md`](tests/README.md).
 - To refresh the game database with the latest Redump data, run `./scripts/update-db.sh`, then `python3 scripts/assemble.py`.
 - The README graphics are rendered from `scripts/brand/brand.html` with `python3 scripts/brand/render.py`, after `python3 scripts/brand/screenshots.py` takes the app screenshots they show (both need Playwright).
-- Running **Actions → Release → Run workflow** on `main` with a tag such as `v1.7.1` (always `vX.Y.Z`: there are no prereleases) publishes a release: `discpress.html` and its SHA-256 as the download, and the same file on GitHub Pages as the online version. The download goes public only once the site is deployed, so both always carry the same version; a daily check (`scripts/check-release.sh`) confirms it. See `.github/workflows/release.yml` and [`web/README.md`](web/README.md). Release notes come from `.github/release-notes/<tag>.md` when that file exists.
+- Running **Actions → Release → Run workflow** on `main` with a tag such as `v1.8.0` (always `vX.Y.Z`: there are no prereleases) publishes a release: `discpress.html` and its SHA-256 as the download, and the same file on GitHub Pages as the online version. The download goes public only once the site is deployed, so both always carry the same version; a daily check (`scripts/check-release.sh`) confirms it. See `.github/workflows/release.yml` and [`web/README.md`](web/README.md). Release notes come from `.github/release-notes/<tag>.md` when that file exists.
 
 </details>
 
