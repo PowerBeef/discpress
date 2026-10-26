@@ -52,25 +52,53 @@ test('the Zstd preset warns where the system’s emulators can’t read it', asy
   await expect(field).toContainText('Kronos and Yabause can’t read Zstd CHDs of Sega Saturn games.');
 });
 
-test('PS2 DVD games become CD CHDs when Settings asks for AetherSX2 and NetherSX2, and follow a change', async ({ app, page }) => {
-  await app.open({ settings: { ps2dvd: 'cd' } });
+test('the compatibility mode makes PS2 DVD games CD CHDs for older emulators, and cards follow a change', async ({ app, page }) => {
+  await app.open({ settings: { compat: true } });
   await app.add(['agent.iso']);
   const card = app.job('agent');
   await app.settled(card);
   await expect(card.locator('code.cmd')).toContainText('chdman createcd');
   await card.locator('details.opts summary').click();
-  await expect(card.locator('label.field', { hasText: 'Create as' })).toContainText('It becomes a CD CHD, for AetherSX2 and NetherSX2 (Settings).');
+  const field = card.locator('label.field', { hasText: 'Create as' });
+  await expect(field).toContainText('It becomes a CD CHD, which older emulators need (Settings \u2192 Compatibility mode for older emulators).');
   await page.click('#settingsBtn');
-  await page.locator('#setPs2Dvd').selectOption('dvd');
+  await page.locator('#setCompat').setChecked(false);
   await page.click('#settingsClose');
   await expect(card.locator('code.cmd')).toContainText('chdman createdvd');
+  // without it, a DVD CHD says which emulators need the other type, and how to get it
+  await expect(field).toContainText('so it becomes a DVD CHD. Older emulators (AetherSX2, NetherSX2, PCSX2 builds from before April 2023) read only CD CHDs: pick CD for them, or turn on Compatibility mode for older emulators in Settings.');
+  await expect(field).not.toContainText('Change this only if');
   await page.click('#settingsBtn');
-  await page.locator('#setPs2Dvd').selectOption('cd');
+  await page.locator('#setCompat').setChecked(true);
   await page.click('#settingsClose');
   await expect(card.locator('code.cmd')).toContainText('chdman createcd');
+  // DVD picked by hand with the mode on: the hint doesn't ask for the mode
+  await field.locator('select').selectOption('dvd');
+  await expect(field).toContainText('read only CD CHDs: pick CD for them.');
+  await expect(field).not.toContainText('turn on');
+  await field.locator('select').selectOption('cd');
   await app.run(card);
   const [out] = await app.downloads(card);
   if (nativeChdman() && sameVersion()) expect(sha1File(out.path)).toBe(sha1File(reference('createcd', 'agent.iso')));
+});
+
+// up to 1.8 the mode was "PlayStation 2 DVD games: CD CHDs (for AetherSX2 and NetherSX2)"
+test('the earlier setting for PS2 DVD games turns the compatibility mode on', async ({ app, page }) => {
+  await app.open({ settings: { ps2dvd: 'cd' } });
+  await app.add(['agent.iso']);
+  const card = app.job('agent');
+  await app.settled(card);
+  await expect(card.locator('code.cmd')).toContainText('chdman createcd');
+  await page.click('#settingsBtn');
+  await expect(page.locator('#setCompat')).toBeChecked();
+  await page.locator('#setCompat').setChecked(false);
+  await page.click('#settingsClose');
+  await expect(card.locator('code.cmd')).toContainText('chdman createdvd');
+  // turned off, it stays off
+  await page.reload();
+  await expect(page.locator('#chipEngine')).toContainText(/ready/i, { timeout: 60_000 });
+  await page.click('#settingsBtn');
+  await expect(page.locator('#setCompat')).not.toBeChecked();
 });
 
 test('a PS1 disc\u2019s .sbi file is saved with its CHD, under the CHD\u2019s name', async ({ app }) => {

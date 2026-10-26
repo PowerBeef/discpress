@@ -67,6 +67,26 @@ test('the Zstd preset warns for PS2, Dreamcast, NAOMI and PC-FX games too', asyn
   await expect(dfield).toContainText('Flycast before 2.3 (and probably Redream) can’t read Zstd CHDs of Sega Dreamcast games.');
 });
 
+// older emulators can't open a Zstd CHD of any console: the compatibility mode says so, even for a
+// console whose own emulators all read it (PSP)
+test('with the compatibility mode on, the Zstd presets warn for every console', async ({ app, page }) => {
+  await app.open();
+  const psp = await card(app, 'psp-umd', 'frwl');
+  await psp.locator('details.opts summary').click();
+  const field = psp.locator('label.field', { hasText: 'Compression' });
+  await field.locator('select').selectOption('zstd');
+  await expect(field).not.toContainText('Older emulators');
+  await page.click('#settingsBtn');
+  await page.locator('#setCompat').setChecked(true);
+  await page.click('#settingsClose');
+  await expect(field).toContainText('Older emulators can\u2019t open Zstd CHDs at all (RetroArch 1.21 and earlier, and most emulators from before 2024).');
+  await expect(field.locator('.hint')).toHaveAttribute('style', /var\(--warn\)/);
+  // the compression itself never changes by itself
+  await expect(field.locator('select')).toHaveValue('zstd');
+  await field.locator('select').selectOption('default');
+  await expect(field).not.toContainText('Older emulators');
+});
+
 // the MiSTer preset uses Zstandard too, and MiSTer has no Dreamcast, PS2 or PC-FX core
 test('the MiSTer preset warns as the Zstd one does, and where MiSTer has no core', async ({ app }) => {
   await app.open();
