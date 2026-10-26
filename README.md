@@ -202,7 +202,7 @@ The right CHD type and hunk size for each console, compression that every emulat
 | When | What Discpress does |
 |---|---|
 | A PSP game | Makes a DVD CHD with 2,048-byte hunks, as PPSSPP recommends |
-| A PS2 game | Makes a DVD or a CD CHD, as the disc was; Settings → *PlayStation 2 DVD games* makes CD CHDs of DVD games for AetherSX2 and NetherSX2 |
+| A PS2 game | Makes a DVD or a CD CHD, as the disc was; Settings → *Compatibility mode for older emulators* makes CD CHDs of DVD games for AetherSX2, NetherSX2 and PCSX2 builds from before April 2023 |
 | A Dreamcast or NAOMI GD-ROM | Stores it as a GD-ROM, from a `.gdi` or a Redump cue sheet |
 | *Keep the cue sheet* on, for a Saturn or Sega CD game | Leaves it out and says why: Kronos, Yabause and jgenesis can't open such a CHD |
 | A NAOMI GD-ROM | Keeps its file's name, which MAME and Flycast look for in the game's romset |
@@ -218,7 +218,7 @@ The right CHD type and hunk size for each console, compression that every emulat
 
 | When | What the card says |
 |---|---|
-| Zstd, or the MiSTer preset | Which of the console's emulators can't read it: Kronos and Yabause (Saturn), BlastEm (Sega CD), Beetle SuperGrafx (PC Engine CD), Opera (3DO), WinUAE (CD32, CDTV), SwanStation builds from before about March 2024 (PlayStation), AetherSX2 and NetherSX2 (PS2), Flycast before 2.3 (Dreamcast, NAOMI), Beetle PC-FX before August 2026 |
+| Zstd, or the MiSTer preset | Which of the console's emulators can't read it: Kronos and Yabause (Saturn), BlastEm (Sega CD), Beetle SuperGrafx (PC Engine CD), Opera (3DO), WinUAE (CD32, CDTV), SwanStation builds from before about March 2024 (PlayStation), AetherSX2 and NetherSX2 (PS2), Flycast before 2.3 (Dreamcast, NAOMI), Beetle PC-FX before August 2026; with the compatibility mode on, that older emulators can't open Zstd CHDs, for every console |
 | The MiSTer preset, for Dreamcast, NAOMI, PS2, PC-FX, PC-98 or Jaguar CD | That MiSTer has no core that plays them from CHDs |
 | A LibCrypt game without its `.sbi` | That emulators stop it partway, and where to get the file |
 | A 2,048-byte copy of a PlayStation disc | That its videos and sound may be missing and Beetle PSX can't load it: convert the `.bin` and `.cue` dump instead |

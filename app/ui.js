@@ -90,7 +90,7 @@ var HOSTED_URL = 'https://powerbeef.github.io/discpress/';
 var iosThreadCap = isIOS && !(/iPad/.test(navigator.userAgent) || navigator.platform === 'MacIntel') ? 4 : 0;
 var maxThreads = Math.min(cores, 16);
 // threads: 'auto' (measured per device, see Tuning) or a fixed number of compression threads
-var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false, notify: false, ps2dvd: 'dvd', verifyAfter: false };
+var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false, notify: false, compat: false, verifyAfter: false };
 var outDir = null; // folder picked for direct writing (not persisted)
 try {
   var saved = JSON.parse(localStorage.getItem('chdman-web-settings') || '{}');
@@ -99,6 +99,8 @@ try {
   if (saved && typeof saved === 'object') for (var sk in saved) {
     if (sk in settings && (typeof saved[sk] === typeof settings[sk] || (sk === 'threads' && (saved[sk] === 'auto' || typeof saved[sk] === 'number')))) settings[sk] = saved[sk];
   }
+  // the compatibility mode was "PlayStation 2 DVD games: CD CHDs" (ps2dvd: 'cd') up to 1.8
+  if (saved && saved.ps2dvd === 'cd' && typeof saved.compat !== 'boolean') settings.compat = true;
 } catch (e) { /* storage may be unavailable */ }
 if (settings.threads !== 'auto') settings.threads = Math.max(1, Math.min(maxThreads, settings.threads | 0 || 1));
 function saveSettings() {
@@ -1164,8 +1166,8 @@ function applyIdent(job, starting) {
       var mixed = rows.some(function (r) { return r.ext !== rows[0].ext; });
       var cdGame = id.entry && !mixed ? id.entry.ext === 'bin' : !(id.detected && id.detected.udf) && (job.isoSize || job.files[0].file.size) < 800 * 1048576;
       job.ps2dvd = !cdGame;
-      // AetherSX2 and NetherSX2 (Android) read CD CHDs only (Settings)
-      job.disc = cdGame || settings.ps2dvd === 'cd' ? 'cd' : 'dvd';
+      // older emulators (AetherSX2, NetherSX2, PCSX2 before April 2023) read CD CHDs only: the compatibility mode
+      job.disc = cdGame || settings.compat ? 'cd' : 'dvd';
     } else if (pf.keep) bySystem = false;
     else {
       job.disc = pf.disc || 'cd';
@@ -1330,6 +1332,12 @@ var PROFILES = {
   ps3: { keep: true, note: 'RPCS3 does not load CHDs. It uses the ISO or the game\u2019s folder.' }
 };
 function profile(sys) { return PROFILES[sys] || {}; }
+// the compatibility mode (Settings): CHDs that older emulators read too (docs/chd/ecosystem-sony-dreamcast.md
+// §0 findings 2 and 3, §8.1, §8.4). A PS2 DVD becomes a CD CHD, which PCSX2 builds from before April 2023,
+// AetherSX2 and NetherSX2 need (createdvd needs MAME 0.255); the Zstd presets warn for every console
+var COMPAT_NAME = 'Compatibility mode for older emulators';
+var PS2_OLD = 'Older emulators (AetherSX2, NetherSX2, PCSX2 builds from before April 2023)';
+var ZSTD_OLD = 'Older emulators can\u2019t open Zstd CHDs at all (RetroArch 1.21 and earlier, and most emulators from before 2024).';
 function presetsFor(disc) { return PRESETS[disc === 'cd' || disc === 'gdrom' ? 'cd' : disc === 'ld' ? 'ld' : 'other']; }
 
 function newJob(props) {
@@ -2298,16 +2306,21 @@ function renderControls(job) {
     var fields = el('div', { class: 'fields' });
     if (discChoices && job.discBySystem) {
       var sys = job.ident.sys, why;
-      if (sys === 'ps2' && job.ps2dvd && job.disc === 'cd' && settings.ps2dvd === 'cd') why = 'This ' + sysName('ps2') + ' game is on a DVD. It becomes a CD CHD, for AetherSX2 and NetherSX2 (Settings).';
+      if (sys === 'ps2' && job.ps2dvd && job.disc === 'cd' && settings.compat) why = 'This ' + sysName('ps2') + ' game is on a DVD. It becomes a CD CHD, which older emulators need (Settings \u2192 ' + COMPAT_NAME + ').';
+      else if (sys === 'ps2' && job.ps2dvd && job.disc === 'dvd') why = 'This ' + sysName('ps2') + ' game is on a DVD, so it becomes a DVD CHD. ' + PS2_OLD + ' read only CD CHDs: pick CD for them' + (settings.compat ? '.' : ', or turn on ' + COMPAT_NAME + ' in Settings.');
       else if (sys === 'ps2') why = 'This ' + sysName('ps2') + ' game is on a ' + KIND[job.ps2dvd ? 'dvd' : 'cd'].label + ', so it becomes a ' + KIND[job.disc].label + ' CHD.';
       else why = sysName(sys) + ' games become ' + KIND[job.disc].label + ' CHDs' + (profile(sys).why && job.disc === profile(sys).disc ? ' ' + profile(sys).why : '') + '.';
-      fields.append(selectField('Create as', discChoices, job.disc, pickDisc, why + ' Change this only if you know you need the other type.', busy));
+      // (a PS2 DVD made as a DVD CHD already says when to change it)
+      if (!(sys === 'ps2' && job.ps2dvd && job.disc === 'dvd')) why += ' Change this only if you know you need the other type.';
+      fields.append(selectField('Create as', discChoices, job.disc, pickDisc, why, busy));
     }
     var cur = presets.find(function (p) { return p[0] === o.preset; }) || presets[0];
     var pfc = profile(job.ident && job.ident.sys), chint = cur[3];
     // the presets that use Zstandard (Zstd, MiSTer): what can't read them; MiSTer's: where it has no core
     var zwarn = /(^|,)(cdzs|zstd)(,|$)/.test(cur[2] || '') && pfc.noZstd;
     if (zwarn) chint += ' ' + pfc.noZstd + ' can\u2019t read Zstd CHDs of ' + sysName(job.ident.sys) + ' games.';
+    // the compatibility mode: Zstd is what older emulators can't open, whatever the console
+    if (settings.compat && /(^|,)(cdzs|zstd)(,|$)/.test(cur[2] || '')) { chint += ' ' + ZSTD_OLD; zwarn = true; }
     if (cur[0] === 'mister' && pfc.noMister) { chint += ' MiSTer has no core that plays ' + sysName(job.ident.sys) + ' games from CHDs.'; zwarn = true; }
     if (pfc.hint && cur[0] !== 'none') chint += ' ' + pfc.hint;
     var cfield = selectField('Compression', presets.map(function (p) { return [p[0], p[1]]; }), o.preset, function (v) { o.preset = v; refresh(); }, chint, busy);
@@ -4255,14 +4268,13 @@ function init() {
       refreshJob(j, true);
     });
   });
-  $('#setPs2Dvd').value = settings.ps2dvd === 'cd' ? 'cd' : 'dvd';
-  $('#setPs2Dvd').addEventListener('change', function (e) {
-    settings.ps2dvd = e.target.value; saveSettings();
-    // jobs not started yet follow it (unless their type was picked by hand)
+  $('#setCompat').checked = !!settings.compat;
+  $('#setCompat').addEventListener('change', function (e) {
+    settings.compat = e.target.checked; saveSettings();
+    // jobs not started yet follow it: a PS2 DVD's type (unless picked by hand), and every card's Zstd hint
     jobs.forEach(function (j) {
-      if (j.kind !== 'create' || !j.ident || j.ident.sys !== 'ps2' || !j.ps2dvd || j.discEdited) return;
-      if (j.state !== 'ready') return;
-      applyIdent(j);
+      if (j.kind !== 'create' || j.state !== 'ready') return;
+      if (j.ident && j.ident.sys === 'ps2' && j.ps2dvd && !j.discEdited) applyIdent(j);
       refreshJob(j, true);
     });
   });
