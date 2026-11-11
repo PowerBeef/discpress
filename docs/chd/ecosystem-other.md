@@ -1,5 +1,7 @@
 # D2: CHD in the other disc-based systems, in multi-system emulators, and the libchdr landscape
 
+> **Status: a research snapshot of 2026-09-27, kept as it was written.** It describes MAME master `76c7d19`, which Discpress was built from up to 1.2.0, with a small patch (`wasm/mame.patch`, Asyncify). Since 1.2.1 Discpress builds the MAME 0.289 release (tag `mame0289`, `f34f025`), and since 1.3.0 its own fork of it in `engine/`: 0.289 plus the changes in [`engine/mame-0.289.diff`](../../engine/mame-0.289.diff) (see [`engine/README.md`](../../engine/README.md)), with C++20 coroutines in place of Asyncify. Many defects listed here are fixed and many recommendations have shipped: notes in italics say where, and [fork-plan.md](fork-plan.md) has the current status of each recommendation. Its recommendations to write `CHSE` and to support CD+G (§15.3, §16.3 and §16.4) were not taken: 0.289 has neither. What the emulators do is as it was read at the commits in Appendix A. Line numbers into `chdman.cpp`, `chd.cpp` and `cdrom.cpp` refer to `76c7d19`, not to `engine/`; "HEAD", "the pin" and "today" mean that snapshot.
+
 > Part of the [Discpress chdman research dossier](README.md), 2026-09-27. Written by a research agent from source reading and experiments. `$SP/...` paths name artefacts in the temporary research workspace, which is not part of the repository (reproducible lab tooling is in [lab/](lab/)). Lane letters (A, B, C, D1, D2, E, G) refer to the reports listed in the README.
 
 Research lane D2 of the Discpress chdman-fork dossier. Written 2026-09-27.
@@ -19,7 +21,7 @@ D1 covers PS1/PS2/PSP/Dreamcast, RetroArch's scanner, rcheevos and MiSTer. For t
 - Web sources are used only for closed-source programs and project documentation.
 - Nothing was built or run. Behaviour inferred from code is described as such. Anything not checked in source is marked **(unverified)**.
 
-**Citation format.** `owner/repo@shortsha:path:line`. The MAME reference is `mamedev/mame@76c7d197ed`, the tree Discpress pins (post-0.289).
+**Citation format.** `owner/repo@shortsha:path:line`. The MAME reference is `mamedev/mame@76c7d197ed`, the tree Discpress pinned at the time (post-0.289).
 
 ---
 
@@ -49,7 +51,7 @@ D1 covers PS1/PS2/PSP/Dreamcast, RetroArch's scanner, rcheevos and MiSTer. For t
    - MAME before 0.262.
    - Every core older than its zstd sync date (§13, §14.3).
 
-   libchdr and MAME refuse to *open* a CHD whose header merely **lists** an unknown codec, even if no hunk uses it (`rtissera/libchdr@8baec6e:src/libchdr_chd.c:1473`; `mamedev/mame@76c7d197ed:src/lib/util/chd.cpp:2782-2787` throws `UNKNOWN_COMPRESSION`). rchd fails only on the hunks that use the codec.
+   libchdr and MAME refuse to *open* a CHD whose header merely **lists** an unknown codec, even if no hunk uses it (`rtissera/libchdr@8baec6e:src/libchdr_chd.c:1473`; `mamedev/mame@76c7d197ed:src/lib/util/chd.cpp:2776` throws `UNKNOWN_COMPRESSION`). rchd fails only on the hunks that use the codec.
 3. **The meaning of PGTYPE's `V` prefix is mixed up across the ecosystem.**
    - In MAME, `V` means *valid pregap data stored in the file*: `mamedev/mame@76c7d197ed:src/lib/util/cdrom.cpp:1103-1107` and `:2656-2660`.
    - These readers follow that meaning: GPGX, PicoDrive, the Beetle PCE family, Geargrafx, 86Box, BizHawk, the UAE family (MAME-derived code; PUAE not fully traced), SAME_CDI and ares.
@@ -89,14 +91,14 @@ D1 covers PS1/PS2/PSP/Dreamcast, RetroArch's scanner, rcheevos and MiSTer. For t
 11. **No CHD in the GameCube/Wii/Xbox/PS3/Wii U/Vita world.**
     - Dolphin's blob types are PLAIN/GCZ/CISO/WBFS/TGC/WIA/RVZ/NFS/…, with no CHD.
     - xemu, RPCS3, Cemu, Vita3K and Xenia have no CHD code.
-    - Discpress should not offer CHD as a target for `gc`/`wii`.
+    - Discpress should not offer CHD as a target for `gc`/`wii`. *(The app's card for a GameCube or Wii disc says that emulators don't load these from CHD and that Dolphin uses RVZ: `PROFILES` in `app/ui.js`.)*
 12. **BigPEmu refuses CHD by design.** Its FAQ says CHD is "not ideal for Jaguar CD titles … common tool paths stripping important data from pregap areas". That is the same pregap problem as finding 3, seen from the other side.
 
 ---
 
 ## 1. Ground truth: what MAME's reader does (the reference every other reader should match)
 
-- **Tags** (`mamedev/mame@76c7d197ed:src/lib/util/chd.h:225-237`, formats in `src/lib/util/chd.cpp:48-51`):
+- **Tags** (`mamedev/mame@76c7d197ed:src/lib/util/chd.h:225-237`, formats in `src/lib/util/chd.cpp:38-41`):
 
   | Tag | Contents |
   |---|---|
@@ -125,11 +127,11 @@ D1 covers PS1/PS2/PSP/Dreamcast, RetroArch's scanner, rcheevos and MiSTer. For t
     - `logofs += postgap + frames`.
   - Reads of stored-pregap tracks add `pregap` to the CHD sector (`:393-398`). Reads of unstored pregap sectors return zeros (`:381-386`).
   - The CHD path does **not** add lead-in or lead-out between sessions; only the CUE path does (`:185-200` vs `:274-296`).
-- **chdman defaults** (`src/tools/chdman.cpp:67-68, 671-674, 2208, 2280, 1359-1360`):
+- **chdman defaults** (`src/tools/chdman.cpp:63-64, 667-670, 2199, 2271, 1355-1356`):
   - CD: `cdlz,cdzl,cdfl`, hunk of 8 frames.
   - DVD: `lzma,zlib,huff,flac`, hunk 4096.
   - Hunk sizes range from 16 B to 1 MiB and must be a whole multiple of the unit (2448 for CD).
-- **Release status.** 0.289 was tagged 2026-07-30. `CHSE` (b93961fd52), CD+G (c9e87a6b7e) and the GD-ROM pregap changes (1cf0f9e986, ac47a71ce1) are **not** in 0.289; they will first ship in 0.290. Discpress's pinned tree contains all of them.
+- **Release status.** 0.289 was tagged 2026-07-30. `CHSE` (b93961fd52), CD+G (c9e87a6b7e) and the GD-ROM pregap changes (1cf0f9e986, ac47a71ce1) are **not** in 0.289; they will first ship in 0.290. Discpress's pinned tree contained all of them up to 1.2.0; since 1.2.1 Discpress builds 0.289 itself, which has none.
 
 ---
 
@@ -557,7 +559,7 @@ No CHD (§3.5).
 | **Vita3K** | VPK/ZIP/PKG install | `vita3k/gui-qt/src/pkg_install_dialog.cpp` (`Vita3K/Vita3K@610e6970ad`). |
 | **Xenia (canary)** | XISO disc images, STFS/GOD, **ZAR** (ZArchive) | `src/xenia/vfs/devices/disc_image_device.cc`, `disc_zarchive_device.cc` (`xenia-canary/xenia-canary@c332733afd`). |
 
-For Discpress this means that `gc`/`wii` outputs should be RVZ. At the very least, a warning should say that no GameCube/Wii emulator reads CHD.
+For Discpress this means that `gc`/`wii` outputs should be RVZ. At the very least, a warning should say that no GameCube/Wii emulator reads CHD. *(The card for these discs says so. RVZ output is not planned unless Dolphin users ask: fork-plan.md, milestone 7.)*
 
 ---
 
@@ -780,12 +782,12 @@ Things upstream still does **not** know about (verified at `607694c`):
     - Enhanced/CD-Extra PC discs;
     - some CD-i and PC-98 titles (unverified);
     - Saturn/PCE rarely.
-  - Recommendation: emit `CHSE` exactly as MAME post-0.289 does (Discpress's pinned tree already does). Document that Kronos, Yabause and jgenesis users need the flattened (pre-#15886) form. If an "old-reader compatible" option is wanted, the only way to provide it is to *omit* `CHSE`, which in turn breaks Virtual Jaguar.
+  - Recommendation: emit `CHSE` exactly as MAME post-0.289 does (Discpress's pinned tree already does). Document that Kronos, Yabause and jgenesis users need the flattened (pre-#15886) form. If an "old-reader compatible" option is wanted, the only way to provide it is to *omit* `CHSE`, which in turn breaks Virtual Jaguar. *(Not taken: since 1.2.1 the engine is 0.289, which neither writes nor reads `CHSE`, so every disc gets the flattened form that Kronos, Yabause and jgenesis need. The page warns about multi-session discs, and that Virtual Jaguar needs session data. Writing `CHSE` for Jaguar CD alone is planned: fork-plan.md, milestone 7.)*
 - **CD+G** (`TRACK nn CDG` → `TYPE:AUDIO SUBTYPE:RW_RAW`) and any stored subcode (from CCD/SUB or CDG sources):
   - **Breaks the entire disc** in Beetle PCE, PCE Fast, SuperGrafx, PC-FX and Saturn (`SUBTYPE` must be `NONE`). D1 reports that Flycast ≤ v2.7 does the same.
   - Harmless in GPGX, PicoDrive, ares, NeoCD, Geargrafx, Ymir, jgenesis, Kronos and DOSBox-X, which skip the 96 bytes.
   - *Used* by MAME, WinUAE/PUAE/Amiberry (CD32/CDTV CD+G), libretro BlastEm, BizHawk and 86Box.
-  - Recommendation: never add subcode unless the source carries it. When it does (CDG), the UI should say that Beetle cores will refuse the image.
+  - Recommendation: never add subcode unless the source carries it. When it does (CDG), the UI should say that Beetle cores will refuse the image. *(Not applicable since 1.2.1: 0.289 rejects `CDG` tracks, and the page refuses such cue sheets before converting.)*
 - **New track tags or reformatted `CHT2` text:**
   - A new tag (a hypothetical `CHT3`) would be invisible to every reader.
   - Appending fields to `CHT2` is tolerated by the sscanf, regex and key:value parsers.
@@ -854,7 +856,7 @@ because all of these assume stored pregaps. ares would also shorten the TOC. Bla
 
 ### 15.8 Identity side-effects
 
-- The overall CHD SHA-1 covers metadata (`CHD_MDFLAGS_CHECKSUM` default, `chd.h:356-358`, `chd.cpp:1857-1873`). Adding `CHSE`, CD+G subtypes or different pregap flags changes the SHA-1 compared with 0.289-made files. MAME software lists will report wrong checksums, and DAT-based managers will see a different file.
+- The overall CHD SHA-1 covers metadata (`CHD_MDFLAGS_CHECKSUM` default, `chd.h:356-358`, `chd.cpp:1847-1863`). Adding `CHSE`, CD+G subtypes or different pregap flags changes the SHA-1 compared with 0.289-made files. MAME software lists will report wrong checksums, and DAT-based managers will see a different file.
 - Codec and hunk-size choices change neither `rawsha1` nor `sha1`.
 
 ---
@@ -863,17 +865,17 @@ because all of these assume stored pregaps. ares would also shorten the TOC. Bla
 
 1. **Default output = chdman 0.289's CD layout.**
    - `cdlz,cdzl,cdfl`; 19 584-byte hunks; no zstd *listed*; stored `V` pregaps exactly as the CUE implies; `POSTGAP` only from the CUE; `SUBTYPE:NONE` unless the source has subcode; no parent.
-   - Treat this as a compatibility contract. The UI's "compatibility" copy should list Opera, Kronos, Yabause, Beetle SuperGrafx, WinUAE and libretro BlastEm as zstd-incapable.
+   - Treat this as a compatibility contract. The UI's "compatibility" copy should list Opera, Kronos, Yabause, Beetle SuperGrafx, WinUAE and libretro BlastEm as zstd-incapable. *(Done: the Zstd presets warn per console, `noZstd` in `PROFILES`.)*
 2. **zstd:**
    - Offer it only as an explicit per-job opt-in (for the PS1/PS2/Dreamcast crowd; see D1).
    - When on, list only the codecs actually wanted.
    - Guarantee one frame per hunk with window ≤ 2^27.
    - Disable it, or warn prominently, for `3do`, `saturn`, `cd32`/`cdtv` and `pcecd` (SuperGrafx core).
-3. **Sessions:** keep writing `CHSE` for multi-session CUEs, since Virtual Jaguar requires it for `jagcd`. Warn for `saturn` (Kronos/Yabause) and `segacd` (jgenesis) when a multi-session source is detected. Consider an option to flatten, i.e. omit `CHSE`.
-4. **CD+G/subcode:** support it (MAME post-0.289 does), but surface "Beetle cores (PCE, PC-FX, Saturn) will refuse discs with subcode". Default to not storing subcode for game systems.
+3. **Sessions:** keep writing `CHSE` for multi-session CUEs, since Virtual Jaguar requires it for `jagcd`. Warn for `saturn` (Kronos/Yabause) and `segacd` (jgenesis) when a multi-session source is detected. Consider an option to flatten, i.e. omit `CHSE`. *(Not taken: the engine is 0.289, which writes no `CHSE`, so flattened is the only form. The page warns about multi-session discs; `CHSE` for Jaguar CD alone is planned, fork-plan.md milestone 7.)*
+4. **CD+G/subcode:** support it (MAME post-0.289 does), but surface "Beetle cores (PCE, PC-FX, Saturn) will refuse discs with subcode". Default to not storing subcode for game systems. *(Not taken: 0.289 has no CD+G input, and the page refuses CD+G cue sheets, `fixDescriptor` in `app/ui.js`. A CloneCD `.sub` is left out of the CHD.)*
 5. **Hunk size:** keep 8 frames for CD. If a larger size is offered, cap it at 512 KiB and at a multiple of 2448, and warn about memory on handhelds, Wii and MCU/FPGA targets.
 6. **DVD vs CD:** never use `createdvd` for CD systems. For the `pc` data-disc path use `createcd`. If a DVD mode exists, offer `-hs 2048` so that MAME's `dvdrom_file` can load it.
-7. **GameCube/Wii:** don't produce CHD. Point users to RVZ, since no emulator reads GC/Wii CHDs.
+7. **GameCube/Wii:** don't produce CHD. Point users to RVZ, since no emulator reads GC/Wii CHDs. *(The app's card for these discs says so: `PROFILES` in `app/ui.js`.)*
 8. **Jaguar CD:** warn that CHDs made from CUE/BIN can lack pregap data that BigPEmu, and real-BIOS authentication, need. BigPEmu will not load CHD at all.
 9. **Test matrix for the fork's CI:** at least upstream libchdr (current and 2024-06 `5a39b15`), rchd with and without `HAVE_RCHD_ZSTD`, chd-rs, and MAME's `cdrom_file`. Add three behavioural oracles:
    - Beetle Saturn-style "assumes stored";
@@ -901,7 +903,7 @@ because all of these assume stored pregaps. ares would also shorten the TOC. Bla
 6. Does rchd's synthesised DVD track make Opera/NeoCD/SAME_CDI accept `createdvd` images? It would be harmless but surprising.
 7. Is SAME_CDI's parent path reachable from its disc loader?
 8. Do any Saturn, PCE CD or PC-98 titles in Redump carry more than one session, so that `CHSE` would affect Kronos/Yabause/jgenesis users?
-9. Should the fork offer a "legacy" mode that omits `CHSE` and matches 0.289 SHA-1s? This interacts with MAME software lists and DATs (lanes B/E).
+9. Should the fork offer a "legacy" mode that omits `CHSE` and matches 0.289 SHA-1s? This interacts with MAME software lists and DATs (lanes B/E). *(Since 1.2.1 that is the only mode: 0.289 writes no `CHSE`.)*
 10. Old libchdr copies declare FLAC block size ×2. Do any readers use a FLAC decoder (other than dr_flac, rflac, claxon or libFLAC) with a different acceptance rule? The one to check is the "micro-flac" MCU backend (2026-09).
 
 ---

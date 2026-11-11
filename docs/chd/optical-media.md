@@ -1,27 +1,30 @@
 # (C) The optical-media model in CHD: CD, GD-ROM and DVD
 
+> **Status: a research snapshot of 2026-09-27, kept as it was written.** It describes MAME master `76c7d19`, which Discpress was built from up to 1.2.0, with a small patch (`wasm/mame.patch`, Asyncify). Since 1.2.1 Discpress builds the MAME 0.289 release (tag `mame0289`, `f34f025`), and since 1.3.0 its own fork of it in `engine/`: 0.289 plus the changes in [`engine/mame-0.289.diff`](../../engine/mame-0.289.diff) (see [`engine/README.md`](../../engine/README.md)), with C++20 coroutines in place of Asyncify. Many defects listed here are fixed and many recommendations have shipped: notes in italics say where, and [fork-plan.md](fork-plan.md) has the current status of each recommendation. The bug table in §12 says for each bug what the engine does now. Line numbers into `chdman.cpp`, `chd.cpp` and `cdrom.cpp` refer to `76c7d19`, not to `engine/`; "HEAD", "the pin" and "today" mean that snapshot.
+
 > Part of the [Discpress chdman research dossier](README.md), 2026-09-27. Written by a research agent from source reading and experiments. `$SP/...` paths name artefacts in the temporary research workspace, which is not part of the repository (reproducible lab tooling is in [lab/](lab/)). Lane letters (A, B, C, D1, D2, E, G) refer to the reports listed in the README.
 
 Research dossier for the Discpress chdman fork. Lane C covers the disc-level semantics: input parsing, metadata, pregaps and padding, sessions, subcode and CD+G, extraction, fidelity against Redump, and which discs and image formats can or cannot be represented.
 
 - Author: research agent C. Date: 2026-09-27.
-- Source studied: MAME `76c7d197ed` (`mame0289-1167`, in `/home/user/discpress/third_party/mame`). The Discpress patch only touches `chd.cpp`, `chd.h` and `chdman.cpp`, and only under `__EMSCRIPTEN__`. `cdrom.*`, `dvdrom.*` and `chdcodec.cpp` in the tree are identical to 76c7d19. Line numbers for `chdman.cpp`, `chd.cpp` and `chd.h` are cited from the pristine blob (`git show HEAD:…`), not from the patched working tree.
-- Reference build of the official release: MAME tag `mame0289` (`f34f02505e`, 2026-07-30), built natively from source with the Discpress Makefile. It is called **0.289** throughout; **HEAD** means 76c7d19, the code Discpress ships.
+- Source studied: MAME `76c7d197ed` (`mame0289-1167`, in `/home/user/discpress/third_party/mame`). The Discpress patch of the time only touched `chd.cpp`, `chd.h` and `chdman.cpp`, and only under `__EMSCRIPTEN__`. `cdrom.*`, `dvdrom.*` and `chdcodec.cpp` in the tree were identical to 76c7d19. Line numbers for `chdman.cpp`, `chd.cpp` and `chd.h` are cited from the pristine blob (`git show HEAD:…`), not from the patched working tree.
+- Reference build of the official release: MAME tag `mame0289` (`f34f02505e`, 2026-07-30), built natively from source with the Discpress Makefile. It is called **0.289** throughout; **HEAD** means 76c7d19, the code Discpress shipped up to 1.2.0.
 - All claims marked **[exp]** were reproduced in `$SP/exp/...`, where `$SP=$SP`. The tools are listed in the appendix. Anything not verified is marked **[unverified]**.
 
 ---
 
 ## 0. Executive summary (the findings that matter most)
 
-1. **HEAD, and so today's Discpress, produces broken Dreamcast/Naomi CHDs from `.gdi` input.** Post-0.289 commit `ac47a71ce1` (#15870, 2026-08-10) turns the SD-area gap before track 2 into a *virtual* pregap. Every high-density track then sits **150 sectors late** in MAME's reader (`logframeofs` 45150 instead of 45000) and in Flycast's layout rules (track 3 at FAD 45300 instead of 45150) **[exp]**. MAME's GD-ROM consumers use logical LBAs: `gdrom.cpp` reports `get_track_start()+150`, and `naomigd.cpp:913` hard-codes `read_data(45000+16)`. GDI→CHD→GDI still round-trips byte-exactly **[exp]**, which is why the upstream PR (tested only by round-tripping) and Discpress's own tests (which compare against a native build of the same code) do not notice. The official 0.289 places track 3 at 45000 for both `.gdi` and Redump `.cue` **[exp]**.
-2. **HEAD is not "0.289".** Discpress prints `0.289 (mame0289-76c7d19 wasm)`. Its release notes (`.github/release-notes/v1.1.0.md:41`, `v1.1.1.md:31`, `v1.2.0.md:28`) promise CHDs "exactly the same, byte for byte, as desktop chdman 0.289", and `app/help.html:49` claims the "same chdman code … with identical data checksums". Compared with the real 0.289 release:
+1. **HEAD, and so today's Discpress, produces broken Dreamcast/Naomi CHDs from `.gdi` input.** Post-0.289 commit `ac47a71ce1` (#15870, 2026-08-10) turns the SD-area gap before track 2 into a *virtual* pregap. Every high-density track then sits **150 sectors late** in MAME's reader (`logframeofs` 45150 instead of 45000) and in Flycast's layout rules (track 3 at FAD 45300 instead of 45150) **[exp]**. MAME's GD-ROM consumers use logical LBAs: `gdrom.cpp` reports `get_track_start()+150`, and `naomigd.cpp:913` hard-codes `read_data(45000+16)`. GDI→CHD→GDI still round-trips byte-exactly **[exp]**, which is why the upstream PR (tested only by round-tripping) and Discpress's own tests (which compare against a native build of the same code) do not notice. The official 0.289 places track 3 at 45000 for both `.gdi` and Redump `.cue` **[exp]**. *(Fixed in 1.2.1, which builds the 0.289 release; `tests/ui/gdrom.spec.js` checks the layout.)*
+2. **HEAD is not "0.289".** Discpress printed `0.289 (mame0289-76c7d19 wasm)`. Its release notes (`.github/release-notes/v1.1.0.md:41`, `v1.1.1.md:31`, `v1.2.0.md:28`) promise CHDs "exactly the same, byte for byte, as desktop chdman 0.289", and `app/help.html:49` claimed the "same chdman code … with identical data checksums". Compared with the real 0.289 release:
    - (a) every CD/DVD CHD differs in compressed bytes, because `c23567b509` changed the LZMA level from 8 to 6. The logical SHA-1 is unchanged. This is the *only* cause: HEAD, including its LZMA 26.02 SDK, rebuilt with the level set back to 8 produces files **byte-identical to official 0.289** on the PS1, Sega CD, ISO-as-CD and DVD fixtures, and both versions verify each other's output **[exp `$SP/src/buildlvl8`]**.
    - (b) GD-ROM CHDs have a different layout and SHA-1 for both `.cue` and `.gdi` input.
    - (c) multi-session CDs get a new `CHSE` tag, which changes the overall SHA-1.
    - (d) `TRACK nn CDG` cues are accepted (0.289 rejects them).
-3. **Sessions are still structurally lost.** The new `CHSE` tag (#15886/#15931) records only session *numbers*. The ~11 400-sector lead-out/lead-in/pregap gap is not stored anywhere, so session-2 data is served ~11 400 LBAs too early. That breaks ISO9660 on Enhanced CDs, MIL-CDs and Jaguar CDs in MAME **[exp]**. Flycast works around this with a heuristic; other readers do nothing. The `CHSE` parser also depends on metadata *order*: two foreign tags before it, or one tag between sessions, silently collapses everything into session 1 **[exp]**.
+   - **Resolved in Discpress 1.2.1:** it builds the 0.289 release, so none of (a) to (d) applies. The version string is now `0.289 (mame0289 discpress)` (`wasm/version.cpp`), and Help no longer has that sentence.
+3. **Sessions are still structurally lost.** The new `CHSE` tag (#15886/#15931) records only session *numbers*. The ~11 400-sector lead-out/lead-in/pregap gap is not stored anywhere, so session-2 data is served ~11 400 LBAs too early. That breaks ISO9660 on Enhanced CDs, MIL-CDs and Jaguar CDs in MAME **[exp]**. Flycast works around this with a heuristic; other readers do nothing. The `CHSE` parser also depends on metadata *order*: two foreign tags before it, or one tag between sessions, silently collapses everything into session 1 **[exp]**. *(0.289, and so the engine, has no `CHSE` at all; the page warns about multi-session discs.)*
 4. **Track data round-trips bit-exactly.** A Redump split-bin cue sent through createcd and then `extractcd --splitbin` returns identical bins, and without `--splitbin` it returns their exact concatenation. Bad or odd sectors are preserved: the CD codec only strips ECC it can regenerate **[exp]**. The loss is in the *cue*. Across **72 022 real Redump cue sheets** (21 systems), chdman can reproduce 77 % of them structurally. It fails on CATALOG (PCE 77 %, SS 70 %, MCD 73 %, 3DO 63 %), FLAGS, ISRC, INDEX ≥ 02, the `CDI/2352` type string and the single-track file naming, and it always writes LF instead of Redump's CRLF.
-5. **The cue parser has long-standing bugs that silently corrupt data** (all present in 0.289 too) **[exp]**:
+5. **The cue parser has long-standing bugs that silently corrupt data** (all present in 0.289 too) **[exp]** *(all fixed in the engine: B5 to B11 in §12)*:
    - MOTOROLA files are byte-swapped twice;
    - a file shared by tracks after the first file gets wrong offsets;
    - several tracks in one WAV are mis-sized;
@@ -30,13 +33,13 @@ Research dossier for the Discpress chdman fork. Lane C covers the disc-level sem
    - `.iso` files holding raw 2352-byte sectors whose count is a multiple of 128 or 146 are mis-typed;
    - the cdrdao TOC parser ignores PREGAP, SILENCE, ZERO and multiple FILEs, treats START as a virtual pregap, and gives 0 frames when no length is given.
 
-   Robustness bugs **[exp]**:
+   Robustness bugs **[exp]** *(fixed in the engine, each now an error with exit 1: B3, B4 and B16 in §12)*:
    - any input that yields 0 tracks makes createcd spin forever at `-nan%`: an empty or lowercase cue, `TRACK 00`, a CloneCD `.ccd`, a lone `.bin`, a cdrdao TOC without explicit lengths, and by inference a binary redumper `.toc`;
    - a cue with 100 tracks segfaults, and a GDI with 100 tracks aborts;
    - `extractcd` on a DVD CHD aborts;
    - `extractdvd` on a CD CHD silently writes 2448-byte frames as an ".iso".
 6. **MAME's own DVD reader cannot open default `createdvd` output.** `dvdrom_file` requires 2048-byte hunks (`dvdrom.cpp:55`), but chdman has defaulted to 4096 since 0.263 **[exp]**. libchdr readers are unaffected.
-7. **There is a compatible way to add fidelity metadata.** New tags written *without* `CHD_MDFLAGS_CHECKSUM` and appended after the CD tags do not change the CHD's SHA-1 **[exp]**, and every existing reader ignores them. A fork can therefore carry CATALOG, ISRC, FLAGS, index points, session gaps, CD-TEXT and the original cue text while staying SHA-1-identical to plain chdman.
+7. **There is a compatible way to add fidelity metadata.** New tags written *without* `CHD_MDFLAGS_CHECKSUM` and appended after the CD tags do not change the CHD's SHA-1 **[exp]**, and readers that look tracks up by tag ignore them. Kronos, libretro Yabause/YabaSanshiro and jgenesis do not: they fail on any tag that is not a track's (D2 §0 finding 4). A fork can therefore carry CATALOG, ISRC, FLAGS, index points, session gaps, CD-TEXT and the original cue text while staying SHA-1-identical to plain chdman. *(Done for the cue text: `createcd --keepcue`, opt-in since 1.3.0. The page leaves it out for Saturn and Sega CD, the consoles those three readers emulate.)*
 
 ---
 
@@ -131,8 +134,8 @@ These are computed in `cdrom_file(chd_file*)` (`cdrom.cpp:268-332`), and in `cdr
 
 - File types (`cdrom.cpp:2507-2551`): `BINARY`, `MOTOROLA` and `WAVE` (16-bit stereo 44.1 kHz PCM only; `WAVE_FORMAT_EXTENSIBLE` is rejected; `cdrom.cpp:1657-1810`). **`AIFF`, `MP3`, FLAC, APE and anything else give "Unhandled track type"**.
 - **Several tracks in one BINARY file** works when the file is the *first* FILE, or each track is alone in its own file. Track length is `idx0(next) - idx0(this)`; the last track takes the rest of the file; the offset is `prev.offset + prev.frames*size` (`cdrom.cpp:2740-2769`). Single-bin and multi-bin forms of the same disc give identical CHDs **[exp]**.
-- **Bug: a FILE shared by tracks, preceded by another FILE.** The offset keeps accumulating from the previous file, so tracks 2-4 were corrupted and track 4 was cut from 449 to 148 frames **[exp `mixed-files`, also in 0.289]**.
-- **Bug: several tracks in one WAVE.** `wavlen` is consumed by the first TRACK, so track 2 and track 3 were both given 730 frames **[exp `wave/Game2.cue`, also in 0.289]**.
+- **Bug: a FILE shared by tracks, preceded by another FILE.** The offset keeps accumulating from the previous file, so tracks 2-4 were corrupted and track 4 was cut from 449 to 148 frames **[exp `mixed-files`, also in 0.289]**. *Fixed in the engine (B6).*
+- **Bug: several tracks in one WAVE.** `wavlen` is consumed by the first TRACK, so track 2 and track 3 were both given 730 frames **[exp `wave/Game2.cue`, also in 0.289]**. *Fixed in the engine (B7).*
 - **Bug: several FILEs per track** (EAC "non-compliant" cue, with INDEX 00 in the previous file; see [Wikipedia: Cue sheet](https://en.wikipedia.org/wiki/Cue_sheet_(computing))). The track's file is fixed at `TRACK` time, which produced `PREGAP:-300`, left the second file unread, and made extraction write `INDEX 01 954437:06:46` **[exp `cuequirks/eac.cue`]**. Redump never uses this layout (0 of 72 022 cues), but audio-rip tools do. *Fixed in the engine (B8):* the pregap is read from the end of the previous file, and the CHD is that of the disc as one file.
 - **Bug: track 1 with INDEX 01 not at 00:00:00 and no INDEX 00.** The leading frames are counted into track 1, so every boundary moves by that amount **[exp `htoa/noidx0.cue`]**.
 - Trailing bytes when a bin is not a multiple of the sector size are dropped silently (1000 bytes lost) **[exp `truncated`]**.
@@ -141,16 +144,16 @@ These are computed in `cdrom_file(chd_file*)` (`cdrom.cpp:268-332`), and in `cdr
   - A UTF-8 BOM gives `couldn't find bin file []`.
   - CRLF is fine.
   - Absolute paths in FILE break (the cue directory is prepended). Lines are cut at 511 bytes (`fgets(…,511,…)`).
-  - Discpress rewrites FILE references to basenames but otherwise passes the cue through unchanged (`app/ui.js:894-902`). BOM and lowercase problems therefore reach chdman.
+  - Discpress rewrites FILE references to basenames but otherwise passes the cue through unchanged (`app/ui.js`). BOM and lowercase problems therefore reach chdman. *(Fixed in 1.2.1: the page decodes a descriptor itself (`decodeText`: BOM, UTF-16, Windows-1252) and gives chdman a corrected copy (`fixDescriptor`: LF line ends, keywords upper-cased).)*
 
 **Audio byte order.** CHD stores Red Book audio **big-endian** (verified by comparing reader output with the source: the samples match only after swapping **[exp]**).
 
 | Where | What happens | Code |
 |---|---|---|
-| cue import | every `AUDIO` track gets `swap=true` *after* parsing, whatever the FILE type (`cdrom.cpp:2730-2734`). So `BINARY` (LE) and `WAVE` (LE) are right, but **`MOTOROLA` (BE) is swapped too, so its audio is stored little-endian**; `Moto.cue` and `Bin.cue` give different data SHA-1s **[exp, also in 0.289]** | `cdrom.cpp:2531-2534`, `2731-2734` |
+| cue import | every `AUDIO` track gets `swap=true` *after* parsing, whatever the FILE type (`cdrom.cpp:2730-2734`). So `BINARY` (LE) and `WAVE` (LE) are right, but **`MOTOROLA` (BE) is swapped too, so its audio is stored little-endian**; `Moto.cue` and `Bin.cue` give different data SHA-1s **[exp, also in 0.289]** *(fixed in the engine, B5)* | `cdrom.cpp:2531-2534`, `2731-2734` |
 | gdi import | audio `swap=true` | `cdrom.cpp:2265-2270` |
 | nrg import | audio `swap=true` (assumes LE, **[unverified]** against real Nero files) | `cdrom.cpp:1993-1996` |
-| toc import | `swap=false` unless the `SWAP` keyword is present. This is consistent with cdrdao ("Raw files must have … big endian byte order", [cdrdao man](https://github.com/cdrdao/cdrdao/blob/master/dao/cdrdao.man)), but `.wav` files named in a TOC are **not** parsed as WAVE: the header is read as audio | `cdrom.cpp:3085-3094` |
+| toc import | `swap=false` unless the `SWAP` keyword is present. This is consistent with cdrdao ("Raw files must have … big endian byte order", [cdrdao man](https://github.com/cdrdao/cdrdao/blob/master/dao/cdrdao.man)), but `.wav` files named in a TOC are **not** parsed as WAVE: the header is read as audio *(the engine reads them as WAVE, B11)* | `cdrom.cpp:3085-3094` |
 | compressor | swaps only the first 2352 bytes of each frame (not the subcode) | `chdman.cpp:517-523` |
 | extraction | swaps back to LE for `.cue` and for `.gdi` (v5 CHDs); **not** for `.toc` (BE raw, which is what cdrdao expects) | `chdman.cpp:2958-2964` |
 | MAME reader | swaps only for legacy `CHGT` (little-endian GD audio, `CD_FLAG_GDROMLE`) | `cdrom.cpp:402-404`, `431-439` |
@@ -185,7 +188,7 @@ Compatibility facts that readers must honour:
 - The overall SHA-1 (`chd.cpp:1839-1890`) hashes each **checksummed** metadata entry. The entries are sorted by (tag, SHA-1), so it does not depend on order.
 - Adding a non-checksummed tag leaves the SHA-1 unchanged. With a meta-only hash, `84a6af…` stayed the same with a `--nochecksum` entry and became `b58c67…` with a checksummed one **[exp `$SP/tools/oversha`]**.
 - `chdman addmeta`/`delmeta` refuse compressed CHDs ("File not writeable"), so fidelity metadata must be written at creation time.
-- **A reader that looks at wildcard metadata index 0 to decide what kind of disc it has would now see `CHSE`** on multi-session CDs. That is a hypothetical but real risk for home-grown readers **[unverified]**; D1 should check the emulators.
+- **A reader that looks at wildcard metadata index 0 to decide what kind of disc it has would now see `CHSE`** on multi-session CDs. That is a hypothetical but real risk for home-grown readers **[unverified]**; D1 should check the emulators. *(D2 found three such readers: Kronos, libretro Yabause/YabaSanshiro and jgenesis fail on any tag that is not a track's; D2 §15.3.)*
 - Both MAME and libchdr users parse with `sscanf`, which ignores trailing text. Fields appended to `CHT2`/`CHSE` strings (for example `SESSION:2 LEADIN:4500 LEADOUT:6750`) would therefore be backward-compatible with MAME's parser, but they would change the SHA-1 because those tags are checksummed.
 
 ---
@@ -228,7 +231,7 @@ The cause is the unsigned expression `metaindex - lastmetaindex <= 1` (`cdrom.cp
 ### 3.4 Would libchdr-based emulators misread these CHDs?
 
 - **The LBA layout does not change compared with 0.289**, because CHSE carries no frames or pregaps. So they misread multi-session discs exactly as before: flattened, unless they guess like Flycast.
-- The new tag is ignored (it is unknown to libchdr) and only changes the SHA-1. That breaks matches against DATs of 0.289-made CHDs, if any exist.
+- The new tag is unknown to libchdr, and readers that look tracks up by tag ignore it; there it only changes the SHA-1, which breaks matches against DATs of 0.289-made CHDs, if any exist. Kronos, libretro Yabause/YabaSanshiro and jgenesis walk every tag and fail on it, and Virtual Jaguar requires it (D2 §15.3).
 - **The real risk is in how a fork stores the gap:**
   - A virtual pregap fixes MAME and generic readers but double-counts in Flycast for MIL-CDs.
   - A new tag, or extra CHSE fields, is invisible to current readers (no worse than today) but needs reader adoption.
@@ -248,6 +251,8 @@ It appears in **0** of PS1 (10 914), PS2 CD (3168), Saturn (2457), Mega-CD (549)
 ---
 
 ## 4. CD+G (`c9e87a6b7e`, #15910, 2026-09-22)
+
+*Post-0.289 only: 0.289, and so the engine, rejects `CDG` tracks, and the page refuses such cue sheets before converting.*
 
 - The cue and TOC parsers now accept `TRACK nn CDG`, which becomes an `AUDIO` track with `subtype=RW_RAW, subsize=96`, so the input must hold **2448-byte sectors** (2352 audio + 96 raw P-W). This matches CDRWIN's "CDG – Karaoke CD+G (sector size: 2448)" ([libodraw CUE spec](https://github.com/libyal/libodraw/blob/main/documentation/CUE%20sheet%20format.asciidoc)). The code is at `cdrom.cpp:721-725`, `2611-2631` and `3163-3183`.
 - **Other discs are unaffected:** the path only runs for the `CDG` token, which 0.289 rejected with "Unknown track type [CDG]" **[exp]**.
@@ -353,7 +358,7 @@ Legacy detail **[unverified: no v4 GD CHD to test]**: for GDI output, extraction
   | MAME reader | `cdrom_file` | `dvdrom_file` |
   | Extract back | `extractcd` to `.cue` writes `MODE1/2048` + `.bin`, identical to the ISO **[exp]** | ISO |
 
-- `parse_iso` (`cdrom.cpp:2068-2138`) picks the sector size by *divisibility*, in the order 2048, then 2336, then 2352. A raw 2352-byte image with N ≡ 0 (mod 128) frames is typed `MODE1/2048`, and with N ≡ 0 (mod 146) it becomes `MODE2/2336` **[exp `$SP/exp/xiso`]**. Discpress sniffs the sync pattern and warns that such an `.iso` "will be converted as a CD", but it still passes the `.iso` to chdman (`app/ui.js:798-803`), so these sizes are mis-typed.
+- `parse_iso` (`cdrom.cpp:2068-2138`) picks the sector size by *divisibility*, in the order 2048, then 2336, then 2352. A raw 2352-byte image with N ≡ 0 (mod 128) frames is typed `MODE1/2048`, and with N ≡ 0 (mod 146) it becomes `MODE2/2336` **[exp `$SP/exp/xiso`]**. Discpress sniffs the sync pattern and warns that such an `.iso` "will be converted as a CD", but it still passes the `.iso` to chdman (`app/ui.js`), so these sizes are mis-typed. *(Fixed: since 1.2.1 the page gives chdman a cue sheet with the sector mode for such an `.iso` (`job.autoCue` in `buildJob`), and the engine's `parse_iso` checks the sync pattern too, B10 in §12.)*
 - Dual-layer PS2 (DVD9): nothing to store; the ISO has no layer-break metadata and none is needed. UMD/PSP ISOs are plain 2048-byte sectors, so createdvd suffices. PS2 games on CD (the 3168 Redump PS2 cues, all `MODE2/2352`) go through createcd.
 - What emulators expect, briefly: DVD CHDs for PS2 DVDs and PSP, CD CHDs for everything else (D1 covers the details).
 
@@ -399,7 +404,7 @@ Legacy detail **[unverified: no v4 GD CHD to test]**: for GDI output, extraction
 3. Write CRLF, and apply Redump naming (no `(Track 1)` for a single track).
 4. Keep 0.289's GD handling.
 
-With (1)-(4), all 72 022 surveyed cues would be reproducible. Verification against the DB can be done *without extraction*: hash each track range from the CHD (the frames between `chdframeofs` and `frames`, audio swapped back to LE) and compare with the DAT's per-track CRC/SHA-1.
+With (1)-(4), all 72 022 surveyed cues would be reproducible. Verification against the DB can be done *without extraction*: hash each track range from the CHD (the frames between `chdframeofs` and `frames`, audio swapped back to LE) and compare with the DAT's per-track CRC/SHA-1. *(Done in 1.3.0 with `createcd --keepcue`, opt-in, and `extractcd --redump`: of 5,676 real Redump cue sheets, 500 per system, 53% come back byte for byte without the kept cue sheet and all of them with it (fork-plan.md, milestone 3). The page's Verify compares with Redump by extracting into checksums only, not by hashing track ranges.)*
 
 ---
 
@@ -428,23 +433,25 @@ With (1)-(4), all 72 022 surveyed cues would be reproducible. Verification again
 
 ## 9. Input formats in the wild
 
-Dispatch is by extension only (`parse_toc`, `cdrom.cpp:2980-3005`): `gdi`, `cue`, `nrg`, `iso`/`cdr`/`toast`; **every other extension is parsed as a cdrdao TOC**, so `.ccd`, `.mds`, `.cdi`, `.bin` and binary `.toc` files yield 0 tracks and createcd hangs **[exp]**.
+Dispatch is by extension only (`parse_toc`, `cdrom.cpp:2980-3005`): `gdi`, `cue`, `nrg`, `iso`/`cdr`/`toast`; **every other extension is parsed as a cdrdao TOC**, so `.ccd`, `.mds`, `.cdi`, `.bin` and binary `.toc` files yield 0 tracks and createcd hangs **[exp]**. *(In the engine a descriptor without tracks is an error, exit 1.)*
+
+*"Supported today" is the state at the research: HEAD's chdman and Discpress 1.2.0. Notes in italics say what changed since.*
 
 | Format | Supported today | What maps across | Effort to add or fix | Browser priority |
 |---|---|---|---|---|
 | cue/bin, single and multi-bin | yes | tracks, INDEX 00/01, PREGAP, POSTGAP, sessions (HEAD); loses CATALOG, ISRC, FLAGS, INDEX2+ and CD-TEXT | fix the bugs in §1.6 (days); add fidelity metadata (days) | **highest**: 99 % of Redump |
-| cdrdao `.toc` | partial: explicit lengths only; START treated as virtual; PREGAP, SILENCE, ZERO and several FILEs ignored; `.wav` not decoded | types, subcode (RW/RW_RAW), flags (not stored) | medium (rewrite the parser to cdrdao semantics) | low (rare), but needed for lossless CD+G |
-| `.gdi` | yes; **HEAD misplaces the HD area** | tracks, LBAs | revert to 0.289 (hours) | **high** (TOSEC Dreamcast) |
-| `.iso` / `.cdr` / `.toast` | yes (size heuristic) | 1 data track | Discpress should build a cue from the sync sniff | high |
-| Nero `.nrg` | partial: `NER5`/`DAOX` only; modes 2048, Mode-2 raw and audio; pregaps turned into virtual pregaps (data dropped); **offset bug after a track with a pregap**; no v1 `NERO`/`DAOI`, TAO `ETN2`, multi-session, Mode-2 Form 1, raw or subchannel modes (`cdrom.cpp:1885-2050`) **[exp `$SP/exp/nrg`]** | tracks | medium | medium |
-| CloneCD `.ccd` + `.img` + `.sub` | **no** (Discpress ignores `.ccd`/`.sub` and converts `.img` as a single data track with a warning) | would give full TOC, sessions, sub-channel (96 bytes/sector, P-W **[layout unverified]**) and CATALOG | easy to medium (INI-style text) | **high** (DiscImageCreator also writes it) |
-| Alcohol `.mds` + `.mdf` | no | sessions, pregaps, subchannel (16 or 96 bytes interleaved) | medium (binary; MDS v1; not the encrypted MDX) | medium |
-| DiscJuggler `.cdi` | no | sessions, pregaps, 2048/2336/2352 sectors, subchannel variants | medium to hard (several versions) | **high for Dreamcast homebrew/MIL-CD** |
-| redumper outputs (`.scram`, `.state`, `.subcode`, `.toc`/`.fulltoc` binary **[unverified]**, `.cdtext`, split `.cue`/`.bin`) | only the split cue/bin (Redump format) | via the cue; its `.toc` is reportedly **binary**, and Discpress would treat any `.toc` as a TOC descriptor, which would hang chdman with 0 tracks **[code reading, `app/ui.js:782-787`]** | ingest `.subcode` and `.cdtext` (medium); never pass the binary `.toc` | medium |
-| ECM (`.bin.ecm`) | no | lossless reconstruction of EDC/ECC | easy (~200 lines) | medium (old PS1 sets) |
+| cdrdao `.toc` | partial: explicit lengths only; START treated as virtual; PREGAP, SILENCE, ZERO and several FILEs ignored; `.wav` not decoded *(engine: read as cdrdao reads them, B11 and B21)* | types, subcode (RW/RW_RAW), flags (not stored) | medium (rewrite the parser to cdrdao semantics) | low (rare), but needed for lossless CD+G |
+| `.gdi` | yes; **HEAD misplaces the HD area** *(0.289's layout since 1.2.1)* | tracks, LBAs | revert to 0.289 (hours) | **high** (TOSEC Dreamcast) |
+| `.iso` / `.cdr` / `.toast` | yes (size heuristic) | 1 data track | Discpress should build a cue from the sync sniff *(done in 1.2.1; the engine also checks the sync pattern, B10)* | high |
+| Nero `.nrg` | partial: `NER5`/`DAOX` only; modes 2048, Mode-2 raw and audio; pregaps turned into virtual pregaps (data dropped); **offset bug after a track with a pregap**; no v1 `NERO`/`DAOI`, TAO `ETN2`, multi-session, Mode-2 Form 1, raw or subchannel modes (`cdrom.cpp:1885-2050`) **[exp `$SP/exp/nrg`]** *(engine: the offset and the dropped pregap are fixed, B9; the other limits stand)* | tracks | medium | medium |
+| CloneCD `.ccd` + `.img` + `.sub` | **no** (Discpress ignores `.ccd`/`.sub` and converts `.img` as a single data track with a warning) *(since 1.3.0 the page turns a single-session `.ccd` into a cue sheet for its `.img`, `ccdToCue` in `app/ui.js`; the `.sub` is not stored, but since 1.5.0 a PS1 disc's `.sbi` is made from it)* | would give full TOC, sessions, sub-channel (96 bytes/sector, P-W **[layout unverified]**) and CATALOG | easy to medium (INI-style text) | **high** (DiscImageCreator also writes it) |
+| Alcohol `.mds` + `.mdf` | no *(since 1.5.0 a card says that it can't be read)* | sessions, pregaps, subchannel (16 or 96 bytes interleaved) | medium (binary; MDS v1; not the encrypted MDX) | medium |
+| DiscJuggler `.cdi` | no *(since 1.5.0 a card says why it isn't converted)* | sessions, pregaps, 2048/2336/2352 sectors, subchannel variants | medium to hard (several versions) | **high for Dreamcast homebrew/MIL-CD** |
+| redumper outputs (`.scram`, `.state`, `.subcode`, `.toc`/`.fulltoc` binary **[unverified]**, `.cdtext`, split `.cue`/`.bin`) | only the split cue/bin (Redump format) | via the cue; its `.toc` is reportedly **binary**, and Discpress would treat any `.toc` as a TOC descriptor, which would hang chdman with 0 tracks **[code reading, `app/ui.js`]** *(since 1.2.1 `descriptorJob` skips a `.toc` that isn't text)* | ingest `.subcode` and `.cdtext` (medium); never pass the binary `.toc` | medium |
+| ECM (`.bin.ecm`) | no *(yes since 1.3.0: `EcmStore` in `app/worker.js`, `wasm/ecm.cpp`)* | lossless reconstruction of EDC/ECC | easy (~200 lines) | medium (old PS1 sets) |
 | Audio in cue: FLAC, APE, MP3, OGG, AIFF | no ("Unhandled track type"); only WAVE, with 1 track per file | audio | FLAC easy (libFLAC already linked); AIFF easy; MP3 medium (lossy, encoder delay); APE hard | medium (TOSEC/"iso+mp3" rips) |
-| PBP (PSX eboot) | no | compressed ISO blocks and CD-DA (often lossy) | medium; official titles are DRM-encrypted | low |
-| CSO / ZSO / DAX (PSP/PS2) | no | ISO → createdvd | easy | medium |
+| PBP (PSX eboot) | no *(since 1.5.0, unencrypted PS1 `EBOOT.PBP` files: `PbpStore`)* | compressed ISO blocks and CD-DA (often lossy) | medium; official titles are DRM-encrypted | low |
+| CSO / ZSO / DAX (PSP/PS2) | no *(CSO and ZSO since 1.3.0: `CisoStore`)* | ISO → createdvd | easy | medium |
 | `.img` variants | Discpress guesses (sync sniff, then an auto cue) | | | |
 
 ---
@@ -466,7 +473,7 @@ Dispatch is by extension only (`parse_toc`, `cdrom.cpp:2980-3005`): `gdi`, `cue`
 | `ecc_verify` / `ecc_generate` / `ecc_clear` | Mode 1 and Mode 2 (header zeroed for Mode 2) (`cdrom.cpp:1363-1466`) |
 
 - Audio from `read_data` is big-endian, except for legacy CHGT (swapped to BE on read).
-- Discpress's identification probe (`wasm/wasm_helper.cpp:142-160`) reads with `get_track_start(track)+lba` and MODE1 conversion. Because it is track-relative, identification works even on the HEAD GD layout.
+- Discpress's identification probe (`wasm_probe_read` in `wasm/wasm_helper.cpp`) reads with `get_track_start(track)+lba`: at the research with MODE1 conversion, now the sector as stored (`CD_TRACK_RAW_DONTCARE`), from which it takes the user data itself. Because it is track-relative, identification works even on the HEAD GD layout.
 
 ---
 
@@ -489,10 +496,10 @@ The repros live under `$SP/exp`.
 
 | # | Bug | Repro | Also in 0.289? |
 |---|---|---|---|
-| B1 | GDI → CHD misplaces the HD area by the SD gap (+150 typical) | `gd/type*.tosec.head.chd`, `cmp0289/aerowings` | no (regression) |
-| B2 | A GD cue mounted directly in MAME is not placed at 45000 | `cdprobe-head gd/dc-type1/redump/DC.cue` | no |
-| B3 | 0 tracks → createcd loops forever (`-nan%`) | `cuequirks/empty.cue`, `lower.cue`, `limits/t0.cue`, `limits/lone.bin`, `x.ccd`, `toc/*.toc` without lengths | yes |
-| B4 | A 100-track cue segfaults; a 100-track GDI aborts | `cd/limits` | yes |
+| B1 | GDI → CHD misplaces the HD area by the SD gap (+150 typical). *Gone since 1.2.1, which builds the 0.289 release.* | `gd/type*.tosec.head.chd`, `cmp0289/aerowings` | no (regression) |
+| B2 | A GD cue mounted directly in MAME is not placed at 45000. *Not in 0.289, so not in the engine.* | `cdprobe-head gd/dc-type1/redump/DC.cue` | no |
+| B3 | 0 tracks → createcd loops forever (`-nan%`). *Fixed in the engine:* a descriptor with no tracks, or with tracks that hold no data, is an error (exit 1). The page has refused such descriptors since 1.2.1 | `cuequirks/empty.cue`, `lower.cue`, `limits/t0.cue`, `limits/lone.bin`, `x.ccd`, `toc/*.toc` without lengths | yes |
+| B4 | A 100-track cue segfaults; a 100-track GDI aborts. *Fixed in the engine:* track numbers outside 1–99 are an error (exit 1) | `cd/limits` | yes |
 | B5 | MOTOROLA audio is double-swapped (and a data track that opens a MOTOROLA file is swapped). *Fixed in the engine.* | `cd/motorola` | yes |
 | B6 | A shared FILE after a different first FILE gets wrong offsets and lengths; the last track of a shared FILE that another FILE follows gets the whole file. *Fixed in the engine.* | `cd/mixed-files` | yes |
 | B7 | Several tracks in one WAVE. *Fixed in the engine.* | `cd/wave/Game2.cue` | yes |
@@ -505,7 +512,7 @@ The repros live under `$SP/exp`.
 | B14 | The CHSE session parser depends on metadata order. *Not applicable:* 0.289, and so the engine, neither write nor read CHSE; the engine's own `CUES` tag (`--keepcue`) goes after all CD metadata | `tools/mkorder` | n/a (HEAD only) |
 | B15 | `dvdrom_file` rejects 4096-byte hunks (the createdvd default). *Not changed:* `dvdrom_file` is MAME's reader, not part of chdman; createdvd's default stays 4096 for byte identity, and the page uses `-hs 2048` for PSP | `tools/dvdprobe` | yes |
 | B16 | `extractcd` on a DVD CHD aborts (`throw nullptr`); `extractdvd` on a CD CHD writes a bogus ISO. *Fixed in the engine:* both are errors (exit 1); `extractraw` still writes a CD's frames | `exp/xmis` | yes |
-| B17 | BOM or lowercase cue keywords | `cuequirks` | yes |
+| B17 | BOM or lowercase cue keywords. *Handled in the page since 1.2.1:* `decodeText` and `fixDescriptor` (`app/ui.js`) give chdman a corrected copy. The engine still reads keywords case-sensitively, as 0.289 does, but finding no tracks is now an error (B3) | `cuequirks` | yes |
 | B19 | GD-ROM round trips: `extractcd` to `.toc` (with or without `-sb`) of any GD-ROM, and to `.cue` of a CHD made from a GDI, read back as an error or another disc. The GDI's gap before track 2 (in no file, `PAD` in the CHD) is written as the cue's `PREGAP`, which 0.289's GD cue parser takes from the start of the track's file (`splitframes`), and the TOC's lengths include the `PAD` frames, which no file holds. *Fixed in the engine:* a GD cue sheet's `PREGAP` pads the track before (the same CHD, byte for byte); for a "type 3 split" disc the 75 frames at the end of the audio track stay in its file (0.289 left them out and wrote `PREGAP 00:03:00`); `--redump` writes Redump's layout whatever the CHD was made from (the Redump sheet's CHD, the same data); `.toc` output is refused. `.gdi` and the `.cue` of a Redump-made CHD are 0.289's | `tests/ui/engine.spec.js` (`gdDisc`, types 1, 2, 3, 3 split) | yes |
 | B20 | Cue sheets with INDEX points out of order (backwards in a file, INDEX 00 after INDEX 01, a track starting before the one before it) or a track with no frames from its INDEX 01 on: 0.289 makes negative pregaps or lengths, or a track of its pregap alone (exit 0), whose TOC doesn't read back. *Refused in the engine* | `tests/ui/engine.spec.js` | yes |
 | B21 | cdrdao TOC details: a `.wav`'s `#offset` is where its WAVE header is (cdrdao's `waveLength`); a length of 0 is the rest of the file; statements past the end of their file, numbers past 2^40, samples in a track with sub-channel data and a `ZERO` in another mode than its track's are errors (0.289 failed reading, or wrapped). *Fixed in the engine* (the engine before counted a `.wav`'s offset from its samples, and made a `DATAFILE` of length 0 a track without data) | `tests/ui/engine.spec.js` | partly (0.289 reads `.wav` raw) |
@@ -522,7 +529,8 @@ Ranked by value to users and risk.
    - **Full 0.289 parity:** also restore the Redump-cue pregap strip in `parse_cue` (moving pregaps into the previous track with `splitframes`, and zeroing `pgdatasize` so HEAD's `write_metadata` emits no `V`). That makes cue→CHD byte-identical to 0.289 **[exp]**. Also restore 0.289's extract-to-cue "Redump rebuild" heuristics in `do_extract_cd`: without them HEAD's extractor no longer reproduces the Redump bins from 0.289-layout CHDs, and with them they are bit-exact **[exp `gd/rtfix2`, `rtfix3`]**.
    - Parity gives SHA-1s that match existing collections and 0.289-made DATs, and MAME's Naomi/DC CHDs where they were made that way **[unverified]**.
    - Add CI tests that check the *reader layout* (MAME `cdprobe` plus the Flycast model), not just round-trips: this regression passed round-trip tests.
-2. **Decide what "same as chdman" means and say it accurately.** To match the official 0.289 byte for byte, set the LZMA level back to 8. That is a one-line change, and it works with the 26.02 SDK **[exp]**. Stop writing `CHSE` by default, or accept that SHA-1 differs for the 89 DC MIL-CDs, 38 Jaguar CDs and 161 PC multi-session discs. Correct the "0.289" labelling in the UI and the release notes. Change the Discpress test oracle from "our own native build" to "official release build + our build": that is how B1 and the LZMA drift slipped through.
+   - *(Done in 1.2.1 by building the 0.289 release; `tests/ui/gdrom.spec.js` checks the layout.)*
+2. **Decide what "same as chdman" means and say it accurately.** To match the official 0.289 byte for byte, set the LZMA level back to 8. That is a one-line change, and it works with the 26.02 SDK **[exp]**. Stop writing `CHSE` by default, or accept that SHA-1 differs for the 89 DC MIL-CDs, 38 Jaguar CDs and 161 PC multi-session discs. Correct the "0.289" labelling in the UI and the release notes. Change the Discpress test oracle from "our own native build" to "official release build + our build": that is how B1 and the LZMA drift slipped through. *(Done in 1.2.1: the reference is the 0.289 release, which has LZMA level 8 and no `CHSE`; the claims were corrected, and the tests compare with unmodified chdman 0.289.)*
 3. **Make input handling robust in the browser.**
    - Refuse zero-track and over-99-track inputs before calling chdman (or fix them in the fork).
    - Normalise cues: strip the BOM and uppercase the keywords.
@@ -530,17 +538,19 @@ Ranked by value to users and risk.
    - Never pass non-cdrdao `.toc` files (redumper's binary `.toc`).
    - Fix MOTOROLA, mixed-file offsets, multi-track WAV, EAC gaps, the NRG offset and the TOC semantics.
    - Each fix needs a synthetic fixture; the generators in `$SP/exp/gen` can seed `tests/fixtures`.
+   - *(Done: the page's guard rails in 1.2.1, the parser fixes in the engine in 1.3.0 and 1.4.0. See §12.)*
 4. **Offer Redump-exact extraction and in-browser verification.**
-   - Store CATALOG, ISRC, FLAGS, INDEX ≥ 2 and the original track type string, or the original cue text, as **non-checksummed tags appended after the CD tags**. The SHA-1 stays identical to plain chdman and all readers ignore the tags **[exp]**.
+   - Store CATALOG, ISRC, FLAGS, INDEX ≥ 2 and the original track type string, or the original cue text, as **non-checksummed tags appended after the CD tags**. The SHA-1 stays identical to plain chdman **[exp]**, and all readers ignore the tags but Kronos, libretro Yabause/YabaSanshiro and jgenesis, which fail on any tag that is not a track's (D2 §0 finding 4).
    - Extract with CRLF and Redump single-track naming.
    - This raises Redump cue reproducibility from 77 % to about 100 %.
    - Verify each track against Redump DATs (per-track CRC32/SHA-1, and the cue hash) straight from the CHD. The official DATs include the cue; `db/mkdb.py` keeps only the first ROM entry per game from libretro's metadat DATs, so a per-track DB would be needed.
+   - *(Done in 1.3.0: `createcd --keepcue`, opt-in, stores the cue text, and `extractcd --redump` writes Redump's layout. Verify compares a CHD with the built-in database's file, and since 1.5.0 every track with the user's DAT files.)*
 5. **Preserve session geometry.**
    - Extend `CHSE` (for example `SESSION:2 LEADOUT:6750 LEADIN:4500 PREGAP:150`); MAME's `sscanf` ignores the tail, but this changes the SHA-1.
    - Or use a non-checksummed `CHSG` tag.
    - Avoid encoding the gap as a virtual pregap by default: it double-counts in Flycast's MIL-CD heuristic.
    - Fix CHSE ordering fragility upstream: carry the session number in each track entry, or search by track number.
-6. **Subchannel and CD+G.** Ingest `.sub`, `.subcode` and `.sbi` into RW_RAW (LibCrypt and other protections), and extract CD+G to CDRWIN `CDG` 2448-byte cue/bin. Check emulator subcode support with D1 before making it the default. RW_RAW changes the frame contents, and the TYPE/SUBTYPE text changes the SHA-1.
+6. **Subchannel and CD+G.** Ingest `.sub`, `.subcode` and `.sbi` into RW_RAW (LibCrypt and other protections), and extract CD+G to CDRWIN `CDG` 2448-byte cue/bin. Check emulator subcode support with D1 before making it the default. RW_RAW changes the frame contents, and the TYPE/SUBTYPE text changes the SHA-1. *(Not taken: 0.289 rejects `CDG` tracks, and the page refuses such cue sheets before converting. Since 1.5.0 the page makes a PS1 disc's `.sbi` from a CloneCD `.sub` instead.)*
 7. **New input formats, in priority order:**
    - CloneCD `.ccd/.img/.sub`;
    - DiscJuggler `.cdi` (Dreamcast);
@@ -550,7 +560,8 @@ Ranked by value to users and risk.
    - MDS/MDF;
    - fuller NRG;
    - MP3/APE (lossy or hard) last.
-8. **DVD.** Consider `-hs 2048` as an option ("MAME-compatible DVD"), or document that MAME can't mount 4 KB-hunk DVD CHDs. Add a media-type check to `extractdvd`/`extractcd`.
+   - *(Done in 1.3.0: single-session CloneCD, ECM and CSO/ZSO. `.cdi` and MDS/MDF are refused with the reason since 1.5.0; the rest is open.)*
+8. **DVD.** Consider `-hs 2048` as an option ("MAME-compatible DVD"), or document that MAME can't mount 4 KB-hunk DVD CHDs. Add a media-type check to `extractdvd`/`extractcd`. *(The checks are in the engine, B16; the page uses `-hs 2048` for PSP.)*
 9. **Validation tooling.** Add a "layout lint" (`chdman verify --cd`) that prints the disc as MAME and libchdr see it (INDEX 01 LBAs, session starts, GD 45000, V semantics, pregap ≤ frames, CHSE ordering) and warns about the known ambiguous cases.
 
 **Compatibility risks to respect:**

@@ -1,5 +1,7 @@
 # G: Encoder technology and platform acceleration for a Discpress `chdman` fork
 
+> **Status: a research snapshot of 2026-09-27, kept as it was written.** It describes MAME master `76c7d19`, which Discpress was built from up to 1.2.0, with a small patch (`wasm/mame.patch`, Asyncify). Since 1.2.1 Discpress builds the MAME 0.289 release (tag `mame0289`, `f34f025`), and since 1.3.0 its own fork of it in `engine/`: 0.289 plus the changes in [`engine/mame-0.289.diff`](../../engine/mame-0.289.diff) (see [`engine/README.md`](../../engine/README.md)), with C++20 coroutines in place of Asyncify. Many defects listed here are fixed and many recommendations have shipped: notes in italics say where, and [fork-plan.md](fork-plan.md) has the current status of each recommendation. Of the options ranked in §12, the byte-identical ones, the codec plan and libdeflate have shipped; a status line there says which. Line numbers into `chdman.cpp`, `chd.cpp` and `cdrom.cpp` refer to `76c7d19`, not to `engine/`; "HEAD", "the pin" and "today" mean that snapshot.
+
 > Part of the [Discpress chdman research dossier](README.md), 2026-09-27. Written by a research agent from source reading and experiments. `$SP/...` paths name artefacts in the temporary research workspace, which is not part of the repository (reproducible lab tooling is in [lab/](lab/)). Lane letters (A, B, C, D1, D2, E, G) refer to the reports listed in the README.
 
 Lane G of the fork dossier. Written 2026-09-27.
@@ -8,7 +10,7 @@ Lane G of the fork dossier. Written 2026-09-27.
 - encoders that could make CHD creation faster or the files smaller while every existing CHD reader can still decode the output;
 - the acceleration options open to a browser (WebAssembly) encoder.
 
-**Subject.** Discpress's pinned MAME source, commit `76c7d197ed`. That is a post-0.289 master snapshot from 2026-09-27, not the `mame0289` tag; see §1.3. Nothing under `/home/user/discpress` was modified.
+**Subject.** The MAME source Discpress pinned at the time, commit `76c7d197ed`. That is a post-0.289 master snapshot from 2026-09-27, not the `mame0289` tag; see §1.3. Nothing under `/home/user/discpress` was modified.
 
 **Evidence labels.** Every claim carries one of these tags:
 - **[exp]**: my own measurement. The harnesses and raw logs are under `$SP/exp/`, in the research workspace.
@@ -32,10 +34,12 @@ Lane G of the fork dossier. Written 2026-09-27.
    - LZMA plus Deflate take about 60% on CD audio tracks and never win there;
    - the double FLAC encode takes about 36% on DVD hunks.
 
-   Simple per-hunk gating plus libdeflate should give about **1.6× on CD data, 2.5× on CD audio and 1.6× on DVD** at a size change of 0 to +0.05%. Some wins are strictly byte-identical and change nothing:
+   Simple per-hunk gating plus libdeflate should give about **1.6× on CD data, 2.5× on CD audio and 1.6× on DVD** at a size change of 0 to +0.05% (2.7× on CD audio with FLAC's MD5 off as well: §11.1). Some wins are strictly byte-identical and change nothing:
    - early termination;
    - turning off FLAC's MD5;
    - a faster SHA-1.
+
+   *(Shipped in 1.3.0. The three byte-identical wins are in the default output. The gating is the opt-in codec plan, `--codecplan`, by track type; natively at `-np 4` it takes 1.8× less CPU on CD data, 1.9× on CD audio and 1.4× on DVD than the default. libdeflate is opt-in too. See `engine/README.md`.)*
 3. **libdeflate beats zlib for the Deflate trial.**
    - Level 9 is 2–3× faster at the same size. The exception is very compressible data (`img`), where it is +0.13% on the whole image.
    - Level 12 was smaller on every class: 0–4% of Deflate output (about 0 on incompressible data), and up to −2.1% on the whole image for 4 KiB text hunks.
@@ -48,17 +52,18 @@ Lane G of the fork dossier. Written 2026-09-27.
    - SDK 22.01, 23.01 and 26.02 give byte-identical output. 16.04 does not.
 5. **The SHA-1 is slow.**
    - MAME's SHA-1 is about 3× slower than a plain unrolled SHA-1 natively and about 5× slower in wasm (about 80 vs 350–580 MB/s).
-   - Discpress runs the whole-image SHA-1 serially in the job worker. That caps throughput at about 80 MB/s, which a 16-thread desktop reaches.
+   - Discpress runs the whole-image SHA-1 serially in the job worker. That caps throughput at about 80 MB/s, which a 16-thread desktop reaches. *(Fixed in 1.3.0, milestone 2.1: the engine's SHA-1 runs at 650 MB/s in wasm.)*
 6. **New finding: Discpress's CD-audio (`cdfl`) output is not byte-identical to its own native reference build.**
    - With Discpress's own `build/chdman.wasm`, a CUE/BIN made from a CC0 piano track gives 3,958,167 bytes.
    - `build/chdman-native` gives 3,958,171 bytes. The data SHA-1s are identical.
    - **Cause: libm.** Emscripten's `cosf` differs from glibc's in 1 ULP on 1.2% of the window points libFLAC evaluates.
    - Separately, libFLAC's NEON (ARM64) and SSE2 autocorrelation sums in a different order from the C path. So official chdman builds disagree across platforms too.
+   - **Resolved in Discpress 1.3.0** (milestone 2.3): libFLAC calls `engine/libm`'s `cosf` and `log` in every build, so the page's CD audio is byte for byte chdman 0.289's on Linux, and the `music-cd` fixture checks it. chdman builds for ARM64, or with another libm, can still differ.
 7. **The SIMD128 build pays off only for FLAC.**
    - libFLAC runs about 2× faster with `-msimd128`.
    - LZMA, zlib, libdeflate and zstd show no measurable change.
 8. **Platform notes.**
-   - JSPI became Baseline on 2026-09-14 (Chrome 137, Firefox 153, Safari 27), so Asyncify can eventually go. The gain is small and needs a fallback.
+   - JSPI became Baseline on 2026-09-14 (Chrome 137, Firefox 153, Safari 27), so Asyncify can eventually go. The gain is small and needs a fallback. *(Asyncify went in 1.3.0, without JSPI: the commands are C++20 coroutines.)*
    - Relaxed SIMD and Memory64 are still missing in Safari and are of no use to these codecs.
    - Shared-memory threads are out for a `file://` app.
    - WebGPU is not a fit.
@@ -83,7 +88,7 @@ The readers checked were:
 | `zstd` / `cdzs` | `ZSTD_initDStream`, then `ZSTD_decompressStream` until the output is full, with no dictionary (MAME `chdcodec.cpp:1126-1146`, libchdr `libchdr_codec_zstd.c`). rchd requires exactly one frame with no trailing bytes and a window of at most 2^27 (D2 §, `rzstd.h:130-178`). [code] | Standard frames only (not magicless); no dictionary ID; a single frame per hunk or sub-stream | Level and strategy parameters, the content-size flag, and the checksum flag (inside the frame). Long-distance matching does nothing within a hunk of 1 MiB or less. |
 | `huff` | MAME's 8-bit Huffman with the tree serialized in the stream. [code] | The bitstream format | The tree construction (§8) |
 
-Four codecs per CHD is the header limit. The CD default uses three (`cdlz`, `cdzl`, `cdfl`), so one slot is free. The DVD, HD and raw default uses all four (`lzma`, `zlib`, `huff`, `flac`) [code `chdman.cpp:671-673`]. A reader that does not know a listed codec refuses to open the file (libchdr, MAME). rchd fails only the affected hunks (D2).
+Four codecs per CHD is the header limit. The CD default uses three (`cdlz`, `cdzl`, `cdfl`), so one slot is free. The DVD, HD and raw default uses all four (`lzma`, `zlib`, `huff`, `flac`) [code `chdman.cpp:667-670`]. A reader that does not know a listed codec refuses to open the file (libchdr, MAME). rchd fails only the affected hunks (D2).
 
 ### 1.2 Verification performed
 
@@ -108,15 +113,15 @@ Four codecs per CHD is the header limit. The CD default uses three (`cdlz`, `cdz
 
 ### 1.3 Library versions and byte identity across MAME versions
 
-| | ≤0.250 | 0.255–0.260 | 0.265–0.289 (tag `f34f025`) | Pinned 76c7d19 (post-0.289) |
+| | ≤0.250 | 0.255–0.260 | 0.265–0.289 (tag `f34f025`) | 76c7d19 (post-0.289; Discpress's pin up to 1.2.0) |
 |---|---|---|---|---|
 | LZMA SDK | 16.04 | 22.01 | 23.01 | **26.02** |
 | chdman LZMA `level` | 9 (0.250) | 8 | 8 | **6** (commit `c23567b509`, per report B) |
-| zlib | 1.2.11–1.2.12 | 1.2.12 | 1.3–1.3.1 | 1.3.2 |
+| zlib | 1.2.11–1.2.12 | 1.2.12 | 1.3–1.3.2 | 1.3.2 |
 | libFLAC | **1.2.1** (level 8 includes `-e`) | 1.2.1 | 1.4.3 | 1.4.3 |
 | zstd | – | – | 1.5.5 (zstd arrived in 0.262 per D1) | **1.5.7** |
 
-Rows are from `git show <tag>:3rdparty/...` [code].
+Rows are from `git show <tag>:3rdparty/...` [code]. *(The engine bundles what the `mame0289` tag does: LZMA SDK 23.01 at level 8, zlib 1.3.2, libFLAC 1.4.3 and zstd 1.5.5.)*
 
 Output identity, measured with chdman's parameters on my corpus [exp]:
 - **LZMA.**
@@ -269,7 +274,7 @@ LZMA SDK 26.02, lc/lp/pb fixed at 3/0/2. Relative time is against level 6 [exp]:
 | Setting | CD bin | CD txt | CD img | CD cmp | DVD bin | DVD txt | DVD img |
 |---|---|---|---|---|---|---|---|
 | **level 6** (pinned HEAD: `fb` 32, `mc` 32, bt4, normal parser) | 37.279 (1.00×) | 23.134 | 3.091 | 88.541 | 47.259 | 31.004 | 3.870 |
-| **level 8 = 9** (`fb` 64, `mc` 48; chdman 0.260–0.289) | 37.233 (1.11×) | 23.044 (1.13×) | 3.017 (1.85×) | 88.565 | 47.239 (1.07×) | 30.954 | 3.772 |
+| **level 8 = 9** (`fb` 64, `mc` 48; chdman 0.255–0.289) | 37.233 (1.11×) | 23.044 (1.13×) | 3.017 (1.85×) | 88.565 | 47.239 (1.07×) | 30.954 | 3.772 |
 | `fb` 128 | 37.227 (1.25×) | – | – | – | 47.234 | – | – |
 | **`fb` 273, `mc` 1000** | **37.195 (1.72×)** | **23.015 (1.62×)** | **2.931 (9.2×)** | 88.538 | 47.232 (1.22×) | 30.949 | 3.635 (7.8×) |
 | `fb` 273, `mc` 10000 | 37.195 | – | – | – | 47.232 | 30.949 | – |
@@ -388,7 +393,7 @@ None is needed. libFLAC with `-p` is the practical ceiling, and it is subset-saf
      | `build/chdman-native` | 3,958,171 B | `7d5b1de6…` |
 
    - The data SHA-1 is the same everywhere (`57ec62d9…`) and all 643 hunks are CD FLAC in every build [exp `$SP/exp/cdtest/`].
-   - **CLAUDE.md says Discpress's CHDs are byte-identical to native chdman "for default settings", and the release notes promise the same. That is false for CD-DA.** Native builds from gcc -O2/-O3 and clang -O3 on glibc all agree with each other.
+   - **CLAUDE.md says Discpress's CHDs are byte-identical to native chdman "for default settings", and the release notes promise the same. That is false for CD-DA.** *(Fixed in 1.3.0, milestone 2.3: see item 3.)* Native builds from gcc -O2/-O3 and clang -O3 on glibc all agree with each other.
 2. **SIMD summation order.**
    - The SSE2 and NEON autocorrelation kernels accumulate **backwards over samples** (`deduplication/lpc_compute_autocorrelation_intrin_{sse2,neon}.c`). The C and FMA kernels go forwards.
    - Products of float samples are exact in double, so FMA versus multiply-add does not matter; only the order does.
@@ -400,6 +405,7 @@ None is needed. libFLAC with `-p` is the practical ceiling, and it is subset-saf
 3. **Consequence for a fork.** Byte identity for FLAC needs two things:
    - vendor one deterministic `cosf`/`log` (musl's sources, or a correctly-rounded one such as CORE-MATH) into both native and wasm, and route libFLAC to it;
    - pin the C autocorrelation, or write a lane-per-lag SIMD kernel, which preserves each lag's forward order. That is what LLVM's auto-vectorization already produced here: wasm SIMD and non-SIMD were identical.
+   - *(Done in 1.3.0: libFLAC calls `engine/libm`'s copies of glibc's `cosf` and `log` in every build, and the autocorrelation is the C one, `FLAC__NO_ASM`.)*
 
 ---
 
@@ -460,9 +466,9 @@ Per 64 MiB processed in 19,584-byte hunks [exp `$SP/exp/hash/`]:
 **Where SHA-1 runs in Discpress.**
 - `chd_file_compressor` hashes every byte twice:
   - a per-hunk SHA-1 + CRC16 for the duplicate map, now computed in the helpers (`wasm_helper_compress`);
-  - the whole-image raw SHA-1 (`m_compsha1.append` in `async_read`, `chd.cpp:3509`), which runs in the **single job worker**.
+  - the whole-image raw SHA-1 (`m_compsha1.append` in `async_read`, `chd.cpp:3481`), which runs in the **single job worker**.
 - At about 80 MB/s in wasm, the job worker saturates once aggregate compression passes about 60–80 MB/s. That is 10–16 threads on CD data after the speedups in §11.
-- A faster SHA-1 removes this serial ceiling and about 5% of helper CPU.
+- A faster SHA-1 removes this serial ceiling and about 5% of helper CPU. *(Done in 1.3.0, milestone 2.1: the engine's SHA-1 is unrolled and reads whole words, 650 MB/s in wasm instead of 120, and its CRC-16 is slice-by-8, 1,450 MB/s instead of 300.)*
 
 **Hardware SHA and CRC.**
 - SHA-NI, ARMv8 SHA1/CRC32 and PCLMUL are unreachable from wasm; wasm SIMD has no crypto or carry-less multiply.
@@ -483,7 +489,7 @@ Per 64 MiB processed in 19,584-byte hunks [exp `$SP/exp/hash/`]:
 | Relaxed SIMD | 114 | 146 | ✗ | Nothing to gain: no FMA-sensitive or shuffle-heavy hot loops. Output could depend on hardware. Skip. |
 | Threads (shared memory, `SharedArrayBuffer`) | 74 (Android 88) | 79 | 15.2 | `SharedArrayBuffer` requires **cross-origin isolation** (COOP `same-origin` plus COEP `require-corp`/`credentialless`). A single HTML file opened from `file://` cannot send headers, which is why Discpress uses message-passing helpers with private wasm instances. Shared memory would enable the LZMA SDK's MT match finder and zero-copy hunks, but only for an HTTPS-hosted build. |
 | Memory64 | 133 | 134 | ✗ | Not needed; per-worker working sets are MBs. It also carries bounds-check overhead. Skip. |
-| JSPI | **137** | **153** | **27** | Baseline "low" since 2026-09-14. It could replace Asyncify, which today instruments only `main`, `do_create*`, `do_copy*` and `compress_common*` (`wasm/link.sh`). The expected gain is small: codecs are not instrumented, and "Asyncify … overhead … 50% or so" applies only to instrumented code [doc Emscripten]. Browsers older than Safari 27 need a fallback build. Low priority. |
+| JSPI | **137** | **153** | **27** | Baseline "low" since 2026-09-14. It could replace Asyncify, which today instruments only `main`, `do_create*`, `do_copy*` and `compress_common*` (`wasm/link.sh`). The expected gain is small: codecs are not instrumented, and "Asyncify … overhead … 50% or so" applies only to instrumented code [doc Emscripten]. Browsers older than Safari 27 need a fallback build. Low priority. *(Not needed: Asyncify went in 1.3.0, replaced by C++20 coroutines.)* |
 | Exception handling (exnref) | 137 | 131 | 18.4 | Already used (`-fwasm-exceptions`). |
 | WebGPU | 113 on Windows, macOS and ChromeOS; all desktops by 144 per web-features; Android 121 | Windows since 141 [unverified] | 26 | See §10.3. |
 
@@ -499,7 +505,7 @@ Sources: web-features 3.40.0 `data.json`, caniuse, MDN Firefox 153 notes, WebKit
     - iPads and Macs with 8 or more cores report **8**, even an M-series Max.
   - **Chromium** returns `sysconf(_SC_NPROCESSORS_CONF)`. That is configured, not online, cores: all 8 on Snapdragon, masked by CPU affinity on Linux, and possibly physical cores on Mac when mitigations are on (`sys_info_posix.cc:115-160`) [code].
   - **Firefox** caps at `dom.maxHardwareConcurrency` = **128** (`StaticPrefList.yaml:6033`). `resistFingerprinting` spoofs it [doc].
-  - Discpress's tuner ignores the reported count and measures (up to 8 threads on touch devices, 16 elsewhere). That is the right call.
+  - Discpress's tuner ignores the reported count and measures (up to 8 threads on touch devices, 4 on iPhones, 16 elsewhere). That is the right call.
 - **Worker limits.** Firefox allows `dom.workers.maxPerDomain` = **512** and queues any beyond that (`all.js:117`, `RuntimeService.cpp:121`). Chromium and WebKit have no documented hard cap [unverified]. Each worker runs its own wasm instance of 16 MB or more, and on iOS the practical limit is WebKit's process memory limit [unverified].
 - **Heterogeneous cores.**
   - A19 Pro: 2 P-cores at 4.26 GHz and 4 E-cores at 2.6 GHz.
@@ -611,6 +617,8 @@ Whether to use it is a policy decision for D1 and D2, not an encoder question. I
 
 "Identical" means byte-identical to chdman built from the same source on the same platform. See §6.4 for why even that fails for FLAC across libm and ISA.
 
+*Status (fork-plan.md, milestone 2): rows 1, 2, 3 and 13 are in the engine's default output since 1.3.0, and row 8 since 1.2.1, which builds the 0.289 release. Row 5 shipped as the opt-in codec plan, by track type instead of sync patterns, and row 6 as the opt-in `--libdeflate`. Rows 4 and 7 were not taken: the ECC got faster instead, and the codec plan leaves `flac` out of non-CD hunks without a probe. Row 21 is moot: Asyncify went without JSPI. The other rows are open or were set aside.*
+
 | # | Option | All current decoders? | Byte-identical to chdman? | Size effect | Speed effect | License | Wasm feasibility | Effort |
 |---|---|---|---|---|---|---|---|---|
 | 1 | **Faster SHA-1** (unrolled; optionally WebCrypto per hunk) and slicing CRC16 | Yes | **Yes** | 0 | Removes the ~80 MB/s serial job-worker ceiling; −3–6% helper CPU | Public domain / own | Trivial (tested: 350–580 MB/s) | Low |
@@ -620,7 +628,7 @@ Whether to use it is a policy decision for D1 and D2, not an encoder question. I
 | 5 | **Gate `cdfl` / `cdlz` on sync patterns** | Yes | Identical on 3,380 of 3,380 test hunks, not guaranteed | 0 measured | CD data ≈−19%; CD audio ≈−50–60% | – | Yes | Low |
 | 6 | **libdeflate -9** replaces zlib in the Deflate trial | Yes (raw Deflate; three decoders tested) | No | 0 to −0.9% (DVD txt); worst +0.13% (CD img) | Deflate trial 2–3× faster (≈−20% CD data, −10% DVD) | MIT | Yes (tested) | Low |
 | 7 | **FLAC-0 probe** for the generic `flac` codec | Yes | No | ≤+0.05% | ≈−30% DVD/HD CPU | – | Yes | Low |
-| 8 | **LZMA level 8** (`fb` 64, `mc` 48), the 0.260–0.289 setting | Yes | No against HEAD; **yes against the 0.289 release** (data tracks) | −0.1 to −0.4% typical, −2.2% very compressible | LZMA +7–13% (+85% very compressible) | Public domain (SDK) | Trivial | Trivial |
+| 8 | **LZMA level 8** (`fb` 64, `mc` 48), the 0.255–0.289 setting | Yes | No against HEAD; **yes against the 0.289 release** (data tracks) | −0.1 to −0.4% typical, −2.2% very compressible | LZMA +7–13% (+85% very compressible) | Public domain (SDK) | Trivial | Trivial |
 | 9 | **LZMA `fb` 273, `mc` 1000** | Yes | No | −0.2 to −0.5% typical, −4.8% very compressible | LZMA ×1.2–1.7 (×9 very compressible) | Public domain | Trivial | Trivial |
 | 10 | libdeflate -12 for the Deflate trial (-10 is cheaper but can lose on very compressible data: CD img +0.23%) | Yes | No | DVD txt −2.1%; CD −0.03 to −0.7% | ×2.6–6.6 zlib time (×13–19 very compressible); -10 ≈×1–3 | MIT | Yes | Low |
 | 11 | **Larger hunks** (`-hs`) | Header-legal. Reader caps apply: rchd ≤512 KiB; MAME DVD needs 2048 (D1, D2, C) | No | **−4 to −18%** | CPU ≈same; readers pay | – | Yes | Trivial (policy) |
@@ -733,22 +741,24 @@ All paths are under `$SP/exp/`.
 
 1. **Offer two presets, and keep the identical one honest.**
    - **"chdman-identical"** (default) takes only the provably byte-identical changes: rows 1–4 and 13.
-   - **Fix row 13 first.** Right now `cdfl` output already differs from the native reference (§6.4). The test suite presumably passes because its short synthetic audio (a few sine tones plus light noise, `tests/fixtures/discgen.py:115-128`) never reaches a borderline LPC decision. Add a longer, real-music-like CC0 fixture to catch this.
-   - Also correct the release-note and CLAUDE.md claims. Reports B and C show the pinned build is not the 0.289 release either: LZMA level 6 against 8, zstd 1.5.7 against 1.5.5, and GD-ROM pregaps.
+   - **Fix row 13 first.** Right now `cdfl` output already differs from the native reference (§6.4). The test suite presumably passes because its short synthetic audio (a few sine tones plus light noise, `tests/fixtures/discgen.py:115-128`) never reaches a borderline LPC decision. Add a longer, real-music-like CC0 fixture to catch this. *(Done in 1.3.0: `engine/libm`, and the `music-cd` fixture.)*
+   - Also correct the release-note and CLAUDE.md claims. Reports B and C show the pinned build is not the 0.289 release either: LZMA level 6 against 8, zstd 1.5.7 against 1.5.5, and GD-ROM pregaps. *(Done in 1.2.1, which builds the 0.289 release.)*
 2. **Pick the identity target on purpose.**
    - Row 8 (LZMA level 8) makes data tracks byte-identical to the *0.289 release*, and 0.1–2% smaller, at +10% LZMA time.
    - Staying on level 6 tracks MAME master, which is presumably where 0.290 will land [unverified].
    - Either way, pin the LZMA SDK at 22.01 or later. Its output is stable through 26.02.
+   - *(Decided in 1.2.1: the 0.289 release, so level 8 with SDK 23.01.)*
 3. **A "fast, compatible" preset** gives large wins at essentially no size cost:
    - rows 5–7 together: libdeflate-9, codec gating, the FLAC-0 probe;
-   - about 1.6× on data CDs and DVDs, and 2.7× on audio.
+   - about 1.6× on data CDs and DVDs, and 2.7× on audio (with row 2's MD5 off; 2.5× from the gating alone, as in §0).
    - It matters most on phones: iPhones have only 2 P-cores, and Snapdragon parts throttle to 30–58%.
+   - *(Shipped in 1.3.0 as the "Nearly as small, faster" preset: the codec plan with libdeflate, without the FLAC-0 probe. In the page CDs convert about 1.7× as fast and DVDs about 1.5×, by the 1.3.0 release notes.)*
 4. **A "smallest, compatible" preset** keeps every file readable everywhere:
    - rows 9, 10 and 12: LZMA `fb` 273 / `mc` 1000, libdeflate-12, FLAC `-p`;
    - about −0.2 to −0.6% on typical data and up to −5% on very compressible data;
    - costs about 1.7–2.5× CPU.
    - Beyond that, only larger hunks (row 11) move the needle, and that decision belongs with D1 and D2 because of reader caps and seek cost.
-5. **Libraries to add or change.** Add libdeflate (MIT; about 100 KB of wasm); nothing else.
+5. **Libraries to add or change.** Add libdeflate (MIT; about 100 KB of wasm); nothing else. *(Done in 1.3.0: `engine/libdeflate`, its compressor only.)*
    - zlib stays, for decompression and identical mode.
    - zopfli, zlib-ng, Chromium zlib and xz buy nothing here.
    - zstd stays optional (compatibility).
@@ -756,9 +766,9 @@ All paths are under `$SP/exp/`.
    - Keep the SIMD/baseline dual build; it is worth about 2× for FLAC.
    - Keep message-passing helpers; shared memory is impossible from `file://`.
    - Keep the measuring thread tuner, since Safari reports only 4 or 8. Add re-tuning or throttle detection for long jobs.
-   - Watch JSPI (Baseline since 2026-09-14) as a later clean-up of Asyncify, with a fallback.
+   - Watch JSPI (Baseline since 2026-09-14) as a later clean-up of Asyncify, with a fallback. *(Not needed: Asyncify went in 1.3.0, replaced by C++20 coroutines.)*
    - Ignore WebGPU, relaxed SIMD and Memory64.
-7. **Serial bottleneck.** Once helpers get 1.6× faster, the job worker's whole-image SHA-1 (MAME's, about 80 MB/s in wasm) and I/O become the limit on 12–16-thread desktops. Row 1 is a prerequisite for scaling.
+7. **Serial bottleneck.** Once helpers get 1.6× faster, the job worker's whole-image SHA-1 (MAME's, about 80 MB/s in wasm) and I/O become the limit on 12–16-thread desktops. Row 1 is a prerequisite for scaling. *(Done in 1.3.0, milestone 2.1.)*
 8. **Test matrix.** Every non-identical preset must be checked with three decoder families, as I did in §1.2:
    - MAME's decoders;
    - libchdr (dr_flac, miniz, LZMA into `dest`);
@@ -772,7 +782,7 @@ All paths are under `$SP/exp/`.
 2. **How often do official chdman builds disagree on real CD-DA?** Compare Windows (MinGW or UCRT libm), macOS ARM64 (NEON plus Apple libm) and Linux x86 (glibc). The same check applies to Discpress's wasm against each. That decides which "identity" can be promised.
 3. **Why did MAME move the LZMA level from 8 to 6** in `c23567b509`? Will 0.290 ship it? This decides the identity target (report B has the commit).
 4. **Hunk-size policy.** What are the seek and decode costs, and the caps, per emulator? rchd ≤512 KiB and MAME `dvdrom_file` needing 2048 are known; libchdr cache behaviour and embedded targets are not. For D1 and D2.
-5. **Asyncify's real overhead** in Discpress, which decides whether JSPI is worth a dual build. Profile `main`, `compress_common` and the yield path.
+5. **Asyncify's real overhead** in Discpress, which decides whether JSPI is worth a dual build. Profile `main`, `compress_common` and the yield path. *(Moot since 1.3.0: Asyncify is gone.)*
 6. **Worker memory on iOS.** What is the per-tab ceiling with 8 helpers, each running its own wasm instance and FLAC/LZMA state? [unverified]
 7. **WebKit JSC against V8 speed** for LZMA and libdeflate wasm. Only V8 (Node) was measured here.
 8. **Fast-LZMA2 unwrapping** (§5.2) and ECT were not measured. Both are unlikely to matter.
