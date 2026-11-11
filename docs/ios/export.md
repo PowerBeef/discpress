@@ -9,6 +9,25 @@ Shipping Safari/iOS builds come from Apple branches, not `main`. The code paths 
 
 **Confidence levels:** **H** = read in source, or stated by Apple/WebKit. **M** = several consistent reports, or an inference from source. **L/unverified** = plausible, but no primary evidence found.
 
+## Status since 1.3
+
+Added 2026-11-11. This report was written just before the iOS work shipped (commit `78fdb72`, 2026-09-28, in 1.3.1), so its recommendations read as plans. This is what became of them and of those in [limits.md](limits.md) and [hosting.md](hosting.md); the plan itself, step by step, is in [README.md](README.md). The research below is unchanged except where a line says otherwise.
+
+- **Done:**
+  - The https copy for Safari (the online version), where results of any size download.
+  - In an app's web view, the `#iosTip` notice points big games to it (`iosWebView` and `initIosTip` in `app/ui.js`).
+  - `Recovery`: results not saved yet are kept after a reload (`Store.cleanupStale` leaves them alone, and the page lists them under "From your last visit").
+  - The wake lock, and the Lockdown Mode message.
+  - A share-sheet read failure is told from the user closing the sheet: for a single result since 1.3.1 (`saveOutput`), for "Save all" since 1.8.2 (`downloadMany`).
+- **Changed:**
+  - Threads: the speed test tries at most 4 on iPhones (`iosThreadCap`) and 8 on other touch devices. 1.3.1 used 2 on iPhones and 4 on iPads, and 1.3.2 reverted that (`.github/release-notes/v1.3.1.md`, `v1.3.2.md`).
+  - The service worker that shipped is network first (`web/sw.js`, `web/README.md`), not the cache-first design of hosting.md §3.3. It keeps the page available offline; it is not a download route (§4 below).
+- **Rejected:**
+  - Staging inputs into OPFS (README.md, Phase 2, step 5 says why).
+  - A fixed heap that doesn't grow, or a larger `INITIAL_MEMORY`: judged not needed, and `wasm/link.sh` still has `INITIAL_MEMORY=16MB` with growth.
+  - "At most 2 helpers on iPhone", and capping helpers by measured memory.
+- **Open, not adopted:** lowering `SHARE_MAX` to about 256 MB on 4 GB devices (limits.md §8; "a guess" in the Implications below). The code uses one fixed 512 MB (`SHARE_MAX` in `app/ui.js`). Revisit after device testing.
+
 ---
 
 ## Summary table
@@ -92,7 +111,8 @@ A WebContent kill makes the page reload ("A problem repeatedly occurred…"). **
   - A `data:` URL can't come from the page (WebCore filters it).
   - **Not viable.** **H**
 - **Files ≥ 4 GiB:** they reject with `AbortError`, message "Abort due to error while reading files.", before any UI appears. **H**
-  - **Discpress impact:** `saveOutput`/`downloadMany` in `app/ui.js` treat every `AbortError` as "closed by the user" and return silently. Only files ≤ `SHARE_MAX` (512 MB) are shared, so today this can't trigger, but any raise of `SHARE_MAX` would hit it. Distinguish the two cases by `e.message`, or make sure files near or over 4 GiB never go to share.
+  - **Discpress impact:** when this was written, `saveOutput`/`downloadMany` in `app/ui.js` treated every `AbortError` as "closed by the user" and returned silently. Only files ≤ `SHARE_MAX` (512 MB) are shared, so the 4 GiB limit itself can't be reached, and a raise of `SHARE_MAX` would have to stay below it. But the same `AbortError` also follows an allocation failure (§1.1, steps 3 and 4), so it can happen at any size, under 512 MB too. Distinguish the two cases by `e.message`, or make sure files near or over 4 GiB never go to share.
+  - **Status:** fixed. A message with "error while reading" is a read failure, not a closed sheet: for a single result since 1.3.1 (`saveOutput`, which then downloads the file instead), for "Save all" since 1.8.2 (`downloadMany`).
 - **Safari vs a third-party WKWebView app:** the WebKit code is identical.
   - In Safari the host is MobileSafari. A jetsam kill there takes down Safari, and whether Safari's limit is higher is **unverified**.
   - In a third-party app the host is the app (Sitecase), so the app dies.
@@ -148,7 +168,7 @@ A WebContent kill makes the page reload ("A problem repeatedly occurred…"). **
   - The French "Chargement du cadre interrompu" seen in Sitecase is this error, which the app displays from `didFailProvisionalNavigation`. **H**
 - **App-side workarounds some apps use:** injected JS reads the blob with `FileReader` into base64 and posts it through `WKScriptMessageHandler`. That is fully in memory (worse than the share sheet) and fatal at GB sizes. **M**
 
-Sitecase ("opens HTML files… offline", iOS 16+, https://apps.apple.com/gh/app/sitecase/id6762896369) evidently returns `.allow` and doesn't implement downloads. The page can't change that.
+Sitecase ("opens HTML files… offline", iOS 16 or 17.6, depending on the App Store listing read; unverified, see [apps-and-native.md](apps-and-native.md) §1; https://apps.apple.com/gh/app/sitecase/id6762896369) evidently returns `.allow` and doesn't implement downloads. The page can't change that.
 
 ### 2.4 Can the page find out beforehand whether downloads work?
 
@@ -255,18 +275,25 @@ Sitecase ("opens HTML files… offline", iOS 16+, https://apps.apple.com/gh/app/
 - **Run the page in Safari** (hosted on https, or any Safari-reachable URL). Safari can't open a local `.html` from Files as `file://`; Files shows HTML through Quick Look, which is why Sitecase-type apps exist.
   - Once in Safari, `<a download>` streams (§2.1), and a SW path becomes possible (§4).
   - This is the only robust general answer for 1–4 GB outputs. **H/M**
-- **Pick a host app that implements WKDownload**, or ask the Sitecase developer to add the 30-line WKDownload support (§2.3). **H** (API)
+- **Pick a host app that implements WKDownload**, or ask the Sitecase developer to add WKDownload support (§2.3; about 30–100 lines, an estimate). **H** (API)
 
 ---
 
 ## Implications for Discpress (brief)
 
+Each item ends with what became of it (see Status since 1.3 at the top).
+
 1. Keep `<a download>` for large files in Safari. It is memory-safe by construction (`NetworkDataTaskBlob`, 512 KiB chunks).
+   - **Status: done.** Results over `SHARE_MAX` download (`viaShare` and `downloadOutput` in `app/ui.js`), and the online version makes Safari reachable.
 2. **In an embedded WKWebView** (no `Safari/` token, not standalone):
    - Downloads almost certainly fail with error 102, and a large share sheet kills the host app.
    - Show a clear message ("open this page in Safari to save files over ~0.5 GB").
    - Or offer the share sheet with an explicit memory warning.
    - SHARE_MAX (512 MB) is a guess. The host app needs at least 1 × size of headroom and WebContent 2–3 × size.
-3. **Never share files ≥ 4 GiB.** WebKit rejects them with `AbortError` ("Abort due to error while reading files."), which the current code mistakes for a user cancel. Check `e.message`, or at least avoid silently returning.
+   - **Status: done** for the message: the `#iosTip` notice (`iosWebView`, `initIosTip`). The share sheet with a memory warning was not added. **Open, not adopted:** `SHARE_MAX` is still one fixed 512 MB; lowering it to about 256 MB on 4 GB devices (limits.md §8) waits for device testing.
+3. **Never share files ≥ 4 GiB.** WebKit rejects them with `AbortError` ("Abort due to error while reading files."), which the code then mistook for a user cancel. Check `e.message`, or at least avoid silently returning.
+   - **Status: done.** `SHARE_MAX` keeps such files away from the share sheet, and the message is checked: for a single result since 1.3.1 (`saveOutput`), for "Save all" since 1.8.2 (`downloadMany`). The same error can follow a failed allocation at any size (§1.1, step 3).
 4. **After a successful share, WebContent keeps one copy of the shared file** until the next file share (`Navigator::m_loader`). Discpress runs chdman in the same tab afterwards, so a large share inflates memory for later jobs (from source reading; not measured on a device).
+   - **Status: open.** Nothing was changed for this, and it is still not measured on a device.
 5. **A service-worker download route** would require an https-hosted build plus `sw.js`, and gives nothing in Safari that `<a download>` doesn't already give. It isn't available in Sitecase or from `file://`.
+   - **Status: not adopted,** for the reason given. The online version has a `sw.js` since 1.3.1, but only to keep the page available offline (network first; `web/README.md`).
