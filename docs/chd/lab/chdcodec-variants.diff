@@ -1,16 +1,15 @@
 --- src/lib/util/chdcodec.cpp
 +++ src/lib/util/chdcodec.cpp
-@@ -21,6 +21,39 @@
- #include <zlib.h>
+@@ -22,6 +22,38 @@
  #include <zstd.h>
+ #include <libdeflate.h>
  
 +#include <cstdio>
 +#include <cstdlib>
 +#include <string>
-+#include "libdeflate.h"
 +#include "zopfli/zopfli.h"
 +
-+// ---- Discpress research variants (environment-controlled; defaults = stock MAME) ----
++// ---- Discpress research variants (environment-controlled; defaults = the engine's own output) ----
 +namespace {
 +// CHDV_DEFLATE = zlib (default) | libdeflate:<1-12> | zopfli:<iterations>
 +long variant_deflate(const uint8_t *src, uint32_t srclen, uint8_t *dest, uint32_t destcap)
@@ -37,26 +36,28 @@
 +}
 +}
 +
+ #include <cstddef>
  #include <cstring>
  #include <new>
- 
-@@ -934,6 +967,15 @@
+@@ -976,6 +1008,17 @@
  
  uint32_t chd_zlib_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
 +	{
-+		long v = variant_deflate(src, srclen, dest, srclen);
++		// as the engine's own encoders below: the result must be smaller than the hunk and the limit
++		uint32_t const cap = std::min(srclen, m_limit);
++		long v = variant_deflate(src, srclen, dest, cap);
 +		if (v >= 0)
 +		{
-+			if (uint32_t(v) >= srclen)
++			if (uint32_t(v) >= cap)
 +				throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
 +			return uint32_t(v);
 +		}
 +	}
- 	// reset the compressor
- 	m_deflater.next_in = const_cast<Bytef *>(src);
- 	m_deflater.avail_in = srclen;
-@@ -1060,7 +1102,8 @@
+ 	// Discpress: libdeflate returns 0 when the result doesn't fit, which here means it must be
+ 	// smaller than the hunk and the limit, as with zlib below
+ 	if (m_libdeflate)
+@@ -1114,7 +1157,8 @@
  uint32_t chd_zstd_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
  	// reset the compressor
@@ -66,7 +67,7 @@
  	if (ZSTD_isError(result))
  		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  
-@@ -1254,6 +1297,30 @@
+@@ -1308,6 +1352,30 @@
  {
  	// initialize the properties
  	configure_properties(m_props, hunkbytes);
@@ -97,9 +98,9 @@
  }
  
  
-@@ -1651,6 +1718,16 @@
- 	// finish up
- 	uint32_t complen = m_encoder.finish();
+@@ -1723,6 +1791,16 @@
+ 	if (!encoded || complen >= m_limit)
+ 		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  
 +	{
 +		long v = variant_deflate(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA], frames * cdrom_file::MAX_SUBCODE_DATA, &dest[complen], hunkbytes() - complen);

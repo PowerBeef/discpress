@@ -68,7 +68,7 @@ These rules come from the emulator survey (D1 §8, D2 §15, G §1). A Discpress 
 | Pregaps | INDEX 00 frames present in the file are **stored** and flagged `PGTYPE:V…`. `PREGAP` commands become virtual. Seven readers assume "stored", two read `V` inverted, and BizHawk rejects `V` with `PREGAP:0` | D2 §15.4 |
 | Postgap | Only when the cue has one: three readers wrongly add it to the storage offset | D2 §15.4 |
 | Subcode | `SUBTYPE:NONE` unless the source really carries subcode. Every Beetle core refuses a disc with any subcode track, and so does Flycast ≤ 2.7 | D2 §15.3, D1 §5.1 |
-| Sessions | `CHSE` only for true multi-session sources (post-0.289 behaviour). It is **required** by Virtual Jaguar (Jaguar CD), **fatal** to Kronos, Yabause and jgenesis, and ignored elsewhere. Redump has multi-session discs only for Jaguar CD (38/38), Dreamcast MIL-CD (89) and PC (161) | D2 §15.3, C §3.5 |
+| Sessions | No `CHSE` today: chdman 0.289, and so the engine, never writes it, and its CHDs keep no session data (the app warns about multi-session discs). The tag, which MAME added after 0.289 (PR #15886), is **required** by Virtual Jaguar (Jaguar CD), **fatal** to Kronos, Yabause and jgenesis, and ignored elsewhere. So it may only be written for true multi-session sources of a console whose readers want it: milestone 7, step 2, plans that for Jaguar CD. Redump has multi-session discs only for Jaguar CD (38/38), Dreamcast MIL-CD (89) and PC (161) | D2 §15.3, C §3.5 |
 | Parent CHDs | Never by default. Only DuckStation, Beetle PSX, PCSX2, LRPS2 and MAME load them | D1 §8.6, D2 §15.5 |
 
 **GD-ROM (Dreamcast, NAOMI)**
@@ -84,7 +84,7 @@ These rules come from the emulator survey (D1 §8, D2 §15, G §1). A Discpress 
 | Codec list | `lzma,zlib,huff,flac` | D1 §8.4 |
 | Hunk size | 2048 for PSP (PPSSPP docs). 2048 is also the only size MAME's `dvdrom_file` accepts, even though chdman's default is 4096 | D1 §4, C §6 |
 | Metadata | Keep the 1-byte `DVD ` tag (Play! and RetroArch need it) and 2048-byte units | D1 §8.3 |
-| Emulator notes | AetherSX2/NetherSX2 cannot read DVD CHDs, so offer `createcd` there | D1 §3.4 |
+| Emulator notes | AetherSX2/NetherSX2 and PCSX2 builds from before April 2023 cannot read DVD CHDs, so the app offers `createcd` there. Settings → "Compatibility mode for older emulators" makes PS2 games on DVD into CD CHDs (1.8.1; from 1.4.0 to 1.8.0 the setting was "PlayStation 2 DVD games"), and without it the card says which emulators need a CD CHD | D1 §0, §3.4 |
 
 **Encoder freedom inside the codecs** (G §1, verified against MAME, libchdr and rchd decoders)
 
@@ -95,36 +95,42 @@ These rules come from the emulator survey (D1 §8, D2 §15, G §1). A Discpress 
 | Deflate | raw deflate | any conforming encoder |
 | zstd | one frame per hunk, window ≤ 2²⁷ | level |
 
-**Identity.** Codec and hunk choices never change the CHD SHA-1. Metadata changes always do. Extra *non-checksummed* metadata changes neither the SHA-1 nor any reader's behaviour (C §2).
+**Identity.** Codec and hunk choices never change the CHD SHA-1. Metadata changes always do. Extra *non-checksummed* metadata doesn't change the SHA-1s, and most readers ignore it (C §2), but not all: Kronos and Yabause (Saturn) and jgenesis (Sega CD) refuse a CHD with any tag that isn't a track's (D2 §0). So the app leaves `--keepcue`, whose `CUES` tag is such metadata, out for those two consoles (`keepcue-strict` in `app/quirks.js`).
 
 ### Output tiers
 
 | Tier | What it guarantees | What it may change | Use |
 |---|---|---|---|
-| **R: reference** | File bytes identical to a named official chdman release on the reference platform, with the same CHD SHA-1 | nothing | default "compatible" output; test oracle |
-| **C: compatible** | Same CHD SHA-1 as tier R; the same codec list and hunk size, so it is readable wherever tier R is | encoder choices (codec planning, early abort, better encoders) | "Fast" and "Smallest" presets |
-| **X: extended** | Readable only by newer or specific readers, or a different SHA-1 | zstd/cdzs, hunk size, subcode ingest, sessions, parents, fidelity metadata that is checksummed | explicit opt-in, with per-system reader warnings |
+| **R: reference** | File bytes identical to a named official chdman release on the reference platform, with the same CHD SHA-1 | nothing | the default output and the test oracle. In the app this is the preset "Smallest (default)", which is chdman's own default settings |
+| **C: compatible** | Same CHD SHA-1 as tier R; no codec that tier R's list lacks, and the same hunk size, so every reader of tier R decodes it | encoder choices (codec planning, better encoders), a shorter codec list, extra non-checksummed metadata (which three readers refuse: see Identity) | opt-in: the presets "Nearly as small, faster" and "Faster to create" (`cdzl,cdfl`, or `zlib,huff`), the unbuilt "Smaller still" (2.7), and `--keepcue` |
+| **X: extended** | Readable only by newer or specific readers, or a different SHA-1 | zstd/cdzs, hunk size (except the contract's 2048 for PSP), subcode ingest, sessions, parents, fidelity metadata that is checksummed | explicit opt-in, with per-system reader warnings: the presets "Faster to load (Zstd)" and "For MiSTer FPGA", a chosen hunk size, milestone 7's layouts |
 
-Discpress knows the system of every job, so policies can be **system-aware**. Examples:
-- write `CHSE` for Jaguar CD, where Virtual Jaguar needs it;
-- warn about it for Saturn, where Kronos and Yabause break;
-- disable zstd for 3DO, Saturn, SuperGrafx and Amiga;
-- use `createdvd -hs 2048` for PSP.
+The preset names are the app's. "Smaller still" is this plan's name for a preset that isn't built (2.7); earlier versions of the plan called it "Smallest", which in the app is the default preset, tier R. Early abort (2.4) keeps chdman's bytes, so it is tier R, not an encoder choice of tier C.
+
+Discpress knows the system of every job, so policies can be **system-aware**. Examples, with what became of each:
+- write `CHSE` for Jaguar CD, where Virtual Jaguar needs it (not built: milestone 7, step 2);
+- warn about it for Saturn, where Kronos and Yabause break (nothing to warn about while no `CHSE` is written; the `CUES` tag they refuse as well is left out for Saturn and Sega CD);
+- disable zstd for 3DO, Saturn, SuperGrafx and Amiga (built as a warning on the Zstd presets, naming the console's readers: compression never changes by itself);
+- use `createdvd -hs 2048` for PSP (built).
 
 ## 4. Roadmap
 
-Effort estimates assume one developer working with the existing test harness.
+Effort estimates assume one developer working with the existing test harness. The statuses are as of Discpress 1.8.1.
 
 | Milestone | Status |
 |---|---|
 | 0. Correctness hotfix | Shipped in 1.2.1 |
 | 1. The engine fork | Steps 1 and 4 done; step 2 partly (Asyncify gone; progress events and push input open); step 3 open (native thread pool) |
-| 2. Performance | 2.1, 2.3, 2.4, 2.5, 2.6 and 2.8 done, 2.2 in part |
+| 2. Performance | 2.1, 2.3, 2.4, 2.5, 2.6 and 2.8 done, 2.2 in part; 2.7 and 2.9 not built |
 | 3. Fidelity and verification | Redump-exact extraction and most parser fixes done; Verify compares with Redump (step 2 in part); session geometry open (milestone 7) |
 | 4. More inputs | CloneCD, CSO/ZSO and ECM done (PBP and `.zip` in milestone 5) |
 | 5. What users ask for | Done (1.5.0) |
 | 6. Detection that knows the game | Done (1.7.0) |
-| 7. Layouts each emulator reads right | Planned (no new engine) |
+| 7. Layouts each emulator reads right | Planned; nothing built (no new conversion engine, but steps 2 and 5 change the fork) |
+
+The two releases after milestone 6 are outside the milestones, and their CHDs are the same:
+- **1.8.0** fixed what a full review of the app found: discs that took another game's tracks or name, results that could be lost, slow adding of big folders.
+- **1.8.1** replaced 1.4.0's setting "PlayStation 2 DVD games" with Settings → "Compatibility mode for older emulators" (`settings.compat`). On, PS2 games on DVD become CD CHDs (§3, DVD), and the Zstd presets warn for every console that older emulators can't open them. Compression still never changes by itself.
 
 ### Milestone 0: correctness hotfix (days)
 
@@ -133,15 +139,16 @@ This affects users today, so it ships as its own small release before any fork w
 **Status: shipped in Discpress 1.2.1.**
 - Re-pinned to the `mame0289` tag: GD-ROM layout and LZMA level are 0.289's, and the native build is byte-identical to an independent 0.289 build on every fixture.
 - `tests/ui/gdrom.spec.js` checks the layout for a `.gdi` and a Redump cue.
-- The claims now say "same checksums as chdman 0.289, the same bytes for data".
+- The claims then said "same checksums as chdman 0.289, the same bytes for data". Since milestone 2.3 (1.3.0) they say "byte for byte" again, CD audio included.
 - Guard rails in the app:
   - descriptors are decoded (BOM, UTF-16, Windows-1252, CR-only line ends) and cue keywords upper-cased;
-  - cues without tracks or with track numbers outside 1–99 are refused, and so are TOCs with a track length chdman can't read;
-  - chdman's own one-file-per-track TOC is repaired (`DATAFILE "f" #0 length`; chdman drops those tracks otherwise);
+  - cues without tracks or with track numbers outside 1–99 are refused, and so are TOCs without tracks;
+  - 1.2.1 also refused TOCs with a track length chdman couldn't read, and repaired chdman's own one-file-per-track TOC (`DATAFILE "f" #0 length`; chdman dropped those tracks otherwise). Both left the app in 1.4.0: the engine reads cdrdao's TOC grammar since (milestone 3, B11), so `fixDescriptor` only refuses a TOC without tracks;
   - binary `.toc` files are skipped;
   - raw `.iso` images get a cue with their sector mode;
   - a `nan%` progress watchdog stops any remaining endless run.
-- Still open: more GD types (1, 2 and 3-split) and the CC0 music fixture for the FLAC divergence.
+- Done since: `tests/ui/engine.spec.js` builds GD types 1, 2, 3 and 3-split (`gd1`, `gd2`, `gd3`, `gd3s`), each as a GDI and as a Redump cue sheet, and checks that both give 0.289's CHD and layout (no pregaps, the high-density area at LBA 45000). The FLAC divergence is caught by the `music-cd` fixture: 10 s of synthetic piano, not a CC0 recording, since fixtures are generated.
+- Still open: the reader-layout assertion against a Flycast model (§5).
 
 1. **GD-ROM.**
    - **Minimal fix:** revert #15870's `.gdi` virtual-pregap branch to 0.289's "gap becomes `PAD` of the previous track".
@@ -200,13 +207,13 @@ This affects users today, so it ships as its own small release before any fork w
 
 ### Milestone 2: performance (1–2 weeks)
 
-**Status: 2.1, 2.3, 2.4, 2.5, 2.6 and 2.8 done (2.8 for extract and verify), and part of 2.2** (see `engine/README.md`; measured in measurements §2).
+**Status: 2.1, 2.3, 2.4, 2.5, 2.6 and 2.8 done (2.8 for extract and verify), and part of 2.2; 2.7 and 2.9 are not built** (see `engine/README.md`; measured in measurements §2).
 - **2.5 codec plan (done, opt-in).** `--codecplan` (`-cp`) on `createcd`, `createdvd`, `createhd` and `createraw`: a CD hunk in audio tracks tries `cdfl`, one in data tracks `cdlz` (the "+`cdzl`" variant would give 1.23× for ±0), any other hunk every codec but `flac` (no FLAC-0 probe); a CD hunk holding both tries all. The page's "Nearly as small, faster" preset.
   - Same codec list, data and SHA-1s as the default; 0.289 verifies the result. The same CHD at any thread count, and in the page.
   - Native, `-np 4`, CPU against the default (after 2.4): CD data 1.81× (+0.22%), CD audio 1.91× (±0), a mixed CD 2.00× (+0.11%), DVD 1.38× (+0.06%).
   - In the page: the benchmark CD 1.73× faster with 1 thread and 1.62× with 4 (44.3% → 44.5% of the input), the benchmark DVD 1.53× and 1.31× (41.0% either way).
 - **2.6 libdeflate (done, opt-in).** `--libdeflate` (`-ld`): the deflate codec (`zlib`, `cdzl`, `cdlz`'s subcode) encodes with libdeflate's level 9 (`engine/libdeflate`, MIT, unmodified) instead of zlib's level 9. Both faster presets use it.
-  - Per hunk: 2.0× (DVD) and 2.8× (CD) faster than zlib-9, 0.4–0.5% smaller. Level 6 would be 3.7–6× faster at zlib-9's size; level 12 2.0–2.3% smaller at 2.5–3.6× zlib's time (a "Smallest" preset, 2.7).
+  - Per hunk: 2.0× (DVD) and 2.8× (CD) faster than zlib-9, 0.4–0.5% smaller. Level 6 would be 3.7–6× faster at zlib-9's size; level 12 2.0–2.3% smaller at 2.5–3.6× zlib's time (for the unbuilt "Smaller still" preset, 2.7).
   - Native, `-np 4`, CPU: default list 1.1–1.5× less; `cdzl,cdfl` 1.5–1.8× less and 0.3–0.7% smaller; plan + libdeflate on DVD 1.17× less than the plan alone and smaller than chdman's default.
   - In the page with 1 thread: "Faster to create" 1.26× (CD, 1.1% smaller) and 1.32× (DVD); "Nearly as small, faster" 1.10× on DVD. With 4 threads the job worker sets the pace, and neither changes.
   - The same CHDs natively, in wasm with and without SIMD, and at any thread count.
@@ -222,7 +229,7 @@ This affects users today, so it ships as its own small release before any fork w
   - Benchmark DVD (1 GB): 1.4× faster (13.4 s → 9.3 s). Its 4 KB hunks leave most of the time to the job worker, which reads, checks and writes 1 GB.
   - With 1 thread: 5–12% faster, from the larger reads.
   - Still open for 2.8: the parent walk (creating with `-op`) and `copy`. Identification of a CHD only reads a few sectors, so it doesn't need it.
-- **2.1 hashing.** SHA-1 is unrolled and reads whole big-endian words; CRC-16 is slice-by-8. Both give the same results, 5× faster in wasm (SHA-1 650 MB/s, CRC-16 1,450 MB/s). So the whole-image SHA-1 no longer limits the job worker, and Web Crypto isn't needed.
+- **2.1 hashing.** SHA-1 is unrolled and reads whole big-endian words; CRC-16 is slice-by-8. Both give the same results, about 5× faster in wasm: SHA-1 went from 120 to 650 MB/s and CRC-16 from 300 to 1,450 MB/s (natively 200 → 650 and 270 → 2,000), measured when it was built (commit `31902a4`). The research's figure for MAME's SHA-1, about 80 MB/s in wasm (150 natively), is a separate measurement of the same code: lane G's harness in Node, wall clock (G §9), and lane B's natively. So the whole-image SHA-1 no longer limits the job worker, and Web Crypto isn't needed.
 - In the page, 2.1 makes the benchmark CD and DVD convert 5–10% faster. Together with milestone 1's coroutines and 2.4, conversions are about 25% faster than in 1.2.1.
 - **2.4 early abort.** Each hunk tries the previous hunk's winner first, and every other codec stops once it can't beat the best result. The output is byte-identical: 294 fixture, stress-image and codec-list combinations match unmodified 0.289, and `tests/ui/engine.spec.js` keeps checking it.
 - Measured CPU savings: 1.06× on CD data, 1.47× on CD audio, 1.10× on DVD. That is below the estimate, because deflate and single-frame FLAC can't stop partway through a hunk.
@@ -232,32 +239,32 @@ This affects users today, so it ships as its own small release before any fork w
 - **2.2, still open:** in-flight dedupe.
 - **Build fix found on the way:** `wasm/Makefile` now tracks header dependencies. A stale object had disagreed with a changed class layout.
 
-Numbers are single-core CPU unless noted (measurements §1–2, G §11–12).
+The table says what was built and what it measured. CPU figures are native, `-np 4`, over all threads (measurements §2); "in the page" means the benchmark CD and DVD, wall clock. Estimates are the lab's, from per-hunk times on one core (measurements §1–3, G §11–12), and are marked as such.
 
-| # | Change | Tier | Measured or estimated gain |
+| # | Change, as built | Tier | Measured gain (estimates marked) |
 |---|---|---|---|
-| 2.1 | Faster SHA-1 (unrolled; the Web Crypto API per hunk) and slice-by-8 CRC-16 | R | Removes the serial job-worker ceiling of about 80 MB/s in wasm (150 MB/s native); −3–6% helper CPU |
-| 2.2 | FLAC MD5 off; generic `flac` encodes into two buffers (no third encode); ECC verify once per CD hunk; in-flight dedupe | R | −5–10% FLAC CPU; −20–33% generic FLAC; −1–2% CD data |
-| 2.3 | **Deterministic libm for libFLAC** (vendored `cosf`/`log`, forward-order autocorrelation) in every build | R | Makes wasm = native = ARM64 for CD audio. The prerequisite for any "byte-identical" claim |
-| 2.4 | **Early abort**: run the predicted winner first; cap later codecs at the current best; small LZMA SDK patch to check the output size during the block | R | 1.2× (CD data), 1.65× (CD audio), 1.24× (DVD), estimated |
-| 2.5 | **Codec plan per track type**: data tracks `cdlz`(+`cdzl`), audio tracks `cdfl`; DVD without generic FLAC, or with a FLAC-0 probe | C | 2.0× CD data (+0.22%), **2.8× CD audio (±0)**, 1.55× DVD (+0.06%) |
-| 2.6 | libdeflate-9 in place of zlib-9 for the deflate trial | C | Deflate 2–3× faster at equal size |
-| 2.7 | "Smallest" preset: LZMA fb 273/mc 1000, libdeflate-12, FLAC `-p` | C | Measured −0.47% (CD) and −0.84% (DVD) at about 2.5× CPU; up to −5% on very compressible data (G) |
-| 2.8 | Parallel decompression for extract, verify, identification and parent walk | R (read only) | Were single-threaded at 45–50 MB/s native: 4–8× on typical devices (done in the page for extract and verify) |
-| 2.9 | Per-system hunk-size policy (for example PS2 DVD at 16 KiB) | X | −9% (16 KiB) to −16% (64 KiB) on DVD; costs random-read latency; MAME needs 2048 |
+| 2.1 | Faster SHA-1 (unrolled, whole big-endian words) and slice-by-8 CRC-16. Done. Web Crypto per hunk, an early idea, wasn't needed | R | SHA-1 120 → 650 MB/s and CRC-16 300 → 1,450 MB/s in wasm, which removes the serial job-worker ceiling; 5–10% faster in the page. Estimated: −3–6% helper CPU |
+| 2.2 | FLAC MD5 off; generic `flac` keeps its big-endian encoding instead of encoding a third time; ECC a word at a time. In part: ECC verify once per CD hunk isn't built (about 1% more), nor is in-flight dedupe | R | ECC 3.4× faster: `createcd` of the benchmark CD takes 2% less CPU, `extractcd` 12% less. The FLAC changes came with 2.4 and are in its figures (estimated before: −5–10% FLAC CPU, −20–33% generic FLAC) |
+| 2.3 | **Deterministic libm for libFLAC**: `engine/libm`'s `cosf` and `log` in every build (the autocorrelation was already the C one). Done | R | The page's CD audio = chdman 0.289 on Linux (x86-64 with FMA), byte for byte: the prerequisite for the "byte-identical" claim. chdman's ARM64 builds (NEON autocorrelation), non-FMA x86, Apple's libm and MSVC's CRT still differ. Costs under 1% of creation time |
+| 2.4 | **Early abort**: the previous hunk's winner first; later codecs capped at the best result; a small LZMA SDK patch checks the output size during the block. Done | R | 1.06× less CPU (CD data), 1.47× (CD audio), 1.10× (DVD); 5–8% faster in the page. Estimated: 1.21×, 1.65×, 1.24× |
+| 2.5 | **Codec plan per track type** (`--codecplan`, opt-in): data tracks `cdlz` only, audio tracks `cdfl`, other CHDs every codec but `flac`. Done, without the `cdzl` and FLAC-0 probe variants | C | Against the default after 2.4: 1.81× less CPU on CD data (+0.22%), 1.91× on CD audio (±0), 2.00× on a mixed CD (+0.11%), 1.38× on DVD (+0.06%); 1.31–1.73× faster in the page. Estimated against chdman's default: 2.04×, 2.78×, 1.55× |
+| 2.6 | libdeflate level 9 in place of zlib level 9 for the deflate codec (`--libdeflate`, opt-in). Done | C | Per hunk 2.0× (DVD) and 2.8× (CD) faster than zlib-9, and 0.4–0.5% smaller (the plan expected equal size); a whole job takes 1.1–1.8× less CPU, depending on the codec list |
+| 2.7 | "Smaller still" preset: LZMA fb 273/mc 1000, libdeflate-12, FLAC `-p`. Not built | C | Lab, with a variant build: −0.47% (CD) and −0.84% (DVD) at about 2.5× CPU; up to −5% on very compressible data (G) |
+| 2.8 | Parallel decompression for extract and verify, in the page; both were single-threaded. Done for those; open for the parent walk and `copy`; identification doesn't need it | R (read only) | With 4 threads the benchmark CD extracts 2.5× faster and the benchmark DVD 1.4×; 5–12% with 1 thread. Estimated: 4–8×; the job worker, which reads, checks and writes everything, sets the pace |
+| 2.9 | Per-system hunk-size policy (for example PS2 DVD at 16 KiB). Not built: PSP gets its 2,048 bytes, and larger hunks are a setting the user picks | X | Lab: −9% (16 KiB) to −16% (64 KiB) on DVD; costs random-read latency; MAME needs 2048 |
 
-Presets:
-- **Compatible** (default) = 2.1–2.4 + 2.8.
-- **Fast** = plus 2.5 and 2.6 (now "Nearly as small, faster"; "Faster to create" also uses 2.6), for phones: G measured Snapdragon parts throttling to 30–58% and iPhones exposing 2 performance cores.
-- **Smallest** = plus 2.7.
-- Anything in tier X is an explicit expert choice with reader warnings.
+Presets, as the plan named them and as the app has them:
+- **Compatible** (default) = 2.1–2.4 + 2.8: tier R. The app calls it "Smallest (default)": chdman's own default settings and bytes.
+- **Fast** = plus 2.5 and 2.6: tier C. In the app, "Nearly as small, faster" (2.5 and 2.6) and "Faster to create" (the codec list `cdzl,cdfl`, or `zlib,huff`, with 2.6). They are for phones: G measured Snapdragon parts throttling to 30–58% and iPhones exposing 2 performance cores.
+- **Smaller still** (not built) = plus 2.7: tier C.
+- Anything in tier X is an explicit expert choice with reader warnings: "Faster to load (Zstd)", "For MiSTer FPGA", a hunk size.
 
 ### Milestone 3: fidelity and verification (2–3 weeks)
 
 **Status: Redump-exact extraction done.** `extractcd --redump` (the page's default for CDs) writes Redump's layout. Real Redump cue sheets, 500 per system with synthetic bins, come back byte for byte through createcd and `extractcd --redump`: PS2 99.8%, PS1 98.4%, Naomi 100%, Dreamcast 94% (the rest are multi-session MIL-CDs), CDTV 92%, 53% of all 5,676. With the cue sheet kept (`createcd --keepcue`, opt-in, below), all 5,676 do, on all 19 systems. The built-in database (libretro-database) has one ROM per game, so verifying every track needs Redump's own DATs. With it, **Verify** now also compares a CHD with Redump: the page extracts with Redump's layout into checksums only (the worker's `crc` output) and looks the files up by size and CRC-32, which checks the ISO, the only `.bin` or the main data track, and confirms the exact release.
 
 1. **Redump-exact extraction.** **Done:** `createcd --keepcue` stores the original cue text as it is, as non-checksummed metadata (`CUES`) after the CD tags; `extractcd --redump` writes it back with the names of the files it writes, when those are laid out as the sheet's (one `BINARY` file per track). Tier C, so opt-in (a page setting, off by default). chdman 0.289 reads, verifies and extracts such CHDs as usual (`tests/ui/engine.spec.js`).
-   - Store CATALOG, ISRC, FLAGS, INDEX ≥ 2, the original track-type string and the original cue text as **non-checksummed metadata**, appended after the CD tags. The CHD SHA-1 is unchanged and every reader ignores them (C §2, §7).
+   - Store CATALOG, ISRC, FLAGS, INDEX ≥ 2, the original track-type string and the original cue text as **non-checksummed metadata**, appended after the CD tags. The CHD SHA-1 is unchanged and most readers ignore them (C §2, §7). Kronos, Yabause and jgenesis refuse them (§3, Identity), so Saturn and Sega CD jobs leave `--keepcue` out.
    - Extract with CRLF line endings and Redump naming.
    - This lifts cue reproducibility from 77% of 72,022 Redump cues to about 100%.
 2. **Verify inside the CHD.** Hash each track range straight from the CHD, with audio swapped back to little-endian and stored pregaps included, and match it against a per-track Redump DB. This extends `db/mkdb.py`, which today keeps only the first ROM per game. It also gives the app a "Verified dump" badge with no extraction step (C §7.2, D1 §2.1). **Status: in part.** Verify compares the file the built-in database lists with Redump (`extractcd --redump` into checksums), and a user's DAT files check every track (milestone 5, step 4); the built-in database still keeps one file per game.
@@ -270,7 +277,7 @@ Presets:
    - `parse_iso` mis-typing;
    - cdrdao TOC semantics;
    - 0-track hang and 100-track crash.
-4. **Session geometry.** Store the lead-out/lead-in gap as non-checksummed metadata, and fix the `CHSE` metadata-order fragility (C §3.3). Report both upstream. (Milestone 7, steps 2 and 4, plans this per console.)
+4. **Session geometry.** Store the lead-out/lead-in gap as non-checksummed metadata, and fix the `CHSE` metadata-order fragility (C §3.3). Report both upstream. (Milestone 7, steps 2 and 4, plans this per console. The engine has no `CHSE` code to fix, since 0.289 neither writes nor reads the tag: the fragility is upstream's.)
 
 ### Milestone 4: more inputs (ongoing, by demand)
 
@@ -295,16 +302,16 @@ Priority order (C §9):
 
 ### Milestone 5: what users ask for (research of 2026-09-30)
 
-A survey of MAME's trackers, emulator and tool trackers and forums (the report "chdman: what users report and ask for") found the biggest unmet needs: checking CHDs against Redump or No-Intro DATs without extracting them, zipped inputs, and LibCrypt data for PAL PS1 games. None of the steps below changes the CHDs Discpress writes by default: they are tier R, or tier C only when a preset is chosen.
+A survey of MAME's trackers, emulator and tool trackers and forums (the report "chdman: what users report and ask for") found the biggest unmet needs: checking CHDs against Redump or No-Intro DATs without extracting them, zipped inputs, and LibCrypt data for PAL PS1 games. None of the steps below changes the CHDs Discpress writes by default: they are tier R, or tier C or X only when a preset is chosen.
 
 **Status: steps 1 to 5 done** (Discpress 1.5.0; tests in `tests/ui/profiles.spec.js`, `zip.spec.js`, `dat.spec.js` and `pbp.spec.js`, and the `ps1-libcrypt` and `ps1-pbp*` fixtures). A PBP's audio tracks are read from its image, where popstation puts them; a disc whose track list doesn't fit its image is refused.
 
 1. **Compatibility notes and clearer refusals** (small).
    - PS2 discs on CD with audio tracks: PCSX2 plays only the first track of a CD CHD (its `ChdFileReader`, draft PR #12037).
    - Dreamcast CD-based discs (CD-R, MIL-CD) whose cue has pregaps: every Flycast release up to 2.7 rejects such CHDs ("Unsupported subtype or pre/postgap", flycast #906; fixed on master only).
-   - PS1 and Zstd: SwanStation before March 2026 can't read Zstd CHDs (RetroArch #18867).
+   - PS1 and Zstd: SwanStation builds from before the end of March 2026 can't read Zstd CHDs. RetroArch #18867 reported it on 2026-03-27 (RetroArch 1.22.2 and a nightly) and was closed the next day, when libretro/swanstation#159 was merged: its commit "Update libchdr." of 2026-03-12 "introduces support for Zstandard compression". (Read on GitHub on 2026-11-11. D1 §2.2 dates that commit 2024-03-12, unverified: the year is wrong, and SwanStation's `dep/libchdr` has no commit of March 2024. The app's note and the README took "before about March 2024" from it until 1.8.1; since 1.8.2 they say "before April 2026".)
    - Formats Discpress can't read (`.cdi`, `.mds`/`.mdf`, `.isz`, `.7z`, `.rar`) get a card that says so and what to do, instead of being ignored.
-   - A "For MiSTer FPGA" preset for CDs: Zstd and FLAC with 4-sector hunks (`-c cdzs,cdfl -hs 9792`), what MiSTer needs for 8× CD speed (mkchd). Tier C: chosen, never automatic.
+   - A "For MiSTer FPGA" preset for CDs: Zstd and FLAC with 4-sector hunks (`-c cdzs,cdfl -hs 9792`), what MiSTer needs for 8× CD speed (mkchd). Tier X (Zstd, and a hunk size of its own): chosen, never automatic.
 2. **`.sbi` from a CloneCD `.sub`** (small). A PS1 disc's LibCrypt sectors carry Q subchannel with a deliberately wrong CRC. The page reads the `.sub`'s Q channel, lists the sectors whose CRC fails, and saves them as an `.sbi` next to the CHD, as for an `.sbi` the user adds. Too many bad sectors means a damaged `.sub`, not LibCrypt: no `.sbi` then, and the card says why.
 3. **`.zip` input** (medium). The page reads a zip's central directory (zip64 too). Stored entries are read in place, as slices of the zip. Deflated ones are unpacked first, into private storage where there is some, else into memory up to a limit, and their CRC-32 must match the zip's. The entries then join the list like picked files, so cue sheets find their tracks inside the zip. Other compression methods and encrypted entries are refused by name.
 4. **DAT verification** (medium). Users add Logiqx DAT files (Redump, No-Intro), plain or zipped; the page keeps them across visits (private storage, else for the visit). Every track of a disc is matched by size and CRC-32: before converting, from the input files (the checksums identification already computes are reused), and for a CHD after Verify, from the checksums of `extractcd --redump`'s files. The card says which DAT entry it matches and whether every track does; results can be named after it. Settings lists the loaded DATs.
@@ -352,13 +359,13 @@ None of the steps changes the CHDs Discpress writes by default. The only automat
    - A disc of a set says how many discs the set has (from the database's names) until all of them are converted.
    - **Deferred:** Saturn games that need a RAM cartridge, until a primary source is checked (Mednafen's database is GPL, so a checklist only).
 
-Deferred: naming GameCube, Wii, Xbox and PS3 discs (+530 KB of database, and their emulators don't take CHDs); checksumming CHD tracks while identifying (Verify does); a PC-98 detector (PC-98 discs are found by size and CRC-32 only); FM Towns, X68000 and other PC sub-platforms; session and index metadata (`CHSE`/`CHIX`), which needs a MAME newer than 0.289.
+Deferred: naming GameCube, Wii, Xbox and PS3 discs (+530 KB of database, and their emulators don't take CHDs); checksumming CHD tracks while identifying (Verify does); a PC-98 detector (PC-98 discs are found by size and CRC-32 only); FM Towns, X68000 and other PC sub-platforms; session and index metadata (`CHSE`/`CHIX`): chdman 0.289 writes neither, so the engine doesn't. `CHSE` for Jaguar CD is milestone 7, step 2, which adds it to the fork rather than moving to a newer MAME.
 
 ### Milestone 7: layouts each emulator reads right (decision of 2026-10-03)
 
 **Decision: no new conversion engine.** The question was whether replacing chdman with a CHD writer of our own would make discs work better in their emulators. The assessment (code, these documents, and experiments with unmodified chdman 0.289 on the synthetic test discs) found:
 - **Size:** at most about 1% smaller files within the codecs every reader decodes: −0.5% on CD and −0.8% on DVD with better encoders (measurements §3), −1.4% on DVD with zopfli at 30–60 times the CPU time. The fork can take those encoders. Larger hunks (−9% to −16% on DVD) are already a setting.
-- **Speed:** nothing left to gain. The engine already beats 0.289 by 1.6× with the default (same bytes, checked with `cmp`), 2.8× with the codec plan and 4× with `cdzl,cdfl` and libdeflate (native, 4 threads, the benchmark CD). LZMA's time is in its match finder, which doesn't vectorize.
+- **Speed:** nothing left to gain. On the benchmark CD the engine already takes 1.2× less CPU than 0.289 with the default (the same file), 2.1× less with the codec plan and 3.2× less with `cdzl,cdfl` and libdeflate (native, `-np 4`; measurements §2, measured again on 2026-11-11). This paragraph first said 1.6×, 2.8× and 4×, of which no record was kept, not even whether it was CPU or wall-clock time. LZMA's time is in its match finder, which doesn't vectorize.
 - **Compatibility:** nothing that rewriting the cue sheet in front of the fork can't do. Unmodified chdman 0.289 produced every layout below from a rewritten cue sheet: a PREGAP line stored as data (`PGTYPE:VAUDIO`), a session gap stored as frames, a MODE2/2048 track relabelled MODE1 (same data SHA-1), a pregap absorbed into the previous track.
 - **Cost:** about 8 to 12 person-weeks to get back to today's output. It would also lose the byte-for-byte oracle and the "chdman 0.289" trust.
 
@@ -372,7 +379,7 @@ Every rule of this milestone:
 
 The CHD's SHA-1 then differs from chdman's for the same input, which MAME's software lists and DAT tools see. The data the disc holds is unchanged. No emulator was run for this assessment: what a reader does comes from its code, as these documents describe it, and each step below checks it on the emulator before it ships where it can.
 
-**Status: planned.**
+**Status: planned; nothing of it is built.** The engine writes no `CHSE`, and the page rewrites no layout. "No new engine" means chdman isn't replaced, not that the fork stays as it is: steps 1, 3 and 4 need only the page, which rewrites the cue sheet in front of chdman, but steps 2 and 5 need engine work, since chdman 0.289 has no code for either tag.
 
 1. **PREGAP and POSTGAP lines stored as real silent frames** for Saturn, Sega CD, PC Engine CD, PC-FX, Neo Geo CD and PS1 (about 1 to 1.5 person-weeks).
    - The page rewrites such a cue sheet before chdman reads it: a PREGAP line becomes zero frames in the track, with INDEX 00 and 01; a POSTGAP line becomes zero frames at the track's end. The zeros come from a file in the worker's filesystem.
@@ -381,6 +388,7 @@ The CHD's SHA-1 then differs from chdman's for the same input, which MAME's soft
    - Redump-style cue sheets (INDEX 00, no PREGAP or POSTGAP lines) are unchanged, and so is their CHD.
    - The `saturn-gapcmd`, `postgap`, `ares-pregap` and `ngcd-layout` warnings become fixes.
 2. **The Jaguar CD session tag** (`CHSE`, as MAME after 0.289 writes it), only for Jaguar CD (about 1.5 person-weeks).
+   - Engine work: `createcd` gets the tag as an option the page passes for Jaguar CD only, as `--keepcue` was added, and writes it where MAME does, since MAME's own parser depends on the order of the tags (C §3.3). The tag is checksummed, so the CHD's SHA-1 differs from 0.289's.
    - Virtual Jaguar refuses a Jaguar CD CHD without it, so every Jaguar CD (27 in the built-in database) would load (not yet checked in Virtual Jaguar itself).
    - It must never be written for Saturn or Sega CD: Kronos, Yabause and jgenesis refuse any CHD that has it.
    - The `jagcd-sessions` warning then names only BigPEmu, which takes no CHDs.
@@ -391,7 +399,7 @@ The CHD's SHA-1 then differs from chdman's for the same input, which MAME's soft
    - The gap of about 11,400 frames becomes zero frames at the end of the first session's last track, so emulators that read the disc as one session (DOSBox-X, 86Box, MAME) find the second session's data where it is. The zero hunks cost almost nothing.
    - Unchecked in DOSBox-X and 86Box.
 5. **A record of each change inside the CHD** (about 1 to 2 person-weeks).
-   - Non-checksummed metadata, like `--keepcue`'s `CUES` tag, lists what steps 1 to 4 changed.
+   - Non-checksummed metadata, like `--keepcue`'s `CUES` tag, lists what steps 1 to 4 changed. Kronos, Yabause and jgenesis refuse such a tag as they refuse `CUES` (§3, Identity), and Saturn and Sega CD are among step 1's consoles, so the record needs another place there. That is not designed yet.
    - `extractcd --redump` reads it and gives back the original files byte for byte, so the Redump bins, Verify's Redump comparison and the DAT check keep working.
 
 Needed by every step: reader models in the tests (a Flycast 2.7 model, "assume stored", "V means virtual", wildcard metadata; §5), and fixtures for each rule checked against them and against the extracted files.
@@ -413,7 +421,7 @@ Separate from the engine question, and only as users ask: writers for other form
   - the existing synthetic fixtures;
   - the generators from lanes C and D1 (GD types, multi-session, CD+G, MOTOROLA, virtual gaps, HTOA);
   - [the codec lab](lab/README.md), with its freely licensed corpus for performance work;
-  - at least one long CC0 music track to catch FLAC nondeterminism.
+  - music to catch FLAC nondeterminism: in the tests the `music-cd` fixture (synthetic piano), in the lab the CC0 recordings.
 - **Layout lint.** Add a `verify --layout` mode that prints how MAME and libchdr would see the disc (INDEX 01 LBAs, session starts, the 45000 boundary, `V` semantics) and flags the ambiguous cases. It should run in CI and be offered to users.
 
 ## 6. Upstream relations

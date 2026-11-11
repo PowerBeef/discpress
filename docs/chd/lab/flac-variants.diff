@@ -10,7 +10,7 @@
  
  #include "ioprocs.h"
  #include "multibyte.h"
-@@ -83,6 +86,26 @@
+@@ -90,6 +93,26 @@
  	FLAC__stream_encoder_set_total_samples_estimate(m_encoder, 0);
  	FLAC__stream_encoder_set_streamable_subset(m_encoder, false);
  	FLAC__stream_encoder_set_blocksize(m_encoder, m_block_size);
