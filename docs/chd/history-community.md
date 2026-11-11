@@ -1,5 +1,7 @@
 # E: chdman and CHD history, community pain points, ecosystem, alternative implementations, competing formats
 
+> **Status: a research snapshot of 2026-09-27, kept as it was written.** It describes MAME master `76c7d19`, which Discpress was built from up to 1.2.0, with a small patch (`wasm/mame.patch`, Asyncify). Since 1.2.1 Discpress builds the MAME 0.289 release (tag `mame0289`, `f34f025`), and since 1.3.0 its own fork of it in `engine/`: 0.289 plus the changes in [`engine/mame-0.289.diff`](../../engine/mame-0.289.diff) (see [`engine/README.md`](../../engine/README.md)), with C++20 coroutines in place of Asyncify. Many defects listed here are fixed and many recommendations have shipped: notes in italics say where, and [fork-plan.md](fork-plan.md) has the current status of each recommendation. Finding 1 was resolved in 1.2.1, and most of the features ranked in §7.3 have shipped. Line numbers into `chdman.cpp`, `chd.cpp` and `cdrom.cpp` refer to `76c7d19`, not to `engine/`; "HEAD", "the pin" and "today" mean that snapshot.
+
 > Part of the [Discpress chdman research dossier](README.md), 2026-09-27. Written by a research agent from source reading and experiments. `$SP/...` paths name artefacts in the temporary research workspace, which is not part of the repository (reproducible lab tooling is in [lab/](lab/)). Lane letters (A, B, C, D1, D2, E, G) refer to the reports listed in the README.
 
 Lane E of the Discpress chdman-fork dossier. Written 2026-09-27.
@@ -149,7 +151,7 @@ Only releases that touched CHD, chdman, cdrom, the codecs, the codec libraries o
 | 0.277 | zlib **1.3.1**. | no byte change [V] |
 | 0.280 (2025-08-30) | `verify --fix` asks for write permission (02fc472f18, #14019). | — |
 | **0.289** (2026-07-30) | zlib **1.3.2** (60dd3aeeb1; the commit message says "3.1.2", a typo, since `zlib.h` says 1.3.2 of 2026-02-17); Quantum Fireball HD templates. | no byte change [V] |
-| **post-0.289 master** (2026-07-31 → 09-27; all in the Discpress pin) | **GD-ROM:** `--removepregap/--addpregap` (1cf0f9e986, #15808), then removed again when GDI virtual pregaps arrived (ac47a71ce1, #15870, MetalSlug, merged by R. Belmont without review comments).<br>**Codec libraries:** LZMA SDK **26.02** with CHD **level 8 → 6** (c23567b509); zstd **1.5.7** (f9050e8508).<br>**Metadata:** session metadata **`CHSE`** (b93961fd52, 20661546b2).<br>**New input:** **CD+G** (c9e87a6b7e, #15910).<br>**Hardening:** `util/chd` modernisation and range fixes, including a byte-wise zero-hunk check (954cbbe49f, e5e82312c2). CD-extraction read errors (14d07e35c1) and dumpmeta stdout errors (8a00440d2d) now handled; AVHuff capped at 16 audio channels (1736a9595b). Two PRs reverted as "AI slop": short writes (ebe430d9fd reverting e0b94b77a5) and raw-input padding (c2f6ac79c1 reverting 33d4dc0aff). | **LZMA, zstd and GD-ROM bytes and SHA1s change** [V] |
+| **post-0.289 master** (2026-07-31 → 09-27; all in the Discpress pin up to 1.2.0) | **GD-ROM:** `--removepregap/--addpregap` (1cf0f9e986, #15808), then removed again when GDI virtual pregaps arrived (ac47a71ce1, #15870, MetalSlug, merged by R. Belmont without review comments).<br>**Codec libraries:** LZMA SDK **26.02** with CHD **level 8 → 6** (c23567b509); zstd **1.5.7** (f9050e8508).<br>**Metadata:** session metadata **`CHSE`** (b93961fd52, 20661546b2).<br>**New input:** **CD+G** (c9e87a6b7e, #15910).<br>**Hardening:** `util/chd` modernisation and range fixes, including a byte-wise zero-hunk check (954cbbe49f, e5e82312c2). CD-extraction read errors (14d07e35c1) and dumpmeta stdout errors (8a00440d2d) now handled; AVHuff capped at 16 audio channels (1736a9595b). Two PRs reverted as "AI slop": short writes (ebe430d9fd reverting e0b94b77a5) and raw-input padding (c2f6ac79c1 reverting 33d4dc0aff). | **LZMA, zstd and GD-ROM bytes and SHA1s change** [V] |
 
 **First release with V5:** V5 first appeared in 0.145u1 (2012-02-19) and first shipped in **MAME 0.146 (2012-05-21)**.
 
@@ -231,7 +233,7 @@ This ledger is what "byte-identical to chdman X" depends on. Each item says whet
 | 17 | **0.263 (fa9d0fc32a)** | **createdvd default hunk 2048 → 4096** | every DVD CHD | [V code] |
 | 18 | 0.263 (0b15781e69, d64e3f7cf2) | bitstream writer dropped bits; map buffer size | maps of very large or delta CHDs (entries needing >24 bits); previously corrupt | [V code] |
 | 19 | 0.266 (df62ba1451) | multisession, INDEXes and FLAGS parsed from cue | multisession cues (layout) [U: no SESSION metadata until post-0.289] | [V code] |
-| 20 | **post-0.289 (c23567b509)** | **LZMA level 8 → 6** (fb 64→32, mc 48→32), alongside SDK 26.02 (which alone is neutral) | every `lzma`/`cdlz` hunk (bytes only); **includes the Discpress pin** | **[V end-to-end]** |
+| 20 | **post-0.289 (c23567b509)** | **LZMA level 8 → 6** (fb 64→32, mc 48→32), alongside SDK 26.02 (which alone is neutral) | every `lzma`/`cdlz` hunk (bytes only); **includes the Discpress pin** up to 1.2.0 | **[V end-to-end]** |
 | 21 | **post-0.289 (f9050e8508)** | **zstd 1.5.5 → 1.5.7** | `zstd`/`cdzs` hunks (only with `-c` choosing them) | **[V experiment]** |
 | 22 | **post-0.289 (1cf0f9e986, ac47a71ce1)** | GD-ROM: Redump cue keeps its own pregaps (`VAUDIO`); GDI gaps become "virtual pregaps" instead of zero padding | **SHA1 and data SHA1 of every GD-ROM CHD**; Redump-cue and GDI CHDs of one disc no longer share a data SHA1 | **[V end-to-end]** |
 | 23 | post-0.289 (b93961fd52) | `CHSE` session metadata | overall SHA1 of multi-session CDs | [V code] |
@@ -592,7 +594,7 @@ Workarounds:
   - PPSSPP updated libchdr ([ppsspp#18824](https://github.com/hrydgard/ppsspp/pull/18824));
   - PCSX2 feature request [#10823](https://github.com/PCSX2/pcsx2/issues/10823);
   - RetroArch [#16193](https://github.com/libretro/RetroArch/issues/16193);
-  - as late as 2026-03, cdzs CHDs fail in SwanStation builds ([RetroArch#18867](https://github.com/libretro/RetroArch/issues/18867));
+  - as late as 2026-03, cdzs CHDs fail in SwanStation builds ([RetroArch#18867](https://github.com/libretro/RetroArch/issues/18867)) *(confirmed: SwanStation's libchdr update with Zstandard, libretro/swanstation#159, was merged on 2026-03-28, the day that issue was closed; D1 §2.2's "2024-03-12" had the year wrong, and the app's warning says "builds from before April 2026" since 1.8.2)*;
   - MiSTer supports it ([forum](https://misterfpga.org/viewtopic.php?t=8219)).
 - Community "CHD-ZSTD" re-encodes are sometimes **larger** than LZMA sets ([1gb70uj](https://reddit.com/r/Roms/comments/1gb70uj/): "lzma at max setting generally compresses stronger than zstd … 2-5%"), and they break DAT matching (§3.3).
 - Wish: compatibility presets ("max compatibility", "fast decode", "smallest").
@@ -787,13 +789,13 @@ Last-commit dates come from shallow clones on 2026-09-27 [V]. Stars come from th
 
 ### 7.1 Fix the byte-identity story first (highest priority)
 
-**Where things stand:** Discpress markets "chdman 0.289" and "byte for byte … as desktop chdman 0.289". Its committed pin and the released v1.2.0 are built from 76c7d19.
+**Where things stood at the research:** Discpress marketed "chdman 0.289" and "byte for byte … as desktop chdman 0.289". Its committed pin and the released v1.2.0 were built from 76c7d19.
 
 **Update at the end of this session (about 22:00):** the Discpress working tree showed *uncommitted* changes re-pinning to `f34f02505e` (the mame0289 tag):
 - `scripts/fetch-mame.sh`, `wasm/*` and `third_party/mame` now at the mame0289 tag;
 - a new `tests/ui/gdrom.spec.js`.
 
-This is option (a) below. A native build of that tree matched my 0.289 build on all 9 fixtures [V].
+This is option (a) below. A native build of that tree matched my 0.289 build on all 9 fixtures [V]. *(Released as Discpress 1.2.1: see finding 1 in §0. Since 1.3.0 the 0.289 sources are forked into `engine/`, and the tests compare its default output with unmodified chdman 0.289.)*
 
 I checked the committed claim against 0.289 (§1.7):
 - The claim **fails for every LZMA-bearing CHD**, which means every default CD, DVD and HD CHD. Only the file bytes differ; the SHA1s match.
@@ -835,27 +837,31 @@ I checked the committed claim against 0.289 (§1.7):
    - Add disk-space preflight.
 2. **Automatic CD vs DVD choice and PSP hunk 2048.**
    - Discpress already does PSP → 2048 [V `app/ui.js`] and has the Redump DB.
-   - Extend it to PS2: the Redump media type decides createcd vs createdvd. This is the "SKU lookup" upstream said is the only reliable way.
+   - Extend it to PS2: the Redump media type decides createcd vs createdvd. This is the "SKU lookup" upstream said is the only reliable way. *(Done: a PS2 disc's type comes from its Redump entry, `applyIdent` in `app/ui.js`; without an entry, from a UDF volume or the size.)*
 3. **Broader input:**
    - CDI (with a warning: often not a full dump), MDS/MDF/MDX, CCD/IMG/SUB, PBP (multi-disc → several CHDs plus `.m3u`), CSO/ZSO, ISZ, ECM;
    - archives (zip/7z/rar), split volumes;
    - MP3/FLAC/APE audio in cues (decode to PCM, warning that the result is not Redump-exact);
    - BOM and codepage-tolerant cue parsing; auto-generated cues for bare bins.
+   - *(Done: BOM and codepage-tolerant descriptors and auto-generated cues in 1.2.1; CCD/IMG, CSO/ZSO and ECM in 1.3.0; PBP, one CHD per disc, and zip in 1.5.0. CDI, MDS/MDF, ISZ, 7z and rar get a card that says why not. Compressed audio in cue sheets is open.)*
 4. **Redump-faithful round trip and verification:**
    - per-track split output by default when the source was split;
    - keep and re-emit the original cue (as an opt-in metadata tag, or a sidecar);
    - verify CHD contents against the built-in Redump DB per track, without extraction, the way DuckStation's "Verify" does.
+   - *(Done in 1.3.0: extracting a CD gives Redump's layout by default, "Keep the cue sheet in CD CHDs" is an opt-in setting, and Verify compares a CHD with the built-in Redump database without extracting it. That checks the file the database lists; a user's DAT files check every track since 1.5.0.)*
 5. **Compatibility presets:**
    - "Max compatibility": no zstd; CD mode for AetherSX2-class targets; warn about DVD CHDs on old cores.
    - "Fast decode": zstd, or LZMA only when much better.
    - "Smallest".
-6. **Multi-disc `.m3u` generation** and consistent naming (Discpress already names from Redump).
+   - *(Done: the default preset, chdman's own settings, is "Smallest" and works in every emulator; "Faster to load (Zstd)" says which of a console's emulators can't read it; and since 1.8.1 Settings → "Compatibility mode for older emulators" makes CD CHDs of PS2 DVD games for AetherSX2-class targets, a PS2 setting since 1.4.0.)*
+6. **Multi-disc `.m3u` generation** and consistent naming (Discpress already names from Redump). *(Done in 1.4.0.)*
 7. **CHD → ISO/cue for places without CHD**: PS3 webMAN, OPL, ODEs, AetherSX2.
 8. **Speed:** keep the multi-core lead.
    - Remove chdman's serial bottlenecks (reader, SHA1).
    - Drop the third FLAC encode (chdman-simd's idea), which keeps the output unchanged.
+   - *(Done in 1.3.0, with the same bytes: a faster SHA-1, and no third FLAC encode.)*
    - Beware of anything that changes the bytes, e.g. zlib-ng for *compression*.
-9. **Nice to have:** CD-TEXT, CATALOG and INDEX preservation (upstream #10308/#15905); multi-session; MSU-style uses.
+9. **Nice to have:** CD-TEXT, CATALOG and INDEX preservation (upstream #10308/#15905); multi-session; MSU-style uses. *(With "Keep the cue sheet in CD CHDs" on, CATALOG, FLAGS, ISRC and INDEX 02 and later come back when extracting. Multi-session is open.)*
 
    Lossy audio (FSLAC) is demanded by some users, but it conflicts with the preservation brand; keep it out or clearly separate it.
 

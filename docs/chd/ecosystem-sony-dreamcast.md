@@ -1,5 +1,7 @@
 # D1: CHD support in PlayStation 1/2/Portable and Dreamcast/NAOMI emulators, and in the frontend/tooling layer
 
+> **Status: a research snapshot of 2026-09-27, kept as it was written.** It describes MAME master `76c7d19`, which Discpress was built from up to 1.2.0, with a small patch (`wasm/mame.patch`, Asyncify). Since 1.2.1 Discpress builds the MAME 0.289 release (tag `mame0289`, `f34f025`), and since 1.3.0 its own fork of it in `engine/`: 0.289 plus the changes in [`engine/mame-0.289.diff`](../../engine/mame-0.289.diff) (see [`engine/README.md`](../../engine/README.md)), with C++20 coroutines in place of Asyncify. Many defects listed here are fixed and many recommendations have shipped: notes in italics say where, and [fork-plan.md](fork-plan.md) has the current status of each recommendation. The GD-ROM regression of finding 1 and §9.1 was fixed in 1.2.1. What the emulators do is as it was read at the commits in Appendix B. Line numbers into `chdman.cpp`, `chd.cpp` and `cdrom.cpp` refer to `76c7d19`, not to `engine/`; "HEAD", "the pin" and "today" mean that snapshot.
+
 > Part of the [Discpress chdman research dossier](README.md), 2026-09-27. Written by a research agent from source reading and experiments. `$SP/...` paths name artefacts in the temporary research workspace, which is not part of the repository (reproducible lab tooling is in [lab/](lab/)). Lane letters (A, B, C, D1, D2, E, G) refer to the reports listed in the README.
 
 Research lane D1 of the Discpress chdman-fork dossier. Date of research: 2026-09-27.
@@ -20,7 +22,7 @@ The goal is a compatibility contract for CHDs produced by a Discpress fork of ch
 - I dated vendored libchdr copies by blob-matching against `rtissera/libchdr` history (`$SP/research/libchdr_blobmap.txt`) or by closest diff.
 - I ran experiments with two chdman builds:
   - the system chdman 0.264;
-  - Discpress's own native chdman at MAME `76c7d19`, which is 1,167 commits after the `mame0289` tag.
+  - Discpress's own native chdman of the time, at MAME `76c7d19`, which is 1,167 commits after the `mame0289` tag.
 - I built a small tool linked against MAME's own `cdrom_file` (`$SP/research/D1test/tool/toc.cpp`) to see where MAME itself places tracks.
 - I used web sources for closed-source projects and for issue trackers.
 
@@ -31,7 +33,8 @@ The goal is a compatibility contract for CHDs produced by a Discpress fork of ch
 ## 0. Key findings
 
 1. **CRITICAL: Dreamcast CHDs from Discpress's current chdman are not loadable in any released Flycast, and GDI-sourced ones are mis-mastered for every reader, MAME included.**
-   - Discpress pins MAME master `76c7d19`, which is after 0.289 and not a release. That tree contains two new GD-ROM changes, made between 2026-07-31 and 2026-08-10:
+   - **Resolved in Discpress 1.2.1:** it builds the 0.289 release, which has neither change below, and `tests/ui/gdrom.spec.js` checks the layout (no pregaps, track 3 at LBA 45000). Dreamcast CHDs made with 1.0–1.2.0 should be converted again.
+   - Discpress pinned MAME master `76c7d19` up to 1.2.0, which is after 0.289 and not a release. That tree contains two new GD-ROM changes, made between 2026-07-31 and 2026-08-10:
      - `1cf0f9e986` (mamedev/mame#15808) keeps the Redump INDEX 00 pregaps as `PREGAP:n PGTYPE:V…` in the `CHGD` metadata.
      - `ac47a71ce1` (mamedev/mame#15870) turns the gaps in a `.gdi` into *virtual* pregaps.
    - Every Flycast release up to and including **v2.7 (2026-08-14)** rejects any CHD track with `PREGAP≠0`, `POSTGAP≠0` or `SUBTYPE≠NONE`, with the error "Unsupported subtype or pre/postgap" (`flyinghead/flycast@5aa091f:core/imgread/chd.cpp:184`). Only Flycast master after `0abac34` (2026-09-10) reads pregaps.
@@ -77,7 +80,7 @@ The goal is a compatibility contract for CHDs produced by a Discpress fork of ch
      - `CHT2`, then `CHTR`;
      - `CHGT`/`CHGD` (Flycast only);
      - `'DVD '`.
-   - The new `CHSE` session tags are therefore ignored everywhere outside MAME.
+   - The new `CHSE` session tags are therefore ignored by every reader of this lane outside MAME. Lane D2 found otherwise for its readers: they are fatal to Kronos, libretro Yabause/YabaSanshiro and jgenesis, which fail on any tag that is not a track's, and required by libretro Virtual Jaguar (D2 §0 finding 4, §15.3).
    - CD+G, which MAME stores as `TYPE:AUDIO SUBTYPE:RW_RAW`, is tolerated, except by Flycast ≤2.7, which rejects any subtype.
    - Changing type strings or the `CHT2` field list would break `sscanf`-based parsers: DuckStation and PCSX2 require exactly 8 fields, and Beetle PSX accepts only `MODE2_RAW` and `AUDIO`.
 7. **RetroArch's scanner identifies CHDs by serial, read from the first data track.**
@@ -102,7 +105,7 @@ The goal is a compatibility contract for CHDs produced by a Discpress fork of ch
 
 ### 1.1 Metadata tags
 
-Source: `mamedev/mame@76c7d197ed:src/lib/util/chd.h:225-237` and `chd.cpp:47-52`.
+Source: `mamedev/mame@76c7d197ed:src/lib/util/chd.h:225-237` and `chd.cpp:37-42`.
 
 | Tag | Meaning | Value (text unless noted) | Written by chdman at 76c7d19 |
 |---|---|---|---|
@@ -112,7 +115,7 @@ Source: `mamedev/mame@76c7d197ed:src/lib/util/chd.h:225-237` and `chd.cpp:47-52`
 | `CHSE` | **new** session marker | `SESSION:%d` | only if the disc has more than one session (`cdrom.cpp:1115-1124`), placed before the first track of each session |
 | `CHGT` | legacy GD-ROM track | same fields as `CHGD` | never (read only; sets the `GDROMLE` flag) |
 | `CHGD` | GD-ROM track | `TRACK:%d TYPE:%s SUBTYPE:%s FRAMES:%d PAD:%d PREGAP:%d PGTYPE:%s PGSUB:%s POSTGAP:%d` | every GD-ROM |
-| `'DVD '` | DVD marker | 1 byte (a NUL; measured with `chdman info`) | every `createdvd` (`chdman.cpp:2317`) |
+| `'DVD '` | DVD marker | 1 byte (a NUL; measured with `chdman info`) | every `createdvd` (`chdman.cpp:2308`) |
 
 Semantics that readers must know:
 
@@ -143,11 +146,11 @@ Semantics that readers must know:
 
 Source: `mamedev/mame@76c7d197ed:src/tools/chdman.cpp`.
 
-- **CD codecs:** `cdlz,cdzl,cdfl` (`:673`).
-- **DVD/HD/raw codecs:** `lzma,zlib,huff,flac` (`:671-672`, `:2291`).
-- **CD hunk:** 8 frames = 19,584 bytes. It must be a multiple of 2448 (`:2208`, `:1360-1361`).
-- **DVD hunk:** 4,096 bytes = 2 sectors. It must be a multiple of 2048, and `unitbytes` is 2048 (`:2280`).
-- **Hunk bounds:** 16 B to 1 MiB (`:67-68`).
+- **CD codecs:** `cdlz,cdzl,cdfl` (`:669`).
+- **DVD/HD/raw codecs:** `lzma,zlib,huff,flac` (`:667-668`, `:2282`).
+- **CD hunk:** 8 frames = 19,584 bytes. It must be a multiple of 2448 (`:2199`, `:1356-1357`).
+- **DVD hunk:** 4,096 bytes = 2 sectors. It must be a multiple of 2048, and `unitbytes` is 2048 (`:2271`).
+- **Hunk bounds:** 16 B to 1 MiB (`:63-64`).
 - **`createdvd` and DVD metadata:** added by `28104cdbdf` (2023-04-09), first in `mame0255` according to `git tag --contains`. (A community guide claims 0.262; that is wrong for the command itself.)
 - **zstd/cdzs codecs:** `05e69b43e9` (#11827, 2023-12-11), first in **`mame0262`**.
 
@@ -160,7 +163,7 @@ This matters most for the Dreamcast readers. The history comes from `git log` of
 | ≤0.261 | Pregaps stripped (MAME issue #6466, 2020: "not bootable in any DC emulator" at the time) | `PAD` frames appended to the previous track |
 | 0.262–0.263 | `b75b8d80e87`: "Don't strip pregaps from Redump GD-ROM files" (#11913). Metadata with `PREGAP≠0` (unverified what exactly) | as above |
 | **0.264–0.289** | `853db181d2c` (#12087): pregap data **moved into the previous track** (`splitframes`), giving `PREGAP:0` and a TOSEC-identical track layout, with no data lost | `PAD` on the previous track |
-| **post-0.289 master (Discpress's pin)** | `1cf0f9e986` (#15808): pregaps kept as `PREGAP:n PGTYPE:V…` | `ac47a71ce1` (#15870): gap becomes `PREGAP:n PGTYPE:MODE1` (virtual) on the next track, **but** the `PAD` before the high-density area is computed from the reduced `physframeofs`, so it also contains those frames (`cdrom.cpp:2297-2316`) |
+| **post-0.289 master (Discpress's pin up to 1.2.0)** | `1cf0f9e986` (#15808): pregaps kept as `PREGAP:n PGTYPE:V…` | `ac47a71ce1` (#15870): gap becomes `PREGAP:n PGTYPE:MODE1` (virtual) on the next track, **but** the `PAD` before the high-density area is computed from the reduced `physframeofs`, so it also contains those frames (`cdrom.cpp:2297-2316`) |
 
 The `-rp`/`-ap` options existed only between 2026-07-31 and 2026-08-10 and were never in a release.
 
@@ -216,7 +219,7 @@ INDEX 01 LBAs as computed by the readers:
 
 Interpretation:
 
-- The 76c7d19 GDI writer and its own `extractcd` agree with each other; `extractcd` re-emits a correct `.gdi` because `chdman.cpp:1548-1549` adds the pregap non-cumulatively.
+- The 76c7d19 GDI writer and its own `extractcd` agree with each other; `extractcd` re-emits a correct `.gdi` because `chdman.cpp:1539-1540` adds the pregap non-cumulatively.
 - MAME's reader disagrees with both. This is an upstream bug.
 - The cue path is self-consistent, but it breaks every Flycast release.
 
@@ -301,7 +304,7 @@ This is a libretro fork of DuckStation from 2021.
 - `libchdr_chd.c` is within 47 lines of upstream `ff1365d` (2026-02-11).
 - It bundles zstd 1.5.7, lzma 25.01 and miniz 3.1.1, so **all codecs including zstd** are available.
 - It is routed through libretro VFS (2026-06).
-- When zstd first arrived is not verified; an "Update libchdr" commit dated 2024-03-12 probably brought it.
+- When zstd first arrived is not verified; an "Update libchdr" commit dated 2024-03-12 probably brought it. *(Corrected 2026-11-11: the year was wrong. That commit, "Update libchdr.", is dated 2026-03-12 and "introduces support for Zstandard compression"; its pull request, libretro/swanstation#159, was merged on 2026-03-28, the day RetroArch#18867 about cdzs CHDs failing in SwanStation was closed. The app's warning said "builds from before about March 2024" up to 1.8.1, and says "before April 2026" since 1.8.2.)*
 
 **Reader.** `src/common/cd_image_chd.cpp`.
 
@@ -470,7 +473,7 @@ This is ES-DE's default PS2 emulator (ES-DE `USERGUIDE.md:5008`).
   - dragoonDorise/EmuDeck#1128 (2024-03-14);
   - Trixarian/NetherSX2-patch#104 (2024-07-14).
 - The workaround is **`createcd`**.
-- NetherSX2-patch#104 blames a "zstd default". That is incorrect: `createdvd` defaults to `lzma,zlib,huff,flac` (`chdman.cpp:2291`).
+- NetherSX2-patch#104 blames a "zstd default". That is incorrect: `createdvd` defaults to `lzma,zlib,huff,flac` (`chdman.cpp:2282`).
 - The likely cause is an old libchdr without `huff` (upstream 2022-12-29) and/or without generic LZMA/FLAC for non-CD hunks (2022-03-26). **Unverified.**
 - zstd: certainly not supported.
 - Parent CHDs: unknown.
@@ -804,7 +807,7 @@ Codec columns list what is compiled into the current source (HEAD), with the fir
 
 ### 8.3 New or changed metadata (sessions, CD+G)
 
-**Additional tags** (`CHSE`, or anything new): ignored by every reader here, because all of them look tags up by name. Readers still place second-session tracks contiguously. Flycast keeps using its MIL-CD heuristic. There is a benefit: RetroArch could someday implement `FIRST_OF_SECOND_SESSION`.
+**Additional tags** (`CHSE`, or anything new): ignored by every reader here, because all of them look tags up by name. *(Not so for lane D2's readers: Kronos, libretro Yabause/YabaSanshiro and jgenesis fail on any tag that is not a track's; D2 §15.3.)* Readers still place second-session tracks contiguously. Flycast keeps using its MIL-CD heuristic. There is a benefit: RetroArch could someday implement `FIRST_OF_SECOND_SESSION`.
 
 **CD+G** (`AUDIO` + `SUBTYPE:RW_RAW`):
 
@@ -885,7 +888,7 @@ Frontends would list parents as separate games. Parent/child output should never
 
 ## 9. Implications for a Discpress fork
 
-1. **Fix the GD-ROM regression before anything else.** It is in the currently shipped `dist/discpress.html` (MAME `76c7d19`).
+1. **Fix the GD-ROM regression before anything else.** It is in the currently shipped `dist/discpress.html` (MAME `76c7d19`). *(Fixed in 1.2.1, by building the 0.289 release instead of patching the two commits out; `tests/ui/gdrom.spec.js` checks the layout.)*
    - Revert or patch `1cf0f9e986` and `ac47a71ce1` in `wasm/mame.patch` to restore the 0.289 behaviour for both `.gdi` and Redump `.cue`: `PREGAP:0`, pregap frames absorbed into the previous track, `PAD` only before the high-density area.
    - Add synthetic fixtures (the `$SP/research/D1test/{gdi,cue}` generators are ready to copy) with golden `CHGD` strings.
    - Add a `cdrom_file` TOC check (`toc.cpp`) that asserts track 3 is at 45000.
@@ -895,11 +898,11 @@ Frontends would list parents as separate games. Parent/child output should never
    - Keep the default CD hunk (19,584 bytes).
    - Never add zstd to a default codec list, even as the 4th codec.
 3. **Label the zstd presets precisely.** Suggested UI text: "needs DuckStation (2024+), SwanStation, Beetle PSX, PCSX ReARMed (current), PCSX2 2.0+, Play!, PPSSPP 1.17.1+, Flycast 2.3+, RetroArch 1.22+ (for scanning and achievements), MiSTer (2024+) or MAME 0.262+; not AetherSX2/NetherSX2, and probably not Redream or Demul."
-4. **PS2.** Keep `createdvd` for DVD titles and `createcd` for CD titles, as the current `applyIdent` logic does. Offer an "AetherSX2/NetherSX2 compatible" option that uses `createcd` with CD codecs for DVD titles.
+4. **PS2.** Keep `createdvd` for DVD titles and `createcd` for CD titles, as the current `applyIdent` logic does. Offer an "AetherSX2/NetherSX2 compatible" option that uses `createcd` with CD codecs for DVD titles. *(Done: a PS2 setting in 1.4.0, replaced in 1.8.1 by Settings → "Compatibility mode for older emulators".)*
 5. **PSP.** Keep `createdvd -hs 2048`, which Discpress already sets.
 6. **Keep metadata strictly MAME-canonical.**
    - Keep the exact `CHT2`/`CHGD` format strings and type strings.
-   - Write `CHSE` only for real multi-session discs, as MAME does.
+   - Write `CHSE` only for real multi-session discs, as MAME does. *(Not taken: since 1.2.1 the engine is 0.289, which neither writes nor reads `CHSE`, and the tag is fatal to Kronos, Yabause and jgenesis (D2 §15.3). The page warns about multi-session discs instead.)*
    - Keep the 1-byte `'DVD '` tag and `unitbytes` of 2048.
    - Do not invent tags that readers must understand. Additional tags are safe only as optional hints.
 7. **No parent/child** output except as an expert option, with a warning about the few readers that support it.
@@ -907,6 +910,7 @@ Frontends would list parents as separate games. Parent/child output should never
    - Keep Redump names, including `(Disc N)`: RetroArch derives its disc suffix from it.
    - Generate `.m3u` files for multi-disc sets, following the ES-DE and Batocera conventions.
    - Tell users to keep a Redump-named `.sbi` next to LibCrypt PS1 CHDs. chdman cannot embed SBI data, and most readers look for `<basename>.sbi`.
+   - *(Done in 1.4.0: `.m3u` playlists for games on several discs, and a PS1 disc's `.sbi` is saved next to the CHD under the CHD's name.)*
 9. **Test against more than upstream libchdr.** Discpress's native test harness could build small decoders, or equivalent read-back tests, from:
    - upstream libchdr (`rtissera`, HEAD);
    - libretro-common libchdr, as used by Beetle;
@@ -916,7 +920,7 @@ Frontends would list parents as separate games. Parent/child output should never
    - MAME's `cdrom_file`.
 
    The checks should compare TOC/LBA and per-track bytes against the source cue/bin.
-10. **Future session metadata.** If the fork ever wants session metadata (MIL-CD), it must stay additive. No reader outside MAME uses `CHSE`. Flycast derives sessions heuristically.
+10. **Future session metadata.** If the fork ever wants session metadata (MIL-CD), it must stay additive. No reader of this lane outside MAME uses `CHSE`; among lane D2's, libretro Virtual Jaguar requires it, and Kronos, libretro Yabause/YabaSanshiro and jgenesis fail on it (D2 §15.3). Flycast derives sessions heuristically.
 
 ---
 
@@ -983,7 +987,7 @@ All clones are in `$SP/src/*-D1`, read-only.
   - `WANT_SUBCODE` options `2203b5a` (2026-02-07);
   - LZMA dictionary fix `fa36420` (2026-08-22);
   - "Stop rejecting sparse CHDv5 images" `d31d8b9` (2026-09-10).
-- `mamedev/mame@76c7d197ed` (the Discpress `third_party/mame` checkout; `mame0289` tagged 2026-07-30).
+- `mamedev/mame@76c7d197ed` (the Discpress `third_party/mame` checkout of the time; `mame0289` tagged 2026-07-30).
 - Web sources:
   - mamedev/mame #6466 and #11913;
   - flyinghead/flycast #906;

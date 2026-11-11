@@ -1,13 +1,15 @@
 # Lane B: chdman internals, the CHD writer/extractor pipeline, and the Discpress wasm patch
 
+> **Status: a research snapshot of 2026-09-27, kept as it was written.** It describes MAME master `76c7d19`, which Discpress was built from up to 1.2.0, with a small patch (`wasm/mame.patch`, Asyncify). Since 1.2.1 Discpress builds the MAME 0.289 release (tag `mame0289`, `f34f025`), and since 1.3.0 its own fork of it in `engine/`: 0.289 plus the changes in [`engine/mame-0.289.diff`](../../engine/mame-0.289.diff) (see [`engine/README.md`](../../engine/README.md)), with C++20 coroutines in place of Asyncify. Many defects listed here are fixed and many recommendations have shipped: notes in italics say where, and [fork-plan.md](fork-plan.md) has the current status of each recommendation. §6 describes the patch and Asyncify as they were. Line numbers into `chdman.cpp`, `chd.cpp` and `cdrom.cpp` refer to `76c7d19`, not to `engine/`; "HEAD", "the pin" and "today" mean that snapshot.
+
 > Part of the [Discpress chdman research dossier](README.md), 2026-09-27. Written by a research agent from source reading and experiments. `$SP/...` paths name artefacts in the temporary research workspace, which is not part of the repository (reproducible lab tooling is in [lab/](lab/)). Lane letters (A, B, C, D1, D2, E, G) refer to the reports listed in the README.
 
-Research dossier for a hard fork of MAME's `chdman`. The subject is Discpress's pinned MAME source, commit `76c7d197ed` (`mame0289-1167`, post-0.289 master dated 2026-09-27).
+Research dossier for a hard fork of MAME's `chdman`. The subject is the MAME source Discpress pinned at the time, commit `76c7d197ed` (`mame0289-1167`, post-0.289 master dated 2026-09-27).
 
 ## 0. Scope, method and caveats
 
 - **What I read.** All of `src/tools/chdman.cpp`, `src/lib/util/chd.{h,cpp}`, `chdcodec.{h,cpp}`, `hashing.cpp`, the CD ECC helpers in `cdrom.cpp`, `osdsync.cpp`, `ioprocs.cpp` and `corefile.cpp` (read/write paths). On the project side: `wasm/*`, `app/worker.js` (parallel and helper roles) and `app/ui.js` (`Engine`, `Tuning`).
-- **Line numbers.** `path:line` citations refer to the pristine upstream files at 76c7d19. The working tree has `wasm/mame.patch` applied, which shifts lines in `chd.cpp`, `chd.h` and `chdman.cpp`, so I exported the unpatched files with `git show HEAD:<path>` into `$SP/src/upstream-B/`. Every other file is unmodified, so its working-tree lines are the upstream lines.
+- **Line numbers.** `path:line` citations refer to the pristine upstream files at 76c7d19. The working tree had `wasm/mame.patch` applied, which shifted lines in `chd.cpp`, `chd.h` and `chdman.cpp`, so I exported the unpatched files with `git show HEAD:<path>` into `$SP/src/upstream-B/`. Every other file was unmodified, so its working-tree lines were the upstream lines. *(Since 1.3.0 the patch no longer exists: Discpress's changes are ordinary code in `engine/mame`, listed in `engine/mame-0.289.diff`.)*
 - **What I ran.** Native chdman was built from this source (`build/chdman-native`, `-O2`, `FLAC__NO_ASM`, `Z7_ST`). I also wrote:
   - a micro-benchmark harness linked against `build/obj-native`: `$SP/bench-B/harness.cpp`, which measures per-thread CPU time;
   - a per-thread CPU sampler: `$SP/bench-B/threads.py`;
@@ -33,7 +35,7 @@ Research dossier for a hard fork of MAME's `chdman`. The subject is Discpress's 
    - HEAD at level 6 differs in every CHD that has an LZMA hunk (`twine`, `mgs`, a 32 MB DVD slice and `arcade.img`);
    - data and overall SHA-1 are unchanged in all of these.
 
-   zstd 1.5.5→1.5.7 (`f9050e8508`) also changes `zstd`/`cdzs` bytes. For GD-ROM input (`aerowings.gdi`), the pinned build even produces a **different Data SHA-1 and different metadata** than 0.289, because of the pregap commits #15808 and #15870. The release notes' claim "exactly the same, byte for byte, as … desktop chdman 0.289" is therefore inaccurate. The README's "identical data checksums" is accurate except for GD-ROM.
+   zstd 1.5.5→1.5.7 (`f9050e8508`) also changes `zstd`/`cdzs` bytes. For GD-ROM input (`aerowings.gdi`), the pinned build even produces a **different Data SHA-1 and different metadata** than 0.289, because of the pregap commits #15808 and #15870. The release notes' claim "exactly the same, byte for byte, as … desktop chdman 0.289" is therefore inaccurate. The README's "identical data checksums" is accurate except for GD-ROM. *(Fixed in 1.2.1, which builds the `mame0289` tag: the tests now compare with unmodified chdman 0.289, the GD-ROM layout included.)*
 2. **The last hunk carries stale bytes, compressed into the file.** A final partial hunk contains stale data from 256 hunks earlier, left over in the work ring buffer. I verified this on the bench CD (9,792 bytes) and on an odd-sector DVD (2,048 bytes).
    - The bytes are invisible to readers and SHA-1s, but they are part of the file bytes.
    - Any reimplementation must emulate this to stay byte-identical.
@@ -43,6 +45,7 @@ Research dossier for a hard fork of MAME's `chdman`. The subject is Discpress's 
    - Compression is capped at **16 worker threads** (`WORK_MAX_THREADS`).
    - `-np N` gives **N−1 compression workers**: `-np 2` is about `-np 1` (project bench: 59.4 s vs 62.9 s).
    - With `-np 1`, or on a single-CPU host, the main thread **busy-spins** on `clock()`: 586,588 `clock_gettime` syscalls for an 8 MB input, burning about as much CPU as the real work.
+   - *(Since 1.3.0 the engine's SHA-1 is unrolled and several times faster: 650 MB/s in wasm, milestone 2.1. The 16-thread cap, `-np N` giving N−1 workers and the busy-wait are unchanged; they matter for the native CLI only.)*
 4. **Redundant work in the default trial.** Every codec compresses every hunk.
    - On CD data hunks, `cdfl` costs 35 % of the trial and never won in my data.
    - On audio hunks, `cdlz` and `cdzl` cost about 60–63 % and never won.
@@ -50,8 +53,9 @@ Research dossier for a hard fork of MAME's `chdman`. The subject is Discpress's 
    - The generic `flac` codec encodes 2 to 3 times per hunk (BE, LE, then BE again).
    - Duplicate hunks inside the 256-hunk in-flight window are compressed anyway.
    - Per-hunk SHA-1 and CRC-16 cost about 10.5 ms/MB, about 5–7 % of trial CPU.
-5. **Decompression is single-threaded.** `verify`, `extract*` and the input side of `copy` run at about 45 MB/s (verify) and 49 MB/s (extractcd). Hashing alone is about 45 % of verify's CPU.
-6. **CLI and error-handling defects I verified.**
+   - *(Since 1.3.0: every codec stops as soon as it can't win, with the same output (milestone 2.4); generic `flac` no longer encodes a third time; the per-hunk hashes are about 5× faster in wasm; and `--codecplan`, opt-in, tries only the codecs meant for a hunk. Natively, duplicates in flight are still compressed.)*
+5. **Decompression is single-threaded.** `verify`, `extract*` and the input side of `copy` run at about 45 MB/s (verify) and 49 MB/s (extractcd). Hashing alone is about 45 % of verify's CPU. *(In the page, `verify` and the extract commands decompress on helper workers since 1.3.0, milestone 2.8, and the hashing is faster. Natively, and for `copy`'s input and the parent walk, decompression is still single-threaded.)*
+6. **CLI and error-handling defects I verified.** *(Fixed in the engine since 1.3.0, each now an error with exit 1: `verify` on a SHA-1 mismatch, `extractcd` on a non-CD CHD, `-us 0`/`-ss 0`, and `copy` onto its own input, which is refused before anything is written. `dumpmeta`'s banner goes to stderr. The other items are not among the engine's fixes; see `engine/README.md`.)*
    - `verify` exits **0 on a SHA-1 mismatch**.
    - `verify` exits 0 on an **interrupted/partial CHD** ("No verification to be done … no checksum").
    - `extractcd` on a non-CD CHD aborts with an uncaught `throw nullptr` (exit 134).
@@ -68,8 +72,8 @@ Research dossier for a hard fork of MAME's `chdman`. The subject is Discpress's 
    - the writer (main instance) makes every dedupe decision, in order;
    - the same wasm module and library build is used on both sides.
 
-   Asyncify is needed only because chdman's `main()` owns the loop. `chd_file_compressor` is already a resumable state machine (`compress_begin`/`compress_continue`), so a fork can drive it from JS and drop Asyncify.
-8. **A BSD-3-Clause fork is possible.** chdman's real object closure is 78 of the 144 compiled objects, and every file in it is BSD-3, zlib, MIT, Xiph-BSD, public domain or (for zstd) BSD/GPLv2 dual. Two compiled-but-unneeded files have no license header: `disasmintf.cpp` and the `nanosvg.cpp` wrapper. MAME's `COPYING` makes header-less files GPL "as part of the whole", so drop them.
+   Asyncify is needed only because chdman's `main()` owns the loop. `chd_file_compressor` is already a resumable state machine (`compress_begin`/`compress_continue`), so a fork can drive it from JS and drop Asyncify. *(Done in 1.3.0, another way: the commands are C++20 coroutines that the worker resumes, `chdman_begin`/`chdman_resume`, and Asyncify is gone. See the note at §6.)*
+8. **A BSD-3-Clause fork is possible.** chdman's real object closure is 78 of the 144 compiled objects, and every file in it is BSD-3, zlib, MIT, Xiph-BSD, public domain or (for zstd) BSD/GPLv2 dual. Two compiled-but-unneeded files have no license header: `disasmintf.cpp` and the `nanosvg.cpp` wrapper. MAME's `COPYING` makes header-less files GPL "as part of the whole", so drop them. *(Done in 1.3.0: `engine/mame` holds only what chdman links, 75 source files listed in `engine/FILES`, without those two.)*
 
 ---
 
@@ -99,7 +103,8 @@ Research dossier for a hard fork of MAME's `chdman`. The subject is Discpress's 
 | `help [command]` | `main` :3399 | – | – |
 
 - **No new commands at HEAD.** The 2026 additions `--removepregap/-rp` (createcd) and `--addpregap/-ap` (extractcd), from #15808 on 2026-07-31, were removed again ten days later by #15870 (2026-08-10), which moved the logic into `cdrom.cpp`.
-- **`extractraw`, `extracthd` and `extractdvd` are the same function** with no media-type check. `extractdvd` on a CD CHD happily dumps raw 2448-byte frames.
+- *(The engine adds four options, all opt-in: `--keepcue` on `createcd`, `--redump` on `extractcd`, and `--codecplan` and `--libdeflate` on `createcd`, `createdvd`, `createhd` and `createraw`. See `engine/README.md`.)*
+- **`extractraw`, `extracthd` and `extractdvd` are the same function** with no media-type check. `extractdvd` on a CD CHD happily dumps raw 2448-byte frames. *(In the engine `extractdvd` of a CD or GD-ROM CHD is an error, exit 1; `extractraw` still writes the frames.)*
 - **`copy` is missing from the official docs** (`docs/source/tools/chdman.rst`), even though it is the only "re-encode/upgrade" path.
 
 ### 1.2 Options (`s_options`, `chdman.cpp:674-705`)
@@ -170,27 +175,27 @@ Research dossier for a hard fork of MAME's `chdman`. The subject is Discpress's 
   - the banner `chdman - MAME Compressed Hunks of Data (CHD) manager <version>`, **always printed first** (:3406);
   - the parameter summary;
   - `info` output;
-  - `dumpmeta` data when no `-o` is given, so **the dumped blob is preceded by the banner**. Verified with `od -c`.
+  - `dumpmeta` data when no `-o` is given, so **the dumped blob is preceded by the banner**. Verified with `od -c`. *(In the engine the banner then goes to stderr.)*
 - **stderr:** progress lines and errors.
   - Progress uses `\r` without a newline: `Compressing, 12.5% complete... (ratio=38.1%)`, `Examining parent, …`, `Verifying, …`, `Extracting, …`.
   - Progress is throttled in `progress()` (:969-980) to one print per 0.5 s of **`clock()`**, which is process CPU time summed over all threads. With N busy threads it prints roughly every 0.5/N s of wall time, and a stalled process prints nothing. Each call is a `clock_gettime(CLOCK_PROCESS_CPUTIME_ID)` syscall (not vDSO).
   - Compression progress is `m_write_hunk / m_hunkcount`.
   - "ratio" is the compressed payload divided by input bytes, excluding the header, map and metadata. `info`'s "Ratio" is file size ÷ logical size, so the two differ (46.1 % vs 47.9 % for `twine`).
-- **Discpress scrapes this text.** `app/ui.js:1521-1522` parses the progress lines with a regex. There is no machine-readable progress channel.
+- **Discpress scrapes this text.** The `onProgress` handlers in `app/ui.js` parse the progress lines with a regex. There is no machine-readable progress channel.
 
 Exit codes (all verified unless noted):
 
 | Situation | Exit |
 |---|---|
 | Success | 0 |
-| `verify`: raw or overall **SHA-1 mismatch** (prints `Error: Raw SHA1 in header = …` to stderr, no `report_error`) :1842-1878 | **0** |
+| `verify`: raw or overall **SHA-1 mismatch** (prints `Error: Raw SHA1 in header = …` to stderr, no `report_error`) :1842-1878 (0.289 too; the Discpress engine exits 1, unless `--fix` corrects it) | **0** |
 | `verify` on an uncompressed CHD, or on a CHD with a null raw SHA-1 (e.g. an **interrupted `create*`**): `report_error(0, …)` → "Fatal error occurred: 0" | **0** |
 | `help`, no arguments, unknown command, bad option (`print_help` returns 1) | 1 |
 | `report_error(1, …)` (`fatal_error`), `std::error_condition` escaping ("CHD error occurred (main)"), `std::exception` ("Unhandled exception") | 1 |
 | Decompression error during verify/extract (hunk CRC-16 mismatch), except `extractcd` | 1 |
 | `extractcd` of a damaged hunk: `cdrom_file::read_data` returns false, which `do_extract_cd` ignores; the frame gets whatever the buffer held (0.289 too; the Discpress engine exits 1) | **0** |
-| `extractcd`/`copy` of a non-CD CHD: the `cdrom_file` constructor does `throw nullptr` (`cdrom.cpp:253-261`), which main does not catch → `std::terminate` | **134 (SIGABRT)** |
-| `createraw -us 0`, `createhd -ss 0` | **136 (SIGFPE)** |
+| `extractcd`/`copy` of a non-CD CHD: the `cdrom_file` constructor does `throw nullptr` (`cdrom.cpp:253-261`), which main does not catch → `std::terminate` (0.289 too; the Discpress engine exits 1) | **134 (SIGABRT)** |
+| `createraw -us 0`, `createhd -ss 0` (0.289 too; the Discpress engine exits 1) | **136 (SIGFPE)** |
 | Killed by signal (SIGTERM, or Ctrl-C in a terminal): partial file left behind, no cleanup | 128+n |
 
 Error-output style: `report_error` prints the message and then `Fatal error occurred: N` (:952-961, :3504-3507). Messages carry no error codes, and none name the hunk or offset except in extractld.
@@ -334,7 +339,7 @@ For each `WS_COMPLETE` item, in order:
   - a child with one inserted sector in the middle plus one modified sector;
   - result: a **3,458-byte** child with 12,286 of 12,288 hunks as "Copy from parent". `verify -ip` passes and extraction round-trips.
   - The walk cost 0.69 s on the IO thread for 48 MB (serial parent decompression).
-- The Discpress patch does **not** parallelise the walk (`!m_walking_parent`, `mame.patch:50`), so the browser walks parents single-threaded.
+- The Discpress patch does **not** parallelise the walk (`!m_walking_parent`, then `mame.patch:50`, now in the engine's `async_read`), so the browser walks parents single-threaded.
 
 ### 2.8 The hash map (`chd.h:469-506`, `chd.cpp:3514-3602`)
 
@@ -565,6 +570,8 @@ The project bench shows CD 1-thread wasm at 68.6 s (`…19-06-10-cmp.md`) vs nat
 
 ### 5.1 Verified defects
 
+*Status in the Discpress engine (`engine/README.md`): 1, 3, 6, 7 and 9 are fixed since 1.3.0. 12 is still open; it matters for the native CLI only.*
+
 | # | Defect | Evidence | Severity |
 |---|---|---|---|
 | 1 | `verify` exits 0 on raw/overall SHA-1 mismatch | flipped header byte → "Error: Raw SHA1…", exit 0 | High for scripts |
@@ -595,8 +602,8 @@ The project bench shows CD 1-thread wasm at 68.6 s (`…19-06-10-cmp.md`) vs nat
 | `chd.cpp:3496` | "TODO: revisit this error code" | Non-CHD exceptions become `io_error` |
 | `chd.h:536` | Atomic status note | – |
 | `chdman.cpp:318` | "TODO: what to do about error getting file size?" | Unhandled |
-| `chdman.cpp:334` | "FIXME: better error reporting?" | Unhandled |
-| `chdman.cpp:336` | "FIXME: check for error return" | The raw-input error path; see #16043 |
+| `chdman.cpp:334` | "FIXME: better error reporting?" | Unhandled *(engine: a failed or short read of the input is an error, exit 1)* |
+| `chdman.cpp:336` | "FIXME: check for error return" | The raw-input error path; see #16043 *(fixed in the engine, as above)* |
 | `chdman.cpp:1369` | "TODO: should we default to the same compression as the output parent?" | Open design question |
 | `chdman.cpp:2486` | "TODO: should we check that the input range is aligned to the unit size?" | Open design question |
 | `chdman.cpp:2494` | "TODO: is this check still necessary…" | Open design question |
@@ -621,7 +628,7 @@ The project bench shows CD 1-thread wasm at 68.6 s (`…19-06-10-cmp.md`) vs nat
 
 **Input errors:**
 
-- Raw-input read errors and short reads are **silently ignored**: `chdman.cpp:336`, and `async_read` ignores `read_data`'s return value.
+- Raw-input read errors and short reads are **silently ignored**: `chdman.cpp:336`, and `async_read` ignores `read_data`'s return value. *(Fixed in the engine: a failed or short read of the input of `createraw`, `createhd` or `createdvd` is an error, exit 1.)*
 - The CD reader errors out properly (`report_error` inside the reader thread becomes `fatal_error`, caught in `async_read` as `std::exception` → `io_error`). By code reading (not run), this works but also prints a generic "exception occurred: std::exception" line.
 
 **Exceptions:**
@@ -665,12 +672,14 @@ The project bench shows CD 1-thread wasm at 68.6 s (`…19-06-10-cmp.md`) vs nat
 Overall pattern:
 
 - Upstream actively takes small robustness fixes but rejects redundant or low-quality ones, and does not treat CHD **file bytes** (or even GD-ROM data layout) as a stable contract between versions.
-- The pinned "0.289" is really **0.289 + 1,167 commits**, including output-changing ones.
+- The pinned "0.289" is really **0.289 + 1,167 commits**, including output-changing ones. *(Up to 1.2.0; 1.2.1 pinned the `mame0289` tag itself.)*
 - zlib, huff and flac output are unchanged between 0.289 and HEAD (verified).
 
 ---
 
 ## 6. The Discpress wasm patch
+
+*Status: this section describes the patch as it was up to 1.2.1. Since 1.3.0 `wasm/mame.patch` no longer exists: the hooks are ordinary code in `engine/mame` under `#ifdef __EMSCRIPTEN__`, listed in `engine/mame-0.289.diff`, and nothing uses Asyncify (`wasm/link.sh` has no such flag). The commands that compress, `verify` and the extract commands are C++20 coroutines (`chdman_task` in `chdman.cpp`): the worker starts one with `chdman_begin` and, while it returns −1, awaits `M.parWait()` and calls `chdman_resume`, so `wasm_par_yield` and `parYield` are gone. `verify` and the extract commands hand hunks to helper workers as well (`chd_file::wasm_read_ahead`). The data flow of §6.2 and the identity argument of §6.3 still hold; each hunk now also carries the codec slots to try. `app/worker.js` is cited by name below, since the research's line numbers no longer fit.*
 
 ### 6.1 What it changes (`wasm/mame.patch`, 130 lines)
 
@@ -689,11 +698,11 @@ Everything is under `#ifdef __EMSCRIPTEN__`, so the native build is untouched.
 **Job worker** (one wasm instance; osd queues have 0 threads, so `async_read` runs inline):
 
 1. `read_data` (BlobStore `FileReaderSync`, or the staged stream) fills a ring half, then the stream SHA-1 runs.
-2. Each hunk is **copied** into a JS batch buffer (`parSubmit`, `app/worker.js:648-654`).
-3. At `wasm_par_yield`, `Asyncify.handleSleep` runs and `parYield` (`worker.js:655-666`) dispatches batches: up to two in flight per helper, transferred (`worker.js:583-596`), with `batchSize = max(1, min(64, 512 KiB/hunk, 128/(2·helpers)))` (:641).
-4. The job then sleeps until the FIFO head hunk is done, and wakes via a `MessageChannel` post (:575-577, :600-606).
+2. Each hunk is **copied** into a JS batch buffer (`M.parSubmit` in `app/worker.js`).
+3. At `wasm_par_yield`, `Asyncify.handleSleep` runs and `parYield` dispatches batches: up to two in flight per helper, transferred, with `batchSize = max(1, min(64, 512 KiB/hunk, 128/(2·helpers)))` (set in `M.parSetup`).
+4. The job then sleeps until the FIFO head hunk is done, and wakes via a `MessageChannel` post (`maybeWake`).
 
-**Helper** (a second wasm instance per worker, `wasm/wasm_helper.cpp:25-80`):
+**Helper** (a second wasm instance per worker; `wasm_helper_init` and `wasm_helper_compress` in `wasm/wasm_helper.cpp`):
 
 1. `wasm_helper_init` creates an **in-memory `chd_file`** (`vector_read_write_adapter`, logical = one hunk, same hunk size, unit size and codec list) and a `chd_compressor_group` on it.
 2. For each hunk:
@@ -702,9 +711,9 @@ Everything is under `#ifdef __EMSCRIPTEN__`, so the native build is untouched.
    - otherwise `find_best_compressor` runs.
 3. Results are sliced out, concatenated and transferred back.
 
-**Back in the job:** for each result, the SHA-1 and payload are copied into a scratch area in the heap, then `_wasm_par_complete` is called (a memcpy into `item.m_compressed`, `worker.js:608-630`). The unmodified writer loop then makes all self/parent/store decisions in hunk order.
+**Back in the job:** for each result, the SHA-1 and payload are copied into a scratch area in the heap, then `_wasm_par_complete` is called (a memcpy into `item.m_compressed`; the helpers' `result` handler in `app/worker.js`). The unmodified writer loop then makes all self/parent/store decisions in hunk order.
 
-The avhu codec is excluded because its `postinit` reads the CHD's `AVAV` metadata (`worker.js:636`).
+The avhu codec is excluded because its `postinit` reads the CHD's `AVAV` metadata (`M.parSetup`).
 
 ### 6.3 Why the bytes are identical, and the assumptions
 
@@ -726,6 +735,7 @@ The avhu codec is excluded because its `postinit` reads the CHD's `AVAV` metadat
 ### 6.4 Costs and limitations
 
 - **Asyncify.**
+  - *(Gone since 1.3.0. The coroutines pause in `compress_common`'s loop and, for `verify` and the extract commands, before each buffer's worth of reading, so those use helpers too. Reads are still synchronous, and the parent walk and `compress_v5_map` still run without helpers.)*
   - Only `main`, `do_create*`, `do_copy*` and `compress_common*` are instrumented, with `ASYNCIFY_IGNORE_INDIRECT` (`wasm/link.sh:5-6`), so the instrumentation overhead in hot code is nil.
   - Each yield unwinds and rewinds four small frames (a 64 KiB Asyncify stack) plus one event-loop turn. There are about (hunks/batchSize) yields: for a 4.7 GB DVD at batch 8, about 147 k.
   - Limitations:
@@ -736,9 +746,11 @@ The avhu codec is excluded because its `postinit` reads the CHD's `AVAV` metadat
 - **Serial job worker.** Reading, stream SHA-1 (wasm, slower than native), copies, OPFS writes, flushing, the `-2` recompressions and the parent walk all run on one thread. This is the same serial ceiling as native, but lower.
 - **Copies per hunk:** input copied twice (heap → batch, batch → helper heap); output copied four times (heap slice, concatenation, heap set, memcpy into the item).
 - **Memory:** each helper holds a full codec group, and the job holds 16 unused groups (`m_codecs[16]` is still allocated). The project bench shows 0.6–1.1 GB peak RSS in Chromium.
-- **Thread count:** chosen by `Tuning` (`app/ui.js:363-447`), which measures helper throughput on synthetic 4 KiB DVD hunks at 1, 2, 3, 4, 6, 8… threads until the gain drops under 8 %. It is capped at 8 on mobile and 16 elsewhere, and cached per core count plus user agent.
+- **Thread count:** chosen by `Tuning` in `app/ui.js`, which measures helper throughput on synthetic 4 KiB DVD hunks at 1, 2, 3, 4, 6, 8… threads until the gain drops under 8 %. It is capped at 8 on mobile (4 on iPhones: `iosThreadCap`) and 16 elsewhere, and cached per core count plus user agent.
 
 ### 6.5 What a fork could restructure
+
+*Status (fork-plan.md, milestones 1 and 2): 1 is done in part, with coroutines instead of a C API: no `callMain` and no Asyncify since 1.3.0, but progress is still read from text. 5 is done in the page for verify and extract, and 6 is done (unrolled SHA-1, slice-by-8 CRC-16). 2 and 3 are open.*
 
 1. **A proper library API instead of `callMain` + Asyncify.** `chd_file_compressor` is already a resumable state machine. Expose a C API (`chd_create_open`/`chd_create_step`/`chd_create_finish`, plus metadata calls) and drive `step()` from JS. This removes Asyncify, the text-scraped progress, and the `main()` coupling.
 2. **Push-based streaming input.** Replace `read_data` pull with "here is the next N bytes" push into the ring. This allows async `File` streams without `FileReaderSync`, true stdin in native builds, and no staging on iOS. It must keep the ring and stale-tail semantics to stay byte-identical.
@@ -753,7 +765,7 @@ The avhu codec is excluded because its `postinit` reads the CHD's `AVAV` metadat
 
 ### 7.1 Real dependency closure (`$SP/bench-B/closure.py` over `build/obj-native`)
 
-Only **78 of the 144** compiled objects are reachable from `chdman.o` and `version.o`. The Makefile links all of them.
+Only **78 of the 144** compiled objects are reachable from `chdman.o` and `version.o`. The Makefile links all of them. *(Since 1.3.0 `engine/mame` holds only what chdman links, and `wasm/sources.mk` lists only that.)*
 
 **Needed — MAME `lib/util` (18 files):**
 
@@ -788,7 +800,7 @@ Only **78 of the 144** compiled objects are reachable from `chdman.o` and `versi
 
 **Not needed:** `aes256cbc`, `archiver`, `corealloc`, `coreutil`, `delegate`, `disasmintf`, `dvdrom`, `dynamicclass`, `harddisk`, `hash`, `ioprocsfilter`, `jedparse`, `language`, `md5`, `mfpresolve`, `msdib`, `nanosvg`, `opresolv`, `options`, `path_to_regex`, `plaparse`, `png`, `simh_tape_file`, `timeconv`, `un7z`, `unzip`, `vecstream`, `wavwrite`, `xmlfile`, `zippath`, all of expat, 26 other LZMA/7z files, `zlib` `compress`/`infback`/`uncompr`, and zstd `debug`/`threading`.
 
-`wasm/sources.mk` is therefore about twice as broad as necessary. `wasm-ld --gc-sections` hides most of it from the binary.
+`wasm/sources.mk` is therefore about twice as broad as necessary. `wasm-ld --gc-sections` hides most of it from the binary. *(Trimmed in 1.3.0.)*
 
 **Coupling points a fork must replace or vendor:**
 
@@ -804,6 +816,8 @@ Only **78 of the 144** compiled objects are reachable from `chdman.o` and `versi
 | `cdrom_file` | TOC parsing and CD reading (lane C) |
 
 ### 7.2 Bundled 3rdparty versions at 76c7d19
+
+*The engine bundles the `mame0289` versions: zstd 1.5.5 and LZMA SDK 23.01, with the same zlib and libFLAC. utf8proc and expat are not in it.*
 
 | Library | Version | Note |
 |---|---|---|
@@ -848,7 +862,7 @@ Only **78 of the 144** compiled objects are reachable from `chdman.o` and `versi
 - Remove `disasmintf.cpp` and `nanosvg.cpp` from the build. They are unused by chdman, and MAME's `COPYING` says "MAME as a whole … GPL; individual files may be … less restrictive … as noted in their header", so a header-less file is best treated as GPL-2.0.
 - Pick BSD for zstd.
 - Ship the notices for zlib, Xiph (FLAC), MIT (utf8proc, expat if kept) and the Unicode data license.
-- Discpress's `THIRD_PARTY_NOTICES.md` says "Only the BSD-licensed parts of MAME … are compiled", but `disasmintf.cpp` is compiled, so the statement is technically inaccurate. Likely nothing of it survives wasm GC, but trimming `sources.mk` settles it.
+- Discpress's `THIRD_PARTY_NOTICES.md` says "Only the BSD-licensed parts of MAME … are compiled", but `disasmintf.cpp` is compiled, so the statement is technically inaccurate. Likely nothing of it survives wasm GC, but trimming `sources.mk` settles it. *(Both done in 1.3.0: neither file is in `engine/FILES` or `wasm/sources.mk`, and `THIRD_PARTY_NOTICES.md` now describes `engine/`.)*
 
 ### 7.4 Build system
 
@@ -860,12 +874,14 @@ Only **78 of the 144** compiled objects are reachable from `chdman.o` and `versi
 - **Discpress:** `wasm/Makefile` + `sources.mk`.
   - Native build: `T=native`, `-O2 -g0`, `FLAC__NO_ASM`.
   - wasm build: `-O3 -fwasm-exceptions` with and without `-msimd128`.
-  - `wasm/link.sh` handles Asyncify and exports; the SDL shim covers the clipboard only.
+  - `wasm/link.sh` handles Asyncify and exports *(exports only since 1.3.0)*; the SDL shim covers the clipboard only.
   - For the 0.289 comparison build I overrode `UTIL`, `ZSTD_SRC`, `EXPAT_SRC` and `COMMON` (0.289 predates `ZLIB_CONST` use, `archiver.cpp`, `ioprocsstream.cpp` and `zstd_preSplit.c`). The Makefile otherwise worked unchanged as a reusable harness for building any MAME revision.
 
 ---
 
 ## 8. UX gaps relative to modern expectations
+
+*"Today" is chdman at 76c7d19. The engine has since fixed the verify exit code and the crashes on bad input, refuses an output that is also an input, and has a per-track-type codec plan (`--codecplan`); the page verifies CHDs against its Redump database and the user's DAT files.*
 
 | Gap | Today | Modern expectation |
 |---|---|---|
@@ -887,11 +903,14 @@ Only **78 of the 144** compiled objects are reachable from `chdman.o` and `versi
 
 ## Implications for a Discpress fork
 
-Ranked by value divided by risk. **[BI]** means byte-identical-preserving: output identical to current (76c7d19) chdman for the same options. **[¬BI]** means it changes output bytes; any compatibility risk is stated.
+Ranked by value divided by risk. **[BI]** means byte-identical-preserving: output identical to current (76c7d19) chdman for the same options. *(The reference since 1.2.1 is the 0.289 release.)* **[¬BI]** means it changes output bytes; any compatibility risk is stated.
+
+*Status (fork-plan.md has the detail): 1, 5, 7, 8 and 11 are done; 3, 4, 6 and 9 in part; 2 is open. Notes follow each item.*
 
 1. **[BI] Fast hashing.** SHA-1 with SHA-NI or ARMv8-SHA, a fast portable fallback, and a SIMD message schedule in wasm; CRC-16 slice-by-8 or CLMUL.
    - Effect: removes the ~150 MB/s serial reader ceiling, and cuts about 5–7 % of worker CPU and about 45 % of verify CPU.
    - Risk: none; hash values are defined mathematically.
+   - *(Done in 1.3.0, milestone 2.1: an unrolled SHA-1 and a slice-by-8 CRC-16, without hardware SHA.)*
 2. **[BI] Fix the threading model.**
    - Replace the busy-wait with a blocking wait (the `-np 1`/single-CPU spin doubles CPU).
    - Make `-np N` mean N compression workers.
@@ -907,13 +926,17 @@ Ranked by value divided by risk. **[BI]** means byte-identical-preserving: outpu
    - Batched CD reads.
 
    Expected gain: about 5–25 % depending on content.
+
+   *(In part: generic `flac` no longer encodes a third time, and the ECC is computed a word at a time. In-flight dedupe is open.)*
 4. **[BI] Library API and executor** (§6.5). A step-driven C API with a pluggable executor and push input:
    - removes Asyncify and text scraping;
    - enables async/streamed browser input (no staging on iOS) and native stdin;
    - enables parallel parent walking in the browser.
 
    **Constraint:** reproduce the 256/128 ring and stale-tail semantics exactly (§2.12). Build a test that compares against native chdman on inputs whose last hunk is partial and whose hunk count exceeds 256.
-5. **[BI] Parallel decompression** for verify, extract, copy input and parent walks: 4–8× on typical hardware. Output identical (reading only).
+
+   *(In part, 1.3.0: Asyncify is gone, through coroutines instead of a step API. Progress events and push input are open.)*
+5. **[BI] Parallel decompression** for verify, extract, copy input and parent walks: 4–8× on typical hardware. Output identical (reading only). *(Done in the page for verify and extract, 1.3.0, milestone 2.8; `copy`'s input and the parent walk are open.)*
 6. **[BI for valid inputs] Robustness and UX fixes:**
    - verify exit codes;
    - banner to stderr;
@@ -928,18 +951,23 @@ Ranked by value divided by risk. **[BI]** means byte-identical-preserving: outpu
    - resumable create.
 
    These change nothing for successful default runs.
+
+   *(Done in 1.3.0: the verify exit code, the banner on stderr, errors instead of `throw nullptr` and SIGFPE, and same-file protection. The rest is open.)*
 7. **[Decision] Pick the byte-identity baseline explicitly.**
-   - Today Discpress equals 76c7d19, i.e. the upcoming 0.290, not 0.289.
+   - Today (1.2.0) Discpress equals 76c7d19, i.e. the upcoming 0.290, not 0.289.
    - Options: (a) keep HEAD (level 6, future-proof with upstream); (b) restore level 8 plus zstd 1.5.5 to match the 0.289 release; (c) make the "reference chdman version" a build parameter and test against several.
    - Also fix the release notes' claim. For GD-ROM the data itself differs from 0.289, so coordinate with lane C.
+   - *(Decided in 1.2.1: the 0.289 release, by building the `mame0289` tag itself. The tests compare with unmodified chdman 0.289.)*
 8. **[¬BI, safe for all readers] Content-aware codec planning.** Skip `cdfl` on data tracks and `cdlz`/`cdzl` on audio tracks (known from the TOC); skip `flac` on non-audio DVD/HD hunks.
    - Gain: about 35–63 % of CD trial CPU and ~50 % of DVD CPU.
    - Bytes change only on the rare hunks where a skipped codec would have won; readers are unaffected (same codec set in the header).
    - Validate on real disc corpora; synthetic fixtures are not enough.
+   - *(Done in 1.3.0, opt-in: `--codecplan`, the page's "Nearly as small, faster" preset; milestone 2.5.)*
 9. **[¬BI] Fix the stale padding.**
    - Zero-fill the tails: invisible, SHA-1 unchanged, file bytes differ.
    - For `createhd` beyond-EOF padding the fix changes the **Data SHA-1**, so gate it behind a flag or warn and refuse when geometry exceeds the input.
    - Also fix the silent raw-input read-error path: fail hard.
+   - *(The read-error path is fixed in the engine. The stale tails are kept: zero-filling them would change the file bytes.)*
 10. **[¬BI, reader-compat risk] Encoder tuning:**
     - zstd levels below 22: level 22 costs 3.5–12 MB/s and decompresses 7–20× faster than LZMA; lower levels are much faster to compress;
     - LZMA fb/mc;
@@ -950,6 +978,7 @@ Ranked by value divided by risk. **[BI]** means byte-identical-preserving: outpu
     - Trim `sources.mk` to the 78-object closure: drop `disasmintf`, `nanosvg`, expat and so on.
     - Correct `THIRD_PARTY_NOTICES.md`.
     - Keep the notices (zlib, Xiph, MIT, Unicode, zstd-BSD).
+    - *(Done in 1.3.0; `scripts/check-licenses.sh` checks `engine/` in CI.)*
 12. **[Overflow hardening, BI for supported sizes]** 64-bit map sizing (`nbits_needed`, `m_rawmap`, CRC over the map), hunk-count range checks at create time, `parse_number` validation.
 
 **Risks:**
@@ -962,7 +991,7 @@ Ranked by value divided by risk. **[BI]** means byte-identical-preserving: outpu
 
 ## Open questions
 
-1. Which chdman should Discpress (and the fork's tests) treat as the reference: the `mame0289` release (LZMA level 8, zstd 1.5.5, old GD-ROM layout) or 76c7d19/0.290? Should the release notes be corrected now?
+1. Which chdman should Discpress (and the fork's tests) treat as the reference: the `mame0289` release (LZMA level 8, zstd 1.5.5, old GD-ROM layout) or 76c7d19/0.290? Should the release notes be corrected now? *(Answered in 1.2.1: the `mame0289` release, and its notes correct the earlier claim.)*
 2. Is the 16-thread cap (`WORK_MAX_THREADS`) intentional for chdman, or only a MAME-emulation default? Would upstream accept a larger or dynamic cap?
 3. How often do "losing" codecs win on **real** discs: cdfl on data tracks, cdlz/cdzl on audio, flac on DVD/HD? This needs a real-disc corpus (not in repo; lane G/E).
 4. Do ARM64 builds (NEON intrinsics, FMA contraction) produce identical FLAC and LZMA bytes? This needs real ARM hardware. My x86 FMA proxy showed no difference.
@@ -970,7 +999,7 @@ Ranked by value divided by risk. **[BI]** means byte-identical-preserving: outpu
 6. What exact dictionary and property assumptions do third-party decoders make (libchdr and others) when a fork changes the LZMA level? This is lane A's decoder-constraints question.
 7. Under `-op` (delta), the final-hunk stale tail can come from parent-walk data. Does that ever make delta CHDs differ between native and wasm? The helpers do not parallelise the walk, so it should match, but it is untested.
 8. Should the fork fix the `createhd` padding bug (changing Data SHA-1s for affected images) or keep it for compatibility with existing software-list hashes?
-9. What is the Asyncify plus `-fwasm-exceptions` behaviour when unwinding through `try` blocks in `do_create_*` under future Emscripten releases? It works with 6.0.10 per the project tests.
+9. What is the Asyncify plus `-fwasm-exceptions` behaviour when unwinding through `try` blocks in `do_create_*` under future Emscripten releases? It works with 6.0.10 per the project tests. *(Moot since 1.3.0: Asyncify is gone.)*
 10. The parent walk iterates over the *child's* length. Can it index stale buffer windows beyond a shorter parent's end and emit out-of-range parent references? This is reachable only with mismatched-size parents; I did not test it.
 
 ## Sources

@@ -1,5 +1,7 @@
 # Lane A: the CHD container format, its codecs, and encoder freedom
 
+> **Status: a research snapshot of 2026-09-27, kept as it was written.** It describes MAME master `76c7d19`, which Discpress was built from up to 1.2.0, with a small patch (`wasm/mame.patch`, Asyncify). Since 1.2.1 Discpress builds the MAME 0.289 release (tag `mame0289`, `f34f025`), and since 1.3.0 its own fork of it in `engine/`: 0.289 plus the changes in [`engine/mame-0.289.diff`](../../engine/mame-0.289.diff) (see [`engine/README.md`](../../engine/README.md)), with C++20 coroutines in place of Asyncify. Many defects listed here are fixed and many recommendations have shipped: notes in italics say where, and [fork-plan.md](fork-plan.md) has the current status of each recommendation. The format itself is as described; of the decoder faults in §11, notes say which the engine has fixed. Line numbers into `chdman.cpp`, `chd.cpp` and `cdrom.cpp` refer to `76c7d19`, not to `engine/`; "HEAD", "the pin" and "today" mean that snapshot.
+
 > Part of the [Discpress chdman research dossier](README.md), 2026-09-27. Written by a research agent from source reading and experiments. `$SP/...` paths name artefacts in the temporary research workspace, which is not part of the repository (reproducible lab tooling is in [lab/](lab/)). Lane letters (A, B, C, D1, D2, E, G) refer to the reports listed in the README.
 
 Research dossier for a Discpress hard fork of MAME `chdman`. It covers the byte formats, every codec, and the
@@ -45,16 +47,17 @@ citation. Anything that is neither is marked **[unverified]**.
 
    A libchdr from 2022-08 **segfaults** on any codec it does not know (huff, zstd, cdzs). **[tested]**
 7. **Reproducibility across library versions:**
-   - Discpress builds from post-0.289 master (`mame0289-1167`), which ships LZMA SDK 26.02 and zstd 1.5.7. The
-     actual 0.289 release shipped LZMA 23.01 and zstd 1.5.5.
+   - Up to 1.2.0 Discpress was built from post-0.289 master (`mame0289-1167`), which ships LZMA SDK 26.02 and zstd
+     1.5.7. The actual 0.289 release, which Discpress has built since 1.2.1, shipped LZMA 23.01 and zstd 1.5.5.
    - LZMA 23.01 and 26.02 produce identical streams on 22,760 test hunks. **[tested]**
    - zstd 1.5.5 and 1.5.7 level-22 frames differ for about 12% of hunks **[tested]**, so `-c zstd`/`cdzs` output is
      *not* byte-identical to the chdman 0.289 release. Default codecs are unaffected.
    - The tree also contains post-0.289 CHD changes: the CHSE session metadata tag, which changes the overall SHA1
      of multi-session discs, and CD+G cue parsing. This is cross-cutting for lanes B and E.
 8. **Robustness:**
-   - All three decoders crash (stack overflow) on a SELF→self map cycle. **[tested]**
-   - MAME's `chdman verify` hangs forever on a malformed FLAC hunk. **[tested]**
+   - All three decoders crash (stack overflow) on a SELF→self map cycle. **[tested]** *(Fixed in the engine in 1.8.2.)*
+   - MAME's `chdman verify` hangs forever on a malformed FLAC hunk. **[tested]** *(Fixed in the engine's
+     `flac.cpp`.)*
    - MAME has unbounded writes in its Huffman tree import and lookup-table build (from the code).
 
 ---
@@ -65,7 +68,7 @@ citation. Anything that is neither is marked **[unverified]**.
 
 | Component | Version / commit | Notes |
 |---|---|---|
-| MAME | `76c7d197ed` = `mame0289-1167`, 2026-09-27 | Pristine files extracted with `git show`; the working tree carries `wasm/mame.patch`. All `path:line` citations refer to the pristine files. |
+| MAME | `76c7d197ed` = `mame0289-1167`, 2026-09-27 | Pristine files extracted with `git show`; the working tree carried `wasm/mame.patch` at the time. All `path:line` citations refer to the pristine files. |
 | MAME release 0.289 | tag `mame0289` = `f34f02505e`, 2026-07-30 | Used for the library-version comparison. |
 | libchdr | `rtissera/libchdr@607694c`, 2026-09-27 (HEAD) | Full history was cloned. Worktrees were built at `647f42b` (2024-02-11), `44c91c9` (2022-08-17), `098e147` (2022-01-04) and `513aebf` (2020-12-25). |
 | chd-rs | `SnowflakePowered/chd-rs@f6cdb77`, 2026-06-29 | Built with its default features: flate2/zlib-rs, lzma-rs-perf-exp 0.2.1, claxon 0.4.3, ruzstd 0.8.3. `verify_block_crc` is **off**. |
@@ -81,7 +84,7 @@ citation. Anything that is neither is marked **[unverified]**.
 | zstd | 1.5.7 | 1.5.5 | `3rdparty/zstd/lib/zstd.h:112-114`. The update was `f9050e8508` on 2026-08-05, after 0.289. |
 | FLAC | 1.4.3 | 1.4.3 | `3rdparty/flac/CMakeLists.txt:11` |
 
-The Discpress wasm build compiles LZMA with `-DZ7_ST`, single-threaded (`wasm/Makefile:24`).
+The Discpress wasm build compiles LZMA with `-DZ7_ST`, single-threaded (`LZMADEF` in `wasm/Makefile`).
 
 ### 1.3 Tools built for this lane
 
@@ -416,7 +419,7 @@ Pseudo-types 7–13 exist only in the on-disk map. `hunk_info` reports SELF, PAR
   - MAME's encoder only references earlier hunks (`otherhunk < hunknum`, `chd.cpp:2893`).
   - Decoders accept forward references and chains **[tested G_forward_self_refs_and_chains]**.
   - **No decoder detects cycles**: a SELF→self entry crashes MAME, libchdr and chd-rs with a stack overflow
-    **[tested R_self_loop]**.
+    **[tested R_self_loop]**. *(Fixed in the engine in 1.8.2.)*
   - libchdr keeps a small decoded-hunk cache for SELF targets (`selfcache`, 64 KiB by default).
 - **PARENT.**
   - The map value is a **unit** index in the parent (V5). chdman hashes the parent at every unit offset, not only at
@@ -510,7 +513,7 @@ chdman writes every metadata entry with the checksum flag, except **AVLD**, whic
 | `CHSE` | **session** (text), new | `"SESSION:%d"` (`chd.cpp:40`) | Written only for multi-session discs, immediately before the first track of each session. It is parsed as applying only if the tag's absolute chain index is adjacent to the track's (`cdrom.cpp:934-941`). Added by `b93961fd52` (2026-08-15) and fixed by `20661546b2` (2026-08-26), **after 0.289**. Neither libchdr nor chd-rs defines it. |
 | `CHGT` | legacy GD-ROM track | same text as CHGD; sets `CD_FLAG_GDROMLE` | read only (`cdrom.cpp:958-960`) |
 | `CHGD` | GD-ROM track (text) | `"TRACK:%d TYPE:%s SUBTYPE:%s FRAMES:%d PAD:%d PREGAP:%d PGTYPE:%s PGSUB:%s POSTGAP:%d"` (`chd.cpp:41`) | createcd from .gdi |
-| `DVD ` | DVD marker | empty string (1 byte, NUL) | createdvd (`chdman.cpp:2308`); DVD support dates from `28104cdbdf` (2023-04-09, MAME 0.254) |
+| `DVD ` | DVD marker | empty string (1 byte, NUL) | createdvd (`chdman.cpp:2308`); DVD support dates from `28104cdbdf` (2023-04-09, MAME 0.255) |
 | `AVAV` | A/V parameters (text) | `"FPS:%d.%06d WIDTH:%d HEIGHT:%d INTERLACED:%d CHANNELS:%d SAMPLERATE:%d"` (`chd.cpp:42`) | createld, avhuff setup |
 | `AVLD` | laserdisc per-frame VBI (binary) | binary; **not checksummed** | createld |
 
@@ -787,13 +790,13 @@ avhuff reads AVAV at compressor post-init (`chdcodec.cpp:1889-1911`). No other c
   zstd version. Default codecs do not use zstd.
 - **FLAC 1.4.3** is unchanged since 0.289.
 - **Cross-cutting (lanes B and E):**
-  - Discpress's "chdman 0.289" is post-release master. It also contains these post-0.289 changes:
+  - Up to 1.2.0 Discpress's "chdman 0.289" was post-release master. It also contained these post-0.289 changes:
     - CHSE session metadata (changes the overall SHA1 of multi-session CDs);
     - `chdman: add GDI pregap support` (`ac47a71ce1`);
     - createcd/extractcd pregap parameters (`1cf0f9e986`);
     - CD+G parsing;
     - `util/chd: fix several size and range handling issues` (`e5e82312c2`).
-  - Byte-identity claims should name the exact tree.
+  - Byte-identity claims should name the exact tree. *(They do since 1.2.1: unmodified chdman 0.289, tag `mame0289`.)*
 
 ---
 
@@ -980,11 +983,14 @@ T46 (MAME more permissive), T43 (chd-rs more permissive).
 ## 11. Decoder robustness
 
 - **MAME:**
-  - SELF recursion has no cycle or depth guard: a stack-overflow crash **[tested]**.
-  - `m_compressed` overflows when `blocklen > hunkbytes` (`chd.cpp:1222`) **[tested]**.
+  - SELF recursion has no cycle or depth guard: a stack-overflow crash **[tested]**. *(Fixed in the engine in
+    1.8.2.)*
+  - `m_compressed` overflows when `blocklen > hunkbytes` (`chd.cpp:1222`) **[tested]**. *(Fixed in the engine in
+    1.8.2.)*
   - The FLAC decode loop never terminates on streams that end early: `process_single` returns true at
     END_OF_STREAM (`flac.cpp:503-505`; libFLAC `stream_decoder.c:1019-1021`). This is a **DoS**: `chdman verify` spins
-    at 100% CPU **[tested]**. It also matters for Discpress's wasm worker when reading user CHDs.
+    at 100% CPU **[tested]**. It also matters for Discpress's wasm worker when reading user CHDs. *(Fixed in the
+    engine's `flac.cpp`: a stream that ends before the hunk is complete is an error.)*
   - `import_tree_rle` writes `repcount` nodes with no bound (`huffman.cpp:176-178`), and `build_lookup_table` doesn't
     bound-check `node.m_bits << shift`, which overflows `m_lookup` if code lengths violate Kraft at the top level
     (`huffman.cpp:614-674`). libchdr fixed both (`de74053`, 2023-02; `a154073`, 2024-10).
@@ -1053,11 +1059,14 @@ These are the must-not-violate rules, as they apply to every decoder tested:
    - CD: 8 → 16–26 frames. Staying ≤ 26 frames keeps the 2-byte length field; the cdfl block size stays 1911–2352.
    - The cost is emulator seek granularity and cache memory, so lane D must confirm emulators handle non-default
      hunk sizes well. Offer it as an option, e.g. an "archive" profile, not as the default.
+   - *(The page has a hunk-size setting per job; the default stays chdman's.)*
 2. **Better deflate for cdzl/zlib/subcode streams.** libdeflate level 12 is fast enough for the browser; zopfli is
    too slow for large images.
    - Gains of 1.3–3.8% on deflate streams, applying to cdzl-won hunks, every subcode stream, and the non-CD zlib
      slot. Fully compatible [T7/T8/T30].
    - libdeflate is also far faster at *decoding* for our own verify path.
+   - *(In part, 1.3.0: libdeflate at level 9 for the deflate codec, opt-in (`--libdeflate`), for speed. Level 12 is
+     open: fork-plan.md, milestone 2.7.)*
 3. **FLAC encoder upgrade.**
    - libFLAC at -8 with exhaustive model search, qlp precision search and LPC orders up to 32, optionally with
      variable block sizes ≤ 2352 using variable numbering.
@@ -1065,16 +1074,22 @@ These are the must-not-violate rules, as they apply to every decoder tested:
      the §12.1 rule 9 limits [T17/T18/T23].
    - The biggest risk is getting numbering or block limits wrong. Mandate the three-decoder test.
    - Removing the MD5 computation and the double 'L'/'B' encode is pure speed.
+   - *(In the engine since 1.3.0: the MD5 is skipped and the third encode is gone, with the same output. Both byte
+     orders are still tried.)*
 4. **Smarter codec selection for speed.**
    - The format lets the encoder pick any listed codec per hunk: prefer a faster-decoding codec when it is within
      x% of the best (e.g. cdzs versus cdlz). This makes emulator loading faster and is compatible with emulators
      that know zstd.
    - Alternatively, try fewer codecs on hunks that obviously won't compress (encoding speed).
+   - *(Done in 1.3.0, another way: the opt-in codec plan, `--codecplan`, tries only the codecs meant for a hunk's
+     track type, and every codec stops once it can't win.)*
 5. **Deterministic "profiles".** Keep a byte-identical "chdman 0.289 compatible" profile (the current promise) and
    make the others explicit.
    - Pin library versions: zstd output changes between 1.5.5 and 1.5.7; LZMA 23.01 and 26.02 happen to agree.
    - Decide whether the fork targets the 0.289 release or post-0.289 master, because of CHSE and CD+G (lanes B, C
      and E).
+   - *(Done: since 1.2.1 the target is the 0.289 release, and the default output is the same byte for byte. The other
+     presets are opt-in: the output tiers of fork-plan.md §3.)*
 6. **Small wins:**
    - Optimal Huffman trees in the map and the huff codec (negligible).
    - Dropping the zstd FCS (1 B/hunk).
@@ -1098,6 +1113,8 @@ These are the must-not-violate rules, as they apply to every decoder tested:
 - **Decoder-side DoS** on malformed input: in Discpress's own reader (MAME code in wasm), a hostile CHD can hang
   the worker (FLAC) or overflow the stack (SELF cycle). The fork should add a depth or visited guard, bound the
   FLAC loop, and bound-check the Huffman import and complen.
+  *(The FLAC loop is bounded in the engine's `flac.cpp`. The SELF cycle and the block length are fixed in 1.8.2. The
+  Huffman import was unchanged as of 1.8.1.)*
 
 ---
 
@@ -1117,7 +1134,7 @@ These are the must-not-violate rules, as they apply to every decoder tested:
 6. The history of MAME's `flac` decoder before libFLAC 1.4, i.e. whether older MAME releases behave like
    libchdr-2020 on smaller fixed frames, was not tested. Only current MAME was built.
 7. Should the fork emit **CHSE** metadata? It only exists on post-0.289 master and alters the overall SHA1 for
-   multi-session discs (lanes C and E).
+   multi-session discs (lanes C and E). *(No: the engine is 0.289, which has none.)*
 8. The zstd 1.5.5/1.5.7 output differences were measured with python-zstandard's one-shot API, which matched
    chdman's frames exactly for 1.5.7. MAME 0.289's own 1.5.5 build was not compiled for the comparison, so this is
    **[likely, not directly verified]**.
