@@ -39,7 +39,7 @@ A page can't tell in advance whether downloads work; the best hint is an iOS use
 - **WebAssembly.**
   - iOS 18+ gives fast memory to only 3 wasm instances per process. The others are bounds-checked, and each `memory.grow` copies the whole heap.
   - Every iPhone reports 4 cores (2 performance cores).
-  - Discpress starts each heap at 16 MB and grows it, and allows up to 8 threads on touch devices.
+  - Discpress starts each heap at 16 MB and grows it, and allows up to 8 threads on touch devices, 4 on iPhones (`iosThreadCap` and `Tuning.cap` in `app/ui.js`).
   - Lockdown Mode turns WebAssembly off entirely.
 - **Background.**
   - Once the page is hidden (screen lock, app switch), WebKit freezes it within 20 s, workers included, and a frozen process is a prime target for being killed.
@@ -55,7 +55,7 @@ A page can't tell in advance whether downloads work; the best hint is an iOS use
 **Routes other than Safari** ([apps-and-native.md](apps-and-native.md)):
 
 - **iCab Mobile ($2.99)** opens local HTML, supports `blob:` downloads (10.4+) and shows its downloads in Files. Every step is documented, but the whole chain is untested with a 1 GB file.
-- **Sitecase is actively maintained** (v2.3.3, 2026-09-27; contact on sitecase.io). Adding downloads is about 50–100 lines in the app.
+- **Sitecase is actively maintained** (v2.3.3, 2026-09-27; contact on sitecase.io). Adding downloads is about 30–100 lines in the app (an estimate: [apps-and-native.md](apps-and-native.md)).
 - **A thin native wrapper app** (WKWebView plus downloads into a Documents folder visible in Files) is 200–400 lines of Swift. It costs $99 a year for the App Store or TestFlight, with a review risk under guideline 4.2 ("repackaged website").
 - **A fully native chdman app** would be the fastest, since the engine builds natively from `engine/`, but it means 1–3 weeks of UI work. No iOS app creates CHDs today.
 - **a-Shell (WASI build)** is feasible but slow: every read and write crosses a text bridge, it runs single-threaded, and the app must stay in the foreground.
@@ -77,7 +77,8 @@ A page can't tell in advance whether downloads work; the best hint is an iOS use
 - In an iPhone/iPad app's web view, a notice (`#iosTip`) points big games to the online version.
 - README and Help send iPhone users to Safari.
 - Tests: `tests/ui/hosted.spec.js`, `tests/ui/mobile.spec.js`.
-- Pages is set up (Settings → Pages → Source: GitHub Actions), and every release deploys there.
+- The service worker that shipped (`web/sw.js`, `web/README.md`) is network first, not the cache-first design of [hosting.md](hosting.md) §3.3: it takes over at once (`skipWaiting()`, `clients.claim()`), a new release reaches the next visit, and its saved copy answers after 4 s on a slow network or when the site answers the page with an error. It never reloads an open page, so a running job is left alone.
+- Pages is set up (Settings → Pages → Source: GitHub Actions). The `pages` job deploys a release there only when its tag is the newest version (`scripts/newest-release.sh`); re-running an older tag fixes its release and leaves the site alone.
 
 The plan as it was:
 
@@ -86,7 +87,7 @@ The plan as it was:
    - give the `github-pages` environment an allowed-tag rule for `v*` (superseded: a tag's run reruns itself on `main`, which the environment allows; `web/README.md`);
    - optionally add a custom domain. `powerbeef.github.io` is shared with every other PowerBeef project site, and so is its storage.
 2. **Keep "nothing is uploaded" checkable.** Add a `Content-Security-Policy` meta tag with `connect-src 'none'` to `app/index.html` (it covers both the file and the hosted copy), and publish the file's SHA-256 with each release so anyone can compare the hosted copy.
-3. **Make it an offline home-screen web app.** Add a manifest, icons and a small service worker that caches the one file and switches to a new version only when no job is running. The single-file download stays the main release for desktop and Android.
+3. **Make it an offline home-screen web app.** Add a manifest, icons and a small service worker that caches the one file and switches to a new version only when no job is running (superseded: the worker that shipped is network first and takes over at once, see Status above and `web/README.md`). The single-file download stays the main release for desktop and Android.
 4. **In the page:**
    - in a viewer app, show a notice up front: large results can't be saved in this app; open the hosted copy in Safari instead;
    - in Safari, results over 512 MB download (already the case);
@@ -102,9 +103,9 @@ The plan as it was:
    - A stored speed test that stopped at the old cap is run again.
 2. **Heaps:** not needed. Measured in the page (bench CD and 1 GB DVD, every preset): a helper's heap never grows past its initial 16 MB, and the job worker's peaks at 23–40 MB. Growth copies are small and rare.
 3. **Wake lock:** already there. It is taken when a job starts and again whenever the page becomes visible. The Help page now says what iOS does when the phone is locked.
-4. **Recovery:** done (`Recovery` in `app/ui.js`, `tests/ui/recovery.spec.js`). A record in `localStorage` lists the running job and the finished results not saved yet. At the next start, `Store.cleanupStale` keeps those results' folder, and the page lists them under "From your last visit" (Save or Delete), with the job that didn't finish.
+4. **Recovery:** done (`Recovery` in `app/ui.js`, `tests/ui/recovery.spec.js`). A record in `localStorage` lists the running job and the finished results not saved yet. At the next start, `Store.cleanupStale` keeps those results' folder, and the page lists them under "From your last visit" (Save or Delete), with the job that didn't finish. For that job the page only says "Add its files again to start over": there is no restart action, since the picked files are gone after a reload ([limits.md](limits.md) §1.3).
 5. **Staging inputs in viewer apps:** not done. The 1.6 GB job read its input for its whole run in Sitecase, and a copy would double the time and disk space of every job. The existing fallback remains: the page streams an input the worker can't read.
-6. **Messages:** done. Lockdown Mode gets its own message, and a share-sheet read failure is no longer taken for the user closing the sheet.
+6. **Messages:** done. Lockdown Mode gets its own message, and a share-sheet read failure ("error while reading" in the `AbortError`'s message) is no longer taken for the user closing the sheet: for a single result since 1.3.1 (`saveOutput` in `app/ui.js`, which then downloads the file instead), for "Save all" since 1.8.2 (`downloadMany`).
 
 The plan as it was:
 
@@ -113,7 +114,7 @@ The plan as it was:
 3. **Keeping the phone awake.** Take a Screen Wake Lock when a job starts and again whenever the page becomes visible, and say that locking the phone or switching apps pauses the job and may stop it.
 4. **Recovery after a reload.**
    - A job leaves a "running" marker in storage.
-   - After a reload, the page says the job was stopped and offers to start it again.
+   - After a reload, the page says the job was stopped and offers to start it again. (It says so, but offers no restart: see Status above.)
    - Finished CHDs that weren't saved yet stay in private storage and are listed, instead of being deleted (`Store.cleanupStale`).
    - Saved results are deleted, as Safari's 7-day rule would delete them anyway.
 5. **Inputs in viewer apps.** Copy picked inputs into private storage at the start when running in a web view, so iOS deleting its temporary copy can't break a job; check `estimate()` for the input plus the output.
@@ -146,7 +147,7 @@ A conversion in Playwright's WebKit once failed with "Multi-core compression fai
 - Both are JSC bugs in its optimizing tier (OMG), not in the page. Every failure was a WebAssembly trap or a crash of the page's process, never a wrong CHD. The 2024 bug needs only OMG; the 2025 one needs OMG, the SIMD build and concurrent compilation together (without any of them: none in 40). Not memory: bounds-checked or mixed fast memories changed nothing. WebKit bug 316918 (SIMD inlined into non-SIMD code) is one such fix, but turning OMG inlining off didn't stop the 2025 crashes.
 - These are x86-64 builds; iPhones and Apple silicon Macs compile with JSC's ARM64 backend, where the same bugs may or may not exist. A PSP or PS2 ISO converted on iOS 18.x and on early iOS 26 would tell.
 - What the page does (`app/worker.js`, `app/ui.js`): a helper that traps is dropped and the others do its batches (the job worker keeps each batch until it is answered; with none left, extract and verify decompress in the job worker). A conversion whose helpers all fail, or whose job worker traps, runs once more from the start. Both give the same CHD, since compression is deterministic. When the second run fails too, the error says it is the browser's fault and to update it (on iOS: iOS; on a Mac: Safari, or another browser). A crash of the whole page can't be caught; Recovery reports it after the reload.
-- Tests: `DEBUG.failHelpers` (`'one'`, `'all'` or `'always'`) makes helpers trap like this (`tests/ui/fallbacks.spec.js`).
+- Tests: `DEBUG.failHelpers` (`'one'`, `'all'` or `'always'`) makes helpers trap like this (`tests/ui/fallbacks.spec.js`); `'lie'` makes the first one answer for other hunks than it was given (`tests/ui/verify.spec.js`).
 
 ## The blurred top of the Home Screen web app (iOS 26)
 

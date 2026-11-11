@@ -9,7 +9,7 @@ Starting point (from the task): in **Sitecase** (App Store, WKWebView), `dist/di
 | Route | Works today? | Large files (1–8 GB)? | Effort for us | Effort for the user | Cost |
 |---|---|---|---|---|---|
 | **Sitecase, as is** | Converts: yes (reported). Export: **no** | Conversion yes; export impossible | none | low | free (Pro $6.99 not needed) |
-| **Sitecase + ask the developer to add WKDownload** | No (needs an app update) | Should be fine, since WKDownload writes to disk (unverified for 1 GB blobs) | Send an email with a ~50-line patch suggestion | low, once shipped | free |
+| **Sitecase + ask the developer to add WKDownload** | No (needs an app update) | Should be fine, since WKDownload writes to disk (unverified for 1 GB blobs) | Send an email with a patch suggestion of about 30–100 lines | low, once shipped | free |
 | **Sitecase + export in parts** (page shares 100–200 MB slices, then `cat` in a-Shell) | Plausible with a small Discpress change (unverified) | Yes, in slices (whether one share of about 200 MB survives is unverified) | small: a "save in parts" button | high (many share sheets plus one a-Shell command) | free |
 | **iCab Mobile** (opens local HTML, has a download manager with `blob:` support, downloads visible in Files) | **Probably**: every piece is documented, but not the whole chain for 1 GB | Unverified for 1 GB blobs | none (maybe a doc note) | low–medium | $2.99 |
 | **Documents by Readdle** (browser with a download manager) | Unverified: can it open a local .html with JS? Could load Discpress from an https URL instead | Unverified | none, or host the page on https | medium | free |
@@ -43,6 +43,7 @@ A claim that "each OPFS file in a WKWebView is limited to 10 MB" (https://github
 ### Sitecase ("HTML Viewer – Sitecase")
 - **App Store listing** (https://apps.apple.com/us/app/html-viewer-sitecase/id6762896369):
   - Dennis Bortmes, v2.3.3 (2026-09-27), iOS 17.6+, free.
+    - The minimum iOS is unverified: this listing (the US store) said 17.6+, while the listings read for [export.md](export.md) and [hosting.md](hosting.md) (the Ghana and German stores) said iOS 16+. So: iOS 16 or 17.6, depending on the App Store listing read.
   - Pro is a $6.99 one-time purchase.
   - Features: "Full HTML, CSS and JavaScript rendering", "Turn network access on or off anytime", "Turn JavaScript support on or off (Pro)", Shortcuts/Siri to open saved files, and whole-folder import (Pro).
   - 2.1.0 "localStorage persistence fix"; 2.2.0 "Update from Source".
@@ -56,7 +57,7 @@ A claim that "each OPFS file in a WKWebView is limited to 10 MB" (https://github
   - handle `navigationAction.shouldPerformDownload` / `blob:` with `.download`;
   - in `download(_:decideDestinationUsing:suggestedFilename:)`, write to the app's Documents folder, then offer `UIDocumentPickerViewController(forExporting:)`, or enable `UIFileSharingEnabled` + `LSSupportsOpeningDocumentsInPlace` so Documents shows in Files.
 
-  That's roughly 50–100 lines. For the 1 GB case, WebKit streams a file-backed blob to disk instead of memory (expected from how WebKit handles blobs, but **unverified on device**).
+  That's roughly 30–100 lines (an estimate; the reports first gave 30, about 50, and 50–100). For the 1 GB case, WebKit streams a file-backed blob to disk instead of memory (expected from how WebKit handles blobs, but **unverified on device**).
 
 ### iCab Mobile (Alexander Clauss), $2.99, v11.3.1 (2026-07-14), iOS 15+ (https://apps.apple.com/us/app/icab-mobile-web-browser/id308111628)
 Version history (http://www.icab-mobile.de/history.html):
