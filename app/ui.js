@@ -1325,7 +1325,7 @@ var PROFILES = {
   jagcd: { noMister: true },
   vcd: { keep: true, note: 'This is a Video CD, not a game: video players don\u2019t open CHDs, so keep the original files to watch it.' },
   video: { keep: true, note: 'This is a video disc, not a game: video players don\u2019t open CHDs, so keep the original files to watch it.' },
-  pc: { keep: true, hint: 'DOSBox Pure opens only uncompressed CHDs (No compression).' },
+  pc: { keep: true, hint: 'For DOSBox Pure, choose No compression: it opens only uncompressed CHDs.' },
   gc: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },
   wii: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },
   xbox: { keep: true, note: 'Xbox emulators (xemu, Xenia) do not load CHDs. They use the ISO itself.' },

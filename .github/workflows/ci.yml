@@ -2,8 +2,9 @@
 # - checks: dist/discpress.html is what the sources make (scripts/check-dist.sh, as a release does),
 #   and engine/ holds only permissively licensed MAME code (scripts/check-licenses.sh);
 # - tests: the whole UI suite (tests/README.md) on dist/discpress.html, against unmodified chdman
-#   0.289 built from the MAME release and the engine built natively. REQUIRE_NATIVE makes the run fail
-#   if either is missing, rather than skip the byte-for-byte checks.
+#   0.289 built from the MAME release and the engine built natively, after checking that
+#   engine/mame-0.289.diff lists every change (scripts/engine-diff.sh --check). REQUIRE_NATIVE makes the
+#   run fail if either build is missing, rather than skip the byte-for-byte checks.
 name: CI
 
 on:

@@ -18,4 +18,4 @@
 
 Some of the page's disc detection rules (Video CD, Neo Geo CD, CDTV and video discs) follow those of [MPF](https://github.com/SabreTools/MPF), the Media Preservation Frontend (MIT, © Matt Nadareski). No code was copied: they are written anew in `app/ident.js`.
 
-MAME as a whole is licensed under GPL-2.0-or-later. Only BSD-licensed parts of MAME (and the public-domain `md5.h`) are in `engine/` and compiled into Discpress. Every change made to them is in [`engine/mame-0.289.diff`](engine/mame-0.289.diff).
+MAME as a whole is licensed under GPL-2.0-or-later. Only BSD-licensed parts of MAME (and the public-domain `md5.h`), with the permissively licensed libraries MAME bundles (the table above), are in `engine/` and compiled into Discpress. Every change made to them is in [`engine/mame-0.289.diff`](engine/mame-0.289.diff).

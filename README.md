@@ -39,7 +39,7 @@
 </p>
 
 > [!TIP]
-> **New in 1.8: the dependable one.** No finished result gets lost, no disc takes another game's tracks or name, and big folders of games are added faster. [See what's new](https://github.com/PowerBeef/discpress/releases/latest).
+> **New in 1.8: the dependable one.** No finished result gets lost, no disc takes another game's tracks or name, and big folders of games are added faster. Since 1.8.1, a compatibility mode makes PS2 DVD games into CHDs that older emulators read. [See what's new](https://github.com/PowerBeef/discpress/releases/latest).
 
 <img src="docs/brand/divider.png" width="100%" alt="">
 
@@ -64,7 +64,7 @@ There is nothing to install, and your files never leave your device. **Download 
     <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/steps-mobile-dark.png">
     <source media="(max-width: 600px)" srcset="docs/brand/steps-mobile-light.png">
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/steps-dark.png">
-    <img src="docs/brand/steps-light.png" width="100%" alt="1. Add your games: pick the cue and bin files, a gdi set, an iso or a zip; Discpress spots the console and the exact game. 2. Press Start: Discpress’s chdman compresses every disc using all your CPU cores. 3. Save the CHDs, named after the official title and ready for your emulator.">
+    <img src="docs/brand/steps-light.png" width="100%" alt="1. Add your games: pick the cue and bin files, a gdi set, an iso or a zip; Discpress spots the console and the exact game. 2. Press Start: Discpress’s chdman compresses every disc on several CPU cores at once. 3. Save the CHDs, named after the official title and ready for your emulator.">
   </picture>
 </p>
 
@@ -82,7 +82,7 @@ There is nothing to install, and your files never leave your device. **Download 
     <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/features-mobile-dark.png">
     <source media="(max-width: 600px)" srcset="docs/brand/features-mobile-light.png">
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/features-dark.png">
-    <img src="docs/brand/features-light.png" width="100%" alt="chdman, improved. Knows your games: console, serial, disc number and region, named from over 31,000 Redump discs. Multi-core fast. Made for phones. Big discs welcome. Totally private. Checks your dumps. Opens what you have. Ready to play.">
+    <img src="docs/brand/features-light.png" width="100%" alt="chdman, improved. Knows your games: console, serial, disc number and region, named from over 33,000 Redump discs. Multi-core fast. Made for phones. Big discs welcome. Totally private. Checks your dumps. Opens what you have. Ready to play.">
   </picture>
 </p>
 
@@ -93,14 +93,14 @@ There is nothing to install, and your files never leave your device. **Download 
 **Converting**
 
 - **Real chdman output.** Standard CHD v5 files, byte for byte the same as desktop chdman 0.289 makes on Linux, with the same checksums as any chdman 0.289.
-- **The right command, picked for you:** `createcd`, `createdvd`, `createhd`, `createld`, `extractcd`, `extractdvd`, `extracthd`, `verify` and `info`, with the type and hunk size each console's emulators need. The **Advanced** tab has every chdman command and option, including `copy`, parent CHDs, `addmeta` and hard disk templates.
+- **The right command, picked for you:** `createcd`, `createdvd`, `createhd`, `createld`, `extractcd`, `extractdvd`, `extracthd`, `extractld`, `extractraw`, `verify` and `info`, with the type and hunk size each console's emulators need. The **Advanced** tab has every chdman command and option, including `copy`, parent CHDs, `addmeta` and hard disk templates.
 - **Compression to suit you.** *Smallest* (the default) is chdman's own. *Nearly as small, faster* tries each track only with the codec that suits it: about 1.7 times as fast for CDs, at most 0.3% bigger, same checksums. *Faster to create*, *Faster to load (Zstd)*, *For MiSTer FPGA* and *No compression* are there too.
-- **Fast.** Compression is spread over all your CPU cores, with WebAssembly SIMD when your browser supports it. Extracting and verifying use several cores too.
-- **Back again.** A CHD extracts to its Redump dump: the same cue sheet and one `.bin` per track, so the files match Redump's checksums. Settings → *Keep the cue sheet in CD CHDs* also keeps what a CHD doesn't otherwise hold (CATALOG, FLAGS, ISRC, extra indexes), for discs that have it.
+- **Fast.** Compression is spread over several CPU cores, as many as make it faster on your device (a one-off speed test decides; Settings has the choice), with WebAssembly SIMD when your browser supports it. Extracting and verifying use several cores too.
+- **Back again.** A CD CHD extracts to its Redump dump: the same cue sheet and one `.bin` per track, so the files match Redump's checksums. A GD-ROM comes back as its `.gdi` set, a DVD as its `.iso`. Settings → *Keep the cue sheet in CD CHDs* also keeps what a CHD doesn't otherwise hold (CATALOG, FLAGS, ISRC, extra indexes), for discs that have it.
 
 **Knowing your games**
 
-- **Game recognition.** Discpress reads the disc's own boot files to find the console, the serial number, which disc of a set it is and its region. It then looks the game up in a built-in copy of the [Redump](http://redump.org) database (over 31,000 discs). When the size and CRC-32 match, the dump is marked as verified. When several releases still fit, you choose which one.
+- **Game recognition.** Discpress reads the disc's own boot files to find the console, the serial number, which disc of a set it is and its region. It then looks the game up in a built-in copy of the [Redump](http://redump.org) database (over 33,000 discs). When the size and CRC-32 match, the dump is marked as verified. When several releases still fit, you choose which one.
 - **Official names.** For example `Metal Gear Solid (USA) (Disc 1).chd`. You can also type your own name, turn renaming off, or use **Rename** to fix the name of a CHD you already have.
 - **Your DAT files.** Add Redump or No-Intro DAT files (the `.dat` or `.xml`, or the `.zip` they come in) and every track of a disc is checked against them by size and CRC-32: before converting, and for a CHD after **Verify**, without extracting it. A disc whose every track matches is named after its DAT entry. The DATs are kept in the browser for your next visits.
 - **Verify** checks a CHD's own checksums, then compares it with Redump without extracting it.
@@ -109,7 +109,7 @@ There is nothing to install, and your files never leave your device. **Download 
 
 - **Archives and packed images are opened as they are read:** `.zip` archives (zip64 included), ECM images (`.bin.ecm`), CSO and ZSO compressed ISOs, and PlayStation `EBOOT.PBP` files made with popstation, one card per disc. Each is checked as it is unpacked.
 - **Disc images of every common kind:** cue sheets and their tracks, Dreamcast `.gdi` sets, `.iso` images (2,048- or 2,352-byte sectors), CloneCD (`.ccd` + `.img` + `.sub`), Nero (`.nrg`) and cdrdao (`.toc`). Cue sheets in odd encodings, with lower-case keywords or Windows line ends, are read correctly.
-- **Clear refusals.** Formats chdman can't take (DiscJuggler `.cdi`, Alcohol 120% `.mds`/`.mdf`, `.isz`, `.7z`, `.rar`), and discs chdman 0.289 would store wrong (CD+G tracks), get a card that says why and what to do instead.
+- **Clear refusals.** Formats chdman can't take (DiscJuggler `.cdi`, Alcohol 120% `.mds`/`.mdf`, `.isz`, `.7z`, `.rar`), and discs chdman 0.289 can't convert (CD+G tracks), get a card that says why and what to do instead.
 
 **Ready for your emulator** (see [below](#ready-for-your-emulator))
 
@@ -159,7 +159,7 @@ There is nothing to install, and your files never leave your device. **Download 
 | PSP | `.iso`, `.cso` or `.zso` | DVD CHD, with the 2,048-byte hunks PPSSPP recommends |
 | Arcade and computer hard disks | `.img`, `.hdd` | Hard disk CHD |
 | LaserDisc arcade games | `.avi` | LaserDisc CHD |
-| Any of the above | `.chd` | Back to `.cue`/`.bin` (by default the Redump dump's own files), `.gdi` or `.iso` |
+| Any of the above | `.chd` | Back to `.cue`/`.bin` (by default the Redump dump's own files), `.gdi`, a cdrdao `.toc` or `.iso`; a hard disk CHD to `.img`, a LaserDisc CHD to `.avi` |
 
 GameCube, Wii, Xbox and PS3 discs, Video CDs, DVD-Video, Blu-ray and UMD Video discs are recognized too, with a note that their emulators or players don't load CHDs.
 
@@ -184,14 +184,14 @@ A lone `.bin` or raw `.iso` without its cue sheet works for single-track data di
 
 ## Ready for your emulator
 
-The right CHD type and hunk size for each console, compression that every emulator reads unless you choose otherwise, the files your emulator wants next to the CHD, and a warning before you make one it can't play.
+The right CHD type and hunk size for each console, compression that every emulator reads unless you choose otherwise (DOSBox Pure, for PC discs, wants none, and the card says so), the files your emulator wants next to the CHD, and a warning before you make one it can't play.
 
 <p align="center">
   <picture>
     <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/emulators-mobile-dark.png">
     <source media="(max-width: 600px)" srcset="docs/brand/emulators-mobile-light.png">
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/emulators-dark.png">
-    <img src="docs/brand/emulators-light.png" width="100%" alt="The right CHD: CD or DVD, and the hunk size each console's emulators want. Boots as it should: Saturn and Sega CD CHDs skip the cue sheet their emulators reject; NAOMI GD-ROMs keep their romset name. Warns in time: says when an emulator can't read Zstd, or misreads a disc's sessions, gaps or tracks. LibCrypt .sbi: saved next to a PAL PlayStation CHD, made from a CloneCD .sub, and asked for when a protected game has none. Whole sets: .m3u playlists and a note of the discs a set still needs. MiSTer preset. Android PS2: CD CHDs of DVD games for AetherSX2 and NetherSX2. Says what won't: GameCube, Wii, Xbox, PS3 and video discs. Refuses what breaks: discs chdman 0.289 would store wrong, such as CD+G tracks.">
+    <img src="docs/brand/emulators-light.png" width="100%" alt="The right CHD: CD or DVD, and the hunk size each console's emulators want. Boots as it should: Saturn and Sega CD CHDs skip the cue sheet their emulators reject; NAOMI GD-ROMs keep their romset name. Warns in time: says when an emulator can't read Zstd, or misreads a disc's sessions, gaps or tracks. LibCrypt .sbi: saved next to a PAL PlayStation CHD, made from a CloneCD .sub, and asked for when a protected game has none. Whole sets: .m3u playlists and a note of the discs a set still needs. MiSTer preset. Older emulators: CD CHDs of PS2 DVD games for AetherSX2, NetherSX2 and older PCSX2. Says what won't: GameCube, Wii, Xbox, PS3 and video discs. Refuses what breaks: discs chdman 0.289 can't convert, such as CD+G tracks.">
   </picture>
 </p>
 
@@ -218,15 +218,15 @@ The right CHD type and hunk size for each console, compression that every emulat
 
 | When | What the card says |
 |---|---|
-| Zstd, or the MiSTer preset | Which of the console's emulators can't read it: Kronos and Yabause (Saturn), BlastEm (Sega CD), Beetle SuperGrafx (PC Engine CD), Opera (3DO), WinUAE (CD32, CDTV), SwanStation builds from before about March 2024 (PlayStation), AetherSX2 and NetherSX2 (PS2), Flycast before 2.3 (Dreamcast, NAOMI), Beetle PC-FX before August 2026; with the compatibility mode on, that older emulators can't open Zstd CHDs, for every console |
+| Zstd, or the MiSTer preset | Which of the console's emulators can't read it: Kronos and Yabause (Saturn), BlastEm (Sega CD), Beetle SuperGrafx (PC Engine CD), Opera (3DO), WinUAE (CD32, CDTV), SwanStation builds from before about March 2024 (PlayStation), AetherSX2 and NetherSX2 (PS2), Flycast before 2.3, and probably Redream and Demul (Dreamcast, NAOMI), Beetle PC-FX before August 2026; with the compatibility mode on, that older emulators can't open Zstd CHDs, for every console |
 | The MiSTer preset, for Dreamcast, NAOMI, PS2, PC-FX, PC-98 or Jaguar CD | That MiSTer has no core that plays them from CHDs |
 | A LibCrypt game without its `.sbi` | That emulators stop it partway, and where to get the file |
 | A 2,048-byte copy of a PlayStation disc | That its videos and sound may be missing and Beetle PSX can't load it: convert the `.bin` and `.cue` dump instead |
-| A disc with several sessions (CD-Extra, MIL-CD) | That emulators read the later sessions from the wrong place; for a Jaguar CD, that its emulators may not load it at all |
+| A disc with several sessions (CD-Extra, MIL-CD) | That emulators read the later sessions from the wrong place (for a Dreamcast or NAOMI disc: except Flycast builds from September 2026 on, which guess it for MIL-CDs); for a Jaguar CD, that its emulators may not load it at all |
 | A CD-based Dreamcast disc with pregaps, or MODE2/2048 or MODE2/2324 tracks | That Flycast 2.7 and earlier, or any Flycast, can't load it |
 | A PS2 game on CD with music tracks | That PCSX2 plays only the first track of a CD CHD |
 | PREGAP or POSTGAP lines in a cue sheet | Which emulators read the tracks after them from the wrong place: Beetle Saturn, Kronos and Yabause; Beetle PCE, Geargrafx, Beetle PC-FX and Beetle PSX; ares; NeoCD |
-| Sega CD layouts | When Genesis Plus GX misses tracks after a second data track, PicoDrive won't take a disc of 80 minutes or more, or BlastEm starts music late |
+| Sega CD layouts | When Genesis Plus GX reads the tracks only up to the first data track after track 1, PicoDrive won't take a disc of 80 minutes or more, or BlastEm starts music late |
 | A Neo Geo CD with a Mode 2 track | That NeoCD can't load it |
 | A UMD Video | That it's a film, which PPSSPP doesn't play |
 | GameCube, Wii, Xbox or PS3; Video CDs and video discs | That their emulators or players don't load CHDs |
@@ -271,14 +271,14 @@ Opening the online version is an ordinary visit to a GitHub Pages site: GitHub s
 
 Yes. Discpress runs chdman from the official MAME 0.289 release, so its files are standard CHD v5 with the same checksums as desktop chdman 0.289's, and byte for byte the same as chdman 0.289 makes on Linux, CD audio included. (chdman builds for Windows or macOS round the FLAC encoder's math differently, so their CD-audio bytes can differ, never the audio itself.)
 
-Its source is in <a href="engine/README.md"><code>engine/</code></a>, and <a href="engine/mame-0.289.diff"><code>engine/mame-0.289.diff</code></a> lists every change: running in a browser and on several cores, more speed without changing a byte, packed images, and fixes for chdman 0.289's crashes on bad input. Only opt-in choices change the bytes (never the checksums): the faster compressions, Zstd, the MiSTer preset, and keeping cue sheets in CD CHDs.
+Its source is in <a href="engine/README.md"><code>engine/</code></a>, and <a href="engine/mame-0.289.diff"><code>engine/mame-0.289.diff</code></a> lists every change: running in a browser and on several cores, more speed without changing a byte, packed images, and fixes for chdman 0.289's crashes on bad input. Only opt-in choices change that. The two faster compressions and keeping cue sheets in CD CHDs give other bytes with the same checksums. Zstd, the MiSTer preset and another hunk size are chdman's own options, and give what desktop chdman gives with them. Making a PS2 DVD game as a CD CHD (<i>Create as</i>, or the compatibility mode for older emulators) gives chdman's <code>createcd</code> CHD of it.
 </details>
 
 <details>
 <summary><b>Which compression should I choose?</b></summary>
 <br>
 
-Keep the default, <i>Smallest</i>, unless you have a reason not to: every emulator reads it. <i>Nearly as small, faster</i> is the best trade when you convert a lot (about 1.7 times as fast for CDs, 1.5 for DVDs, files at most 0.3% bigger). <i>Faster to load (Zstd)</i> helps weak devices, but some emulators can't read it, and the card says which. On MiSTer, use <i>For MiSTer FPGA</i>.
+Keep the default, <i>Smallest</i>, unless you have a reason not to: every emulator reads it (DOSBox Pure, for PC discs, is the exception: it wants <i>No compression</i>). <i>Nearly as small, faster</i> is the best trade when you convert a lot (about 1.7 times as fast for CDs, 1.5 for DVDs, files at most 0.3% bigger). <i>Faster to load (Zstd)</i> helps weak devices, but some emulators can't read it, and the card says which. On MiSTer, use <i>For MiSTer FPGA</i>.
 </details>
 
 <details>
@@ -307,7 +307,7 @@ The downloaded file and the online version work the same in each of them. On iPh
 <summary><b>How big can a disc be?</b></summary>
 <br>
 
-Multi-gigabyte DVD images work as long as your device has the free space, because results are written to disk rather than memory. Creating a CHD is CPU-heavy, so expect a few minutes per CD on a computer and longer on a phone; the faster compressions in Options trade a little size for speed.
+Multi-gigabyte DVD images work as long as your device has the free space, because results are written to disk rather than memory. Where the browser keeps them in memory instead (see the question above), a job whose results could take over 2 GB, or 1 GB on phones and tablets, asks before it starts. Creating a CHD is CPU-heavy, so expect a few minutes per CD on a computer and longer on a phone; the faster compressions in Options trade a little size for speed.
 </details>
 
 <details>
@@ -352,7 +352,7 @@ source ~/emsdk/emsdk_env.sh
 ```
 
 - If you only change files in `app/`, run `python3 scripts/assemble.py` instead of the full build. Without Emscripten, run `python3 scripts/extract-build.py` once first: it recovers the WebAssembly build from `dist/discpress.html`. A change to `engine/`, `wasm/` or `build.sh` needs the full build: the page records the sources its WebAssembly was built from, and `scripts/check-dist.sh` (run by every release) refuses a page built from older ones.
-- `tests/` has end-to-end UI tests (Playwright) that check every conversion against native chdman, with synthetic disc images of every supported kind, plus conversion benchmarks. CI runs them on every push and pull request (`.github/workflows/ci.yml`). See [`tests/README.md`](tests/README.md).
+- `tests/` has end-to-end UI tests (Playwright) that check every conversion against native chdman, with synthetic disc images of every supported kind, plus conversion benchmarks. CI runs them on every pull request and every push to `main` (`.github/workflows/ci.yml`). See [`tests/README.md`](tests/README.md).
 - To refresh the game database with the latest Redump data, run `./scripts/update-db.sh`, then `python3 scripts/assemble.py`.
 - The README graphics are rendered from `scripts/brand/brand.html` with `python3 scripts/brand/render.py`, after `python3 scripts/brand/screenshots.py` takes the app screenshots they show (both need Playwright).
 - Running **Actions → Release → Run workflow** on `main` with a tag such as `v1.8.0` (always `vX.Y.Z`: there are no prereleases) publishes a release: `discpress.html` and its SHA-256 as the download, and the same file on GitHub Pages as the online version. The download goes public only once the site is deployed, so both always carry the same version; a daily check (`scripts/check-release.sh`) confirms it. See `.github/workflows/release.yml` and [`web/README.md`](web/README.md). Release notes come from `.github/release-notes/<tag>.md` when that file exists.
@@ -391,7 +391,7 @@ source ~/emsdk/emsdk_env.sh
 
 ## Credits and license
 
-Discpress is released under the [BSD 3-Clause license](LICENSE). It is built on **chdman** and MAME's `lib/util` (BSD 3-Clause, © Aaron Giles, R. Belmont and the MAMEdev team), with zlib, LZMA SDK, FLAC, Zstandard, libdeflate and a few smaller libraries. Game data comes from [Redump](http://redump.org) via [libretro-database](https://github.com/libretro/libretro-database). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full list.
+Discpress is released under the [BSD 3-Clause license](LICENSE). It is built on **chdman** and MAME's `lib/util` (BSD 3-Clause, © Aaron Giles, R. Belmont, Vas Crabb and the MAMEdev team), with zlib, LZMA SDK, FLAC, Zstandard, libdeflate and a few smaller libraries. Game data comes from [Redump](http://redump.org) via [libretro-database](https://github.com/libretro/libretro-database). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full list.
 
 Discpress is not affiliated with the MAME team, Redump or libretro.
 
