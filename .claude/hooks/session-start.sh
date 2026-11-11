@@ -10,8 +10,11 @@ fi
 ROOT="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 cd "$ROOT"
 
-# Playwright Test + axe-core (Chromium itself is preinstalled in the image)
+# Playwright Test + axe-core. Chromium is preinstalled in the image, in the build of one Playwright
+# version: tests/package.json pins that version (tests/README.md), so say so if the two ever part
 (cd tests && npm install --no-audit --no-fund)
+(cd tests && node -e "import('@playwright/test').then(async ({ chromium }) => { await (await chromium.launch()).close(); })" 2>/dev/null) \
+  || echo "warning: Playwright can't launch the image's Chromium, so the UI tests won't run: pin @playwright/test in tests/package.json to the version that ships the build in ${PLAYWRIGHT_BROWSERS_PATH:-~/.cache/ms-playwright} (tests/README.md)" >&2
 
 # numpy for the synthetic disc generator
 python3 -c 'import numpy' 2>/dev/null || pip install -q numpy
