@@ -24,13 +24,13 @@ and warns if Playwright can't launch the image's Chromium.
 
 | Command | What it does |
 |---|---|
-| `npm test` | all UI tests against `dist/discpress.html` (about 4 minutes on 4 cores) |
+| `npm test` | all UI tests against `dist/discpress.html` (about 10 minutes on 4 cores) |
 | `npm run test:dev` | the same against a page assembled from the current `app/` and `db/` (with `build/`'s wasm, taken first from `dist/discpress.html` when that is newer and differs) |
 | `npx playwright test ui/convert.spec.js` | one file; add `-g "ps2"` to filter by test name |
 | `npx playwright test --project=iphone` | one project: `desktop`, `file-url`, `iphone`, `android`, `layout` |
 | `EXTRA_BROWSERS=1 npx playwright test --project=webkit` | real WebKit and Firefox too (`webkit`, `iphone-webkit`, `firefox`), once installed: `PLAYWRIGHT_BROWSERS_PATH=<dir> npx playwright install webkit firefox` and `npx playwright install-deps webkit firefox`, with Chromium linked into `<dir>`. Playwright's Linux WebKit has no `navigator.storage` and fails navigations while offline, so the private-storage tests and the offline reload skip there; `engine.spec` and `facts.spec` run in the Chromium projects only |
 | `npm run report` | open the HTML report of the last run (traces and screenshots of failures) |
-| `npm run bench -- --quick` | quick benchmark on the small fixtures (about 1.5 minutes) |
+| `npm run bench -- --quick` | quick benchmark on the small fixtures (under a minute) |
 | `npm run bench` | full benchmark on large generated images (300 MB CD, 1 GB DVD) |
 | `npm run bench:dev -- --compare latest` | benchmark the current `app/` and compare with the last run |
 
@@ -53,7 +53,7 @@ LeakSanitizer and UndefinedBehaviorSanitizer (`scripts/build-sanitized.sh`, `bui
 by `CHDMAN_ENGINE`: a sanitizer report in chdman's output fails the test, whatever its exit code; a
 `CHDMAN_ENGINE` build that is missing or older than `engine/` or `wasm/` fails the run rather than skip
 every test (so does `REQUIRE_NATIVE` without a current `build/chdman-native`). It runs
-when `engine/` or `wasm/` change, and weekly. Leaks unmodified chdman 0.289 has too are suppressed
+when `engine/`, `wasm/`, the spec, the fixtures or the suppressions change, and weekly. Leaks unmodified chdman 0.289 has too are suppressed
 (`support/lsan.supp`, each with how that was checked). Locally:
 `CHDMAN_ENGINE=../build/chdman-san LSAN_OPTIONS=suppressions=$PWD/support/lsan.supp npx playwright test ui/engine.spec.js`.
 
@@ -62,11 +62,12 @@ when `engine/` or `wasm/` change, and weekly. Leaks unmodified chdman 0.289 has 
 - **Native chdman is the oracle.** Every CHD the app creates is compared with what native chdman
   makes from the same files: preferably `build/chdman-0.289`, unmodified chdman from the MAME 0.289
   release (`scripts/build-upstream.sh`), otherwise the engine's own `build/chdman-native`. With
-  either, the outputs must be **byte-identical**, for every compression preset, thread count, SIMD and
-  non-SIMD build, and storage mode. With another chdman version only the data checksums are compared.
-  The engine's opt-in options that change a CHD's bytes but not its checksums (`--codecplan`, the
-  "Nearly as small, faster" preset, and `--keepcue`) are checked against 0.289's checksums, and
-  against `build/chdman-native`'s bytes when it is current.
+  either, the outputs must be **byte-identical**, for every compression preset made of chdman's own
+  options, thread count, SIMD and non-SIMD build, and storage mode. With another chdman version only
+  the data checksums are compared.
+  The engine's opt-in options that change a CHD's bytes but not its checksums (`--codecplan` and
+  `--libdeflate`, in the "Nearly as small, faster" and "Faster to create" presets, and `--keepcue`) are
+  checked against 0.289's checksums, and against `build/chdman-native`'s bytes when it is current.
 - **Extraction** is compared file by file with native `extractcd`/`extractdvd`/`extracthd`, and DVD
   and hard disk images must come back identical to the original input.
 - **Every test** also fails if the page logs a console error or uncaught exception, or makes any
@@ -107,15 +108,15 @@ game database when it is requested as `/discpress.html?testdb=1` (`app.open({ te
 | `gdrom` | Dreamcast GD-ROM layout from a `.gdi` and a Redump cue: no pregaps, track 3 at LBA 45000 |
 | `engine` | the engine's own command line against unmodified chdman 0.289: the 0.289 defects it fixes, identical CHDs when codec trials stop early, and the checksums and codecs of the codec plan |
 | `profiles` | settings picked from the console (`PROFILES`): type and hunk size (PSP 2,048), Zstd warnings, the compatibility mode for older emulators (PS2 DVD games as CD CHDs, and the setting it replaced), Xbox 360 and PS3 notes, `.sbi` files (also made from a CloneCD `.sub`), `.m3u` playlists (lettered discs too), the PCSX2 and Flycast notes, the MiSTer preset |
-| `quirks` | the rules in `app/quirks.js`: Saturn and Sega CD leave out `--keepcue`, NAOMI keeps its name, Zstd and MiSTer warnings for PS2, Dreamcast, NAOMI and PC-FX (and for every console in the compatibility mode), `data-quirk` ids, more than two notes grouped, the LibCrypt warning until an `.sbi` or `.lsd` is added, an `.sbi` of another console left out, a set's "Disc 1 of 3" note |
+| `quirks` | the rules in `app/quirks.js` (Saturn and Sega CD leave out `--keepcue`, NAOMI keeps its name) and the `PROFILES` warnings next to them: Zstd and MiSTer for PS2, Dreamcast, NAOMI and PC-FX (and Zstd for every console in the compatibility mode), `data-quirk` ids, more than two notes grouped, the LibCrypt warning until an `.sbi` or `.lsd` is added, an `.sbi` of another console left out, a set's "Disc 1 of 3" note |
 | `facts` | `scripts/assemble.py` refuses a `db/facts` line with an unknown system, serial or fact, or without a source |
 | `zip` | `.zip` input: stored and deflated entries, zip64, entries it refuses, no private storage |
 | `pbp` | PS1 `EBOOT.PBP` files: one card per disc, files it refuses |
 | `dat` | DAT files: every track matched before converting and after Verify, verified discs named after them, kept for later visits |
 | `verify` | Verify on a finished card, the verify-after setting, verify by itself after a helper failed (or lied), the question before results too large for memory |
 | `advanced` | the Advanced tab: form, text commands, validation, listtemplates |
-| `edge-cases` | missing tracks, lone tracks, duplicates, unsupported files, descriptors and CloneCD images chdman can't convert, truncated images, compressed ISOs (as a CD, not one at all, damaged), DVD/CD switch, cancel, remove |
-| `fallbacks` | no SIMD, no OPFS, memory-only, input staging and page streaming (iOS web views, also of a compressed ISO), single core |
+| `edge-cases` | missing tracks, lone tracks, duplicates, unsupported files, descriptors and CloneCD images chdman can't convert, truncated images, compressed ISOs (as a CD, not one at all, damaged), ECM images (finding their cue sheet, not one at all, damaged), tracks of the same name in several game folders, cue sheets with unquoted, single-quoted or macOS-style names, DVD/CD switch, cancel, remove, the questions before unsaved results are thrown away |
+| `fallbacks` | no SIMD, no OPFS, memory-only, input staging and page streaming (iOS web views, also of a compressed ISO and an ECM image), single core, helper workers that fail to start or trap (the others, or a second run, finish the job; extract and verify go on), the message when the browser's engine fails again |
 | `mobile` | phone layout, thread defaults (the iPhone speed test tries up to 4, and one stored at 1.3.1's limit of 2 is measured again), the fixed-header scrolling used inside iOS app web views, saving through the share sheet (its failure falls back to a download, results too large for it download), the Safari tip in iOS app web views, the Safari fallback for big results in a Home Screen web app |
 | `recovery` | results kept from an earlier visit (listed after a reload, saved, deleted) and a conversion stopped by a reload; where results live in memory (also from `file://`, where Chrome gives no private storage), which results a reload lost |
 | `folder` | writing results into a folder (a fake File System Access folder): a file already there is replaced only if the user agrees, and never deleted by a cancel; a cancel leaves no new file |

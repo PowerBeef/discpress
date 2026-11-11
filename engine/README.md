@@ -70,7 +70,7 @@ The paths mirror MAME's, so every file can be compared with its original. **[`ma
 | `../libdeflate` (outside `mame/`) | libdeflate 1.24's compressor, for `--libdeflate` | MIT ([`COPYING`](libdeflate/COPYING)) |
 | `../libm` (outside `mame/`) | `cosf` and `log` from Arm optimized-routines, for libFLAC | MIT ([`LICENSE`](libm/LICENSE)) |
 
-MAME as a whole is GPL-2.0-or-later, but every MAME file here carries a BSD-3-Clause header (`md5.h`: public domain), so the whole engine is under permissive licenses. The MAME copyright holders are named in each file's header.
+MAME as a whole is GPL-2.0-or-later, but every file of MAME's own here (`mame/src`) carries a BSD-3-Clause header (`md5.h`: public domain), and the libraries it bundles (`mame/3rdparty`) keep the permissive licenses in the table, so the whole engine is under permissive licenses (`scripts/check-licenses.sh` checks both). The MAME copyright holders are named in each file's header.
 
 ## Rules
 

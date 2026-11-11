@@ -2,7 +2,7 @@
 # malformed inputs chdman 0.289 crashed or hung on) with the engine built with AddressSanitizer,
 # LeakSanitizer and UndefinedBehaviorSanitizer (scripts/build-sanitized.sh). Any report fails the run,
 # but leaks unmodified chdman 0.289 has too (tests/support/lsan.supp, each with how it was checked).
-# When engine/ or wasm/ change, weekly, and on demand.
+# When engine/, wasm/, the spec, the fixtures or the suppressions change, weekly, and on demand.
 name: Sanitizers
 
 on:

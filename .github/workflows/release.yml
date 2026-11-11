@@ -13,7 +13,8 @@ name: Release
 #   4. publish: makes the draft public only once the site is deployed, so a failed deploy leaves both
 #      at the previous release; it becomes the latest release only if the site now shows it;
 #   5. verify: scripts/check-release.sh checks that the download, its .sha256, the site and the site's
-#      .sha256 are all that file (release-check.yml repeats the check daily).
+#      .sha256 are all that file (the site only when this run made the release the latest;
+#      release-check.yml repeats the whole check daily).
 # Run it from Actions > Release > Run workflow on main, with a tag such as v1.3.5. A pushed v* tag or a
 # release published by hand starts it too: it reruns itself on main for that tag, since only main may
 # deploy to GitHub Pages.
