@@ -1,7 +1,8 @@
 include sources.mk
 T ?= wasm
 SIMD ?= -msimd128
-# EXTRA: additional compiler flags for experiments (e.g. EXTRA=-flto)
+# EXTRA: additional compiler flags for experiments (e.g. EXTRA=-fno-inline). Not -flto, which breaks C++
+# exceptions here, nor flags that change results, such as -ffast-math (CLAUDE.md)
 EXTRA ?=
 ifeq ($(T),wasm)
 CC := emcc

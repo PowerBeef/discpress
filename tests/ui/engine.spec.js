@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { FIXTURES, ROOT } from '../support/paths.js';
 import { engineSourcesNewest } from '../support/native.js';
+import { craftChd } from '../support/chdcraft.js';
 
 // CHDMAN_ENGINE: another build of the engine, such as the sanitized one (scripts/build-sanitized.sh)
 const ENGINE = process.env.CHDMAN_ENGINE ? path.resolve(process.env.CHDMAN_ENGINE) : path.join(ROOT, 'build', 'chdman-native');
@@ -1011,6 +1012,38 @@ test('extractcd of a damaged CHD is an error, and leaves no files', () => {
   expect(fs.readdirSync(en)).toEqual([]);
   // as extractraw fails on the same CHD
   expect(run(ENGINE, ['extractraw', '-i', bad, '-o', path.join(en, 'x.raw')]).code).toBe(1);
+});
+
+// A CHD's map can store a hunk as a copy of another hunk of the file. chdman only writes copies of hunks
+// that hold data; a map that makes a hunk a copy of itself, or of hunks that lead back to it, made 0.289
+// call itself until the stack overflowed, and a stored length over the hunk size made it read past its
+// buffer. Copies of copies that do end are valid, and still read.
+test('a CHD whose map goes round in a circle, or claims an oversized block, is an error, not a crash', () => {
+  const D = Buffer.from(Array.from({ length: 4096 }, (_, i) => (i * 7 + (i >> 5)) & 0x7f));
+  const write = (name, hunks) => { const p = tmp(name); fs.writeFileSync(p, craftChd(hunks)); return p; };
+  // valid: a copy, a copy of a copy, and a chain of 300 of them
+  const chain = [{ data: D }, ...Array.from({ length: 300 }, (_, i) => ({ self: i }))];
+  for (const [name, hunks] of [['copies.chd', [{ data: D }, { self: 0 }, { self: 1 }]], ['chain.chd', chain]]) {
+    const out = tmp(name + '.raw');
+    const r = run(ENGINE, ['extractraw', '-i', write(name, hunks), '-o', out, '-f']);
+    expect({ code: r.code, signal: r.signal }, name).toEqual({ code: 0, signal: null });
+    expect(fs.readFileSync(out).equals(Buffer.concat(hunks.map(() => D))), name).toBe(true);
+  }
+  // not valid
+  const loop = write('loop.chd', [{ data: D }, { self: 1 }]);
+  expect(run(UPSTREAM, ['extractraw', '-i', loop, '-o', tmp('up.raw'), '-f']).signal, 'upstream crashes').not.toBeNull(); // the bug
+  for (const [name, hunks] of [
+    ['loop.chd', [{ data: D }, { self: 1 }]],
+    ['circle.chd', [{ data: D }, { self: 2 }, { self: 3 }, { self: 1 }]],
+    ['outside.chd', [{ data: D }, { self: 9 }]],
+    ['long block.chd', [{ data: D, length: 0x80000 }]],
+  ]) {
+    const out = tmp(name + '.raw');
+    const r = run(ENGINE, ['extractraw', '-i', write(name, hunks), '-o', out, '-f']);
+    expect({ code: r.code, signal: r.signal }, name).toEqual({ code: 1, signal: null });
+    expect(r.err, name).toContain('Error reading CHD file');
+    expect(fs.existsSync(out), name).toBe(false);
+  }
 });
 
 // A Dreamcast disc of each GD-ROM layout (the high-density area: one data track; data, then audio; two data
