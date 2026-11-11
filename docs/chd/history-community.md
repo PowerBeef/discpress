@@ -594,7 +594,7 @@ Workarounds:
   - PPSSPP updated libchdr ([ppsspp#18824](https://github.com/hrydgard/ppsspp/pull/18824));
   - PCSX2 feature request [#10823](https://github.com/PCSX2/pcsx2/issues/10823);
   - RetroArch [#16193](https://github.com/libretro/RetroArch/issues/16193);
-  - as late as 2026-03, cdzs CHDs fail in SwanStation builds ([RetroArch#18867](https://github.com/libretro/RetroArch/issues/18867)) *(D1 §2.2 puts SwanStation's zstd at a libchdr update of probably 2024-03-12, unverified, and the app's warning says "builds from before about March 2024"; the two dates are not reconciled)*;
+  - as late as 2026-03, cdzs CHDs fail in SwanStation builds ([RetroArch#18867](https://github.com/libretro/RetroArch/issues/18867)) *(confirmed: SwanStation's libchdr update with Zstandard, libretro/swanstation#159, was merged on 2026-03-28, the day that issue was closed; D1 §2.2's "2024-03-12" had the year wrong, and the app's warning says "builds from before April 2026" since 1.8.2)*;
   - MiSTer supports it ([forum](https://misterfpga.org/viewtopic.php?t=8219)).
 - Community "CHD-ZSTD" re-encodes are sometimes **larger** than LZMA sets ([1gb70uj](https://reddit.com/r/Roms/comments/1gb70uj/): "lzma at max setting generally compresses stronger than zstd … 2-5%"), and they break DAT matching (§3.3).
 - Wish: compatibility presets ("max compatibility", "fast decode", "smallest").

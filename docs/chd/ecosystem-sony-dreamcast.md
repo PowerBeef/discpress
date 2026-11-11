@@ -304,7 +304,7 @@ This is a libretro fork of DuckStation from 2021.
 - `libchdr_chd.c` is within 47 lines of upstream `ff1365d` (2026-02-11).
 - It bundles zstd 1.5.7, lzma 25.01 and miniz 3.1.1, so **all codecs including zstd** are available.
 - It is routed through libretro VFS (2026-06).
-- When zstd first arrived is not verified; an "Update libchdr" commit dated 2024-03-12 probably brought it. *(Lane E §3.10 cites RetroArch#18867 for cdzs CHDs failing in SwanStation builds as late as 2026-03. The two dates are not reconciled; the app's warning says "builds from before about March 2024".)*
+- When zstd first arrived is not verified; an "Update libchdr" commit dated 2024-03-12 probably brought it. *(Corrected 2026-11-11: the year was wrong. That commit, "Update libchdr.", is dated 2026-03-12 and "introduces support for Zstandard compression"; its pull request, libretro/swanstation#159, was merged on 2026-03-28, the day RetroArch#18867 about cdzs CHDs failing in SwanStation was closed. The app's warning said "builds from before about March 2024" up to 1.8.1, and says "before April 2026" since 1.8.2.)*
 
 **Reader.** `src/common/cd_image_chd.cpp`.
 
