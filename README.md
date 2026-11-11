@@ -218,7 +218,7 @@ The right CHD type and hunk size for each console, compression that every emulat
 
 | When | What the card says |
 |---|---|
-| Zstd, or the MiSTer preset | Which of the console's emulators can't read it: Kronos and Yabause (Saturn), BlastEm (Sega CD), Beetle SuperGrafx (PC Engine CD), Opera (3DO), WinUAE (CD32, CDTV), SwanStation builds from before about March 2024 (PlayStation), AetherSX2 and NetherSX2 (PS2), Flycast before 2.3, and probably Redream and Demul (Dreamcast, NAOMI), Beetle PC-FX before August 2026; with the compatibility mode on, that older emulators can't open Zstd CHDs, for every console |
+| Zstd, or the MiSTer preset | Which of the console's emulators can't read it: Kronos and Yabause (Saturn), BlastEm (Sega CD), Beetle SuperGrafx (PC Engine CD), Opera (3DO), WinUAE (CD32, CDTV), SwanStation builds from before April 2026 (PlayStation), AetherSX2 and NetherSX2 (PS2), Flycast before 2.3, and probably Redream and Demul (Dreamcast, NAOMI), Beetle PC-FX before August 2026; with the compatibility mode on, that older emulators can't open Zstd CHDs, for every console |
 | The MiSTer preset, for Dreamcast, NAOMI, PS2, PC-FX, PC-98 or Jaguar CD | That MiSTer has no core that plays them from CHDs |
 | A LibCrypt game without its `.sbi` | That emulators stop it partway, and where to get the file |
 | A 2,048-byte copy of a PlayStation disc | That its videos and sound may be missing and Beetle PSX can't load it: convert the `.bin` and `.cue` dump instead |

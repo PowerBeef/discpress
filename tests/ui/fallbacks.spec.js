@@ -21,6 +21,7 @@ async function convertAgent(app) {
 
 test('without WebAssembly SIMD the baseline build is used and gives the same result', async ({ app, page }) => {
   await app.open({ noSimd: true });
+  await expect(page.locator('#chipEngine')).toHaveText('Engine ready (without SIMD)');
   await convertAgent(app);
   // the build that was loaded is marked, and both embedded copies are cleared
   await expect(page.locator('#wasm-base[data-used]')).toHaveCount(1);

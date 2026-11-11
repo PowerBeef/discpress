@@ -137,6 +137,35 @@ test('on iPhone, a file the share sheet cannot take is downloaded instead', asyn
   await expect(page.locator('.toast.err', { hasText: 'Downloading it instead' })).toBeVisible();
 });
 
+// WebKit reports files the share sheet could not read as an AbortError, like a sheet the user closed
+test('on iPhone, Save all downloads the files when the share sheet cannot read them, and does nothing when it is closed', async ({ page }, testInfo) => {
+  test.skip(!/iphone/.test(testInfo.project.name), 'iOS only');
+  await page.addInitScript(() => {
+    navigator.canShare = () => true;
+    navigator.share = () => Promise.reject(new DOMException(window.__closed ? 'Abort due to cancellation of share.' : 'Abort due to error while reading files.', 'AbortError'));
+  });
+  const app = new App(page, testInfo, false);
+  await app.open();
+  await app.add([...fixture('ps1-single').add, ...fixture('saturn').add]);
+  for (const t of ['twine', 'albert odyssey']) await app.settled(app.job(t));
+  await page.click('#startAll');
+  for (const t of ['twine', 'albert odyssey']) await app.waitState(app.job(t), 'done');
+  await expect(page.locator('#dlAll')).toHaveText(/Save all to Files \(2\)/);
+  // closed by the user: nothing is downloaded, and the results stay unsaved
+  const downloads = [];
+  page.on('download', d => downloads.push(d.suggestedFilename()));
+  await page.evaluate(() => { window.__closed = true; });
+  await page.click('#dlAll');
+  await page.waitForTimeout(1500);
+  expect(downloads).toEqual([]);
+  await expect(page.locator('.toast.err')).toHaveCount(0);
+  // not read: both are downloaded
+  await page.evaluate(() => { window.__closed = false; });
+  await page.click('#dlAll');
+  await expect.poll(() => downloads.length, { timeout: 20_000 }).toBe(2);
+  await expect(page.locator('.toast.err', { hasText: 'Downloading them instead' })).toBeVisible();
+});
+
 test('on iPhone, a result too large for the share sheet is downloaded without it', async ({ page }, testInfo) => {
   test.skip(!/iphone/.test(testInfo.project.name), 'iOS only');
   // WebKit's share sheet reads the whole file into memory, which closes the app for a large one

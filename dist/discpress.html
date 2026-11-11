@@ -11251,7 +11251,7 @@ var PROFILES = {
   naomi2: { noZstd: 'Flycast before 2.3 (and probably Demul)', noMister: true },
   pcfx: { noZstd: 'Beetle PC-FX before August 2026', noMister: true },
   pc98: { noMister: true },
-  ps1: { noZstd: 'SwanStation builds from before about March 2024' },
+  ps1: { noZstd: 'SwanStation builds from before April 2026' },
   saturn: { noZstd: 'Kronos and Yabause' },
   segacd: { noZstd: 'BlastEm (RetroArch)' },
   pcecd: { noZstd: 'Beetle SuperGrafx' },
@@ -13396,7 +13396,8 @@ async function saveOutput(job, out) {
 async function downloadMany(list) {
   var outs = [];
   list.forEach(function (job) { job.outputs.forEach(function (o) { if (o.kind !== 'disk') outs.push([job, o]); }); });
-  if (outs.length && viaShare(outs.map(function (x) { return x[1]; }))) {
+  var share = outs.length && viaShare(outs.map(function (x) { return x[1]; }));
+  if (share) {
     // one share sheet for all files
     try {
       var files = [];
@@ -13408,10 +13409,18 @@ async function downloadMany(list) {
         return;
       }
     } catch (e) {
-      if (e && e.name === 'AbortError') return;
+      // closed by the user, unless it is WebKit's AbortError for files it could not read (saveOutput):
+      // then they are downloaded, as below
+      if (e && e.name === 'AbortError') {
+        if (!/error while reading/i.test(e.message || '')) return;
+        toast('The share sheet could not take these files (' + e.message + '). Downloading them instead.', 'err');
+        share = false;
+      }
     }
-    for (var k = 0; k < outs.length; k++) await saveOutput(outs[k][0], outs[k][1]);
-    return;
+    if (share) {
+      for (var k = 0; k < outs.length; k++) await saveOutput(outs[k][0], outs[k][1]);
+      return;
+    }
   }
   for (var i = 0; i < outs.length; i++) {
     await downloadOutput(outs[i][0], outs[i][1]);
@@ -14288,7 +14297,7 @@ function init() {
   initHosted();
   initIosTip();
   Engine.ready().then(function () {
-    setChip('chipEngine', ['Engine ready', Engine.simd ? '' : el('span', { class: 'opt' }, ' (compatibility mode)')], 'ok');
+    setChip('chipEngine', ['Engine ready', Engine.simd ? '' : el('span', { class: 'opt' }, ' (without SIMD)')], 'ok');
   }, function (e) {
     setChip('chipEngine', 'Engine unavailable', 'err');
     $('#fatal').append(el('div', { class: 'note err fatal' }, el('b', null, 'This browser cannot run Discpress. '), e.message));

@@ -227,7 +227,7 @@ test('PS1 games warn that older SwanStation can’t read the Zstd preset', async
   await card.locator('details.opts summary').click();
   const field = card.locator('label.field', { hasText: 'Compression' });
   await field.locator('select').selectOption('zstd');
-  await expect(field).toContainText('SwanStation builds from before about March 2024 can’t read Zstd CHDs of Sony PlayStation games.');
+  await expect(field).toContainText('SwanStation builds from before April 2026 can’t read Zstd CHDs of Sony PlayStation games.');
 });
 
 test('a PS1 CloneCD image: LibCrypt sectors in its .sub become an .sbi saved with the CHD', async ({ app }) => {
