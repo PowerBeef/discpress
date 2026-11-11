@@ -2,7 +2,9 @@
 
 Measured on 2026-09-27 for the chdman fork dossier. Everything here can be reproduced with [`lab/lab.sh`](lab/lab.sh); see [lab/README.md](lab/README.md).
 
-**What was measured.** The subject is chdman built from the source Discpress shipped at the time: MAME `76c7d19`, i.e. 0.289 plus 1,167 commits. Codecs were driven through MAME's own classes (`chdcodec.cpp`), linked from `build/obj-native`. Discpress 1.2.1 moved to the 0.289 release, whose only codec difference is LZMA level 8 instead of 6 (§5): LZMA figures shift by about 0.1% in size and LZMA is about 1.35× slower there; everything else is unchanged. The lab scripts now build against the 0.289 pin.
+**What was measured.** The subject is chdman built from the source Discpress shipped at the time: MAME `76c7d19`, i.e. 0.289 plus 1,167 commits. Codecs were driven through MAME's own classes (`chdcodec.cpp`), linked from `build/obj-native`. Discpress 1.2.1 moved to the 0.289 release, whose only codec difference is LZMA level 8 instead of 6 (§5): LZMA figures shift by about 0.1% in size and LZMA is about 1.35× slower there; everything else is unchanged.
+
+**What the lab builds against today.** The scripts moved to the 0.289 pin with 1.2.1, and to the engine (`engine/mame`, the fork of chdman 0.289) when it was forked. Their two patches apply to the engine's `chdcodec.cpp` and `flac.cpp`; the first had stopped applying when milestones 2.4 and 2.6 changed that file, and was rebased on 2026-11-11. So a run today measures the engine: LZMA level 8, and creation times that include early abort and the faster hashing and ECC. The tables of §1, §3 and §4 are the research's runs and were not repeated; the "as built" tables in §2 are the engine's.
 
 **Build and host.** The native build uses `-O2`, `FLAC__NO_ASM` and `Z7_ST`, as `scripts/build-native.sh` builds it. The host is a 4 vCPU Intel Xeon at 2.1 GHz shared with other jobs. **Timings are per-thread CPU time** (`CLOCK_THREAD_CPUTIME_ID`, or `rusage` for whole processes), so contention mostly cancels out. Wall-clock comparisons are marked as such.
 
@@ -96,7 +98,7 @@ How easy this is depends on the library:
 - libFLAC can abort from its write callback, at frame granularity.
 - The LZMA SDK has a pack-size stop in `LzmaEnc_CodeOneBlock` (used by LZMA2). In the one-shot LZMA1 path, however, the encoder only returns every 128 KB and the range coder buffers 64 KB. Early abort for hunk-sized inputs therefore needs a small SDK patch, which cannot change the bits.
 
-**Measured, as built (milestone 2.4, `engine/README.md`).** CPU time over all threads, `-np 4`, the engine against unmodified chdman 0.289, same bytes every time (4-core Xeon, 2.1 GHz):
+**Measured, as built (milestone 2.4, `engine/README.md`).** The tables from here to the end of §2 come from separate runs, one for each milestone as it was built, and times are only comparable within a table. CPU time over all threads, `-np 4`, the engine against unmodified chdman 0.289, same bytes every time (4-core Xeon, 2.1 GHz):
 
 | Input | chdman 0.289 | Engine | Less CPU |
 |---|---|---|---|
@@ -117,6 +119,8 @@ The gains are below the estimate because codecs don't emit output evenly. Deflat
 | CD audio (the music, 114 MB) | 15.3 s | 8.0 s | 1.91× | ±0 |
 | Mixed CD (`mixed.cue`, 210 MB) | 52.2 s | 26.1 s | 2.00× | +0.11% |
 | DVD (`payload.iso`, 83 MB) | 33.7 s | 24.4 s | 1.38× | +0.06% |
+
+The "Default" column is the engine's default on the same inputs, as the "Engine" column of the table above is, but from a later run (for commit `a67e3f1`; the table above is `bac044a`'s, earlier the same day), and it is slower throughout: 33.1 s against 28.5 s on CD data, 15.3 s against 13.9 s on CD audio, 33.7 s against 27.8 s on the DVD, which is even above chdman 0.289's 30.5 s in the first run. The cause was not looked into (the host is shared with other jobs). Each "Less CPU" figure compares two columns of one run.
 
 In the page (4-core Xeon, SIMD), the "Nearly as small, faster" preset against the default: the benchmark CD in 35.8 s instead of 62.0 s with 1 thread (1.73×) and 10.9 s instead of 17.6 s with 4 (1.62×); the benchmark DVD in 158.0 s instead of 241.3 s (1.53×) and 55.5 s instead of 72.6 s (1.31×). Each CHD equals the native engine's byte for byte. With 4 threads less of the time is compression, so the gain is smaller.
 
@@ -140,6 +144,19 @@ In the engine, `-np 4`, CPU and size against the same options without it:
 | DVD | `--codecplan` | 1.17× | −0.20% (−0.14% against chdman's default) |
 
 In the page (SIMD) with 1 thread: "Faster to create" 23.3 → 18.5 s on the benchmark CD (45.0% → 43.8% of the input) and 40.3 → 30.5 s on the benchmark DVD; "Nearly as small, faster" 152.3 → 139.0 s on the DVD. With 4 threads the job worker sets the pace and the times don't change.
+
+**The benchmark CD with everything built (measured again on 2026-11-11).** `createcd` of the 300 MB benchmark CD, `-np 4`, CPU over all threads, mean of 3 runs that agree within 1%. The host is not the one of the tables above (4 vCPUs, an Intel Xeon), and it was busy with other jobs, so wall-clock times were not usable:
+
+| Build and options | CPU | Less CPU than 0.289's default | Size |
+|---|---|---|---|
+| chdman 0.289, default | 47.1 s | — | 154,521,453 |
+| Engine, default | 39.1 s | 1.20× | the same file |
+| Engine, `--codecplan` | 22.1 s | 2.13× | +0.27% |
+| Engine, `--codecplan --libdeflate` ("Nearly as small, faster") | 22.3 s | 2.11× | +0.27% |
+| Engine, `-c cdzl,cdfl --libdeflate` ("Faster to create") | 14.9 s | 3.17× | −1.15% |
+| chdman 0.289, `-c cdzl,cdfl` | 24.7 s | 1.91× | +1.54% |
+
+The milestone 2.4 table has this disc at 1.16× for the default, on its host; the faster hashing (2.1) and ECC (2.2) were built after it.
 
 ## 3. Encoder tuning that every reader can decode
 
@@ -166,7 +183,7 @@ What each variant changes:
 | FLAC max LPC order 32 | 64,207,438 | −0.14% | 70.8 s | 35,019,415 | ±0 | 44.0 s |
 | FLAC exhaustive model + precision search | 64,108,876 | −0.29% | **695 s** | 35,014,389 | −0.01% | 663 s |
 | FLAC precision search (`-p`) | 64,164,215 | −0.21% | 113 s | — | — | — |
-| **"Smallest" preset**: LZMA level 9 fb 273 mc 1000 + libdeflate-12 + FLAC `-p` | **63,991,305** | **−0.47%** | 140 s | **34,724,995** | **−0.84%** | 90 s |
+| **"Smaller still"** (not built; `smallest` in `run_variants.py`): LZMA level 9 fb 273 mc 1000 + libdeflate-12 + FLAC `-p` | **63,991,305** | **−0.47%** | 140 s | **34,724,995** | **−0.84%** | 90 s |
 
 **Findings:**
 
@@ -174,9 +191,9 @@ What each variant changes:
   - The best single change is libdeflate on DVD/raw data: −0.76% for about 30% more CPU. The same encoder is also *faster* than zlib at comparable levels.
   - LZMA tuning gains 0.1–0.2%.
   - FLAC `-p` gains 0.2% on CD for 2× CPU, while exhaustive search costs 12× for 0.3%.
-  - All together, the "Smallest" preset gives −0.47% (CD) and −0.84% (DVD) for about 2.5× the CPU, and every reader decodes it.
+  - All together ("Smaller still", the plan's 2.7) they give −0.47% (CD) and −0.84% (DVD) for about 2.5× the CPU, and every reader decodes it. It is not built, and it is not the app's "Smallest (default)" preset, which is chdman's own default settings.
 - **The 0.289 → HEAD LZMA level change (8 → 6)** cost about 0.1% in size and made LZMA about 1.35× faster (lane B). Level 9 recovers the size.
-- None of these changes is worth breaking byte identity by default. They fit an explicit "smallest" preset.
+- None of these changes is worth breaking byte identity by default. They fit an explicit, opt-in preset ("Smaller still").
 
 **Deflate at its limit.** zopfli (15 iterations) is too slow for the full corpus, so it ran on smaller discs built from the same material (`small.cue`: the first 6,000 data frames plus the Chopin *Albumleaf* and NIN *999,999* tracks, 46.6 MB; `small.iso`: the first 12,000 sectors of `payload.iso`, 24.6 MB). Four threads; CPU is the process total. MAME and libchdr decoded every output to the same data SHA-1.
 
@@ -239,7 +256,7 @@ The SDK update changes nothing. So the shipped claim of "byte for byte the same 
 
 **Hypothesis.** chdman's CD codecs strip regenerable ECC only when `ecc_verify()` passes, and Mode 2 ECC is computed with a zeroed header. PS1 discs might therefore keep 276 bytes of incompressible parity per sector.
 
-**Result: refuted.** The identical payload compresses to 32,695,083 bytes as MODE1 and 32,746,765 bytes as MODE2 (+0.16%). `cdrom_file::ecc_source_byte` already masks the header for Mode 2 (`cdrom.cpp:1363-1367`).
+**Result: refuted.** The identical payload compresses to 32,695,083 bytes as MODE1 and 32,746,765 bytes as MODE2 (+0.16%). `cdrom_file::ecc_source_byte` already masks the header for Mode 2 (`cdrom.cpp:1323-1327` in MAME 0.289). The engine no longer has that function: its ECC works on a copy of the sector with those four bytes zeroed (`cdrom_file::ecc_region`), to the same effect.
 
 What is still never stripped:
 
