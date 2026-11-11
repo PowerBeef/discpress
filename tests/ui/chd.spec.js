@@ -5,6 +5,7 @@ import path from 'node:path';
 import { test, expect, fixture } from '../support/app.js';
 import { FIXTURES } from '../support/paths.js';
 import { chdman, engineExtract, extract, info, nativeChdman, reference, sha1File, sharedCopy } from '../support/native.js';
+import { craftChd } from '../support/chdcraft.js';
 
 test.skip(() => !nativeChdman(), 'needs native chdman to make input CHDs');
 
@@ -249,6 +250,32 @@ for (const [what, name, command, input, extra, testdb, text] of [
     await expect(card.locator('.result')).toContainText('Verified.');
     for (const t of text) await expect(card.locator('.result')).toContainText(t);
     if (text[0].startsWith('\u2713')) await expect(card.locator('.ident-how')).toHaveText('\u2713 Exact match in the Redump database (checksum verified)');
+  });
+}
+
+// a map that makes a hunk a copy of itself overflowed chdman 0.289's stack, and a stored length over the
+// hunk size made it read past a buffer (engine.spec.js); in the page either would take the worker down
+for (const threads of [1, 4]) {
+  test(`a CHD whose map goes round in a circle or claims an oversized block is an error (${threads} thread${threads > 1 ? 's' : ''})`, async ({ app }) => {
+    const D = Buffer.from(Array.from({ length: 4096 }, (_, i) => (i * 7 + (i >> 5)) & 0x7f));
+    const sub = `gen/crafted-${threads}`, dir = path.join(FIXTURES, sub); // (its own files: the two run side by side)
+    fs.mkdirSync(dir, { recursive: true });
+    const files = { 'copies': [{ data: D }, { self: 0 }, { self: 1 }], 'circle': [{ data: D }, { self: 2 }, { self: 1 }], 'long block': [{ data: D, length: 0x80000 }] };
+    for (const [name, hunks] of Object.entries(files)) fs.writeFileSync(path.join(dir, name + '.chd'), craftChd(hunks));
+    await app.open({ settings: { threads } });
+    await app.add(Object.keys(files).map(n => `${sub}/${n}.chd`));
+    for (const name of ['circle', 'long block']) {
+      const card = app.job(name);
+      await app.settled(card);
+      await app.run(card, { expectState: 'error', timeout: 60_000 });
+      await expect(card).toContainText('Invalid data');
+    }
+    // copies of copies that end are valid
+    const good = app.job('copies');
+    await app.settled(good);
+    await app.run(good);
+    const [out] = await app.downloads(good);
+    expect(fs.readFileSync(out.path).equals(Buffer.concat([D, D, D]))).toBe(true);
   });
 }
 

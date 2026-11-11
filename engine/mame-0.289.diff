@@ -2363,7 +2363,134 @@
  	// reset file characteristics
  	m_file.reset();
  	m_allow_reads = false;
-@@ -1115,6 +1140,11 @@
+@@ -892,6 +917,48 @@
+ 	m_cachehunk = ~0;
+ }
+ 
++/**
++ * @fn  std::error_condition chd_file::self_target(uint64_t hunknum, uint32_t &target) const noexcept
++ *
++ * @brief   -------------------------------------------------
++ *            self_target - Discpress: find the hunk that holds the data of a hunk stored as a copy
++ *            of hunk hunknum of this file. chdman only writes copies of hunks that hold data, so that
++ *            is hunknum itself. Another writer's file may copy a copy: the chain is followed here,
++ *            in a loop. 0.289 followed it by calling read_hunk again, so a map that makes a hunk a
++ *            copy of itself, or of hunks that lead back to it (a damaged or crafted file),
++ *            overflowed the stack. More steps than the file has hunks is such a circle: an error.
++ *          -------------------------------------------------.
++ */
++
++std::error_condition chd_file::self_target(uint64_t hunknum, uint32_t &target) const noexcept
++{
++	for (uint32_t steps = 0; ; steps++)
++	{
++		if (UNEXPECTED(hunknum >= m_hunkcount))
++			return std::error_condition(error::HUNK_OUT_OF_RANGE);
++		uint64_t next;
++		if (m_version >= 5)
++		{
++			uint8_t const *const rawmap = &m_rawmap[m_mapentrybytes * hunknum];
++			if (rawmap[0] != COMPRESSION_SELF)
++				break;
++			next = get_u48be(&rawmap[4]);
++		}
++		else
++		{
++			uint8_t const *const rawmap = &m_rawmap[16 * hunknum];
++			if ((rawmap[15] & V34_MAP_ENTRY_FLAG_TYPE_MASK) != V34_MAP_ENTRY_TYPE_SELF_HUNK)
++				break;
++			next = get_u64be(&rawmap[0]);
++		}
++		if (UNEXPECTED(steps >= m_hunkcount))
++			return std::error_condition(error::INVALID_DATA);
++		hunknum = next;
++	}
++	target = uint32_t(hunknum);
++	return std::error_condition();
++}
++
+ std::error_condition chd_file::codec_process_hunk(uint32_t hunknum)
+ {
+ 	// punt if no file
+@@ -919,6 +986,9 @@
+ 				case V34_MAP_ENTRY_TYPE_COMPRESSED:
+ 					{
+ 						uint32_t const blocklen = get_u16be(&rawmap[12]) | (uint32_t(rawmap[14]) << 16);
++						// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
++						if (UNEXPECTED(blocklen > m_compressed.size()))
++							return std::error_condition(error::INVALID_DATA);
+ 						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
+ 						if (UNEXPECTED(err))
+ 							return err;
+@@ -931,7 +1001,14 @@
+ 					return std::error_condition(error::UNSUPPORTED_FORMAT);
+ 
+ 				case V34_MAP_ENTRY_TYPE_SELF_HUNK:
+-					return codec_process_hunk(blockoffs);
++					{
++						// Discpress: a copy of another hunk of this file (see self_target)
++						uint32_t target;
++						std::error_condition const err = self_target(blockoffs, target);
++						if (UNEXPECTED(err))
++							return err;
++						return codec_process_hunk(target);
++					}
+ 
+ 				case V34_MAP_ENTRY_TYPE_PARENT_HUNK:
+ 					if (UNEXPECTED(m_parent_missing))
+@@ -958,6 +1035,9 @@
+ 				case COMPRESSION_TYPE_2:
+ 				case COMPRESSION_TYPE_3:
+ 					{
++						// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
++						if (UNEXPECTED(blocklen > m_compressed.size()))
++							return std::error_condition(error::INVALID_DATA);
+ 						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
+ 						if (UNEXPECTED(err))
+ 							return err;
+@@ -970,7 +1050,14 @@
+ 					return std::error_condition(error::UNSUPPORTED_FORMAT);
+ 
+ 				case COMPRESSION_SELF:
+-					return codec_process_hunk(blockoffs);
++					{
++						// Discpress: a copy of another hunk of this file (see self_target)
++						uint32_t target;
++						std::error_condition const err = self_target(blockoffs, target);
++						if (UNEXPECTED(err))
++							return err;
++						return codec_process_hunk(target);
++					}
+ 
+ 				case COMPRESSION_PARENT:
+ 					if (UNEXPECTED(m_parent_missing))
+@@ -1045,6 +1132,9 @@
+ 				case V34_MAP_ENTRY_TYPE_COMPRESSED:
+ 					{
+ 						uint32_t const blocklen = get_u16be(&rawmap[12]) | (uint32_t(rawmap[14]) << 16);
++						// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
++						if (UNEXPECTED(blocklen > m_compressed.size()))
++							return std::error_condition(error::INVALID_DATA);
+ 						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
+ 						if (UNEXPECTED(err))
+ 							return err;
+@@ -1073,7 +1163,14 @@
+ 					return std::error_condition();
+ 
+ 				case V34_MAP_ENTRY_TYPE_SELF_HUNK:
+-					return read_hunk(blockoffs, dest);
++					{
++						// Discpress: a copy of another hunk of this file (see self_target)
++						uint32_t target;
++						std::error_condition const err = self_target(blockoffs, target);
++						if (UNEXPECTED(err))
++							return err;
++						return read_hunk(target, dest);
++					}
+ 
+ 				case V34_MAP_ENTRY_TYPE_PARENT_HUNK:
+ 					if (UNEXPECTED(m_parent_missing))
+@@ -1115,6 +1212,14 @@
  					case COMPRESSION_TYPE_2:
  					case COMPRESSION_TYPE_3:
  						{
@@ -2372,10 +2499,13 @@
 +							if (wasm_read_cached(hunknum, rawmap[0], dest))
 +								return (util::crc16_creator::simple(dest, m_hunkbytes) != blockcrc) ? std::error_condition(error::DECOMPRESSION_ERROR) : std::error_condition();
 +#endif
++							// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
++							if (UNEXPECTED(blocklen > m_compressed.size()))
++								return std::error_condition(error::INVALID_DATA);
  							std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  							if (UNEXPECTED(err))
  								return err;
-@@ -1130,9 +1160,15 @@
+@@ -1130,16 +1235,29 @@
  
  					case COMPRESSION_NONE:
  						{
@@ -2391,7 +2521,22 @@
  							if (UNEXPECTED(util::crc16_creator::simple(dest, m_hunkbytes) != blockcrc))
  								return std::error_condition(error::DECOMPRESSION_ERROR);
  							return std::error_condition();
-@@ -2173,6 +2209,10 @@
+ 						}
+ 
+ 					case COMPRESSION_SELF:
+-						return read_hunk(blockoffs, dest);
++						{
++							// Discpress: a copy of another hunk of this file (see self_target)
++							uint32_t target;
++							std::error_condition const err = self_target(blockoffs, target);
++							if (UNEXPECTED(err))
++								return err;
++							return read_hunk(target, dest);
++						}
+ 
+ 					case COMPRESSION_PARENT:
+ 						if (UNEXPECTED(m_parent_missing))
+@@ -2173,6 +2291,10 @@
  		// for COMPRESSION_PARENT: parentbits
  		// the overall size is clamped later with bitbuf.flush()
  		int nbits_needed = (8*16) + (12 + std::max<int>({lengthbits+16, selfbits, parentbits}))*m_hunkcount;
@@ -2402,7 +2547,7 @@
  		std::vector<uint8_t> compressed(nbits_needed / 8 + 1);
  		bitstream_out bitbuf(&compressed[16], compressed.size() - 16);
  
-@@ -2255,7 +2295,8 @@
+@@ -2255,7 +2377,8 @@
  
  		// write the map header
  		uint32_t complen = bitbuf.flush();
@@ -2412,7 +2557,7 @@
  		put_u32be(&compressed[0], complen);
  		put_u48be(&compressed[4], firstoffs);
  		put_u16be(&compressed[10], mapcrc);
-@@ -2966,6 +3007,13 @@
+@@ -2966,6 +3089,13 @@
  
  chd_file_compressor::~chd_file_compressor()
  {
@@ -2426,7 +2571,7 @@
  	// free the work queues
  	osd_work_queue_free(m_read_queue);
  	osd_work_queue_free(m_work_queue);
-@@ -3022,6 +3070,10 @@
+@@ -3022,6 +3152,10 @@
  
  	// reset write state
  	m_write_hunk = 0;
@@ -2437,7 +2582,7 @@
  }
  
  /**
-@@ -3123,6 +3175,11 @@
+@@ -3123,6 +3257,11 @@
  			}
  			else
  			{
@@ -2449,7 +2594,7 @@
  				// otherwise, append it compressed and add to the self map
  				hunk_write_compressed(item.m_hunknum, item.m_compression, item.m_compressed, item.m_complen, item.m_hash[0].m_crc16);
  				m_total_out += item.m_complen;
-@@ -3263,12 +3320,44 @@
+@@ -3263,12 +3402,44 @@
  	// TODO: data race
  	if ((m_current_map.find(item.m_hash[0].m_crc16, item.m_hash[0].m_sha1) == hashmap::NOT_FOUND) &&
  			(m_parent_map.find(item.m_hash[0].m_crc16, item.m_hash[0].m_sha1) == hashmap::NOT_FOUND))
@@ -2495,7 +2640,7 @@
  /**
   * @fn  void *chd_file_compressor::async_read_static(void *param, int threadid)
   *
-@@ -3345,6 +3434,16 @@
+@@ -3345,6 +3516,16 @@
  			assert(item.m_status == WS_READING);
  			item.m_status = WS_QUEUED;
  			item.m_hunknum = hunknum;
@@ -2512,7 +2657,7 @@
  			item.m_osd = osd_work_item_queue(m_work_queue, m_walking_parent ? async_walk_parent_static : async_compress_hunk_static, &item, 0);
  		}
  
-@@ -3512,3 +3611,184 @@
+@@ -3512,3 +3693,184 @@
  	metadata_entry metaentry;
  	return metadata_find(AV_METADATA_TAG, 0, metaentry);
  }
@@ -2740,7 +2885,15 @@
  private:
  	struct metadata_entry;
  	struct metadata_hash;
-@@ -433,6 +453,21 @@
+@@ -391,6 +411,7 @@
+ 	std::error_condition verify_proper_compression_append(uint32_t hunknum) const noexcept;
+ 	void hunk_write_compressed(uint32_t hunknum, int8_t compression, const uint8_t *compressed, uint32_t complength, util::crc16_t crc16);
+ 	void hunk_copy_from_self(uint32_t hunknum, uint32_t otherhunk);
++	std::error_condition self_target(uint64_t hunknum, uint32_t &target) const noexcept; // Discpress
+ 	void hunk_copy_from_parent(uint32_t hunknum, uint64_t parentunit);
+ 	std::error_condition metadata_find(chd_metadata_tag metatag, int32_t metaindex, metadata_entry &metaentry, bool resume = false) const noexcept;
+ 	std::error_condition metadata_set_previous_next(uint64_t prevoffset, uint64_t nextoffset) noexcept;
+@@ -433,6 +454,21 @@
  	// caching
  	std::vector<uint8_t>    m_cache;            // single-hunk cache for partial reads/writes
  	uint32_t                m_cachehunk;        // which hunk is in the cache?
@@ -2762,7 +2915,7 @@
  };
  
  
-@@ -450,11 +485,28 @@
+@@ -450,11 +486,28 @@
  	void compress_begin();
  	std::error_condition compress_continue(double &progress, double &ratio);
  
@@ -2791,7 +2944,7 @@
  	// hash map for looking up values
  	class hashmap
  	{
-@@ -524,6 +576,7 @@
+@@ -524,6 +577,7 @@
  			, m_complen(0)
  			, m_compression(0)
  			, m_codecs(nullptr)
@@ -2799,7 +2952,7 @@
  		{ }
  
  		osd_work_item *     m_osd;              // OSD work item running on this block
-@@ -537,6 +590,7 @@
+@@ -537,6 +591,7 @@
  		uint32_t              m_complen;          // compressed data length
  		int8_t                m_compression;      // type of compression used
  		chd_compressor_group *m_codecs;         // codec instance
@@ -2807,7 +2960,7 @@
  		std::vector<hash_pair> m_hash;        // array of hashes
  	};
  
-@@ -549,6 +603,7 @@
+@@ -549,6 +604,7 @@
  	void async_read();
  
  	// current compression status

@@ -411,6 +411,7 @@ private:
 	std::error_condition verify_proper_compression_append(uint32_t hunknum) const noexcept;
 	void hunk_write_compressed(uint32_t hunknum, int8_t compression, const uint8_t *compressed, uint32_t complength, util::crc16_t crc16);
 	void hunk_copy_from_self(uint32_t hunknum, uint32_t otherhunk);
+	std::error_condition self_target(uint64_t hunknum, uint32_t &target) const noexcept; // Discpress
 	void hunk_copy_from_parent(uint32_t hunknum, uint64_t parentunit);
 	std::error_condition metadata_find(chd_metadata_tag metatag, int32_t metaindex, metadata_entry &metaentry, bool resume = false) const noexcept;
 	std::error_condition metadata_set_previous_next(uint64_t prevoffset, uint64_t nextoffset) noexcept;
