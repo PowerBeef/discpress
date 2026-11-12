@@ -324,9 +324,28 @@ var Engine = {
     this.url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
     return this;
   },
+  // Firefox's tab crashes when a worker is terminated while it instantiates its WebAssembly (as when a helper
+  // that fails to start stops the job at once, its siblings still starting): a worker given the engine here is
+  // starting until it says otherwise ('wasm-ready', or 'fatal'), and Engine.stop terminates one still starting
+  // once it has, or in 10 s
   post: function (w, msg, transfer) {
+    if (!w.engineWatch) {
+      w.engineWatch = true;
+      w.engineStarting = true;
+      var started = function () {
+        w.engineStarting = false;
+        if (w.engineStop) { w.engineStop = false; w.terminate(); }
+      };
+      w.addEventListener('message', function (e) { var t = e.data && e.data.type; if (t === 'wasm-ready' || t === 'fatal') started(); });
+      w.addEventListener('error', started);
+    }
     try { msg.wasmModule = this.module; w.postMessage(msg, transfer || []); }
     catch (e) { delete msg.wasmModule; msg.wasmBytes = this.bytes; w.postMessage(msg, transfer || []); }
+  },
+  stop: function (w) {
+    if (!w.engineStarting) { w.terminate(); return; }
+    w.engineStop = true;
+    setTimeout(function () { w.terminate(); }, 10000);
   },
   // runs one chdman command; returns {promise, cancel}
   run: function (o) {
@@ -376,8 +395,8 @@ var Engine = {
       if (watch) { clearInterval(watch); watch = 0; }
       // a chunk still waiting for the worker's answer: its staging ends (and lets go of the file)
       if (ackWait) { var a = ackWait; ackWait = null; a(); }
-      if (worker) worker.terminate();
-      helpers.forEach(function (h) { h.terminate(); });
+      if (worker) Engine.stop(worker);
+      helpers.forEach(function (h) { Engine.stop(h); });
       helpers = [];
     }
     var promise = new Promise(function (resolve, reject) {
@@ -555,7 +574,7 @@ var Tuning = {
         else if (++misses >= (n > cores ? 1 : 2)) break;
       }
     } finally {
-      pool.forEach(function (h) { h.w.terminate(); });
+      pool.forEach(function (h) { Engine.stop(h.w); });
       document.removeEventListener('visibilitychange', onVisibility);
     }
     var t = { key: this.key(), threads: bestN, rate: +best.toFixed(2), steps: steps, cores: cores, cap: Tuning.cap, date: Date.now() };
