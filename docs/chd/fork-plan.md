@@ -467,12 +467,17 @@ Where the time goes, measured on the benchmark discs (300 MB CD, 1 GB DVD; 4 cor
      buffer holds there (§3, "chdman's window is part of its output"). Left: the running SHA-1 and the
      copies, about 3 s of the job worker's time per GB, and Firefox, whose 4 threads gain less (CI's
      benchmark: 14.6 → 11.6 s, against Chromium's 13.7 → 8.7).
-   - Exact SIMD for FLAC's loops: Emscripten already vectorizes the two largest, autocorrelation (373 SIMD
-     instructions in the build) and the residual from the LPC coefficients (349), without changing a result
-     (each lag's sum keeps its order; WebAssembly SIMD has no fused multiply-add). What is left is mostly
-     scalar: the partition sums (15) and the fixed predictor (56), integer loops that would give the same
-     results by construction. Only worth writing if a measurement shows them in the page's time.
-   - Whether FLAC can stop after the first channel when it already can't win: only if that is exact.
+   - Exact SIMD for FLAC's loops: not written. Emscripten already vectorizes the two largest,
+     autocorrelation (373 SIMD instructions in the build) and the residual from the LPC coefficients (349),
+     without changing a result (each lag's sum keeps its order; WebAssembly SIMD has no fused multiply-add).
+     What is left mostly scalar, the partition sums (15) and the fixed predictor (56), is 21% of FLAC's
+     instructions; FLAC is about 39% of a DVD hunk's default compression (it encodes each hunk twice, in
+     both byte orders, a block each), so making them twice as fast would save about 4%.
+   - FLAC stopping after the first channel when it already can't win: not exact, so not done. chdman's
+     FLAC (level 8) searches every stereo pairing (left/right, left/side, right/side, mid/side) and keeps the
+     smallest; after the first channels, the size of the pairings still to come is unknown and can be far
+     smaller, so nothing counted so far bounds the frame from below. (Within a channel the encoder already
+     stops after a block that passes the limit, but a DVD hunk is one block.)
 4. **The new exception format** (done): `WASM_EH=exnref ./build.sh` builds with exnref
    (`-sWASM_LEGACY_EXCEPTIONS=0`: 1,704 `try_table`, no legacy `try`), and `.github/workflows/rebuild.yml`
    runs the conversion tests on that page, which gives chdman's CHDs byte for byte at the same speed (the
