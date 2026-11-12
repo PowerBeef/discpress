@@ -28,7 +28,7 @@ const MGS = 'Metal Gear Solid (DAT Test) (Disc 1)';
 const mgsRoms = (track2 = 'mgs disc1 (Track 2).bin') => [
   rom(MGS + '.cue', 'mgs disc1.cue'), rom(MGS + ' (Track 1).bin', 'mgs disc1 (Track 1).bin'), rom(MGS + ' (Track 2).bin', track2)];
 
-test('every track matching a DAT game verifies the disc and names it after the game', async ({ app, page }) => {
+test('every track matching a DAT game verifies the disc and names it after the game', async ({ app, page, browserName }) => {
   const dat = writeDat('test.dat', xmlDat('Sony - PlayStation (Test)', [{ name: MGS, roms: mgsRoms() }, { name: 'Other Game', roms: [rom('Other.bin', 'twine.bin')] }]));
   await app.open();
   await app.add([dat]);
@@ -43,7 +43,9 @@ test('every track matching a DAT game verifies the disc and names it after the g
   await app.run(card);
   const outs = await app.downloads(card);
   expect(outs.map(o => o.name)).toEqual([MGS + '.chd']);
-  // kept: after a reload, Settings lists it, and removing it forgets it
+  // kept: after a reload, Settings lists it, and removing it forgets it (in private storage, which Playwright's
+  // WebKit has none of: navigator.storage)
+  if (browserName === 'webkit') return;
   await page.reload();
   await expect(page.locator('#chipEngine')).toContainText(/ready/i, { timeout: 60_000 });
   await page.click('#settingsBtn');

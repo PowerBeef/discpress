@@ -240,6 +240,8 @@ for (const fx of fixtures) {
       // native baseline for the same work
       if (cfg.native && cfg.nativeTiming) {
         const threadsList = cfg.threads;
+        // (an extract's size from the page's row for the same work: the rows before a native one may be native)
+        const outMB = (results.find(r => r.fixture === fx.key && r.op === op && r.preset === preset && r.simd !== 'native' && r.outputMB) || {}).outputMB;
         for (const threads of threadsList) {
           const times = [];
           for (let r = 0; r < cfg.repeat; r++) {
@@ -248,7 +250,7 @@ for (const fx of fixtures) {
           }
           const secs = median(times);
           results.push({ fixture: fx.key, op, preset, simd: 'native', threads, seconds: +secs.toFixed(3), runs: times.map(x => +x.toFixed(3)),
-            inputMB: +((op === 'create' ? inBytes : fs.statSync(chdInput).size) / 1048576).toFixed(1), mbps: +((op === 'create' ? inBytes : results.at(-1).outputMB * 1048576) / 1048576 / secs).toFixed(1) });
+            inputMB: +((op === 'create' ? inBytes : fs.statSync(chdInput).size) / 1048576).toFixed(1), mbps: +((op === 'create' ? inBytes : outMB * 1048576) / 1048576 / secs).toFixed(1) });
           log(`  ${fx.key} ${op} ${preset} native threads=${threads}: ${secs.toFixed(2)} s`);
         }
       }

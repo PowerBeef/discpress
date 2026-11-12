@@ -1,7 +1,6 @@
-# Times conversions through the page (tests/bench/bench.js) in each browser engine: Chromium and Firefox on
-# Ubuntu, against native chdman on the same machine (whose outputs each conversion must equal), and WebKit,
-# Safari's engine, on an Apple-silicon Mac (the closest to an iPhone's CPU; timed only). The results are the
-# run's summary and an artifact. When the page changes, weekly, and on demand.
+# Times conversions through the page (tests/bench/bench.js) in each browser engine, Chromium, Firefox and
+# WebKit (Safari's), on Ubuntu, against native chdman on the same machine (whose outputs each conversion must
+# equal). The results are the run's summary and an artifact. When the page changes, weekly, and on demand.
 name: Benchmarks
 
 on:
@@ -33,9 +32,10 @@ jobs:
           - browser: firefox
             os: ubuntu-24.04
             native: true
+          # (WebKit on Ubuntu too: the macOS runner this asked for was cancelled before any runner took it)
           - browser: webkit
-            os: macos-14
-            native: false
+            os: ubuntu-24.04
+            native: true
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     name: bench (${{ matrix.browser }})
@@ -75,7 +75,6 @@ jobs:
         run: >
           node bench/bench.js --browser ${{ matrix.browser }} --label ci-${{ matrix.browser }}
           --threads 1,4 --presets default,fast --cd-mb 150 --dvd-mb 512
-          ${{ !matrix.native && '--no-native' || '' }}
       - name: Summary
         if: always()
         run: cat tests/.cache/bench/*.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true

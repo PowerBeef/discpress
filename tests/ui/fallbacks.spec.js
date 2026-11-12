@@ -171,14 +171,17 @@ for (const [mode, logged] of [['one', 'A helper thread stopped (Out of bounds me
   });
 }
 
-test('when the engine fails again, the error says what to do about the browser, not about threads', async ({ app }) => {
+test('when the engine fails again, the error says what to do about the browser, not about threads', async ({ app, browserName }) => {
   await app.open({ settings: { threads: 4 }, debug: { failHelpers: 'always' } });
   await app.add(fixture('ps2-dvd').add);
   const card = app.jobs().first();
   await app.settled(card);
   await app.run(card, { expectState: 'error' });
   await expect(card).toContainText('Multi-core compression failed (Out of bounds memory access');
-  await expect(card).toContainText('This is a fault in the browser, not in your files. Update the browser, or convert in another one.');
+  // (Safari's own advice where the browser is Safari, which Playwright's WebKit says it is)
+  await expect(card).toContainText(browserName === 'webkit'
+    ? 'This is a fault in this version of Safari, not in your files. Update Safari (or macOS), or convert in Chrome, Edge or Firefox.'
+    : 'This is a fault in the browser, not in your files. Update the browser, or convert in another one.');
   await expect(card).not.toContainText('1 thread');
   await expect(card.locator('pre.logtext')).toContainText('Converting again');
 });
