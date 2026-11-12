@@ -432,8 +432,7 @@ function gameFolders(testInfo, { missingB = false } = {}) {
   return root;
 }
 async function addFolder(app, dir) {
-  const [chooser] = await Promise.all([app.page.waitForEvent('filechooser'), app.page.click('#addFolder')]);
-  await chooser.setFiles(dir);
+  await app.addFolder(dir);
 }
 
 test('a game missing a track does not borrow the same-named track of another game in the folder', async ({ app }, testInfo) => {

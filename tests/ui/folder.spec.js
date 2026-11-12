@@ -281,8 +281,7 @@ test('saving all into a folder never lets two results of the same name replace e
   }
   await page.addInitScript(fakeFolder);
   await app.open({ settings: { rename: false, threads: 1 } });
-  const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#addFolder')]);
-  await chooser.setFiles(root);
+  await app.addFolder(root);
   await expect(app.jobs()).toHaveCount(2);
   for (let i = 0; i < 2; i++) {
     await app.settled(app.jobs().nth(i));
