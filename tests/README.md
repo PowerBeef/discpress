@@ -48,6 +48,10 @@ it serves, and the run stops if that isn't the page `DISCPRESS_HTML` picks (stop
 checks skip. Set it locally too to be sure a run compared everything. The same workflow runs
 `scripts/check-dist.sh`, `scripts/engine-diff.sh --check` and `scripts/check-licenses.sh`.
 
+`.github/workflows/browsers.yml` runs the suite in Firefox and in WebKit (the `firefox`, `webkit` and
+`iphone-webkit` projects, `EXTRA_BROWSERS=1`), with the same references, when the page or the tests
+change and weekly.
+
 `.github/workflows/sanitizers.yml` runs `ui/engine.spec.js` on the engine built with AddressSanitizer,
 LeakSanitizer and UndefinedBehaviorSanitizer (`scripts/build-sanitized.sh`, `build/chdman-san`), named
 by `CHDMAN_ENGINE`: a sanitizer report in chdman's output fails the test, whatever its exit code; a
@@ -56,6 +60,10 @@ every test (so does `REQUIRE_NATIVE` without a current `build/chdman-native`). I
 when `engine/`, `wasm/`, the spec, the fixtures or the suppressions change, and weekly. Leaks unmodified chdman 0.289 has too are suppressed
 (`support/lsan.supp`, each with how that was checked). Locally:
 `CHDMAN_ENGINE=../build/chdman-san LSAN_OPTIONS=suppressions=$PWD/support/lsan.supp npx playwright test ui/engine.spec.js`.
+
+`.github/workflows/fuzz.yml` fuzzes the engine with libFuzzer under the same sanitizers
+(`scripts/fuzz.sh`; what each fuzzer feeds it, and the bugs found so far: `fuzz/README.md`). Each
+finding, once fixed, is kept as an input in `fuzz/regressions/`, which every run replays.
 
 ## How correctness is checked
 
@@ -136,8 +144,14 @@ Times real conversions through the UI (from pressing the button to the finished 
 with the page's own clock) and the same work with native chdman. Options:
 `--fixtures`, `--quick`, `--ops create,extract`, `--threads 1,2,4`, `--simd on,off`,
 `--presets default,plan,fast,zstd,none` (`plan` and `fast` use the engine's own options and are checked against `build/chdman-native`), `--repeat N`, `--html PATH`, `--label NAME`,
-`--compare FILE|latest`, `--cd-mb`, `--dvd-mb`, `--no-native`, `--no-verify`.
+`--compare FILE|latest`, `--cd-mb`, `--dvd-mb`, `--no-native`, `--no-verify`, `--browser chromium|firefox|webkit`
+(the other two once Playwright has installed them).
 
 Each run writes `.cache/bench/<time>-<label>.json` and `.md`: seconds (median), throughput,
 compression ratio, peak memory of the browser, time relative to native chdman, change against a
 previous run, and whether the output was byte-identical to native chdman.
+
+`.github/workflows/bench.yml` runs it in each engine when the page changes, weekly and on demand:
+Chromium and Firefox on Ubuntu (against native chdman), WebKit on an Apple-silicon Mac (timed only),
+at 1 and 4 threads with the default and "Faster to create" presets, on a 150 MB CD and a 512 MB DVD.
+The tables are the run's summary.
