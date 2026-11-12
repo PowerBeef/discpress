@@ -116,7 +116,12 @@ export class App {
 
   // (timeout: less than a test's 180 s, so a job that never ends fails here, with the card's text)
   async run(card, { expectState = 'done', timeout = 150_000 } = {}) {
-    await card.locator('.job-foot button.primary').click();
+    const start = card.locator('.job-foot button.primary');
+    await start.click();
+    // (a click while the card is redrawn, as it can be just after identification ends, reaches no button:
+    // the card is still ready, so once more; a page that ignores the button fails all the same)
+    try { await expect(card).not.toHaveAttribute('data-state', 'ready', { timeout: 3000 }); }
+    catch (e) { await start.click(); }
     let st;
     try { st = await this.waitState(card, ['done', 'error', 'canceled'], timeout); }
     catch (e) { throw new Error(`job still "${await card.getAttribute('data-state')}" after ${timeout / 1000} s:\n${await card.innerText()}`); }
