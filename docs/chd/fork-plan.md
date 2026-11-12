@@ -129,7 +129,7 @@ Effort estimates assume one developer working with the existing test harness. Th
 | 5. What users ask for | Done (1.5.0) |
 | 6. Detection that knows the game | Done (1.7.0) |
 | 7. Layouts each emulator reads right | Planned; nothing built (no new conversion engine, but steps 2 and 5 change the fork) |
-| 8. Faster, more efficient, more reliable | Step 1 done (fuzzing and crafted headers found over 20 faults that damaged files reach, all but one also chdman 0.289's); step 2's workflows in place, with first results; step 3 in progress (a wider compression window: DVDs 11–20% faster); step 4 planned |
+| 8. Faster, more efficient, more reliable | Step 1 done (fuzzing and crafted headers found over 20 faults that damaged files reach, all but one also chdman 0.289's); step 2's workflows in place, with first results; step 3 in progress (a wider compression window: DVDs 11–20% faster); step 4 done (an exnref build in CI) |
 
 The two releases after milestone 6 are outside the milestones, and their CHDs are the same:
 - **1.8.0** fixed what a full review of the app found: discs that took another game's tracks or name, results that could be lost, slow adding of big folders.
@@ -473,9 +473,12 @@ Where the time goes, measured on the benchmark discs (300 MB CD, 1 GB DVD; 4 cor
      scalar: the partition sums (15) and the fixed predictor (56), integer loops that would give the same
      results by construction. Only worth writing if a measurement shows them in the page's time.
    - Whether FLAC can stop after the first channel when it already can't win: only if that is exact.
-4. **Later** (as needed): a CI build with WebAssembly's new exception format (`-sWASM_LEGACY_EXCEPTIONS=0`,
-   exnref), so that switching once every browser has it is one line. A battery saver isn't needed: the
-   thread setting already is one.
+4. **The new exception format** (done): `WASM_EH=exnref ./build.sh` builds with exnref
+   (`-sWASM_LEGACY_EXCEPTIONS=0`: 1,704 `try_table`, no legacy `try`), and `.github/workflows/rebuild.yml`
+   runs the conversion tests on that page, which gives chdman's CHDs byte for byte at the same speed (the
+   DVD's default 44.40 s against 44.67, the CD's 11.65 against 11.66). Switching, once every browser the
+   page supports has exnref (Chrome 137, Firefox 131, Safari 18.4), is that flag and `EH_TEST` in
+   `app/ui.js`. A battery saver isn't needed: the thread setting already is one.
 
 ## 5. Test and verification strategy
 
