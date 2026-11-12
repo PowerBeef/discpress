@@ -751,7 +751,17 @@ var Recovery = {
     this.write(all);
   },
   running: function (job) {
+    this.current = job || null;
     this.update(function (rec) { rec.running = job ? job.title : null; });
+  },
+  leaving: false, // beforeunload was seen: the page may be going away (or the visitor chose to stay)
+  // the running job ended without results. Once a reload or close has begun, WebKit fails a job's reads
+  // before the page is gone, which ends the job: then its record stays, so that the next visit still says
+  // it didn't finish, and goes only if the page is still here 3 s later (and runs nothing newer)
+  ended: function (job) {
+    var self = this;
+    if (!this.leaving) { this.running(null); return; }
+    setTimeout(function () { if (self.current === job) self.running(null); }, 3000);
   },
   // results in memory ('blob') are recorded too: a reload loses them, and the next visit says so
   finished: function (job) {
@@ -2933,7 +2943,7 @@ async function runJobNow(job) {
         await verifyResult(job);
       }
     } else {
-      Recovery.running(null);
+      Recovery.ended(job);
       job.state = 'error';
       if (res.readFail) { job.errorText = readFailHint(res.error); Store.removeJob(job.id); refreshJob(job, true); return; }
       // (a helper that stopped, whose work the others did, isn't why)
@@ -2946,7 +2956,7 @@ async function runJobNow(job) {
       Store.removeJob(job.id);
     }
   } catch (e) {
-    Recovery.running(null);
+    Recovery.ended(job);
     if (e.canceled && job.stalled) { job.state = 'error'; job.errorText = STALLED; }
     else if (e.canceled && job.storageRefused) { job.state = 'error'; job.errorText = 'The browser\u2019s storage wasn\u2019t available for this job, so it stopped rather than keep its results in memory. Try again in a moment.'; }
     else if (e.canceled) { job.state = 'canceled'; }
@@ -4398,6 +4408,7 @@ function init() {
   });
 
   window.addEventListener('beforeunload', function (e) {
+    Recovery.leaving = true;
     var busy = jobs.some(function (j) { return j.state === 'running' || j.state === 'queued'; }) || !!cli.run;
     var left = jobs.some(unsaved) || (cli.last && unsaved(cli.last));
     if (busy || left) { e.preventDefault(); e.returnValue = ''; }
