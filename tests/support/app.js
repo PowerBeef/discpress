@@ -98,6 +98,20 @@ export class App {
     await chooser.setFiles(names.map(fixturePath));
   }
 
+  /** Add a folder through the real folder chooser. Now and then (1 time in 100 to 200, more under load)
+   * Playwright's Firefox never delivers a folder: no change event, and setFiles never returns. Then the folder
+   * is chosen again, once (a late delivery of the first would be a duplicate, which the page ignores). */
+  async addFolder(dir) {
+    for (let attempt = 1; ; attempt++) {
+      const [chooser] = await Promise.all([this.page.waitForEvent('filechooser'), this.page.click('#addFolder')]);
+      const input = chooser.element();
+      await input.evaluate(el => { el.picked = false; el.addEventListener('change', () => { el.picked = true; }, { once: true }); });
+      chooser.setFiles(dir).catch(() => {});
+      try { await expect.poll(() => input.evaluate(el => el.picked), { timeout: 10_000 }).toBe(true); return; }
+      catch (e) { if (attempt === 2) throw new Error(`the folder chooser didn't deliver ${dir}, twice`); }
+    }
+  }
+
   jobs() { return this.page.locator('#jobs article.job'); }
   // title: the files' name (data-title); the heading shows the game once it's identified
   job(title) { return this.page.locator(`#jobs article.job[data-title=${JSON.stringify(title)}]`); }
