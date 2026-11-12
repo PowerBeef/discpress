@@ -87,8 +87,14 @@ test('an unsaved result can be deleted from the list', async ({ app, page }) => 
   await expect(page.locator('#earlier')).toBeHidden();
 });
 
-test('a conversion stopped by a reload is reported', async ({ app, page }) => {
+// Once a reload has begun, WebKit fails the job worker's reads of the picked files, and logs each (as a
+// console error, or as an uncaught error with the URL's start cut off): the browser's report of the read the
+// reload cut off, not the page's
+const CUT_READ = /^(Cannot load blob:|uncaught: )\S+ due to access control checks\.$/;
+
+test('a conversion stopped by a reload is reported', async ({ app, page, browserName }) => {
   await app.open({ settings: { threads: 1 } });
+  if (browserName === 'webkit') app.allowErrors(CUT_READ);
   await app.add(fixture('ps2-dvd').add);
   const card = app.jobs().first();
   await app.settled(card);
@@ -140,8 +146,9 @@ test('where results live in memory, a reload says which were lost and how to kee
   await expect(page.locator('#earlier')).toBeHidden();
 });
 
-test('where results live in memory, a conversion stopped by a reload is reported', async ({ app, page }, testInfo) => {
+test('where results live in memory, a conversion stopped by a reload is reported', async ({ app, page, browserName }, testInfo) => {
   await app.open({ settings: { threads: 1 }, ...(testInfo.project.name === 'file-url' ? {} : { noOpfs: true }) });
+  if (browserName === 'webkit') app.allowErrors(CUT_READ);
   await app.add(fixture('ps2-dvd').add);
   const card = app.jobs().first();
   await app.settled(card);
