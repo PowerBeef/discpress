@@ -802,3 +802,16 @@ test('the no-progress watchdog doesn\u2019t count time the page is hidden', asyn
   await expect(card.locator('[data-note="no-progress"]')).toHaveCount(0);
   await app.waitState(card, 'done', 60_000);
 });
+
+// DEBUG.profile: the job worker says in the job's log where its time went, the helpers' too
+test('with the profile debug setting, the log says where the job worker’s time went', async ({ app }) => {
+  await app.open({ settings: { threads: 2 }, debug: { profile: 1 } });
+  await app.add(fixture('ps2-dvd').add);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await app.run(card);
+  const log = await card.locator('pre.logtext').textContent();
+  const line = /Profile \(ms\): (.*)/.exec(log);
+  expect(line, log.slice(-2000)).not.toBeNull();
+  for (const what of ['read input', 'in the engine', 'hand out hunks', 'take results', 'waiting for helpers', 'helpers compressing', 'helpers busy']) expect(line[1]).toMatch(new RegExp(`${what} \\d+`));
+});
