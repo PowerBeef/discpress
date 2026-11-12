@@ -467,6 +467,18 @@
  		if(bps >= 0.0)
  			return bps;
  		else
+--- a/3rdparty/flac/src/libFLAC/stream_encoder.c
++++ b/3rdparty/flac/src/libFLAC/stream_encoder.c
+@@ -4126,7 +4126,8 @@
+ 					residual,
+ #endif
+ 					abs_residual_partition_sums+sum,
+-					raw_bits_per_partition+sum,
++					/* Discpress: null without escape coding, which C doesn't let an offset be added to */
++					raw_bits_per_partition != NULL ? raw_bits_per_partition+sum : NULL,
+ 					residual_samples,
+ 					predictor_order,
+ 					rice_parameter_limit,
 --- a/3rdparty/flac/src/libFLAC/window.c
 +++ b/3rdparty/flac/src/libFLAC/window.c
 @@ -39,6 +39,7 @@
@@ -657,6 +669,63 @@
  
    *destLen -= (SizeT)outStream.rem;
    if (outStream.overflow)
+--- a/src/lib/util/avhuff.cpp
++++ b/src/lib/util/avhuff.cpp
+@@ -67,6 +67,7 @@
+ #include <cmath>
+ #include <cstdlib>
+ #include <cstring>
++#include <iterator>
+ #include <new>
+ 
+ 
+@@ -723,6 +724,11 @@
+ 	uint32_t width = get_u16be(&source[4]);
+ 	uint32_t height = get_u16be(&source[6]);
+ 
++	// Discpress: no more channels than there are places for (the encoder takes up to 16): 0.289 went past
++	// the end of audiostart and of m_config.audio
++	if (channels > std::size(m_config.audio))
++		return AVHERR_INVALID_DATA;
++
+ 	// validate that the sizes make sense
+ 	if (complength < 10 + 2 * channels)
+ 		return AVHERR_INVALID_DATA;
+@@ -932,6 +938,10 @@
+ 			// if no huffman length, just copy the data
+ 			if (treesize == 0)
+ 			{
++				// Discpress: as much as the samples take (as stored): 0.289 read past the channel's
++				// data, and past the end of the hunk's
++				if (size < 2 * samples)
++					return AVHERR_INVALID_DATA;
+ 				const uint8_t *cursource = source;
+ 				for (int sampnum = 0; sampnum < samples; sampnum++)
+ 				{
+--- a/src/lib/util/bitstream.h
++++ b/src/lib/util/bitstream.h
+@@ -146,7 +146,8 @@
+ 
+ inline void bitstream_in::remove(int numbits)
+ {
+-	m_buffer <<= numbits;
++	// (all 32 bits, which a crafted v5 map's field width can ask for: the buffer is empty, not shifted by 32)
++	m_buffer = (numbits < 32) ? (m_buffer << numbits) : 0;
+ 	m_bits -= numbits;
+ }
+ 
+@@ -226,6 +227,11 @@
+ 
+ inline void bitstream_out::write(uint32_t newbits, int numbits)
+ {
++	// Discpress: nothing to write, as for a CHD map with no copies of hunks (0.289 went on to shift
++	// the value by 32 bits, which C++ leaves undefined, and then returned without using it)
++	if (numbits <= 0)
++		return;
++
+ 	newbits <<= 32 - numbits;
+ 
+ 	// flush the buffer if we're going to overflow it
 --- a/src/lib/util/cdrom.cpp
 +++ b/src/lib/util/cdrom.cpp
 @@ -28,6 +28,8 @@
@@ -722,7 +791,85 @@
  	const uint32_t index_offset = frame - track_start;
  	int index = 0;
  
-@@ -1153,204 +1177,106 @@
+@@ -897,6 +921,13 @@
+  * @return  A std::error_condition.
+  */
+ 
++// Discpress: chd.cpp's formats for the track metadata, with a width for each string that fills its 16-byte
++// buffer at most (the longest a CD has is 15 characters, VMODE2_FORM_MIX); a longer one, in damaged or
++// crafted metadata, doesn't match. 0.289 read them with %s, which wrote past the end of the buffer.
++static const char CDROM_TRACK_METADATA_FORMAT_READ[] = "TRACK:%d TYPE:%15s SUBTYPE:%15s FRAMES:%d";
++static const char CDROM_TRACK_METADATA2_FORMAT_READ[] = "TRACK:%d TYPE:%15s SUBTYPE:%15s FRAMES:%d PREGAP:%d PGTYPE:%15s PGSUB:%15s POSTGAP:%d";
++static const char GDROM_TRACK_METADATA_FORMAT_READ[] = "TRACK:%d TYPE:%15s SUBTYPE:%15s FRAMES:%d PAD:%d PREGAP:%d PGTYPE:%15s PGSUB:%15s POSTGAP:%d";
++
+ std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
+ {
+ 	std::string metadata;
+@@ -924,12 +955,12 @@
+ 		// fetch the metadata for this track
+ 		if (!chd->read_metadata(CDROM_TRACK_METADATA_TAG, toc.numtrks, metadata))
+ 		{
+-			if (sscanf(metadata.c_str(), CDROM_TRACK_METADATA_FORMAT, &tracknum, type, subtype, &frames) != 4)
++			if (sscanf(metadata.c_str(), CDROM_TRACK_METADATA_FORMAT_READ, &tracknum, type, subtype, &frames) != 4)
+ 				return chd_file::error::INVALID_DATA;
+ 		}
+ 		else if (!chd->read_metadata(CDROM_TRACK_METADATA2_TAG, toc.numtrks, metadata))
+ 		{
+-			if (sscanf(metadata.c_str(), CDROM_TRACK_METADATA2_FORMAT, &tracknum, type, subtype, &frames, &pregap, pgtype, pgsub, &postgap) != 8)
++			if (sscanf(metadata.c_str(), CDROM_TRACK_METADATA2_FORMAT_READ, &tracknum, type, subtype, &frames, &pregap, pgtype, pgsub, &postgap) != 8)
+ 				return chd_file::error::INVALID_DATA;
+ 		}
+ 		else
+@@ -944,7 +975,7 @@
+ 			if (err)
+ 				break;
+ 
+-			if (sscanf(metadata.c_str(), GDROM_TRACK_METADATA_FORMAT, &tracknum, type, subtype, &frames, &padframes, &pregap, pgtype, pgsub, &postgap) != 9)
++			if (sscanf(metadata.c_str(), GDROM_TRACK_METADATA_FORMAT_READ, &tracknum, type, subtype, &frames, &padframes, &pregap, pgtype, pgsub, &postgap) != 9)
+ 				return chd_file::error::INVALID_DATA;
+ 
+ 			toc.flags |= CD_FLAG_GDROM;
+@@ -995,7 +1026,14 @@
+ 
+ 	/* if we got any tracks this way, we're done */
+ 	if (toc.numtrks > 0)
++	{
++		// Discpress: with each track once: a track number that repeats or skips one (damaged or crafted
++		// metadata) left a track of nothing, of 0-byte sectors, which extractcd divided by
++		for (uint32_t i = 0; i < toc.numtrks; i++)
++			if (toc.tracks[i].datasize == 0)
++				return chd_file::error::INVALID_DATA;
+ 		return std::error_condition();
++	}
+ 
+ 	osd_printf_info("toc.numtrks = %u?!\n", toc.numtrks);
+ 
+@@ -1004,6 +1042,9 @@
+ 	err = chd->read_metadata(CDROM_OLD_METADATA_TAG, 0, oldmetadata);
+ 	if (err)
+ 		return err;
++	// Discpress: as long as the table it holds (0.289 read past the end of shorter metadata)
++	if (oldmetadata.size() < 4 + MAX_TRACKS * 6 * 4)
++		return chd_file::error::INVALID_DATA;
+ 
+ 	/* reconstruct the TOC from it */
+ 	auto *mrp = reinterpret_cast<uint32_t *>(&oldmetadata[0]);
+@@ -1044,6 +1085,14 @@
+ 		}
+ 	}
+ 
++	// Discpress: no more tracks than the table holds, with sectors a CD has: anything else (damaged or
++	// crafted metadata) made 0.289 read past the end of the table, and of a sector's buffer
++	if (toc.numtrks > MAX_TRACKS)
++		return chd_file::error::INVALID_DATA;
++	for (uint32_t i = 0; i < toc.numtrks; i++)
++		if (toc.tracks[i].datasize == 0 || toc.tracks[i].datasize > MAX_SECTOR_DATA || toc.tracks[i].subsize > MAX_SUBCODE_DATA)
++			return chd_file::error::INVALID_DATA;
++
+ 	return std::error_condition();
+ }
+ 
+@@ -1153,204 +1202,106 @@
  	0x50, 0xa4, 0xa5, 0x51, 0xa7, 0x53, 0x52, 0xa6, 0xa3, 0x57, 0x56, 0xa2, 0x54, 0xa0, 0xa1, 0x55
  };
  
@@ -962,10 +1109,7 @@
 +	uint64_t a[11] = { }, b[11] = { };
 +	int const count = q ? ECC_Q_NUM_BYTES : ECC_P_NUM_BYTES;
 +	if (!q)
- 	{
--		val1 ^= ecc_source_byte(sector, row[component]);
--		val2 ^= ecc_source_byte(sector, row[component]);
--		val1 = ecclow[val1];
++	{
 +		// the columns of the first 24 rows (a row's last word also reads 2 bytes of the next row, unused)
 +		for (int row = 0; row < ECC_P_COMP; row++)
 +			for (int l = 0; l < 11; l++)
@@ -1000,7 +1144,10 @@
 +	memcpy(av, a, sizeof(a));
 +	memcpy(bv, b, sizeof(b));
 +	for (int i = 0; i < count; i++)
-+	{
+ 	{
+-		val1 ^= ecc_source_byte(sector, row[component]);
+-		val2 ^= ecc_source_byte(sector, row[component]);
+-		val1 = ecclow[val1];
 +		uint8_t const p0 = ecchigh[ecclow[av[i]] ^ bv[i]];
 +		parity[i] = p0;
 +		parity[count + i] = p0 ^ bv[i];
@@ -1010,7 +1157,7 @@
  }
  
  /**
-@@ -1367,24 +1293,17 @@
+@@ -1367,24 +1318,17 @@
  
  bool cdrom_file::ecc_verify(const uint8_t *sector)
  {
@@ -1043,7 +1190,7 @@
  }
  
  /**
-@@ -1400,13 +1319,13 @@
+@@ -1400,13 +1344,13 @@
  
  void cdrom_file::ecc_generate(uint8_t *sector)
  {
@@ -1063,7 +1210,7 @@
  }
  
  /**
-@@ -1578,22 +1497,25 @@
+@@ -1578,22 +1522,25 @@
  
  int cdrom_file::msf_to_frames(const char *token)
  {
@@ -1103,7 +1250,7 @@
  }
  
  /*-------------------------------------------------
-@@ -1604,17 +1526,18 @@
+@@ -1604,17 +1551,18 @@
  -------------------------------------------------*/
  
  /**
@@ -1124,7 +1271,7 @@
  {
  	unsigned long offset = 0;
  	uint32_t length, rate, filesize;
-@@ -1633,7 +1556,7 @@
+@@ -1633,7 +1581,7 @@
  	}
  
  	/* read the core header and make sure it's a WAVE file */
@@ -1133,7 +1280,7 @@
  	offset += actual;
  	if (offset < 4)
  	{
-@@ -1647,7 +1570,7 @@
+@@ -1647,7 +1595,7 @@
  	}
  
  	/* get the total size */
@@ -1142,7 +1289,7 @@
  	offset += actual;
  	if (offset < 8)
  	{
-@@ -1657,7 +1580,7 @@
+@@ -1657,7 +1605,7 @@
  	filesize = little_endianize_int32(filesize);
  
  	/* read the RIFF file type and make sure it's a WAVE file */
@@ -1151,7 +1298,7 @@
  	offset += actual;
  	if (offset < 12)
  	{
-@@ -1673,9 +1596,9 @@
+@@ -1673,9 +1621,9 @@
  	/* seek until we find a format tag */
  	while (true)
  	{
@@ -1163,7 +1310,7 @@
  		offset += actual;
  		length = little_endianize_int32(length);
  		if (memcmp(&buf[0], "fmt ", 4) == 0)
-@@ -1691,7 +1614,7 @@
+@@ -1691,7 +1639,7 @@
  	}
  
  	/* read the format -- make sure it is PCM */
@@ -1172,7 +1319,7 @@
  	offset += actual;
  	temp16 = little_endianize_int16(temp16);
  	if (temp16 != 1)
-@@ -1701,7 +1624,7 @@
+@@ -1701,7 +1649,7 @@
  	}
  
  	/* number of channels -- only stereo is supported */
@@ -1181,7 +1328,7 @@
  	offset += actual;
  	temp16 = little_endianize_int16(temp16);
  	if (temp16 != 2)
-@@ -1711,7 +1634,7 @@
+@@ -1711,7 +1659,7 @@
  	}
  
  	/* sample rate */
@@ -1190,7 +1337,7 @@
  	offset += actual;
  	rate = little_endianize_int32(rate);
  	if (rate != 44100)
-@@ -1721,11 +1644,11 @@
+@@ -1721,11 +1669,11 @@
  	}
  
  	/* bytes/second and block alignment are ignored */
@@ -1204,7 +1351,7 @@
  	offset += actual;
  	bits = little_endianize_int16(bits);
  	if (bits != 16)
-@@ -1740,9 +1663,9 @@
+@@ -1740,9 +1688,9 @@
  	/* seek until we find a data tag */
  	while (true)
  	{
@@ -1216,7 +1363,7 @@
  		offset += actual;
  		length = little_endianize_int32(length);
  		if (memcmp(&buf[0], "data", 4) == 0)
-@@ -1764,7 +1687,12 @@
+@@ -1764,7 +1712,12 @@
  		return 0;
  	}
  
@@ -1230,7 +1377,7 @@
  
  	return length;
  }
-@@ -1864,11 +1792,11 @@
+@@ -1864,11 +1817,11 @@
  
  	outtoc.numsessions = 1;
  
@@ -1246,7 +1393,7 @@
  	{
  		osd_printf_error("ERROR: Not a Nero 5.5 or later image!\n");
  		fclose(infile);
-@@ -1888,8 +1816,13 @@
+@@ -1888,8 +1841,13 @@
  
  	while (!done)
  	{
@@ -1262,7 +1409,7 @@
  
  		chunk_size = get_u32be(&buffer[4]);
  
-@@ -1901,15 +1834,20 @@
+@@ -1901,15 +1859,20 @@
  			// skip second chunk size and UPC code
  			fseek(infile, 20, SEEK_CUR);
  
@@ -1285,7 +1432,7 @@
  			for (int track = start; track <= end; track++)
  			{
  				uint32_t size, mode;
-@@ -1925,7 +1863,15 @@
+@@ -1925,7 +1888,15 @@
  
  //              printf("Track %d: sector size %d mode %x index0 %llx index1 %llx track_end %llx (pregap %d sectors, length %d sectors)\n", track, size, mode, index0, index1, track_end, (uint32_t)(index1-index0)/size, (uint32_t)(track_end-index1)/size);
  				outinfo.track[track-1].fname.assign(tocfname);
@@ -1302,7 +1449,7 @@
  				outinfo.track[track-1].idx[0] = outinfo.track[track-1].idx[1] = 0;
  
  				switch (mode)
-@@ -1976,21 +1922,29 @@
+@@ -1976,21 +1947,29 @@
  						return chd_file::error::UNSUPPORTED_FORMAT;
  				}
  
@@ -1337,7 +1484,7 @@
  			}
  		}
  
-@@ -2000,7 +1954,15 @@
+@@ -2000,7 +1979,15 @@
  		}
  		else
  		{
@@ -1354,7 +1501,7 @@
  		}
  	}
  
-@@ -2042,6 +2004,20 @@
+@@ -2042,6 +2029,20 @@
  	outinfo.reset();
  
  	uint64_t size = get_file_size(tocfname);
@@ -1375,7 +1522,7 @@
  	fclose(infile);
  
  
-@@ -2052,7 +2028,15 @@
+@@ -2052,7 +2053,15 @@
  	outinfo.track[0].offset = 0;
  	outinfo.track[0].idx[0] = outinfo.track[0].idx[1] = 0;
  
@@ -1392,7 +1539,7 @@
  	{
  		outtoc.tracks[0].trktype = CD_TRACK_MODE1;
  		outtoc.tracks[0].frames = size / 2048;
-@@ -2149,7 +2133,7 @@
+@@ -2149,7 +2158,7 @@
  
  	const int numtracks = atoi(token);
  
@@ -1401,7 +1548,7 @@
  	{
  		osd_printf_error("GDI expects too many tracks. Expected %d tracks but only up to %zu tracks allowed\n", numtracks, std::size(outinfo.track) + 1);
  		return chd_file::error::INVALID_DATA;
-@@ -2178,7 +2162,7 @@
+@@ -2178,7 +2187,7 @@
  		paramcnt++;
  		const int trknum = atoi(token) - 1;
  
@@ -1410,7 +1557,7 @@
  		{
  			osd_printf_error("Track %d is out of expected range of 1 to %d\n", trknum + 1, numtracks);
  			return chd_file::error::INVALID_DATA;
-@@ -2222,7 +2206,7 @@
+@@ -2222,7 +2231,7 @@
  			outtoc.tracks[trknum].trktype = CD_TRACK_MODE1;
  			outtoc.tracks[trknum].datasize = 2048;
  		}
@@ -1419,7 +1566,7 @@
  		{
  			outtoc.tracks[trknum].trktype = CD_TRACK_AUDIO;
  			outtoc.tracks[trknum].datasize = 2352;
-@@ -2252,6 +2236,12 @@
+@@ -2252,6 +2261,12 @@
  		outinfo.track[trknum].fname.assign(path).append(token);
  
  		const uint64_t sz = get_file_size(outinfo.track[trknum].fname);
@@ -1432,7 +1579,7 @@
  		outtoc.tracks[trknum].frames = sz / trksize;
  		outtoc.tracks[trknum].padframes = 0;
  
-@@ -2345,6 +2335,19 @@
+@@ -2345,6 +2360,19 @@
  	enum gdi_area current_area = SINGLE_DENSITY;
  	bool is_multibin = false;
  	int leadin = -1;
@@ -1452,7 +1599,7 @@
  
  	FILE *infile = fopen(path.c_str(), "rt");
  	if (!infile)
-@@ -2371,6 +2374,14 @@
+@@ -2371,6 +2399,14 @@
  	char linebuffer[512];
  	memset(linebuffer, 0, sizeof(linebuffer));
  
@@ -1467,7 +1614,7 @@
  	while (!feof(infile))
  	{
  		/* get the next line */
-@@ -2427,6 +2438,8 @@
+@@ -2427,6 +2463,8 @@
  				/* get lead-out time */
  				TOKENIZE
  				int leadout_offset = msf_to_frames(token);
@@ -1476,7 +1623,7 @@
  				outinfo.track[trknum].leadout = leadout_offset;
  			}
  			else if (!strncmp(linebuffer+i, "LEAD-IN", 7))
-@@ -2472,13 +2485,18 @@
+@@ -2472,13 +2510,18 @@
  			/* get the file type */
  			TOKENIZE
  
@@ -1497,7 +1644,7 @@
  			}
  			else if (!strcmp(token, "WAVE"))
  			{
-@@ -2489,6 +2507,8 @@
+@@ -2489,6 +2532,8 @@
  					osd_printf_error("ERROR: couldn't read [%s] or not a valid .WAV\n", lastfname);
  					return chd_file::error::INVALID_DATA;
  				}
@@ -1506,7 +1653,7 @@
  			}
  			else
  			{
-@@ -2502,6 +2522,12 @@
+@@ -2502,6 +2547,12 @@
  			/* get the track number */
  			TOKENIZE
  			trknum = strtoul(token, nullptr, 10) - 1;
@@ -1519,7 +1666,7 @@
  
  			/* next token on the line is the track type */
  			TOKENIZE
-@@ -2541,6 +2567,10 @@
+@@ -2541,6 +2592,10 @@
  				outinfo.track[trknum].offset = wavoffs;
  				wavoffs = wavlen = 0;
  			}
@@ -1530,7 +1677,7 @@
  
  			outinfo.track[trknum].fname.assign(lastfname); /* default filename to the last one */
  
-@@ -2586,6 +2616,54 @@
+@@ -2586,6 +2641,54 @@
  				osd_printf_error("ERROR: encountered invalid index %d\n", idx);
  				return chd_file::error::INVALID_DATA;
  			}
@@ -1585,7 +1732,7 @@
  
  			outinfo.track[trknum].idx[idx] = frames;
  
-@@ -2610,6 +2688,8 @@
+@@ -2610,6 +2713,8 @@
  			/* get index */
  			TOKENIZE
  			frames = msf_to_frames(token);
@@ -1594,7 +1741,7 @@
  
  			outtoc.tracks[trknum].pregap = frames;
  		}
-@@ -2620,11 +2700,15 @@
+@@ -2620,11 +2725,15 @@
  			/* get index */
  			TOKENIZE
  			frames = msf_to_frames(token);
@@ -1610,7 +1757,7 @@
  			outtoc.tracks[trknum].control_flags = 0;
  
  			/* keep looping over remaining tokens in FLAGS line until there's no more to read */
-@@ -2667,18 +2751,51 @@
+@@ -2667,18 +2776,51 @@
  		}
  
  		/* this is true for cue/bin and cue/iso, and we need it for cue/wav since .WAV is little-endian */
@@ -1664,7 +1811,7 @@
  			tlen = get_file_size(outinfo.track[trknum].fname);
  			if (tlen == 0)
  			{
-@@ -2700,11 +2817,17 @@
+@@ -2700,11 +2842,17 @@
  				return chd_file::error::INVALID_DATA;
  			}
  
@@ -1683,7 +1830,7 @@
  		}
  		else if (outtoc.tracks[trknum].frames == 0)
  		{
-@@ -2777,6 +2900,77 @@
+@@ -2777,6 +2925,77 @@
  		}
  	}
  
@@ -1761,7 +1908,7 @@
  	if (is_gdrom)
  	{
  		/*
-@@ -2787,6 +2981,18 @@
+@@ -2787,6 +3006,18 @@
  			uint32_t this_pregap = outtoc.tracks[trknum].pregap;
  			uint32_t this_offset = this_pregap * (outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize);
  
@@ -1780,7 +1927,7 @@
  			outtoc.tracks[trknum-1].frames += this_pregap;
  			outtoc.tracks[trknum-1].splitframes += this_pregap;
  
-@@ -2808,7 +3014,7 @@
+@@ -2808,7 +3039,7 @@
  				outtoc.tracks[trknum].physframeofs = 45000;
  				int dif=outtoc.tracks[trknum].physframeofs-(outtoc.tracks[trknum-1].frames+outtoc.tracks[trknum-1].physframeofs);
  				outtoc.tracks[trknum-1].frames += dif;
@@ -1789,7 +1936,7 @@
  			}
  			else
  			{
-@@ -2965,6 +3171,67 @@
+@@ -2965,6 +3196,67 @@
  	char linebuffer[512];
  	memset(linebuffer, 0, sizeof(linebuffer));
  
@@ -1857,7 +2004,7 @@
  	while (!feof(infile))
  	{
  		/* get the next line */
-@@ -2989,6 +3256,8 @@
+@@ -2989,6 +3281,8 @@
  		*/
  		if (!strcmp(token, "NO"))
  		{
@@ -1866,7 +2013,7 @@
  			TOKENIZE
  			if (!strcmp(token, "COPY"))
  				outtoc.tracks[trknum].control_flags &= ~CD_FLAG_CONTROL_DIGITAL_COPY_PERMITTED;
-@@ -2997,100 +3266,210 @@
+@@ -2997,100 +3291,210 @@
  		}
  		else if (!strcmp(token, "COPY"))
  		{
@@ -2120,7 +2267,7 @@
  
  			/* next token on the line is the track type */
  			TOKENIZE
-@@ -3117,22 +3496,128 @@
+@@ -3117,22 +3521,128 @@
  		}
  		else if (!strcmp(token, "START"))
  		{
@@ -2324,7 +2471,11 @@
  	static uint64_t read_uint64(FILE *infile);
 --- a/src/lib/util/chd.cpp
 +++ b/src/lib/util/chd.cpp
-@@ -28,6 +28,20 @@
+@@ -25,9 +25,24 @@
+ #include <cstdlib>
+ #include <cstring>
+ #include <ctime>
++#include <limits>
  #include <new>
  #include <tuple>
  
@@ -2345,7 +2496,7 @@
  
  //**************************************************************************
  //  CONSTANTS
-@@ -853,6 +867,17 @@
+@@ -853,6 +868,17 @@
  
  void chd_file::close()
  {
@@ -2363,7 +2514,7 @@
  	// reset file characteristics
  	m_file.reset();
  	m_allow_reads = false;
-@@ -892,6 +917,48 @@
+@@ -892,6 +918,48 @@
  	m_cachehunk = ~0;
  }
  
@@ -2412,17 +2563,20 @@
  std::error_condition chd_file::codec_process_hunk(uint32_t hunknum)
  {
  	// punt if no file
-@@ -919,6 +986,9 @@
+@@ -919,6 +987,12 @@
  				case V34_MAP_ENTRY_TYPE_COMPRESSED:
  					{
  						uint32_t const blocklen = get_u16be(&rawmap[12]) | (uint32_t(rawmap[14]) << 16);
 +						// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
 +						if (UNEXPECTED(blocklen > m_compressed.size()))
 +							return std::error_condition(error::INVALID_DATA);
++						// Discpress: and a hunk compressed in a CHD that says it isn't: 0.289 called a codec it doesn't have
++						if (UNEXPECTED(!m_decompressor[0]))
++							return std::error_condition(error::INVALID_DATA);
  						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  						if (UNEXPECTED(err))
  							return err;
-@@ -931,7 +1001,14 @@
+@@ -931,11 +1005,21 @@
  					return std::error_condition(error::UNSUPPORTED_FORMAT);
  
  				case V34_MAP_ENTRY_TYPE_SELF_HUNK:
@@ -2438,17 +2592,27 @@
  
  				case V34_MAP_ENTRY_TYPE_PARENT_HUNK:
  					if (UNEXPECTED(m_parent_missing))
-@@ -958,6 +1035,9 @@
+ 						return std::error_condition(error::REQUIRES_PARENT);
++					// Discpress: and a CHD without a parent whose map says so (damaged or crafted): 0.289 read through a null pointer
++					if (UNEXPECTED(!m_parent))
++						return std::error_condition(error::INVALID_DATA);
+ 					return m_parent->codec_process_hunk(blockoffs);
+ 				}
+ 			}
+@@ -958,6 +1042,12 @@
  				case COMPRESSION_TYPE_2:
  				case COMPRESSION_TYPE_3:
  					{
 +						// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
 +						if (UNEXPECTED(blocklen > m_compressed.size()))
 +							return std::error_condition(error::INVALID_DATA);
++						// Discpress: and a codec slot the header leaves empty: 0.289 called a codec it doesn't have
++						if (UNEXPECTED(!m_decompressor[rawmap[0]]))
++							return std::error_condition(error::INVALID_DATA);
  						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  						if (UNEXPECTED(err))
  							return err;
-@@ -970,7 +1050,14 @@
+@@ -970,11 +1060,24 @@
  					return std::error_condition(error::UNSUPPORTED_FORMAT);
  
  				case COMPRESSION_SELF:
@@ -2464,17 +2628,30 @@
  
  				case COMPRESSION_PARENT:
  					if (UNEXPECTED(m_parent_missing))
-@@ -1045,6 +1132,9 @@
+ 						return std::error_condition(error::REQUIRES_PARENT);
++					// Discpress: and a CHD without a parent whose map says so (damaged or crafted): 0.289 read through a null pointer
++					if (UNEXPECTED(!m_parent))
++						return std::error_condition(error::INVALID_DATA);
++					// Discpress: a parent whose units are larger than its hunks has no hunk for a unit (0.289 divided by zero)
++					if (UNEXPECTED(m_parent->unit_bytes() > m_parent->hunk_bytes()))
++						return std::error_condition(error::INVALID_DATA);
+ 					return m_parent->codec_process_hunk(blockoffs / (m_parent->hunk_bytes() / m_parent->unit_bytes()));
+ 				}
+ 				break;
+@@ -1045,6 +1148,12 @@
  				case V34_MAP_ENTRY_TYPE_COMPRESSED:
  					{
  						uint32_t const blocklen = get_u16be(&rawmap[12]) | (uint32_t(rawmap[14]) << 16);
 +						// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
 +						if (UNEXPECTED(blocklen > m_compressed.size()))
 +							return std::error_condition(error::INVALID_DATA);
++						// Discpress: and a hunk compressed in a CHD that says it isn't: 0.289 called a codec it doesn't have
++						if (UNEXPECTED(!m_decompressor[0]))
++							return std::error_condition(error::INVALID_DATA);
  						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  						if (UNEXPECTED(err))
  							return err;
-@@ -1073,7 +1163,14 @@
+@@ -1073,11 +1182,21 @@
  					return std::error_condition();
  
  				case V34_MAP_ENTRY_TYPE_SELF_HUNK:
@@ -2490,7 +2667,14 @@
  
  				case V34_MAP_ENTRY_TYPE_PARENT_HUNK:
  					if (UNEXPECTED(m_parent_missing))
-@@ -1115,6 +1212,14 @@
+ 						return std::error_condition(error::REQUIRES_PARENT);
++					// Discpress: and a CHD without a parent whose map says so (damaged or crafted): 0.289 read through a null pointer
++					if (UNEXPECTED(!m_parent))
++						return std::error_condition(error::INVALID_DATA);
+ 					return m_parent->read_hunk(blockoffs, dest);
+ 				}
+ 			}
+@@ -1115,6 +1234,17 @@
  					case COMPRESSION_TYPE_2:
  					case COMPRESSION_TYPE_3:
  						{
@@ -2502,10 +2686,13 @@
 +							// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
 +							if (UNEXPECTED(blocklen > m_compressed.size()))
 +								return std::error_condition(error::INVALID_DATA);
++							// Discpress: and a codec slot the header leaves empty: 0.289 called a codec it doesn't have
++							if (UNEXPECTED(!m_decompressor[rawmap[0]]))
++								return std::error_condition(error::INVALID_DATA);
  							std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  							if (UNEXPECTED(err))
  								return err;
-@@ -1130,16 +1235,29 @@
+@@ -1130,20 +1260,36 @@
  
  					case COMPRESSION_NONE:
  						{
@@ -2536,7 +2723,169 @@
  
  					case COMPRESSION_PARENT:
  						if (UNEXPECTED(m_parent_missing))
-@@ -2173,6 +2291,10 @@
+ 							return std::error_condition(error::REQUIRES_PARENT);
++						// Discpress: and a CHD without a parent whose map says so (damaged or crafted): 0.289 read through a null pointer
++						if (UNEXPECTED(!m_parent))
++							return std::error_condition(error::INVALID_DATA);
+ 						return m_parent->read_bytes(blockoffs * m_parent->unit_bytes(), dest, m_hunkbytes);
+ 					}
+ 				}
+@@ -1307,6 +1453,11 @@
+ 
+ std::error_condition chd_file::read_bytes(uint64_t offset, void *buffer, uint32_t bytes)
+ {
++	// Discpress: nothing to read, as for a CD track without data (a damaged or crafted CHD's): 0.289's
++	// last hunk wrapped around at offset 0, and it read a whole hunk into the buffer
++	if (bytes == 0)
++		return std::error_condition();
++
+ 	// iterate over hunks
+ 	uint32_t const first_hunk = offset / m_hunkbytes;
+ 	uint32_t const last_hunk = (offset + bytes - 1) / m_hunkbytes;
+@@ -1360,6 +1511,10 @@
+ 
+ std::error_condition chd_file::write_bytes(uint64_t offset, const void *buffer, uint32_t bytes)
+ {
++	// Discpress: nothing to write (as read_bytes)
++	if (bytes == 0)
++		return std::error_condition();
++
+ 	// iterate over hunks
+ 	uint32_t const first_hunk = offset / m_hunkbytes;
+ 	uint32_t const last_hunk = (offset + bytes - 1) / m_hunkbytes;
+@@ -1453,7 +1608,7 @@
+ 	// read the metadata
+ 	try { output.resize(metaentry.length); }
+ 	catch (std::bad_alloc const &) { return std::errc::not_enough_memory; }
+-	return file_read(metaentry.offset + METADATA_HEADER_SIZE, &output[0], metaentry.length);
++	return file_read(metaentry.offset + METADATA_HEADER_SIZE, output.data(), metaentry.length); // Discpress: data(), as metadata can be empty
+ }
+ 
+ /**
+@@ -1515,7 +1670,7 @@
+ 	// read the metadata
+ 	try { output.resize(metaentry.length); }
+ 	catch (std::bad_alloc const &) { return std::errc::not_enough_memory; }
+-	err = file_read(metaentry.offset + METADATA_HEADER_SIZE, &output[0], metaentry.length);
++	err = file_read(metaentry.offset + METADATA_HEADER_SIZE, output.data(), metaentry.length); // Discpress: data(), as metadata can be empty
+ 	if (UNEXPECTED(err))
+ 		return err;
+ 	resulttag = metaentry.metatag;
+@@ -1678,12 +1833,12 @@
+ 		// read the metadata item
+ 		try { filedata.resize(metaentry.length); }
+ 		catch (std::bad_alloc const &) { return std::errc::not_enough_memory; }
+-		err = source.file_read(metaentry.offset + METADATA_HEADER_SIZE, &filedata[0], metaentry.length);
++		err = source.file_read(metaentry.offset + METADATA_HEADER_SIZE, filedata.data(), metaentry.length); // Discpress: data(), as metadata can be empty
+ 		if (UNEXPECTED(err))
+ 			return err;
+ 
+ 		// write it to the destination
+-		err = write_metadata(metaentry.metatag, (uint32_t)-1, &filedata[0], metaentry.length, metaentry.flags);
++		err = write_metadata(metaentry.metatag, (uint32_t)-1, filedata.data(), metaentry.length, metaentry.flags);
+ 		if (UNEXPECTED(err))
+ 			return err;
+ 	}
+@@ -1725,14 +1880,14 @@
+ 
+ 		// allocate memory and read the data
+ 		filedata.resize(metaentry.length);
+-		err = file_read(metaentry.offset + METADATA_HEADER_SIZE, &filedata[0], metaentry.length);
++		err = file_read(metaentry.offset + METADATA_HEADER_SIZE, filedata.data(), metaentry.length); // Discpress: data(), as metadata can be empty
+ 		if (UNEXPECTED(err))
+ 			throw err;
+ 
+ 		// create an entry for this metadata and add it
+ 		metadata_hash hashentry;
+ 		put_u32be(hashentry.tag, metaentry.metatag);
+-		hashentry.sha1 = util::sha1_creator::simple(&filedata[0], metaentry.length);
++		hashentry.sha1 = util::sha1_creator::simple(filedata.data(), metaentry.length);
+ 		hasharray.push_back(hashentry);
+ 	}
+ 	if (err != error::METADATA_NOT_FOUND)
+@@ -1880,6 +2035,41 @@
+ }
+ 
+ /**
++ * @fn  bool chd_file::past_end(uint64_t offset, uint64_t length) const
++ * @brief   past_end - Discpress: whether length bytes from offset would run past the end of the
++ *            file (false when its length is unknown, so that the read reports it)
++ */
++bool chd_file::past_end(uint64_t offset, uint64_t length) const
++{
++	uint64_t filelength;
++	if (!m_file || m_file->length(filelength))
++		return false;
++	return (offset > filelength) || (length > filelength - offset);
++}
++
++/**
++ * @fn  void chd_file::check_sizes(uint64_t hunkcount) const
++ *
++ * @brief   -------------------------------------------------
++ *            check_sizes - Discpress: a header whose sizes no data can have (a damaged or
++ *            crafted file) is an error. 0.289 divided by a hunk or unit size of 0, and with a
++ *            logical size of more hunks than a map can count, it made a map too small for them
++ *          -------------------------------------------------.
++ *
++ * @exception   CHDERR_INVALID_FILE Thrown when the sizes can't be right.
++ *
++ * @param   hunkcount   The number of hunks the header gives or implies.
++ */
++
++void chd_file::check_sizes(uint64_t hunkcount) const
++{
++	if (UNEXPECTED(m_hunkbytes == 0 || m_unitbytes == 0))
++		throw std::error_condition(error::INVALID_FILE);
++	if (UNEXPECTED(hunkcount > std::numeric_limits<uint32_t>::max()))
++		throw std::error_condition(error::INVALID_FILE);
++}
++
++/**
+  * @fn  void chd_file::parse_v3_header(uint8_t *rawheader, sha1_t &parentsha1)
+  *
+  * @brief   -------------------------------------------------
+@@ -1938,7 +2128,8 @@
+ 		parentsha1 = be_read_sha1(&rawheader[m_parentsha1_offset]);
+ 
+ 	// guess at the units based on snooping the metadata
+-	m_unitbytes = guess_unitbytes();
++	m_unitbytes = (m_hunkbytes != 0) ? guess_unitbytes() : 0;
++	check_sizes(m_hunkcount);
+ 	m_unitcount = (m_logicalbytes + m_unitbytes - 1) / m_unitbytes;
+ }
+ 
+@@ -2001,7 +2192,8 @@
+ 		parentsha1 = be_read_sha1(&rawheader[m_parentsha1_offset]);
+ 
+ 	// guess at the units based on snooping the metadata
+-	m_unitbytes = guess_unitbytes();
++	m_unitbytes = (m_hunkbytes != 0) ? guess_unitbytes() : 0;
++	check_sizes(m_hunkcount);
+ 	m_unitcount = (m_logicalbytes + m_unitbytes - 1) / m_unitbytes;
+ }
+ 
+@@ -2029,8 +2221,9 @@
+ 	m_mapoffset = get_u64be(&rawheader[40]);
+ 	m_metaoffset = get_u64be(&rawheader[48]);
+ 	m_hunkbytes = get_u32be(&rawheader[56]);
+-	m_hunkcount = (m_logicalbytes + m_hunkbytes - 1) / m_hunkbytes;
+ 	m_unitbytes = get_u32be(&rawheader[60]);
++	check_sizes((m_hunkbytes != 0) ? ((m_logicalbytes / m_hunkbytes) + ((m_logicalbytes % m_hunkbytes) != 0)) : 0);
++	m_hunkcount = (m_logicalbytes + m_hunkbytes - 1) / m_hunkbytes;
+ 	m_unitcount = (m_logicalbytes + m_unitbytes - 1) / m_unitbytes;
+ 
+ 	// determine compression
+@@ -2073,7 +2266,7 @@
+ 	try
+ 	{
+ 		// first get a CRC-16 of the original rawmap
+-		util::crc16_t mapcrc = util::crc16_creator::simple(&m_rawmap[0], m_hunkcount * 12);
++		util::crc16_t mapcrc = util::crc16_creator::simple(m_rawmap.data(), m_hunkcount * 12);
+ 
+ 		// create a buffer to hold the RLE data
+ 		std::vector<uint8_t> compression_rle(m_hunkcount);
+@@ -2173,6 +2366,10 @@
  		// for COMPRESSION_PARENT: parentbits
  		// the overall size is clamped later with bitbuf.flush()
  		int nbits_needed = (8*16) + (12 + std::max<int>({lengthbits+16, selfbits, parentbits}))*m_hunkcount;
@@ -2547,7 +2896,7 @@
  		std::vector<uint8_t> compressed(nbits_needed / 8 + 1);
  		bitstream_out bitbuf(&compressed[16], compressed.size() - 16);
  
-@@ -2255,7 +2377,8 @@
+@@ -2255,7 +2452,8 @@
  
  		// write the map header
  		uint32_t complen = bitbuf.flush();
@@ -2557,7 +2906,75 @@
  		put_u32be(&compressed[0], complen);
  		put_u48be(&compressed[4], firstoffs);
  		put_u16be(&compressed[10], mapcrc);
-@@ -2966,6 +3089,13 @@
+@@ -2298,7 +2496,7 @@
+ 	// if no offset, we haven't written it yet
+ 	if (m_mapoffset == 0)
+ 	{
+-		memset(&m_rawmap[0], 0xff, m_rawmap.size());
++		memset(m_rawmap.data(), 0xff, m_rawmap.size());
+ 		return;
+ 	}
+ 
+@@ -2314,13 +2512,21 @@
+ 	uint8_t const lengthbits = rawbuf[12];
+ 	uint8_t const selfbits = rawbuf[13];
+ 	uint8_t const parentbits = rawbuf[14];
++	// Discpress: the bit reader reads at most 32 bits at a time, as many as compress_v5_map writes:
++	// more (a damaged or crafted map) shifted by a negative count, which C++ leaves undefined
++	if (UNEXPECTED((lengthbits > 32) || (selfbits > 32) || (parentbits > 32)))
++		throw std::error_condition(error::DECOMPRESSION_ERROR);
+ 
+ 	// now read the map
++	// Discpress: one that would run past the end of the file is the error reading it gives, without
++	// allocating it first (up to 4 GB, for a damaged or crafted header)
++	if (UNEXPECTED(past_end(m_mapoffset + 16, mapbytes)))
++		throw std::error_condition(std::errc::io_error);
+ 	std::vector<uint8_t> compressed(mapbytes);
+-	ioerr = file_read(m_mapoffset + 16, &compressed[0], mapbytes);
++	ioerr = file_read(m_mapoffset + 16, compressed.data(), mapbytes);
+ 	if (UNEXPECTED(ioerr))
+ 		throw ioerr;
+-	bitstream_in bitbuf(&compressed[0], compressed.size());
++	bitstream_in bitbuf(compressed.data(), compressed.size());
+ 
+ 	// first decode the compression types
+ 	huffman_decoder<16, 8> decoder;
+@@ -2409,7 +2615,7 @@
+ 	}
+ 
+ 	// verify the final CRC
+-	if (UNEXPECTED(util::crc16_creator::simple(&m_rawmap[0], m_hunkcount * 12) != mapcrc))
++	if (UNEXPECTED(util::crc16_creator::simple(m_rawmap.data(), m_hunkcount * 12) != mapcrc))
+ 		throw std::error_condition(error::DECOMPRESSION_ERROR);
+ }
+ 
+@@ -2636,14 +2842,23 @@
+ 	}
+ 
+ 	// read the map; v5+ compressed drives need to read and decompress their map
+-	m_rawmap.resize(m_hunkcount * m_mapentrybytes);
++	// Discpress: a map larger than 32 bits can count (a damaged or crafted header) is an error: 0.289
++	// computed its size in 32 bits, and with the size wrapped, read and wrote past the end of the map
++	uint64_t const mapsize = uint64_t(m_hunkcount) * m_mapentrybytes;
++	if (UNEXPECTED(mapsize > std::numeric_limits<uint32_t>::max()))
++		throw std::error_condition(error::INVALID_FILE);
++	// Discpress: and a stored map that would run past the end of the file is the error reading it
++	// gives, without allocating it first
++	if (!(m_version >= 5 && compressed()) && UNEXPECTED(past_end(m_mapoffset, mapsize)))
++		throw std::error_condition(std::errc::io_error);
++	m_rawmap.resize(mapsize);
+ 	if (m_version >= 5 && compressed())
+ 	{
+ 		decompress_v5_map();
+ 	}
+ 	else
+ 	{
+-		std::error_condition err = file_read(m_mapoffset, &m_rawmap[0], m_rawmap.size());
++		std::error_condition err = file_read(m_mapoffset, m_rawmap.data(), m_rawmap.size());
+ 		if (UNEXPECTED(err))
+ 			throw err;
+ 	}
+@@ -2966,6 +3181,13 @@
  
  chd_file_compressor::~chd_file_compressor()
  {
@@ -2571,7 +2988,7 @@
  	// free the work queues
  	osd_work_queue_free(m_read_queue);
  	osd_work_queue_free(m_work_queue);
-@@ -3022,6 +3152,10 @@
+@@ -3022,6 +3244,10 @@
  
  	// reset write state
  	m_write_hunk = 0;
@@ -2582,7 +2999,7 @@
  }
  
  /**
-@@ -3123,6 +3257,11 @@
+@@ -3123,6 +3349,11 @@
  			}
  			else
  			{
@@ -2594,7 +3011,7 @@
  				// otherwise, append it compressed and add to the self map
  				hunk_write_compressed(item.m_hunknum, item.m_compression, item.m_compressed, item.m_complen, item.m_hash[0].m_crc16);
  				m_total_out += item.m_complen;
-@@ -3263,12 +3402,44 @@
+@@ -3263,12 +3494,44 @@
  	// TODO: data race
  	if ((m_current_map.find(item.m_hash[0].m_crc16, item.m_hash[0].m_sha1) == hashmap::NOT_FOUND) &&
  			(m_parent_map.find(item.m_hash[0].m_crc16, item.m_hash[0].m_sha1) == hashmap::NOT_FOUND))
@@ -2640,7 +3057,7 @@
  /**
   * @fn  void *chd_file_compressor::async_read_static(void *param, int threadid)
   *
-@@ -3345,6 +3516,16 @@
+@@ -3345,6 +3608,16 @@
  			assert(item.m_status == WS_READING);
  			item.m_status = WS_QUEUED;
  			item.m_hunknum = hunknum;
@@ -2657,7 +3074,7 @@
  			item.m_osd = osd_work_item_queue(m_work_queue, m_walking_parent ? async_walk_parent_static : async_compress_hunk_static, &item, 0);
  		}
  
-@@ -3512,3 +3693,184 @@
+@@ -3512,3 +3785,184 @@
  	metadata_entry metaentry;
  	return metadata_find(AV_METADATA_TAG, 0, metaentry);
  }
@@ -2825,7 +3242,7 @@
 +		memcpy(dest, &ahead.data[0], m_hunkbytes);
 +		return true;
 +	case 3: // compressed bytes
-+		m_decompressor[type]->decompress(&ahead.data[0], ahead.data.size(), reinterpret_cast<uint8_t *>(dest), m_hunkbytes);
++		m_decompressor[type]->decompress(ahead.data.data(), ahead.data.size(), reinterpret_cast<uint8_t *>(dest), m_hunkbytes);
 +		return true;
 +	default:
 +		return false;
@@ -2885,7 +3302,16 @@
  private:
  	struct metadata_entry;
  	struct metadata_hash;
-@@ -391,6 +411,7 @@
+@@ -380,6 +400,8 @@
+ 
+ 	// internal helpers
+ 	uint32_t guess_unitbytes();
++	void check_sizes(uint64_t hunkcount) const; // Discpress
++	bool past_end(uint64_t offset, uint64_t length) const; // Discpress
+ 	void parse_v3_header(uint8_t *rawheader, util::sha1_t &parentsha1);
+ 	void parse_v4_header(uint8_t *rawheader, util::sha1_t &parentsha1);
+ 	void parse_v5_header(uint8_t *rawheader, util::sha1_t &parentsha1);
+@@ -391,6 +413,7 @@
  	std::error_condition verify_proper_compression_append(uint32_t hunknum) const noexcept;
  	void hunk_write_compressed(uint32_t hunknum, int8_t compression, const uint8_t *compressed, uint32_t complength, util::crc16_t crc16);
  	void hunk_copy_from_self(uint32_t hunknum, uint32_t otherhunk);
@@ -2893,7 +3319,7 @@
  	void hunk_copy_from_parent(uint32_t hunknum, uint64_t parentunit);
  	std::error_condition metadata_find(chd_metadata_tag metatag, int32_t metaindex, metadata_entry &metaentry, bool resume = false) const noexcept;
  	std::error_condition metadata_set_previous_next(uint64_t prevoffset, uint64_t nextoffset) noexcept;
-@@ -433,6 +454,21 @@
+@@ -433,6 +456,21 @@
  	// caching
  	std::vector<uint8_t>    m_cache;            // single-hunk cache for partial reads/writes
  	uint32_t                m_cachehunk;        // which hunk is in the cache?
@@ -2915,7 +3341,7 @@
  };
  
  
-@@ -450,11 +486,28 @@
+@@ -450,11 +488,28 @@
  	void compress_begin();
  	std::error_condition compress_continue(double &progress, double &ratio);
  
@@ -2944,7 +3370,7 @@
  	// hash map for looking up values
  	class hashmap
  	{
-@@ -524,6 +577,7 @@
+@@ -524,6 +579,7 @@
  			, m_complen(0)
  			, m_compression(0)
  			, m_codecs(nullptr)
@@ -2952,7 +3378,7 @@
  		{ }
  
  		osd_work_item *     m_osd;              // OSD work item running on this block
-@@ -537,6 +591,7 @@
+@@ -537,6 +593,7 @@
  		uint32_t              m_complen;          // compressed data length
  		int8_t                m_compression;      // type of compression used
  		chd_compressor_group *m_codecs;         // codec instance
@@ -2960,7 +3386,7 @@
  		std::vector<hash_pair> m_hash;        // array of hashes
  	};
  
-@@ -549,6 +604,7 @@
+@@ -549,6 +606,7 @@
  	void async_read();
  
  	// current compression status
@@ -3035,7 +3461,24 @@
  		return header_bytes + complen + m_subcode_compressor.compress(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA], frames * cdrom_file::MAX_SUBCODE_DATA, &dest[header_bytes + complen]);
  	}
  
-@@ -735,17 +751,33 @@
+@@ -426,8 +442,16 @@
+ 		uint32_t ecc_bytes = (frames + 7) / 8;
+ 		uint32_t header_bytes = ecc_bytes + complen_bytes;
+ 
++		// Discpress: a header longer than the data, or a base longer than what follows the header (a
++		// damaged or crafted hunk), is an error: 0.289 decoded past the end of the data, and the
++		// subcode's length wrapped
++		if (UNEXPECTED(complen < header_bytes))
++			throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
++
+ 		// extract compressed length of base
+ 		uint32_t complen_base = (complen_bytes > 2) ? get_u24be(&src[ecc_bytes]) : get_u16be(&src[ecc_bytes]);
++		if (UNEXPECTED(complen_base > complen - header_bytes))
++			throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
+ 
+ 		// reset and decode
+ 		m_base_decompressor.decompress(&src[header_bytes], complen_base, &m_buffer[0], frames * cdrom_file::MAX_SECTOR_DATA);
+@@ -735,17 +759,33 @@
  //  compression for this hunk
  //-------------------------------------------------
  
@@ -3071,7 +3514,7 @@
  				// if this is the best one, copy the data into the permanent buffer
  				uint32_t compbytes = m_compressor[codecnum]->compress(src, m_hunkbytes, &m_compress_test[0]);
  #if CHDCODEC_VERIFY_COMPRESSION
-@@ -772,7 +804,7 @@
+@@ -772,7 +812,7 @@
  				}
  printf("   codec%d=%d bytes            \n", codecnum, compbytes);
  #endif
@@ -3080,7 +3523,7 @@
  				{
  					compression = codecnum;
  					complen = compbytes;
-@@ -787,6 +819,7 @@
+@@ -787,6 +827,7 @@
  	// if the best is none, copy it over
  	if (compression == -1)
  		memcpy(compressed, src, m_hunkbytes);
@@ -3088,7 +3531,7 @@
  	return compression;
  }
  
-@@ -852,12 +885,12 @@
+@@ -852,12 +893,12 @@
  		{
  			// set the low bit of the size so we don't match next time
  			*ptr |= 1;
@@ -3103,7 +3546,7 @@
  	for (int scan = 0; scan < MAX_ZLIB_ALLOCS; scan++)
  		if (codec->m_allocptr[scan] == nullptr)
  		{
-@@ -867,7 +900,7 @@
+@@ -867,7 +908,7 @@
  
  	// set the low bit of the size so we don't match next time
  	*ptr = size | 1;
@@ -3112,7 +3555,7 @@
  }
  
  
-@@ -881,7 +914,7 @@
+@@ -881,7 +922,7 @@
  	auto *codec = reinterpret_cast<chd_zlib_allocator *>(opaque);
  
  	// find the hunk
@@ -3121,7 +3564,7 @@
  	for (int scan = 0; scan < MAX_ZLIB_ALLOCS; scan++)
  		if (ptr == codec->m_allocptr[scan])
  		{
-@@ -915,6 +948,13 @@
+@@ -915,6 +956,13 @@
  		throw std::bad_alloc();
  	else if (zerr != Z_OK)
  		throw std::error_condition(chd_file::error::CODEC_ERROR);
@@ -3135,7 +3578,7 @@
  }
  
  
-@@ -925,6 +965,8 @@
+@@ -925,6 +973,8 @@
  chd_zlib_compressor::~chd_zlib_compressor()
  {
  	deflateEnd(&m_deflater);
@@ -3144,7 +3587,7 @@
  }
  
  
-@@ -934,12 +976,24 @@
+@@ -934,12 +984,24 @@
  
  uint32_t chd_zlib_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
@@ -3170,7 +3613,7 @@
  	m_deflater.total_out = 0;
  	int zerr = deflateReset(&m_deflater);
  	if (zerr != Z_OK)
-@@ -949,7 +1003,7 @@
+@@ -949,7 +1011,7 @@
  	zerr = deflate(&m_deflater, Z_FINISH);
  
  	// if we ended up with more data than we started with, return an error
@@ -3179,7 +3622,7 @@
  		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  
  	// otherwise, return the length
-@@ -1066,7 +1120,7 @@
+@@ -1066,7 +1128,7 @@
  
  	// do it
  	ZSTD_inBuffer input{ src, srclen, 0 };
@@ -3188,7 +3631,7 @@
  	while (output.pos < output.size)
  	{
  		result = ZSTD_compressStream2(m_stream, &output, &input, ZSTD_e_end);
-@@ -1197,12 +1251,12 @@
+@@ -1197,12 +1259,12 @@
  		{
  			// set the low bit of the size so we don't match next time
  			*ptr |= 1;
@@ -3203,7 +3646,7 @@
  	for (int scan = 0; scan < MAX_LZMA_ALLOCS; scan++)
  		if (codec->m_allocptr[scan] == nullptr)
  		{
-@@ -1212,7 +1266,7 @@
+@@ -1212,7 +1274,7 @@
  
  	// set the low bit of the size so we don't match next time
  	*ptr = size | 1;
@@ -3212,7 +3655,7 @@
  }
  
  
-@@ -1229,7 +1283,7 @@
+@@ -1229,7 +1291,7 @@
  	auto *const codec = static_cast<chd_lzma_allocator *>(const_cast<ISzAlloc *>(p));
  
  	// find the hunk
@@ -3221,7 +3664,7 @@
  	for (int scan = 0; scan < MAX_LZMA_ALLOCS; scan++)
  		if (ptr == codec->m_allocptr[scan])
  		{
-@@ -1284,8 +1338,8 @@
+@@ -1284,8 +1346,8 @@
  		if (res != SZ_OK)
  			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  
@@ -3232,7 +3675,7 @@
  		res = LzmaEnc_MemEncode(encoder, dest, &complen, src, srclen, 0, nullptr, &m_allocator, &m_allocator);
  		if (res != SZ_OK)
  			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
-@@ -1419,7 +1473,7 @@
+@@ -1419,7 +1481,7 @@
  uint32_t chd_huffman_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
  	uint32_t complen;
@@ -3241,7 +3684,7 @@
  		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  	return complen;
  }
-@@ -1474,6 +1528,7 @@
+@@ -1474,6 +1536,7 @@
  	m_encoder.set_num_channels(2);
  	m_encoder.set_block_size(blocksize(hunkbytes));
  	m_encoder.set_strip_metadata(true);
@@ -3249,7 +3692,7 @@
  }
  
  
-@@ -1483,32 +1538,47 @@
+@@ -1483,32 +1546,47 @@
  
  uint32_t chd_flac_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
@@ -3310,7 +3753,7 @@
  	}
  	return complen + 1;
  }
-@@ -1642,14 +1712,16 @@
+@@ -1642,14 +1720,16 @@
  		memcpy(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA + framenum * cdrom_file::MAX_SUBCODE_DATA], &src[framenum * cdrom_file::FRAME_SIZE + cdrom_file::MAX_SECTOR_DATA], cdrom_file::MAX_SUBCODE_DATA);
  	}
  
@@ -3330,6 +3773,18 @@
  
  	// deflate the subcode data
  	m_deflater.next_in = const_cast<Bytef *>(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA]);
+@@ -1950,6 +2030,11 @@
+ 
+ void chd_avhuff_decompressor::decompress(const uint8_t *src, uint32_t complen, uint8_t *dest, uint32_t destlen)
+ {
++	// Discpress: a frame larger than the hunk (damaged or crafted data) is an error: 0.289 decoded it
++	// past the end of the hunk (its size, as raw_data_size has it: header, metadata, audio, video)
++	if ((complen >= 8) && (12 + uint64_t(src[0]) + 2 * uint64_t(src[1]) * get_u16be(&src[2]) + 2 * uint64_t(get_u16be(&src[4])) * get_u16be(&src[6]) > destlen))
++		throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
++
+ 	// decode the audio and video
+ 	avhuff_error averr = m_decoder.decode_data(src, complen, dest);
+ 	if (averr != AVHERR_NONE)
 --- a/src/lib/util/chdcodec.h
 +++ b/src/lib/util/chdcodec.h
 @@ -71,6 +71,13 @@
@@ -3707,6 +4162,42 @@
 +		crc = (crc << 8) ^ t[0][(crc >> 8) ^ *src++];
  	m_accum.m_raw = crc;
  }
+ 
+--- a/src/lib/util/huffman.cpp
++++ b/src/lib/util/huffman.cpp
+@@ -631,6 +631,10 @@
+ 		uint32_t nextstart = (curstart + bithisto[codelen]) >> 1;
+ 		if (codelen != 1 && nextstart * 2 != (curstart + bithisto[codelen]))
+ 			return HUFFERR_INTERNAL_INCONSISTENCY;
++		// Discpress: more codes than one bit has room for (a damaged or crafted tree): 0.289 gave codes
++		// more bits than their length, and build_lookup_table wrote past the end of its table
++		if (codelen == 1 && (curstart + bithisto[codelen]) > 2)
++			return HUFFERR_INTERNAL_INCONSISTENCY;
+ 		bithisto[codelen] = curstart;
+ 		curstart = nextstart;
+ 	}
+@@ -654,6 +658,7 @@
+ void huffman_context_base::build_lookup_table()
+ {
+ 	// iterate over all codes
++	uint32_t covered = 0;
+ 	for (int curcode = 0; curcode < m_numcodes; curcode++)
+ 	{
+ 		// process all nodes which have non-zero bits
+@@ -669,8 +674,14 @@
+ 			lookup_value *destend = &m_lookup[((node.m_bits + 1) << shift) - 1];
+ 			while (dest <= destend)
+ 				*dest++ = value;
++			covered = std::max<uint32_t>(covered, (node.m_bits + 1) << shift);
+ 		}
+ 	}
++
++	// Discpress: the entries no code covers decode as code 0 of no bits. Canonical codes cover the table
++	// from 0 up, all of it for a complete tree (what an encoder writes); 0.289 left the rest as it was,
++	// whatever was in that memory, and a damaged tree's data read bit counts from it
++	std::fill(m_lookup + covered, m_lookup + (uint32_t(1) << m_maxbits), lookup_value(0));
+ }
+ 
  
 --- a/src/lib/util/unicode.cpp
 +++ b/src/lib/util/unicode.cpp

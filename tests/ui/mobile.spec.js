@@ -244,3 +244,18 @@ test('in Safari itself, there is no such notice', async ({ app, page }, testInfo
   await app.open();
   await expect(page.locator('#iosTip')).toBeHidden();
 });
+
+// Phones and tablets take minutes over a disc: the hint under Compression suggests the preset that saves about a third
+// of it, without choosing it (the default stays chdman's)
+test('on a phone, the compression hint suggests the faster preset, and the default stays', async ({ app }) => {
+  await app.open();
+  await app.add(fixture('ps1-multitrack').add);
+  const card = app.job('mgs disc1');
+  await app.settled(card);
+  const field = card.locator('label.field', { hasText: 'Compression' });
+  await expect(field.locator('select')).toHaveValue('default');
+  await expect(field.locator('.hint')).toContainText('On a phone or tablet, Nearly as small, faster takes about a third less time');
+  await card.locator('details.opts summary').click();
+  await field.locator('select').selectOption({ label: 'Nearly as small, faster' });
+  await expect(field.locator('.hint')).not.toContainText('On a phone or tablet');
+});

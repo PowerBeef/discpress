@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <limits>
 #include <new>
 #include <tuple>
 
@@ -989,6 +990,9 @@ std::error_condition chd_file::codec_process_hunk(uint32_t hunknum)
 						// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
 						if (UNEXPECTED(blocklen > m_compressed.size()))
 							return std::error_condition(error::INVALID_DATA);
+						// Discpress: and a hunk compressed in a CHD that says it isn't: 0.289 called a codec it doesn't have
+						if (UNEXPECTED(!m_decompressor[0]))
+							return std::error_condition(error::INVALID_DATA);
 						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
 						if (UNEXPECTED(err))
 							return err;
@@ -1013,6 +1017,9 @@ std::error_condition chd_file::codec_process_hunk(uint32_t hunknum)
 				case V34_MAP_ENTRY_TYPE_PARENT_HUNK:
 					if (UNEXPECTED(m_parent_missing))
 						return std::error_condition(error::REQUIRES_PARENT);
+					// Discpress: and a CHD without a parent whose map says so (damaged or crafted): 0.289 read through a null pointer
+					if (UNEXPECTED(!m_parent))
+						return std::error_condition(error::INVALID_DATA);
 					return m_parent->codec_process_hunk(blockoffs);
 				}
 			}
@@ -1038,6 +1045,9 @@ std::error_condition chd_file::codec_process_hunk(uint32_t hunknum)
 						// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
 						if (UNEXPECTED(blocklen > m_compressed.size()))
 							return std::error_condition(error::INVALID_DATA);
+						// Discpress: and a codec slot the header leaves empty: 0.289 called a codec it doesn't have
+						if (UNEXPECTED(!m_decompressor[rawmap[0]]))
+							return std::error_condition(error::INVALID_DATA);
 						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
 						if (UNEXPECTED(err))
 							return err;
@@ -1062,6 +1072,12 @@ std::error_condition chd_file::codec_process_hunk(uint32_t hunknum)
 				case COMPRESSION_PARENT:
 					if (UNEXPECTED(m_parent_missing))
 						return std::error_condition(error::REQUIRES_PARENT);
+					// Discpress: and a CHD without a parent whose map says so (damaged or crafted): 0.289 read through a null pointer
+					if (UNEXPECTED(!m_parent))
+						return std::error_condition(error::INVALID_DATA);
+					// Discpress: a parent whose units are larger than its hunks has no hunk for a unit (0.289 divided by zero)
+					if (UNEXPECTED(m_parent->unit_bytes() > m_parent->hunk_bytes()))
+						return std::error_condition(error::INVALID_DATA);
 					return m_parent->codec_process_hunk(blockoffs / (m_parent->hunk_bytes() / m_parent->unit_bytes()));
 				}
 				break;
@@ -1135,6 +1151,9 @@ std::error_condition chd_file::read_hunk(uint32_t hunknum, void *buffer)
 						// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
 						if (UNEXPECTED(blocklen > m_compressed.size()))
 							return std::error_condition(error::INVALID_DATA);
+						// Discpress: and a hunk compressed in a CHD that says it isn't: 0.289 called a codec it doesn't have
+						if (UNEXPECTED(!m_decompressor[0]))
+							return std::error_condition(error::INVALID_DATA);
 						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
 						if (UNEXPECTED(err))
 							return err;
@@ -1175,6 +1194,9 @@ std::error_condition chd_file::read_hunk(uint32_t hunknum, void *buffer)
 				case V34_MAP_ENTRY_TYPE_PARENT_HUNK:
 					if (UNEXPECTED(m_parent_missing))
 						return std::error_condition(error::REQUIRES_PARENT);
+					// Discpress: and a CHD without a parent whose map says so (damaged or crafted): 0.289 read through a null pointer
+					if (UNEXPECTED(!m_parent))
+						return std::error_condition(error::INVALID_DATA);
 					return m_parent->read_hunk(blockoffs, dest);
 				}
 			}
@@ -1220,6 +1242,9 @@ std::error_condition chd_file::read_hunk(uint32_t hunknum, void *buffer)
 							// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
 							if (UNEXPECTED(blocklen > m_compressed.size()))
 								return std::error_condition(error::INVALID_DATA);
+							// Discpress: and a codec slot the header leaves empty: 0.289 called a codec it doesn't have
+							if (UNEXPECTED(!m_decompressor[rawmap[0]]))
+								return std::error_condition(error::INVALID_DATA);
 							std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
 							if (UNEXPECTED(err))
 								return err;
@@ -1262,6 +1287,9 @@ std::error_condition chd_file::read_hunk(uint32_t hunknum, void *buffer)
 					case COMPRESSION_PARENT:
 						if (UNEXPECTED(m_parent_missing))
 							return std::error_condition(error::REQUIRES_PARENT);
+						// Discpress: and a CHD without a parent whose map says so (damaged or crafted): 0.289 read through a null pointer
+						if (UNEXPECTED(!m_parent))
+							return std::error_condition(error::INVALID_DATA);
 						return m_parent->read_bytes(blockoffs * m_parent->unit_bytes(), dest, m_hunkbytes);
 					}
 				}
@@ -1425,6 +1453,11 @@ std::error_condition chd_file::write_units(uint64_t unitnum, const void *buffer,
 
 std::error_condition chd_file::read_bytes(uint64_t offset, void *buffer, uint32_t bytes)
 {
+	// Discpress: nothing to read, as for a CD track without data (a damaged or crafted CHD's): 0.289's
+	// last hunk wrapped around at offset 0, and it read a whole hunk into the buffer
+	if (bytes == 0)
+		return std::error_condition();
+
 	// iterate over hunks
 	uint32_t const first_hunk = offset / m_hunkbytes;
 	uint32_t const last_hunk = (offset + bytes - 1) / m_hunkbytes;
@@ -1478,6 +1511,10 @@ std::error_condition chd_file::read_bytes(uint64_t offset, void *buffer, uint32_
 
 std::error_condition chd_file::write_bytes(uint64_t offset, const void *buffer, uint32_t bytes)
 {
+	// Discpress: nothing to write (as read_bytes)
+	if (bytes == 0)
+		return std::error_condition();
+
 	// iterate over hunks
 	uint32_t const first_hunk = offset / m_hunkbytes;
 	uint32_t const last_hunk = (offset + bytes - 1) / m_hunkbytes;
@@ -1571,7 +1608,7 @@ std::error_condition chd_file::read_metadata(chd_metadata_tag searchtag, uint32_
 	// read the metadata
 	try { output.resize(metaentry.length); }
 	catch (std::bad_alloc const &) { return std::errc::not_enough_memory; }
-	return file_read(metaentry.offset + METADATA_HEADER_SIZE, &output[0], metaentry.length);
+	return file_read(metaentry.offset + METADATA_HEADER_SIZE, output.data(), metaentry.length); // Discpress: data(), as metadata can be empty
 }
 
 /**
@@ -1633,7 +1670,7 @@ std::error_condition chd_file::read_metadata(chd_metadata_tag searchtag, uint32_
 	// read the metadata
 	try { output.resize(metaentry.length); }
 	catch (std::bad_alloc const &) { return std::errc::not_enough_memory; }
-	err = file_read(metaentry.offset + METADATA_HEADER_SIZE, &output[0], metaentry.length);
+	err = file_read(metaentry.offset + METADATA_HEADER_SIZE, output.data(), metaentry.length); // Discpress: data(), as metadata can be empty
 	if (UNEXPECTED(err))
 		return err;
 	resulttag = metaentry.metatag;
@@ -1796,12 +1833,12 @@ std::error_condition chd_file::clone_all_metadata(chd_file &source)
 		// read the metadata item
 		try { filedata.resize(metaentry.length); }
 		catch (std::bad_alloc const &) { return std::errc::not_enough_memory; }
-		err = source.file_read(metaentry.offset + METADATA_HEADER_SIZE, &filedata[0], metaentry.length);
+		err = source.file_read(metaentry.offset + METADATA_HEADER_SIZE, filedata.data(), metaentry.length); // Discpress: data(), as metadata can be empty
 		if (UNEXPECTED(err))
 			return err;
 
 		// write it to the destination
-		err = write_metadata(metaentry.metatag, (uint32_t)-1, &filedata[0], metaentry.length, metaentry.flags);
+		err = write_metadata(metaentry.metatag, (uint32_t)-1, filedata.data(), metaentry.length, metaentry.flags);
 		if (UNEXPECTED(err))
 			return err;
 	}
@@ -1843,14 +1880,14 @@ util::sha1_t chd_file::compute_overall_sha1(util::sha1_t rawsha1)
 
 		// allocate memory and read the data
 		filedata.resize(metaentry.length);
-		err = file_read(metaentry.offset + METADATA_HEADER_SIZE, &filedata[0], metaentry.length);
+		err = file_read(metaentry.offset + METADATA_HEADER_SIZE, filedata.data(), metaentry.length); // Discpress: data(), as metadata can be empty
 		if (UNEXPECTED(err))
 			throw err;
 
 		// create an entry for this metadata and add it
 		metadata_hash hashentry;
 		put_u32be(hashentry.tag, metaentry.metatag);
-		hashentry.sha1 = util::sha1_creator::simple(&filedata[0], metaentry.length);
+		hashentry.sha1 = util::sha1_creator::simple(filedata.data(), metaentry.length);
 		hasharray.push_back(hashentry);
 	}
 	if (err != error::METADATA_NOT_FOUND)
@@ -1998,6 +2035,41 @@ uint32_t chd_file::guess_unitbytes()
 }
 
 /**
+ * @fn  bool chd_file::past_end(uint64_t offset, uint64_t length) const
+ * @brief   past_end - Discpress: whether length bytes from offset would run past the end of the
+ *            file (false when its length is unknown, so that the read reports it)
+ */
+bool chd_file::past_end(uint64_t offset, uint64_t length) const
+{
+	uint64_t filelength;
+	if (!m_file || m_file->length(filelength))
+		return false;
+	return (offset > filelength) || (length > filelength - offset);
+}
+
+/**
+ * @fn  void chd_file::check_sizes(uint64_t hunkcount) const
+ *
+ * @brief   -------------------------------------------------
+ *            check_sizes - Discpress: a header whose sizes no data can have (a damaged or
+ *            crafted file) is an error. 0.289 divided by a hunk or unit size of 0, and with a
+ *            logical size of more hunks than a map can count, it made a map too small for them
+ *          -------------------------------------------------.
+ *
+ * @exception   CHDERR_INVALID_FILE Thrown when the sizes can't be right.
+ *
+ * @param   hunkcount   The number of hunks the header gives or implies.
+ */
+
+void chd_file::check_sizes(uint64_t hunkcount) const
+{
+	if (UNEXPECTED(m_hunkbytes == 0 || m_unitbytes == 0))
+		throw std::error_condition(error::INVALID_FILE);
+	if (UNEXPECTED(hunkcount > std::numeric_limits<uint32_t>::max()))
+		throw std::error_condition(error::INVALID_FILE);
+}
+
+/**
  * @fn  void chd_file::parse_v3_header(uint8_t *rawheader, sha1_t &parentsha1)
  *
  * @brief   -------------------------------------------------
@@ -2056,7 +2128,8 @@ void chd_file::parse_v3_header(uint8_t *rawheader, util::sha1_t &parentsha1)
 		parentsha1 = be_read_sha1(&rawheader[m_parentsha1_offset]);
 
 	// guess at the units based on snooping the metadata
-	m_unitbytes = guess_unitbytes();
+	m_unitbytes = (m_hunkbytes != 0) ? guess_unitbytes() : 0;
+	check_sizes(m_hunkcount);
 	m_unitcount = (m_logicalbytes + m_unitbytes - 1) / m_unitbytes;
 }
 
@@ -2119,7 +2192,8 @@ void chd_file::parse_v4_header(uint8_t *rawheader, util::sha1_t &parentsha1)
 		parentsha1 = be_read_sha1(&rawheader[m_parentsha1_offset]);
 
 	// guess at the units based on snooping the metadata
-	m_unitbytes = guess_unitbytes();
+	m_unitbytes = (m_hunkbytes != 0) ? guess_unitbytes() : 0;
+	check_sizes(m_hunkcount);
 	m_unitcount = (m_logicalbytes + m_unitbytes - 1) / m_unitbytes;
 }
 
@@ -2147,8 +2221,9 @@ void chd_file::parse_v5_header(uint8_t *rawheader, util::sha1_t &parentsha1)
 	m_mapoffset = get_u64be(&rawheader[40]);
 	m_metaoffset = get_u64be(&rawheader[48]);
 	m_hunkbytes = get_u32be(&rawheader[56]);
-	m_hunkcount = (m_logicalbytes + m_hunkbytes - 1) / m_hunkbytes;
 	m_unitbytes = get_u32be(&rawheader[60]);
+	check_sizes((m_hunkbytes != 0) ? ((m_logicalbytes / m_hunkbytes) + ((m_logicalbytes % m_hunkbytes) != 0)) : 0);
+	m_hunkcount = (m_logicalbytes + m_hunkbytes - 1) / m_hunkbytes;
 	m_unitcount = (m_logicalbytes + m_unitbytes - 1) / m_unitbytes;
 
 	// determine compression
@@ -2191,7 +2266,7 @@ std::error_condition chd_file::compress_v5_map()
 	try
 	{
 		// first get a CRC-16 of the original rawmap
-		util::crc16_t mapcrc = util::crc16_creator::simple(&m_rawmap[0], m_hunkcount * 12);
+		util::crc16_t mapcrc = util::crc16_creator::simple(m_rawmap.data(), m_hunkcount * 12);
 
 		// create a buffer to hold the RLE data
 		std::vector<uint8_t> compression_rle(m_hunkcount);
@@ -2421,7 +2496,7 @@ void chd_file::decompress_v5_map()
 	// if no offset, we haven't written it yet
 	if (m_mapoffset == 0)
 	{
-		memset(&m_rawmap[0], 0xff, m_rawmap.size());
+		memset(m_rawmap.data(), 0xff, m_rawmap.size());
 		return;
 	}
 
@@ -2437,13 +2512,21 @@ void chd_file::decompress_v5_map()
 	uint8_t const lengthbits = rawbuf[12];
 	uint8_t const selfbits = rawbuf[13];
 	uint8_t const parentbits = rawbuf[14];
+	// Discpress: the bit reader reads at most 32 bits at a time, as many as compress_v5_map writes:
+	// more (a damaged or crafted map) shifted by a negative count, which C++ leaves undefined
+	if (UNEXPECTED((lengthbits > 32) || (selfbits > 32) || (parentbits > 32)))
+		throw std::error_condition(error::DECOMPRESSION_ERROR);
 
 	// now read the map
+	// Discpress: one that would run past the end of the file is the error reading it gives, without
+	// allocating it first (up to 4 GB, for a damaged or crafted header)
+	if (UNEXPECTED(past_end(m_mapoffset + 16, mapbytes)))
+		throw std::error_condition(std::errc::io_error);
 	std::vector<uint8_t> compressed(mapbytes);
-	ioerr = file_read(m_mapoffset + 16, &compressed[0], mapbytes);
+	ioerr = file_read(m_mapoffset + 16, compressed.data(), mapbytes);
 	if (UNEXPECTED(ioerr))
 		throw ioerr;
-	bitstream_in bitbuf(&compressed[0], compressed.size());
+	bitstream_in bitbuf(compressed.data(), compressed.size());
 
 	// first decode the compression types
 	huffman_decoder<16, 8> decoder;
@@ -2532,7 +2615,7 @@ void chd_file::decompress_v5_map()
 	}
 
 	// verify the final CRC
-	if (UNEXPECTED(util::crc16_creator::simple(&m_rawmap[0], m_hunkcount * 12) != mapcrc))
+	if (UNEXPECTED(util::crc16_creator::simple(m_rawmap.data(), m_hunkcount * 12) != mapcrc))
 		throw std::error_condition(error::DECOMPRESSION_ERROR);
 }
 
@@ -2759,14 +2842,23 @@ void chd_file::create_open_common()
 	}
 
 	// read the map; v5+ compressed drives need to read and decompress their map
-	m_rawmap.resize(m_hunkcount * m_mapentrybytes);
+	// Discpress: a map larger than 32 bits can count (a damaged or crafted header) is an error: 0.289
+	// computed its size in 32 bits, and with the size wrapped, read and wrote past the end of the map
+	uint64_t const mapsize = uint64_t(m_hunkcount) * m_mapentrybytes;
+	if (UNEXPECTED(mapsize > std::numeric_limits<uint32_t>::max()))
+		throw std::error_condition(error::INVALID_FILE);
+	// Discpress: and a stored map that would run past the end of the file is the error reading it
+	// gives, without allocating it first
+	if (!(m_version >= 5 && compressed()) && UNEXPECTED(past_end(m_mapoffset, mapsize)))
+		throw std::error_condition(std::errc::io_error);
+	m_rawmap.resize(mapsize);
 	if (m_version >= 5 && compressed())
 	{
 		decompress_v5_map();
 	}
 	else
 	{
-		std::error_condition err = file_read(m_mapoffset, &m_rawmap[0], m_rawmap.size());
+		std::error_condition err = file_read(m_mapoffset, m_rawmap.data(), m_rawmap.size());
 		if (UNEXPECTED(err))
 			throw err;
 	}
@@ -3857,7 +3949,7 @@ bool chd_file::wasm_read_cached(uint32_t hunknum, uint8_t type, void *dest)
 		memcpy(dest, &ahead.data[0], m_hunkbytes);
 		return true;
 	case 3: // compressed bytes
-		m_decompressor[type]->decompress(&ahead.data[0], ahead.data.size(), reinterpret_cast<uint8_t *>(dest), m_hunkbytes);
+		m_decompressor[type]->decompress(ahead.data.data(), ahead.data.size(), reinterpret_cast<uint8_t *>(dest), m_hunkbytes);
 		return true;
 	default:
 		return false;

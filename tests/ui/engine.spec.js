@@ -1046,6 +1046,129 @@ test('a CHD whose map goes round in a circle, or claims an oversized block, is a
   }
 });
 
+// A header whose sizes no data can have: 0.289 divides by a hunk or unit size of 0, and a logical size of
+// more hunks than a map counts (2^32 or more) gave a map too small for them
+test('a CHD header with a hunk or unit size of 0, or too many hunks, is an error, not a crash', () => {
+  const D = Buffer.from(Array.from({ length: 4096 }, (_, i) => (i * 7 + (i >> 5)) & 0x7f));
+  const good = craftChd([{ data: D }, { self: 0 }]);
+  const variant = (name, edit) => { const b = Buffer.from(good); edit(b); const p = tmp(name); fs.writeFileSync(p, b); return p; };
+  const files = {
+    'hunk size 0': variant('hunk0.chd', b => b.writeUInt32BE(0, 56)),
+    'unit size 0': variant('unit0.chd', b => b.writeUInt32BE(0, 60)),
+    '2^34 hunks': variant('huge.chd', b => b.writeBigUInt64BE(1n << 46n, 32)),
+    '2^32 hunks': variant('just over.chd', b => b.writeBigUInt64BE(1n << 44n, 32)),
+  };
+  expect(run(UPSTREAM, ['info', '-i', files['hunk size 0']]).signal, 'upstream divides by zero').toBe('SIGFPE'); // the bug
+  for (const [name, file] of Object.entries(files)) {
+    for (const args of [['info', '-i', file], ['verify', '-i', file], ['extractraw', '-i', file, '-o', tmp('x.raw'), '-f']]) {
+      const r = run(ENGINE, args);
+      expect({ code: r.code, signal: r.signal }, `${name}: ${args[0]}`).toEqual({ code: 1, signal: null });
+      expect(r.err, `${name}: ${args[0]}`).toContain('Invalid file');
+    }
+  }
+});
+
+// Found by fuzzing (tests/fuzz/README.md): a v5 map whose Huffman tree has more codes than one bit has room for,
+// or whose size in memory doesn't fit in 32 bits, or that runs past the end of the file
+test('a damaged or crafted map is an error, not a crash', () => {
+  const good = makeChd('createcd', 'twine.cue');
+  const g = fs.readFileSync(good);
+  const mapoffset = Number(g.readBigUInt64BE(40));
+  const variant = (name, edit) => { const b = Buffer.from(g); edit(b); const p = tmp(name); fs.writeFileSync(p, b); return p; };
+  // the tree of the map's compression types: three codes of 1 bit (4 bits each: 1, then the length 1), the rest none
+  const tree = variant('tree.chd', b => { b.fill(0x11, mapoffset + 16, mapoffset + 19); b.fill(0, mapoffset + 19, mapoffset + 26); });
+  // 358 million hunks: 12 bytes each are more than 2^32
+  const wrap = variant('wrap.chd', b => b.writeBigUInt64BE(BigInt(b.readUInt32BE(56)) * 358000000n, 32));
+  // a compressed map of 1 GB, in a file of 1.5 MB
+  const pastEnd = variant('past end.chd', b => b.writeUInt32BE(1 << 30, mapoffset));
+  // the bugs: the lookup table written past its end smashes the stack (gcc's stack protector aborts), the map too small
+  // for its hunks is written past its end
+  expect(run(UPSTREAM, ['info', '-i', tree]).signal, 'upstream, tree').toBeTruthy();
+  expect(run(UPSTREAM, ['info', '-i', wrap]).signal, 'upstream, 358 million hunks').toBeTruthy();
+  for (const [file, message] of [[tree, 'Decompression error'], [wrap, 'Invalid file'], [pastEnd, 'Input/output error']]) {
+    for (const args of [['info', '-i', file], ['verify', '-i', file], ['extractcd', '-i', file, '-o', tmp('x.cue'), '-f']]) {
+      const r = run(ENGINE, args);
+      expect({ code: r.code, signal: r.signal }, `${path.basename(file)}: ${args[0]}`).toEqual({ code: 1, signal: null });
+      expect(r.err, `${path.basename(file)}: ${args[0]}`).toContain(message);
+    }
+  }
+});
+
+// A CD codec's hunk says how long its sector data is: more than the hunk holds made 0.289 decode past the end of it, and
+// the subcode's length wrap (the fuzzer's input, a cdzs hunk of 32 frames, in a CHD; the sanitized build sees the reads)
+test('a CD hunk whose sector data is longer than the hunk is an error', () => {
+  const stored = fs.readFileSync(path.join(ROOT, 'tests', 'fuzz', 'regressions', 'codec', 'cd-base-longer-than-hunk')).subarray(2);
+  const file = tmp('cd base.chd');
+  fs.writeFileSync(file, craftChd([{ stored }], 2448 * 32, { codec: 'cdzs', unitbytes: 2448 }));
+  const r = run(ENGINE, ['extractraw', '-i', file, '-o', tmp('x.raw'), '-f']);
+  expect({ code: r.code, signal: r.signal }).toEqual({ code: 1, signal: null });
+  expect(r.err).toContain('Decompression error');
+});
+
+// A CD's track metadata that names a track twice or skips one left a track of 0-byte sectors, which extractcd divided by
+test('CD metadata without one of its tracks is an error', () => {
+  const g = fs.readFileSync(makeChd('createcd', 'twine.cue'));
+  const b = Buffer.from(g), at = g.indexOf('TRACK:1 TYPE');
+  expect(at).toBeGreaterThan(0);
+  b.write('TRACK:2', at, 'latin1'); // its one track, as track 2
+  const file = tmp('track 2.chd');
+  fs.writeFileSync(file, b);
+  expect(run(UPSTREAM, ['extractcd', '-i', file, '-o', tmp('u.cue'), '-f']).signal, 'upstream').toBe('SIGFPE'); // the bug
+  for (const args of [['extractcd', '-i', file, '-o', tmp('x.cue'), '-f'], ['info', '-i', file, '-v']]) {
+    const r = run(ENGINE, args);
+    expect({ code: r.code, signal: r.signal }, args[0]).toEqual({ code: args[0] === 'info' ? 0 : 1, signal: null });
+  }
+});
+
+// The track metadata's strings were read with %s into 16-byte buffers: a longer one wrote past their end (on the stack;
+// the sanitized build sees it, upstream then aborts on the error that follows)
+test('CD metadata with a string longer than its buffer is an error', () => {
+  const g = fs.readFileSync(makeChd('createcd', 'twine.cue'));
+  const b = Buffer.from(g), at = g.indexOf('MODE2_RAW SUBTYPE:NONE');
+  expect(at).toBeGreaterThan(0);
+  b.write('MODE2_RAW_SUBTYPE_NONE_FRAMES_629_PREGAP_0', at, 'latin1'); // one 42-character type, in place
+  const file = tmp('long type.chd');
+  fs.writeFileSync(file, b);
+  const r = run(ENGINE, ['extractcd', '-i', file, '-o', tmp('x.cue'), '-f']);
+  expect({ code: r.code, signal: r.signal }).toEqual({ code: 1, signal: null });
+});
+
+// A hunk stored with a codec the header doesn't list (a v3 CHD without compression whose map says a hunk is compressed,
+// or a v5 map's codec slot left empty) made 0.289 call a codec it doesn't have
+test('a hunk that names a codec the CHD has none for is an error', () => {
+  const head = Buffer.alloc(120);
+  head.write('MComprHD', 0, 'latin1'); head.writeUInt32BE(120, 8); head.writeUInt32BE(3, 12);
+  head.writeUInt32BE(1, 24); head.writeBigUInt64BE(512n, 28); head.writeUInt32BE(512, 76); // one hunk of 512 bytes, compression 0
+  const entry = Buffer.alloc(16);
+  entry.writeBigUInt64BE(136n, 0); entry.writeUInt16BE(16, 12); entry[15] = 1 | 0x10; // compressed, 16 bytes, no CRC
+  const v3 = tmp('v3.chd');
+  fs.writeFileSync(v3, Buffer.concat([head, entry, Buffer.alloc(16, 9)]));
+  // and a v5 CHD whose map gives a hunk the second codec slot, which its header leaves empty
+  const v5 = tmp('v5.chd');
+  fs.writeFileSync(v5, craftChd([{ data: Buffer.alloc(4096, 3), slot: 1 }]));
+  expect(run(UPSTREAM, ['extractraw', '-i', v3, '-o', tmp('u.raw'), '-f']).signal, 'upstream').toBe('SIGSEGV'); // the bug
+  for (const file of [v3, v5]) {
+    const r = run(ENGINE, ['extractraw', '-i', file, '-o', tmp('x.raw'), '-f']);
+    expect({ code: r.code, signal: r.signal }, path.basename(file)).toEqual({ code: 1, signal: null });
+    expect(r.err, path.basename(file)).toContain('Invalid data');
+  }
+});
+
+// A map entry saying a hunk is in the parent, in a CHD that has none: 0.289 read through a null pointer
+test('a hunk in a parent the CHD doesn\u2019t have is an error', () => {
+  const head = Buffer.alloc(120);
+  head.write('MComprHD', 0, 'latin1'); head.writeUInt32BE(120, 8); head.writeUInt32BE(3, 12);
+  head.writeUInt32BE(1, 24); head.writeBigUInt64BE(512n, 28); head.writeUInt32BE(512, 76); // no parent (flags 0)
+  const entry = Buffer.alloc(16);
+  entry[15] = 5 | 0x10; // hunk 0 of the parent
+  const file = tmp('parent.chd');
+  fs.writeFileSync(file, Buffer.concat([head, entry]));
+  expect(run(UPSTREAM, ['extractraw', '-i', file, '-o', tmp('u.raw'), '-f']).signal, 'upstream').toBe('SIGSEGV'); // the bug
+  const r = run(ENGINE, ['extractraw', '-i', file, '-o', tmp('x.raw'), '-f']);
+  expect({ code: r.code, signal: r.signal }).toEqual({ code: 1, signal: null });
+  expect(r.err).toContain('Invalid data');
+});
+
 // A Dreamcast disc of each GD-ROM layout (the high-density area: one data track; data, then audio; two data
 // tracks; data, audio, data), as Redump lays it out (a cue sheet, each track's pregap at the start of its own
 // file) and as TOSEC does (a GDI: track 2's pregap in no file, the others at the end of the previous file, but

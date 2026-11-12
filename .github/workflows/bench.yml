@@ -1,0 +1,88 @@
+# Times conversions through the page (tests/bench/bench.js) in each browser engine, Chromium, Firefox and
+# WebKit (Safari's), on Ubuntu, against native chdman on the same machine (whose outputs each conversion must
+# equal). The results are the run's summary and an artifact. When the page changes, weekly, and on demand.
+name: Benchmarks
+
+on:
+  push:
+    branches: [main]
+    paths: ['dist/**', 'tests/bench/**', '.github/workflows/bench.yml']
+  pull_request:
+    paths: ['dist/**', 'tests/bench/**', '.github/workflows/bench.yml']
+  schedule:
+    - cron: '11 7 * * 4'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: chromium
+            os: ubuntu-24.04
+            native: true
+          - browser: firefox
+            os: ubuntu-24.04
+            native: true
+          # (WebKit on Ubuntu too: the macOS runner this asked for was cancelled before any runner took it)
+          - browser: webkit
+            os: ubuntu-24.04
+            native: true
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    name: bench (${{ matrix.browser }})
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/package-lock.json
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: numpy, for the synthetic test discs
+        run: pip install numpy==2.4.6
+      - name: Cache MAME 0.289 and its chdman
+        if: matrix.native
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            third_party/mame
+            build/chdman-0.289
+          key: mame-0.289-${{ runner.os }}-${{ hashFiles('scripts/fetch-mame.sh', 'scripts/build-upstream.sh', 'wasm/**') }}
+      - name: Native chdman (0.289 and the engine)
+        if: matrix.native
+        run: |
+          [ -x build/chdman-0.289 ] || ./scripts/build-upstream.sh
+          ./scripts/build-native.sh
+      - name: Playwright and ${{ matrix.browser }}
+        working-directory: tests
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps ${{ matrix.browser }}
+      # (bench.js makes the synthetic discs, the benchmark images among them)
+      - name: Benchmark
+        working-directory: tests
+        run: >
+          node bench/bench.js --browser ${{ matrix.browser }} --label ci-${{ matrix.browser }}
+          --threads 1,4 --presets default,fast --cd-mb 150 --dvd-mb 512
+      - name: Summary
+        if: always()
+        run: cat tests/.cache/bench/*.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+      - name: Results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bench-${{ matrix.browser }}
+          path: tests/.cache/bench
+          if-no-files-found: ignore
+          retention-days: 90

@@ -115,7 +115,7 @@ Discpress knows the system of every job, so policies can be **system-aware**. Ex
 
 ## 4. Roadmap
 
-Effort estimates assume one developer working with the existing test harness. The statuses are as of Discpress 1.8.1.
+Effort estimates assume one developer working with the existing test harness. The statuses are as of Discpress 1.8.2.
 
 | Milestone | Status |
 |---|---|
@@ -127,6 +127,7 @@ Effort estimates assume one developer working with the existing test harness. Th
 | 5. What users ask for | Done (1.5.0) |
 | 6. Detection that knows the game | Done (1.7.0) |
 | 7. Layouts each emulator reads right | Planned; nothing built (no new conversion engine, but steps 2 and 5 change the fork) |
+| 8. Faster, more efficient, more reliable | Step 1 done (fuzzing and crafted headers found over 20 faults that damaged files reach, all but one also chdman 0.289's); step 2's workflows in place; steps 3 and 4 planned |
 
 The two releases after milestone 6 are outside the milestones, and their CHDs are the same:
 - **1.8.0** fixed what a full review of the app found: discs that took another game's tracks or name, results that could be lost, slow adding of big folders.
@@ -405,6 +406,64 @@ The CHD's SHA-1 then differs from chdman's for the same input, which MAME's soft
 Needed by every step: reader models in the tests (a Flycast 2.7 model, "assume stored", "V means virtual", wildcard metadata; §5), and fixtures for each rule checked against them and against the extracted files.
 
 Separate from the engine question, and only as users ask: writers for other formats, starting with CSO/ZSO for real PSP and PS2 hardware (about 1 person-week; the page already reads both), then PBP for PS1 on PSP and Vita, and Xbox ISO for xemu (1 to 2 each). RVZ for Dolphin (5 to 8, with licence and key questions) only if Dolphin users ask, since Dolphin converts to RVZ itself.
+
+### Milestone 8: faster, more efficient, more reliable (research of 2026-11-11)
+
+**Decision: reliability first, then speed with the same bytes.** The default compression stays chdman's
+(the byte-for-byte contract, §3); phones are only told about "Nearly as small, faster"; Verify after
+converting stays off by default.
+
+Where the time goes, measured on the benchmark discs (300 MB CD, 1 GB DVD; 4 cores; `bench.js`):
+- **Native, `-np 4`, wall/CPU seconds:** DVD with the default codecs, 0.289 58.1/169.9, the engine 50.0/151.2,
+  the codec plan with libdeflate 26.6/81.5, `zlib,huff` with libdeflate 4.5/14.0. CD: 0.289 15.0/46.7, the
+  engine 13.0/39.3, plan 7.4/22.6, `cdzl,cdfl` 4.9/15.0.
+- **Each codec alone on a DVD hunk** (a native harness timing `find_best_compressor`): LZMA 310.6 µs, FLAC
+  228.6, zlib 47.8, Huffman 20.5; all four 586.5. FLAC almost never wins on data, which is what the codec plan
+  skips. In FLAC, autocorrelation is 31% of its instructions, `residual_from_qlp` 21%, the partition sums
+  13%, the fixed predictor 8%.
+- **The page in Chromium at 1, 2 and 4 threads:** DVD default 157.3, 82.2 and 49.3 s; plan 99.5, 53.5 and
+  34.0; fast 20.7 and 11.2 (1 and 4). CD default 41.4, 20.5 and 11.8; plan 24.6, 11.4 and 7.4; fast 14.0 and
+  5.2. At 4 threads the page is within 10–12% of native with the default; "Faster to create" on a DVD takes
+  11.2 s against native's 4.5, so its time is in the page's own serial path, not in compression.
+- **Ruled out:** clearing LZMA's tables lazily (12.8% of its instructions are a `memset`; the lazy version
+  measured slower), C++ exceptions for the codecs that lose (14,247 throws on the DVD's 6,186 hunks, under
+  1 µs each in Chromium), `-flto` (no gain, and it breaks exceptions).
+
+1. **Reliability** (done, but for what CI's Firefox and WebKit runs show).
+   - The three header faults (hunk or unit size 0, more hunks than a map counts) are errors.
+   - libFuzzer under ASan and UBSan (`tests/fuzz/`, `scripts/fuzz.sh`, weekly in `.github/workflows/fuzz.yml`
+     with a kept corpus): CHD files read as identification and every reading command does, the browser's
+     read-ahead and helper decompression included; descriptors through `createcd`; each codec's hunks; ECM
+     windows. It found, and the engine fixes: a Huffman tree's lookup table written past its end (the stack,
+     for a map or a `huff` hunk), a map size computed in 32 bits (written past its end), maps larger than the
+     file allocated first, map bit widths over 32, CD codec sector data longer than the hunk, LaserDisc
+     frames larger than the hunk and more than 16 channels, a read of 0 bytes that read a whole hunk, CD
+     metadata parsed with `%s` into 16-byte buffers, CD metadata missing a track (a division by zero),
+     old-style CD metadata read past its end, hunks naming a codec or a parent the CHD doesn't have (null
+     pointers), and four kinds of undefined behavior with unchanged results (`tests/fuzz/README.md`,
+     `engine/README.md`). Every CHD the fixtures make is unchanged.
+   - The page's own readers of CSO/ZSO, PBP, ECM, zip and CloneCD files get damaged files of each kind
+     (`tests/ui/readers.spec.js`): each ends as a card that says why, or a conversion that finishes or fails,
+     never an uncaught error or a card left waiting. Open: a damaged file stored (not deflated) in a zip
+     converts, since stored files are read in place and the zip's CRC-32 is checked for deflated ones only.
+   - A running conversion the page hears nothing from for 90 s, while visible, says so (`STALL_MS`).
+   - The suite runs in Firefox and WebKit in CI too (`.github/workflows/browsers.yml`).
+2. **Measure on real browsers** (workflows in place). `.github/workflows/bench.yml` times the page in
+   Chromium and Firefox (Ubuntu) and WebKit (an Apple-silicon Mac). Whether Firefox's or Safari's numbers
+   come before step 3 is decided from its results.
+3. **Speed with the same bytes** (planned).
+   - The job worker's serial path first: what "Faster to create" waits on (11.2 s against native's 4.5 on a
+     DVD), and extract's and verify's, profiled with counters the page reads in a debug build. It reads the
+     input, keeps the running SHA-1 of all of it, hands hunks to the helpers and writes their results.
+   - Exact SIMD for FLAC's loops: Emscripten already vectorizes the two largest, autocorrelation (373 SIMD
+     instructions in the build) and the residual from the LPC coefficients (349), without changing a result
+     (each lag's sum keeps its order; WebAssembly SIMD has no fused multiply-add). What is left is mostly
+     scalar: the partition sums (15) and the fixed predictor (56), integer loops that would give the same
+     results by construction. Only worth writing if a measurement shows them in the page's time.
+   - Whether FLAC can stop after the first channel when it already can't win: only if that is exact.
+4. **Later** (as needed): a CI build with WebAssembly's new exception format (`-sWASM_LEGACY_EXCEPTIONS=0`,
+   exnref), so that switching once every browser has it is one line. A battery saver isn't needed: the
+   thread setting already is one.
 
 ## 5. Test and verification strategy
 

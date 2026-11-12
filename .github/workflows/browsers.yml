@@ -1,0 +1,89 @@
+# The UI suite (tests/README.md) on dist/discpress.html in Firefox and in WebKit, Safari's engine (Playwright's
+# projects behind EXTRA_BROWSERS: webkit, iphone-webkit and firefox), against unmodified chdman 0.289 and the
+# engine built natively, as ci.yml runs it in Chromium. A test that fails in one of them for a reason the page
+# can't fix is pinned there with test.fail() or skipped with its reason. When the page, the tests or this
+# workflow change, weekly, and on demand.
+name: Browsers
+
+on:
+  push:
+    branches: [main]
+    paths: ['app/**', 'dist/**', 'tests/**', 'web/**', '.github/workflows/browsers.yml']
+  pull_request:
+    paths: ['app/**', 'dist/**', 'tests/**', 'web/**', '.github/workflows/browsers.yml']
+  schedule:
+    - cron: '37 6 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browsers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - browser: firefox
+            projects: --project=firefox
+          - browser: webkit
+            projects: --project=webkit --project=iphone-webkit
+    name: tests (${{ matrix.browser }})
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/package-lock.json
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: numpy, for the synthetic test discs
+        run: pip install numpy==2.4.6
+      # the references the tests compare with, as in ci.yml (the same cache)
+      - name: Cache MAME 0.289 and its chdman
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            third_party/mame
+            build/chdman-0.289
+          key: mame-0.289-${{ runner.os }}-${{ hashFiles('scripts/fetch-mame.sh', 'scripts/build-upstream.sh', 'wasm/**') }}
+      - name: Unmodified chdman 0.289
+        run: '[ -x build/chdman-0.289 ] || ./scripts/build-upstream.sh'
+      - name: The engine built natively
+        run: ./scripts/build-native.sh
+      - name: Cache Playwright's ${{ matrix.browser }}
+        id: pwcache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ matrix.browser }}-${{ runner.os }}-${{ hashFiles('tests/package-lock.json') }}
+      - name: Playwright and ${{ matrix.browser }}
+        working-directory: tests
+        run: |
+          npm ci --no-audit --no-fund
+          if [ '${{ steps.pwcache.outputs.cache-hit }}' = 'true' ]; then npx playwright install-deps ${{ matrix.browser }}; else npx playwright install --with-deps ${{ matrix.browser }}; fi
+      - name: Synthetic test discs
+        run: python3 tests/fixtures/make_fixtures.py
+      - name: UI tests in ${{ matrix.browser }}
+        working-directory: tests
+        env:
+          EXTRA_BROWSERS: '1'
+          REQUIRE_NATIVE: '1'
+        run: npx playwright test ${{ matrix.projects }}
+      - name: Report of a failed run
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-report-${{ matrix.browser }}
+          path: |
+            tests/.cache/report
+            tests/.cache/test-results
+          retention-days: 14

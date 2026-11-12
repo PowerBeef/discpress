@@ -324,9 +324,28 @@ var Engine = {
     this.url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
     return this;
   },
+  // Firefox's tab crashes when a worker is terminated while it instantiates its WebAssembly (as when a helper
+  // that fails to start stops the job at once, its siblings still starting): a worker given the engine here is
+  // starting until it says otherwise ('wasm-ready', or 'fatal'), and Engine.stop terminates one still starting
+  // once it has, or in 10 s
   post: function (w, msg, transfer) {
+    if (!w.engineWatch) {
+      w.engineWatch = true;
+      w.engineStarting = true;
+      var started = function () {
+        w.engineStarting = false;
+        if (w.engineStop) { w.engineStop = false; w.terminate(); }
+      };
+      w.addEventListener('message', function (e) { var t = e.data && e.data.type; if (t === 'wasm-ready' || t === 'fatal') started(); });
+      w.addEventListener('error', started);
+    }
     try { msg.wasmModule = this.module; w.postMessage(msg, transfer || []); }
     catch (e) { delete msg.wasmModule; msg.wasmBytes = this.bytes; w.postMessage(msg, transfer || []); }
+  },
+  stop: function (w) {
+    if (!w.engineStarting) { w.terminate(); return; }
+    w.engineStop = true;
+    setTimeout(function () { w.terminate(); }, 10000);
   },
   // runs one chdman command; returns {promise, cancel}
   run: function (o) {
@@ -344,6 +363,19 @@ var Engine = {
       }
     }) : null;
     var ackWait = null;
+    // no-progress watchdog: any message from the job worker is progress; only time the page is
+    // visible counts (a hidden page's workers may be paused, iOS pauses them all). o.onStall(true)
+    // after STALL_MS of none, o.onStall(false) when one comes again
+    var quiet = 0, lastTick = Date.now(), quietSaid = false, watch = o.onStall ? setInterval(function () {
+      var now = Date.now();
+      if (document.visibilityState === 'visible') quiet += now - lastTick;
+      lastTick = now;
+      if (!quietSaid && quiet >= (DEBUG.stallMs || STALL_MS)) { quietSaid = true; o.onStall(true); }
+    }, 1000) : 0;
+    function heard() {
+      quiet = 0;
+      if (quietSaid) { quietSaid = false; o.onStall(false); }
+    }
     // the worker could not read an input itself: read it here and send it over
     async function feedStage(m) {
       var blob = o.inputs[m.index].blob, step = 4 << 20;
@@ -360,10 +392,11 @@ var Engine = {
     }
     function cleanup() {
       finished = true;
+      if (watch) { clearInterval(watch); watch = 0; }
       // a chunk still waiting for the worker's answer: its staging ends (and lets go of the file)
       if (ackWait) { var a = ackWait; ackWait = null; a(); }
-      if (worker) worker.terminate();
-      helpers.forEach(function (h) { h.terminate(); });
+      if (worker) Engine.stop(worker);
+      helpers.forEach(function (h) { Engine.stop(h); });
       helpers = [];
     }
     var promise = new Promise(function (resolve, reject) {
@@ -394,6 +427,7 @@ var Engine = {
       worker.onmessage = function (e) {
         var m = e.data;
         if (finished) return;
+        heard();
         if (m.type.charAt(0) === 's' && m.type.charAt(1) === '-') { if (sink) sink.handle(m, worker); }
         else if (m.type === 'stage-request') feedStage(m);
         else if (m.type === 'stage-ack') { var a = ackWait; ackWait = null; if (a) a(); }
@@ -425,7 +459,8 @@ var Engine = {
       };
       self.post(worker, {
         type: 'run', jobId: o.jobId, dirPath: o.dirPath, args: o.args, inputs: o.inputs || [],
-        writable: o.writable || [], slots: o.slots || 0, outMode: o.outMode || 'mem', ports: ports, debugStage: DEBUG.stage, debugSinkMax: DEBUG.sinkMax, debugStorage: DEBUG.failStorage
+        writable: o.writable || [], slots: o.slots || 0, outMode: o.outMode || 'mem', ports: ports, debugStage: DEBUG.stage, debugSinkMax: DEBUG.sinkMax, debugStorage: DEBUG.failStorage,
+        debugFreeze: o.onStall ? DEBUG.freeze : 0
       }, ports);
     });
     return {
@@ -539,7 +574,7 @@ var Tuning = {
         else if (++misses >= (n > cores ? 1 : 2)) break;
       }
     } finally {
-      pool.forEach(function (h) { h.w.terminate(); });
+      pool.forEach(function (h) { Engine.stop(h.w); });
       document.removeEventListener('visibilitychange', onVisibility);
     }
     var t = { key: this.key(), threads: bestN, rate: +best.toFixed(2), steps: steps, cores: cores, cap: Tuning.cap, date: Date.now() };
@@ -582,6 +617,7 @@ async function heldLocks() {
 }
 var Store = {
   available: false,
+  ready: null, // init's promise: a job waits for it before choosing where its results go
   session: 's' + Date.now().toString(36) + uid(),
   init: async function () {
     // held while this visit lasts, so other visits can tell it is still open (Recovery)
@@ -590,6 +626,7 @@ var Store = {
       await sleep(50);
     }
     var work = null;
+    if (DEBUG.storeDelay) await sleep(DEBUG.storeDelay); // testing: a slow check (Firefox's can be)
     try {
       if (!navigator.storage || !navigator.storage.getDirectory) throw new Error('no private storage');
       var root = await navigator.storage.getDirectory();
@@ -714,7 +751,17 @@ var Recovery = {
     this.write(all);
   },
   running: function (job) {
+    this.current = job || null;
     this.update(function (rec) { rec.running = job ? job.title : null; });
+  },
+  leaving: false, // beforeunload was seen: the page may be going away (or the visitor chose to stay)
+  // the running job ended without results. Once a reload or close has begun, WebKit fails a job's reads
+  // before the page is gone, which ends the job: then its record stays, so that the next visit still says
+  // it didn't finish, and goes only if the page is still here 3 s later (and runs nothing newer)
+  ended: function (job) {
+    var self = this;
+    if (!this.leaving) { this.running(null); return; }
+    setTimeout(function () { if (self.current === job) self.running(null); }, 3000);
   },
   // results in memory ('blob') are recorded too: a reload loses them, and the next visit says so
   finished: function (job) {
@@ -2323,6 +2370,8 @@ function renderControls(job) {
     if (settings.compat && /(^|,)(cdzs|zstd)(,|$)/.test(cur[2] || '')) { chint += ' ' + ZSTD_OLD; zwarn = true; }
     if (cur[0] === 'mister' && pfc.noMister) { chint += ' MiSTer has no core that plays ' + sysName(job.ident.sys) + ' games from CHDs.'; zwarn = true; }
     if (pfc.hint && cur[0] !== 'none') chint += ' ' + pfc.hint;
+    // phones and tablets take minutes over a disc: the preset that saves a third of that, suggested (never chosen)
+    if (isMobile && cur[0] === 'default' && presets.some(function (p) { return p[0] === 'plan'; })) chint += ' ' + PLAN_HINT;
     var cfield = selectField('Compression', presets.map(function (p) { return [p[0], p[1]]; }), o.preset, function (v) { o.preset = v; refresh(); }, chint, busy);
     if (zwarn) cfield.lastChild.style.color = 'var(--warn)';
     fields.append(cfield);
@@ -2393,6 +2442,7 @@ function renderNotes(job) {
     else box.append(el('div', { class: 'note warn' }, 'This CHD depends on a parent CHD (SHA-1 ' + job.info.parent.slice(0, 12) + '…). Add the parent .chd file too.'));
   }
   if (job.state === 'error' && job.errorText) box.append(el('div', { class: 'note err' }, job.errorText));
+  if (job.state === 'running' && job.noProgress) box.append(el('div', { class: 'note warn', 'data-note': 'no-progress' }, el('b', null, 'No progress for over a minute. '), STALL_HINT));
   if (job.state === 'canceled') box.append(el('div', { class: 'note' }, 'Canceled.'));
   box.hidden = !box.childNodes.length;
 }
@@ -2719,6 +2769,11 @@ async function pump() {
   }
 }
 
+// the compression hint on phones and tablets (renderControls)
+var PLAN_HINT = 'On a phone or tablet, Nearly as small, faster takes about a third less time, for files at most 0.3% bigger.';
+// the no-progress watchdog (Engine.run): a running job's card says so after this long without a word from it
+var STALL_MS = 90000;
+var STALL_HINT = 'The browser may have paused it, or it may be stuck. You can wait, or cancel it and try again, with fewer CPU threads (Settings) if it stops again.';
 // chdman never finishes when it finds no data: its progress then reads "nan% complete" (0 of 0)
 var STALLED = 'chdman found no data to convert in these files and would never have finished, so it was stopped. Check that the .cue, .gdi or .toc file lists the disc\u2019s tracks.';
 function stalledProgress(t) { return /\bnan% complete/i.test(t); }
@@ -2737,6 +2792,7 @@ async function runJobNow(job) {
     return true;
   }
   job.stalled = false;
+  job.noProgress = false;
   job.log = job.retryLog || []; // a run again after the engine failed keeps the first run's log
   job.retryLog = null;
   job.outputs = [];
@@ -2765,6 +2821,8 @@ async function runJobNow(job) {
     if (job.state !== 'running') return;
   }
   if (job.subScan && await stopped(job.subScan)) return;
+  // (whether private storage is there, which a job started just after the page opened might not know yet)
+  if (Store.ready) await Store.ready;
   var spec = buildJob(job);
   if (settings.storage === 'folder' && outDir && (spec.rename || spec.outMode === 'stream')) {
     var oi = spec.args.indexOf('-o'), main = spec.rename ? outBase(job) + '.chd' : oi >= 0 ? spec.args[oi + 1].replace(/^.*\//, '') : '';
@@ -2846,6 +2904,7 @@ async function runJobNow(job) {
       if (/^A helper thread stopped/.test(m.message)) job.helperStopped = true;
     },
     onScan: function (f) { setProgress(job, null, 'Reading the ECM image\u2026 ' + Math.floor(f * 100) + '%'); },
+    onStall: function (on) { job.noProgress = on; if (job.ui) renderNotes(job); },
     onStorage: function (mode, reason) {
       job.storage = mode;
       if (spec.outMode !== 'opfs' || mode !== 'mem') return;
@@ -2884,7 +2943,7 @@ async function runJobNow(job) {
         await verifyResult(job);
       }
     } else {
-      Recovery.running(null);
+      Recovery.ended(job);
       job.state = 'error';
       if (res.readFail) { job.errorText = readFailHint(res.error); Store.removeJob(job.id); refreshJob(job, true); return; }
       // (a helper that stopped, whose work the others did, isn't why)
@@ -2897,7 +2956,7 @@ async function runJobNow(job) {
       Store.removeJob(job.id);
     }
   } catch (e) {
-    Recovery.running(null);
+    Recovery.ended(job);
     if (e.canceled && job.stalled) { job.state = 'error'; job.errorText = STALLED; }
     else if (e.canceled && job.storageRefused) { job.state = 'error'; job.errorText = 'The browser\u2019s storage wasn\u2019t available for this job, so it stopped rather than keep its results in memory. Try again in a moment.'; }
     else if (e.canceled) { job.state = 'canceled'; }
@@ -3824,6 +3883,7 @@ async function cliRun() {
   // results kept in memory, as for a conversion: ask first when they could be too large (what it reads,
   // twice that for an extraction, and the copies of inputs chdman changes)
   var cliOut = /^(info|listtemplates|verify|addmeta|delmeta|dumpmeta)$/.test(args[0]) ? 0 : (/^extract/.test(args[0]) ? 2 : 1) * inputs.reduce(function (n, i) { return n + i.blob.size; }, 0);
+  if (Store.ready) await Store.ready;
   var cliMem = !(settings.storage === 'folder' && outDir) && (settings.storage === 'memory' || !Store.available);
   if (!confirmMemory(memoryNeed({ outMode: cliMem ? 'mem' : 'opfs', slots: cliOut ? 1 : 0, expected: cliOut, writable: writable }))) return;
   // the last command's results give way to this one's (only one command's results are shown)
@@ -3865,7 +3925,8 @@ async function cliRun() {
         var m = /([\d.]+)% complete/.exec(t);
         if (m) { prog.querySelector('.bar').classList.remove('indet'); prog.querySelector('.bar').setAttribute('aria-valuenow', Math.round(+m[1])); barI.style.width = m[1] + '%'; ptext.textContent = t.trim(); }
       },
-      onNotice: function (m) { if (m.level !== 'debug') con.textContent += m.message + '\n'; }
+      onNotice: function (m) { if (m.level !== 'debug') con.textContent += m.message + '\n'; },
+      onStall: function (on) { if (on) con.textContent += '[No progress for over a minute] ' + STALL_HINT + '\n'; }
     });
     var r = await cli.run.promise;
     con.textContent += '\n[exit code ' + r.code + (r.error ? ': ' + r.error : '') + ']\n';
@@ -4347,6 +4408,7 @@ function init() {
   });
 
   window.addEventListener('beforeunload', function (e) {
+    Recovery.leaving = true;
     var busy = jobs.some(function (j) { return j.state === 'running' || j.state === 'queued'; }) || !!cli.run;
     var left = jobs.some(unsaved) || (cli.last && unsaved(cli.last));
     if (busy || left) { e.preventDefault(); e.returnValue = ''; }
@@ -4356,7 +4418,8 @@ function init() {
   updateDock();
   updateChips();
 
-  Store.init().then(function () { updateChips(); renderEarlier(); DatStore.load(); });
+  Store.ready = Store.init();
+  Store.ready.then(function () { updateChips(); renderEarlier(); DatStore.load(); });
   $('#datAdd').addEventListener('click', function () { pickFiles('datInput', function (l) { addEntries(filesFromList(l)); }); });
   initHosted();
   initIosTip();

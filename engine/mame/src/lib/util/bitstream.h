@@ -146,7 +146,8 @@ inline uint32_t bitstream_in::peek(int numbits)
 
 inline void bitstream_in::remove(int numbits)
 {
-	m_buffer <<= numbits;
+	// (all 32 bits, which a crafted v5 map's field width can ask for: the buffer is empty, not shifted by 32)
+	m_buffer = (numbits < 32) ? (m_buffer << numbits) : 0;
 	m_bits -= numbits;
 }
 
@@ -226,6 +227,11 @@ inline bitstream_out::bitstream_out(void *dest, uint32_t destlength)
 
 inline void bitstream_out::write(uint32_t newbits, int numbits)
 {
+	// Discpress: nothing to write, as for a CHD map with no copies of hunks (0.289 went on to shift
+	// the value by 32 bits, which C++ leaves undefined, and then returned without using it)
+	if (numbits <= 0)
+		return;
+
 	newbits <<= 32 - numbits;
 
 	// flush the buffer if we're going to overflow it

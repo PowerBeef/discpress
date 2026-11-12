@@ -84,7 +84,9 @@ test('a job whose results could be too large to keep in memory asks first', asyn
 // Storage that fails when the run starts (a file still held by a run that ended, or none at all): the job
 // went on in memory without the question above, and the whole visit switched to memory (audit 2026-10-05, M2)
 for (const [kind, flips] of [['other', true], ['lock', false]]) {
-  test(`storage that fails when a run starts (${kind}): asks before keeping a large result in memory`, async ({ app, page }) => {
+  test(`storage that fails when a run starts (${kind}): asks before keeping a large result in memory`, async ({ app, page, browserName }) => {
+    // (storage there to begin with: without any, the question comes before the run, verify.spec's test above)
+    test.skip(browserName === 'webkit', 'Playwright\'s WebKit has no navigator.storage');
     await app.open({ debug: { memMax: 100000, failStorage: kind } });
     const asked = [];
     page.removeAllListeners('dialog');

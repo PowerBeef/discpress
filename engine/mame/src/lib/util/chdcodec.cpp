@@ -442,8 +442,16 @@ public:
 		uint32_t ecc_bytes = (frames + 7) / 8;
 		uint32_t header_bytes = ecc_bytes + complen_bytes;
 
+		// Discpress: a header longer than the data, or a base longer than what follows the header (a
+		// damaged or crafted hunk), is an error: 0.289 decoded past the end of the data, and the
+		// subcode's length wrapped
+		if (UNEXPECTED(complen < header_bytes))
+			throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
+
 		// extract compressed length of base
 		uint32_t complen_base = (complen_bytes > 2) ? get_u24be(&src[ecc_bytes]) : get_u16be(&src[ecc_bytes]);
+		if (UNEXPECTED(complen_base > complen - header_bytes))
+			throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
 
 		// reset and decode
 		m_base_decompressor.decompress(&src[header_bytes], complen_base, &m_buffer[0], frames * cdrom_file::MAX_SECTOR_DATA);
@@ -2022,6 +2030,11 @@ void chd_avhuff_decompressor::process(const uint8_t *src, uint32_t complen)
 
 void chd_avhuff_decompressor::decompress(const uint8_t *src, uint32_t complen, uint8_t *dest, uint32_t destlen)
 {
+	// Discpress: a frame larger than the hunk (damaged or crafted data) is an error: 0.289 decoded it
+	// past the end of the hunk (its size, as raw_data_size has it: header, metadata, audio, video)
+	if ((complen >= 8) && (12 + uint64_t(src[0]) + 2 * uint64_t(src[1]) * get_u16be(&src[2]) + 2 * uint64_t(get_u16be(&src[4])) * get_u16be(&src[6]) > destlen))
+		throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
+
 	// decode the audio and video
 	avhuff_error averr = m_decoder.decode_data(src, complen, dest);
 	if (averr != AVHERR_NONE)

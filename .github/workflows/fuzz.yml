@@ -1,0 +1,69 @@
+# Fuzzes the engine (scripts/fuzz.sh, tests/fuzz/README.md): every seed, past finding and saved corpus
+# input once, then each fuzzer for a while: 30 minutes weekly, as long as asked on demand, 5 minutes when
+# engine/, wasm/ or the fuzzers change. The corpus grows from run to run in the Actions cache (pruned to
+# the inputs that add coverage); a finding fails the run and is uploaded with it.
+name: Fuzz
+
+on:
+  push:
+    branches: [main]
+    paths: ['engine/**', 'wasm/**', 'tests/fuzz/**', 'tests/support/lsan.supp', 'scripts/fuzz.sh', '.github/workflows/fuzz.yml']
+  pull_request:
+    paths: ['engine/**', 'wasm/**', 'tests/fuzz/**', 'tests/support/lsan.supp', 'scripts/fuzz.sh', '.github/workflows/fuzz.yml']
+  schedule:
+    - cron: '23 4 * * 3'
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds each fuzzer runs (the four run at once)
+        default: '1800'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      CC: clang-18
+      CXX: clang++-18
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: clang and its libFuzzer runtime
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang-18 libclang-rt-18-dev
+      - name: The fuzzers and their seeds
+        run: ./scripts/fuzz.sh build
+      - name: Restore the corpus
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+      - name: Every seed, regression and corpus input once
+        run: ./scripts/fuzz.sh check all
+      - name: Fuzz
+        run: ./scripts/fuzz.sh run all ${{ github.event_name == 'schedule' && '1800' || (github.event_name == 'workflow_dispatch' && inputs.seconds) || '300' }}
+      - name: Prune the corpus
+        if: success()
+        run: ./scripts/fuzz.sh prune all
+      # (a pull request's cache is its own: only main's runs keep the corpus)
+      - name: Save the corpus
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/fuzz/corpus
+          key: fuzz-corpus-${{ github.run_id }}
+      - name: Findings
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-findings
+          path: |
+            build/fuzz/findings
+            build/fuzz/*.log
+          if-no-files-found: ignore

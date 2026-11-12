@@ -631,6 +631,10 @@ huffman_error huffman_context_base::assign_canonical_codes()
 		uint32_t nextstart = (curstart + bithisto[codelen]) >> 1;
 		if (codelen != 1 && nextstart * 2 != (curstart + bithisto[codelen]))
 			return HUFFERR_INTERNAL_INCONSISTENCY;
+		// Discpress: more codes than one bit has room for (a damaged or crafted tree): 0.289 gave codes
+		// more bits than their length, and build_lookup_table wrote past the end of its table
+		if (codelen == 1 && (curstart + bithisto[codelen]) > 2)
+			return HUFFERR_INTERNAL_INCONSISTENCY;
 		bithisto[codelen] = curstart;
 		curstart = nextstart;
 	}
@@ -654,6 +658,7 @@ huffman_error huffman_context_base::assign_canonical_codes()
 void huffman_context_base::build_lookup_table()
 {
 	// iterate over all codes
+	uint32_t covered = 0;
 	for (int curcode = 0; curcode < m_numcodes; curcode++)
 	{
 		// process all nodes which have non-zero bits
@@ -669,8 +674,14 @@ void huffman_context_base::build_lookup_table()
 			lookup_value *destend = &m_lookup[((node.m_bits + 1) << shift) - 1];
 			while (dest <= destend)
 				*dest++ = value;
+			covered = std::max<uint32_t>(covered, (node.m_bits + 1) << shift);
 		}
 	}
+
+	// Discpress: the entries no code covers decode as code 0 of no bits. Canonical codes cover the table
+	// from 0 up, all of it for a complete tree (what an encoder writes); 0.289 left the rest as it was,
+	// whatever was in that memory, and a damaged tree's data read bit counts from it
+	std::fill(m_lookup + covered, m_lookup + (uint32_t(1) << m_maxbits), lookup_value(0));
 }
 
 

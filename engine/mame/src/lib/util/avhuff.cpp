@@ -67,6 +67,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <new>
 
 
@@ -723,6 +724,11 @@ avhuff_error avhuff_decoder::decode_data(const uint8_t *source, uint32_t complen
 	uint32_t width = get_u16be(&source[4]);
 	uint32_t height = get_u16be(&source[6]);
 
+	// Discpress: no more channels than there are places for (the encoder takes up to 16): 0.289 went past
+	// the end of audiostart and of m_config.audio
+	if (channels > std::size(m_config.audio))
+		return AVHERR_INVALID_DATA;
+
 	// validate that the sizes make sense
 	if (complength < 10 + 2 * channels)
 		return AVHERR_INVALID_DATA;
@@ -932,6 +938,10 @@ avhuff_error avhuff_decoder::decode_audio(int channels, int samples, const uint8
 			// if no huffman length, just copy the data
 			if (treesize == 0)
 			{
+				// Discpress: as much as the samples take (as stored): 0.289 read past the channel's
+				// data, and past the end of the hunk's
+				if (size < 2 * samples)
+					return AVHERR_INVALID_DATA;
 				const uint8_t *cursource = source;
 				for (int sampnum = 0; sampnum < samples; sampnum++)
 				{

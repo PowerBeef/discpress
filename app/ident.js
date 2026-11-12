@@ -223,7 +223,7 @@ function readerWorker(msg, timeout, onScan) {
         clearTimeout(timer);
         if (dead) return;
         dead = err;
-        w.terminate();
+        Engine.stop(w);
         if (!ready) reject(err);
         Object.keys(waiting).forEach(function (id) { var q = waiting[id]; delete waiting[id]; clearTimeout(q.timer); q.reject(err); });
       }
@@ -356,8 +356,8 @@ function crcWorker(blob, start, end, onProgress, how) {
       var w = new Worker(Engine.url);
       var entry = {
         blob: blob,
-        stop: function () { w.terminate(); var e = new Error('paused'); e.paused = true; reject(e); },
-        abort: function () { w.terminate(); var e = new Error('stopped'); e.aborted = true; reject(e); }
+        stop: function () { Engine.stop(w); var e = new Error('paused'); e.paused = true; reject(e); },
+        abort: function () { Engine.stop(w); var e = new Error('stopped'); e.aborted = true; reject(e); }
       };
       var resolve = function (v) { crcRunning.delete(entry); resolveRaw(v); };
       var reject = function (e) { crcRunning.delete(entry); rejectRaw(e); };
@@ -366,11 +366,11 @@ function crcWorker(blob, start, end, onProgress, how) {
       w.onmessage = function (e) {
         var m = e.data;
         if (m.type === 'crc-progress') onProgress && onProgress(m.done / m.total);
-        else if (m.type === 'crc') { w.terminate(); resolve(m.crc); }
+        else if (m.type === 'crc') { Engine.stop(w); resolve(m.crc); }
         else if (m.type === 'notice') { if (m.level === 'error' && !why) why = m.message; }
-        else if (m.type === 'fatal') { w.terminate(); reject(new Error(why || m.message)); }
+        else if (m.type === 'fatal') { Engine.stop(w); reject(new Error(why || m.message)); }
       };
-      w.onerror = function (e) { w.terminate(); reject(new Error(e.message || 'worker error')); };
+      w.onerror = function (e) { Engine.stop(w); reject(new Error(e.message || 'worker error')); };
       var pbp = /^pbp@(\d+):(\d+)$/.exec(how || ''); // a PS1 PBP's disc: its header's offset and its sectors
       Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end, ciso: how === 'ciso', ecm: how === 'ecm', pbp: pbp ? { at: +pbp[1], sectors: +pbp[2] } : null, debugSlow: DEBUG.crcSlow }); // with the compiled module, for zlib's crc32
     });
