@@ -33,7 +33,7 @@
 #include <emscripten.h>
 extern "C" {
 	// provided by the JavaScript host (browser build): offload hunk compression to helper workers
-	int wasm_par_enabled(uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression, uint32_t flags);
+	int wasm_par_enabled(uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression, uint32_t flags, uint32_t window);
 	void wasm_par_submit(void *item, const uint8_t *data, uint32_t length, uint32_t codecs);
 	// and decompression, for commands that read (see chd_file::wasm_read_ahead)
 	int wasm_rd_enabled(const void *chd, uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression);
@@ -3222,11 +3222,21 @@ void chd_file_compressor::compress_begin()
 	m_read_done_offset = 0;
 	m_read_error.clear();
 
+	// Discpress: the window. chdman's 256 hunks natively; in the browser up to 4 MiB of hunks (at most
+	// WORK_BUFFER_HUNKS), as one message to a helper worker costs about as much as compressing a few
+	// small hunks, but chdman's 256 for larger hunks (CDs') and with a parent, whose walk leaves other
+	// bytes in the buffer than the ones a partial last hunk must get (async_read)
+	m_window = CHDMAN_WINDOW;
+#ifdef __EMSCRIPTEN__
+	if (!m_parent)
+		m_window = std::clamp<uint32_t>(((4 << 20) / hunk_bytes()) & ~1U, CHDMAN_WINDOW, WORK_BUFFER_HUNKS);
+#endif
+
 	// reset work item state
-	m_work_buffer.resize(hunk_bytes() * (WORK_BUFFER_HUNKS + 1));
+	m_work_buffer.resize(hunk_bytes() * (m_window + 1));
 	memset(&m_work_buffer[0], 0, m_work_buffer.size());
-	m_compressed_buffer.resize(hunk_bytes() * WORK_BUFFER_HUNKS);
-	for (int itemnum = 0; itemnum < WORK_BUFFER_HUNKS; itemnum++)
+	m_compressed_buffer.resize(hunk_bytes() * m_window);
+	for (uint32_t itemnum = 0; itemnum < m_window; itemnum++)
 	{
 		work_item &item = m_work_item[itemnum];
 		item.m_compressor = this;
@@ -3246,7 +3256,7 @@ void chd_file_compressor::compress_begin()
 	m_write_hunk = 0;
 
 #ifdef __EMSCRIPTEN__
-	s_wasm_par = compressed() ? wasm_par_enabled(hunk_bytes(), unit_bytes(), m_compression, m_libdeflate ? 1 : 0) : 0; // flags: 1 = libdeflate
+	s_wasm_par = compressed() ? wasm_par_enabled(hunk_bytes(), unit_bytes(), m_compression, m_libdeflate ? 1 : 0, m_window) : 0; // flags: 1 = libdeflate
 #endif
 }
 
@@ -3274,9 +3284,9 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 	{
 		// see if we have enough free work items to read the next half of a buffer
 		uint32_t const startitem = m_read_queue_offset / hunk_bytes();
-		uint32_t const enditem = startitem + WORK_BUFFER_HUNKS / 2;
+		uint32_t const enditem = startitem + m_window / 2;
 		uint32_t curitem = startitem;
-		while ((curitem < enditem) && (m_work_item[curitem % WORK_BUFFER_HUNKS].m_status == WS_READY))
+		while ((curitem < enditem) && (m_work_item[curitem % m_window].m_status == WS_READY))
 			++curitem;
 
 		// if it's not all clear, defer
@@ -3285,20 +3295,20 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 
 		// if we're walking the parent, we want one more item to have cleared so we
 		// can read an extra hunk there
-		if (m_walking_parent && m_work_item[curitem % WORK_BUFFER_HUNKS].m_status != WS_READY)
+		if (m_walking_parent && m_work_item[curitem % m_window].m_status != WS_READY)
 			break;
 
 		// queue the next read
 		for (curitem = startitem; curitem < enditem; curitem++)
-			m_work_item[curitem % WORK_BUFFER_HUNKS].m_status = WS_READING;
+			m_work_item[curitem % m_window].m_status = WS_READING;
 		osd_work_item_queue(m_read_queue, async_read_static, this, WORK_ITEM_FLAG_AUTO_RELEASE);
-		m_read_queue_offset += WORK_BUFFER_HUNKS * hunk_bytes() / 2;
+		m_read_queue_offset += m_window * hunk_bytes() / 2;
 	}
 
 	// flush out any finished items
-	while (m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status == WS_COMPLETE)
+	while (m_work_item[m_write_hunk % m_window].m_status == WS_COMPLETE)
 	{
-		work_item &item = m_work_item[m_write_hunk % WORK_BUFFER_HUNKS];
+		work_item &item = m_work_item[m_write_hunk % m_window];
 
 		// free any OSD work item
 		if (item.m_osd)
@@ -3379,6 +3389,12 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 			}
 			else
 			{
+				// Discpress: the ratio of the whole CHD, which chdman prints as the final one (0.289 left it as
+				// the last step before had it: in the browser, where helper workers' results come in batches,
+				// as little as 0%)
+				progress = 1.0;
+				ratio = (m_total_in == 0) ? 1.0 : double(m_total_out) / double(m_total_in);
+
 				// wait for all reads to finish and if we're compressed, write the final SHA1 and map
 				osd_work_queue_wait(m_read_queue, 30 * osd_ticks_per_second());
 				if (!compressed())
@@ -3400,10 +3416,10 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 
 	// if we're waiting for work, wait
 	// sometimes code can get here with .m_status == WS_READY and .m_osd != nullptr, TODO find out why this happens
-	while ((m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status != WS_READY) &&
-			(m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status != WS_COMPLETE) &&
-			m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_osd)
-		osd_work_item_wait(m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_osd, osd_ticks_per_second());
+	while ((m_work_item[m_write_hunk % m_window].m_status != WS_READY) &&
+			(m_work_item[m_write_hunk % m_window].m_status != WS_COMPLETE) &&
+			m_work_item[m_write_hunk % m_window].m_osd)
+		osd_work_item_wait(m_work_item[m_write_hunk % m_window].m_osd, osd_ticks_per_second());
 
 	return m_walking_parent ? error::WALKING_PARENT : error::COMPRESSING;
 }
@@ -3564,7 +3580,7 @@ void chd_file_compressor::async_read()
 		return;
 
 	// determine parameters for the read
-	uint32_t const work_buffer_bytes = WORK_BUFFER_HUNKS * hunk_bytes();
+	uint32_t const work_buffer_bytes = m_window * hunk_bytes();
 	uint32_t numbytes = work_buffer_bytes / 2;
 	if ((m_read_done_offset + numbytes) > logical_bytes())
 		numbytes = logical_bytes() - m_read_done_offset;
@@ -3598,13 +3614,29 @@ void chd_file_compressor::async_read()
 		{
 			// otherwise, call the virtual function
 			read_data(dest, m_read_done_offset, numbytes);
+#ifdef __EMSCRIPTEN__
+			// Discpress: a partial last hunk is compressed whole, and past the end of the data it holds
+			// what the work buffer held there before: with a wider window than chdman's, other bytes than
+			// in chdman's buffer. So it gets chdman's: those of the hunk CHDMAN_WINDOW before it (still in
+			// the buffer, as the window is wider), or the zeros the buffer starts with when there is none
+			if ((m_window != CHDMAN_WINDOW) && (end_offset == logical_bytes()) && (logical_bytes() % hunk_bytes()))
+			{
+				uint64_t const last = logical_bytes() / hunk_bytes();
+				uint32_t const tail = logical_bytes() % hunk_bytes();
+				uint8_t *const slot = &m_work_buffer[(last % m_window) * hunk_bytes()];
+				if (last >= CHDMAN_WINDOW)
+					memcpy(slot + tail, &m_work_buffer[((last - CHDMAN_WINDOW) % m_window) * hunk_bytes()] + tail, hunk_bytes() - tail);
+				else
+					memset(slot + tail, 0, hunk_bytes() - tail);
+			}
+#endif
 		}
 
 		// spawn off work for each hunk
 		for (uint64_t curoffs = m_read_done_offset; curoffs < end_offset; curoffs += hunk_bytes())
 		{
 			uint32_t hunknum = curoffs / hunk_bytes();
-			work_item &item = m_work_item[hunknum % WORK_BUFFER_HUNKS];
+			work_item &item = m_work_item[hunknum % m_window];
 			assert(item.m_status == WS_READING);
 			item.m_status = WS_QUEUED;
 			item.m_hunknum = hunknum;

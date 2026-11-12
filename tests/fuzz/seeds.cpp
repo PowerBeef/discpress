@@ -219,6 +219,13 @@ void chd_seeds()
 		make_chd(name, { "createraw", "-i", s_tmp + "/raw.bin", "-hs", "4096", "-us", "512", "-np", "1", "-c", codec });
 	}
 	make_chd("hd.chd", { "createhd", "-i", s_tmp + "/raw.bin", "-np", "1", "-c", "zlib" });
+	// 300 and a half hunks: the browser build's wider window gives the partial last hunk's tail the bytes of
+	// the hunk 256 before it (chd_file_compressor::async_read), which AddressSanitizer watches here
+	bytes window;
+	for (int h = 0; h < 300; h++)
+		window = cat({ window, (h % 3) ? noise(4096, 100 + h) : prose(4096) });
+	fuzzhost::write_file(s_tmp + "/window.bin", cat({ window, prose(2048) }));
+	make_chd("raw-window.chd", { "createraw", "-i", s_tmp + "/window.bin", "-hs", "4096", "-us", "512", "-np", "1", "-c", "zlib" });
 	fuzzhost::write_file(s_tmp + "/dvd.iso", iso(40));
 	make_chd("dvd.chd", { "createdvd", "-i", s_tmp + "/dvd.iso", "-np", "1" });
 	make_chd("dvd-zstd.chd", { "createdvd", "-i", s_tmp + "/dvd.iso", "-np", "1", "-c", "zstd" });

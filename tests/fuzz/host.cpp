@@ -78,7 +78,7 @@ bool deliver()
 // wasm/par_lib.js's functions, as the page answers them
 extern "C" {
 
-int wasm_par_enabled(uint32_t, uint32_t, const uint32_t *, uint32_t) { return 0; }
+int wasm_par_enabled(uint32_t, uint32_t, const uint32_t *, uint32_t, uint32_t) { return 0; }
 
 void wasm_par_submit(void *, const uint8_t *, uint32_t, uint32_t)
 {

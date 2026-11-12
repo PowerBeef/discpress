@@ -95,6 +95,8 @@ These rules come from the emulator survey (D1 §8, D2 §15, G §1). A Discpress 
 | Deflate | raw deflate | any conforming encoder |
 | zstd | one frame per hunk, window ≤ 2²⁷ | level |
 
+**chdman's window is part of its output.** A partial last hunk (a disc whose size isn't a whole number of hunks, as most CDs and many ISOs) is compressed whole, and past the end of the data it holds whatever chdman's work buffer of 256 hunks held at that place: the bytes of the hunk 256 before it, or zeros. The SHA-1s don't cover them, but the compressed bytes do. So a writer that keeps another number of hunks in flight must give that tail the same bytes, as the engine's wider browser window does (`m_window`, `tests/ui/window.spec.js`); the thread count doesn't matter.
+
 **Identity.** Codec and hunk choices never change the CHD SHA-1. Metadata changes always do. Extra *non-checksummed* metadata doesn't change the SHA-1s, and most readers ignore it (C §2), but not all: Kronos and Yabause (Saturn) and jgenesis (Sega CD) refuse a CHD with any tag that isn't a track's (D2 §0). So the app leaves `--keepcue`, whose `CUES` tag is such metadata, out for those two consoles (`keepcue-strict` in `app/quirks.js`).
 
 ### Output tiers
@@ -127,7 +129,7 @@ Effort estimates assume one developer working with the existing test harness. Th
 | 5. What users ask for | Done (1.5.0) |
 | 6. Detection that knows the game | Done (1.7.0) |
 | 7. Layouts each emulator reads right | Planned; nothing built (no new conversion engine, but steps 2 and 5 change the fork) |
-| 8. Faster, more efficient, more reliable | Step 1 done (fuzzing and crafted headers found over 20 faults that damaged files reach, all but one also chdman 0.289's); step 2's workflows in place; steps 3 and 4 planned |
+| 8. Faster, more efficient, more reliable | Step 1 done (fuzzing and crafted headers found over 20 faults that damaged files reach, all but one also chdman 0.289's); step 2's workflows in place, with first results; step 3 in progress (a wider compression window: DVDs 11–20% faster); step 4 done (an exnref build in CI) |
 
 The two releases after milestone 6 are outside the milestones, and their CHDs are the same:
 - **1.8.0** fixed what a full review of the app found: discs that took another game's tracks or name, results that could be lost, slow adding of big folders.
@@ -451,19 +453,37 @@ Where the time goes, measured on the benchmark discs (300 MB CD, 1 GB DVD; 4 cor
 2. **Measure on real browsers** (workflows in place). `.github/workflows/bench.yml` times the page in
    Chromium and Firefox (Ubuntu) and WebKit (an Apple-silicon Mac). Whether Firefox's or Safari's numbers
    come before step 3 is decided from its results.
-3. **Speed with the same bytes** (planned).
-   - The job worker's serial path first: what "Faster to create" waits on (11.2 s against native's 4.5 on a
-     DVD), and extract's and verify's, profiled with counters the page reads in a debug build. It reads the
-     input, keeps the running SHA-1 of all of it, hands hunks to the helpers and writes their results.
-   - Exact SIMD for FLAC's loops: Emscripten already vectorizes the two largest, autocorrelation (373 SIMD
-     instructions in the build) and the residual from the LPC coefficients (349), without changing a result
-     (each lag's sum keeps its order; WebAssembly SIMD has no fused multiply-add). What is left is mostly
-     scalar: the partition sums (15) and the fixed predictor (56), integer loops that would give the same
-     results by construction. Only worth writing if a measurement shows them in the page's time.
-   - Whether FLAC can stop after the first channel when it already can't win: only if that is exact.
-4. **Later** (as needed): a CI build with WebAssembly's new exception format (`-sWASM_LEGACY_EXCEPTIONS=0`,
-   exnref), so that switching once every browser has it is one line. A battery saver isn't needed: the
-   thread setting already is one.
+3. **Speed with the same bytes** (in progress).
+   - The job worker's serial path, profiled (`DEBUG.profile`): of 13.2 s for "Faster to create" on the 1 GB
+     DVD at 4 threads, the job worker spent 3.8 s reading the input, 2.5 s in the engine itself (mostly the
+     running SHA-1), 0.6 s handing out hunks and 0.8 s taking results, and waited the rest; the helpers were
+     busy 21 s of the 46 they had. Reading faster didn't help: reading ahead asynchronously, or in 4 MB
+     blocks, cut the read time to 1.6 s but made extracting 7–26% slower and creating no faster. The helpers
+     waited on messages: 16 hunks a batch (chdman's 256 in flight, read 128 at a time) are 1.2 ms of work
+     for `zlib,huff`. Done: in the browser the compressor keeps up to 1024 hunks of 4 KiB or less in
+     flight, and batches grow to 64 hunks (`m_window`, engine/README.md). Measured, median of three:
+     "Faster to create" on the DVD 12.99 → 10.36 s, the default 50.42 → 44.67 s, CDs (whose hunks keep 256)
+     the same; byte for byte chdman's, which took giving a partial last hunk's tail the bytes chdman's own
+     buffer holds there (§3, "chdman's window is part of its output"). Left: the running SHA-1 and the
+     copies, about 3 s of the job worker's time per GB, and Firefox, whose 4 threads gain less (CI's
+     benchmark: 14.6 → 11.6 s, against Chromium's 13.7 → 8.7).
+   - Exact SIMD for FLAC's loops: not written. Emscripten already vectorizes the two largest,
+     autocorrelation (373 SIMD instructions in the build) and the residual from the LPC coefficients (349),
+     without changing a result (each lag's sum keeps its order; WebAssembly SIMD has no fused multiply-add).
+     What is left mostly scalar, the partition sums (15) and the fixed predictor (56), is 21% of FLAC's
+     instructions; FLAC is about 39% of a DVD hunk's default compression (it encodes each hunk twice, in
+     both byte orders, a block each), so making them twice as fast would save about 4%.
+   - FLAC stopping after the first channel when it already can't win: not exact, so not done. chdman's
+     FLAC (level 8) searches every stereo pairing (left/right, left/side, right/side, mid/side) and keeps the
+     smallest; after the first channels, the size of the pairings still to come is unknown and can be far
+     smaller, so nothing counted so far bounds the frame from below. (Within a channel the encoder already
+     stops after a block that passes the limit, but a DVD hunk is one block.)
+4. **The new exception format** (done): `WASM_EH=exnref ./build.sh` builds with exnref
+   (`-sWASM_LEGACY_EXCEPTIONS=0`: 1,704 `try_table`, no legacy `try`), and `.github/workflows/rebuild.yml`
+   runs the conversion tests on that page, which gives chdman's CHDs byte for byte at the same speed (the
+   DVD's default 44.40 s against 44.67, the CD's 11.65 against 11.66). Switching, once every browser the
+   page supports has exnref (Chrome 137, Firefox 131, Safari 18.4), is that flag and `EH_TEST` in
+   `app/ui.js`. A battery saver isn't needed: the thread setting already is one.
 
 ## 5. Test and verification strategy
 
