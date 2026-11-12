@@ -49,6 +49,11 @@ function instantiate(extra) {
   return createChdman(opts);
 }
 
+/* ---------------- profiling (DEBUG.profile) ---------------- */
+// where the job worker's time goes, in ms by what it did; reported in the job's log when chdman ends
+var PROF = null;
+function profAdd(name, t0) { if (PROF) PROF[name] = (PROF[name] || 0) + (performance.now() - t0); }
+
 /* ---------------- storage backends ---------------- */
 
 function BlobStore(blob) {
@@ -71,12 +76,14 @@ BlobStore.prototype.block = function (bi) {
   return b;
 };
 BlobStore.prototype.read = function (dst, pos, len) {
+  var t0 = PROF ? performance.now() : 0;
   try { return this.read2(dst, pos, len); }
   catch (e) {
     if (e && typeof e.errno === 'number') throw e;
     postMessage({ type: 'notice', level: 'error', message: 'Reading the input failed: ' + (e && e.message || e) });
     throw { errno: ERR.EIO };
   }
+  finally { profAdd('read input', t0); }
 };
 BlobStore.prototype.read2 = function (dst, pos, len) {
   if (pos >= this.sizeV) return 0;
@@ -488,12 +495,13 @@ function OpfsStore(slot) {
   this.tick = 0;
 }
 OpfsStore.prototype.put = function (src, pos) {
-  var n;
+  var n, t0 = PROF ? performance.now() : 0;
   try { n = this.h.write(src, { at: pos }); }
   catch (e) {
     postMessage({ type: 'notice', level: 'error', message: 'Storage full: the browser refused to write more data (' + (e && e.name || e) + ').' });
     throw { errno: ERR.ENOSPC };
   }
+  finally { profAdd('write output', t0); }
   if (n !== src.length) throw { errno: ERR.ENOSPC };
 };
 OpfsStore.prototype.flushBuf = function (b) {
@@ -1045,6 +1053,11 @@ function setupParallel(M, ports) {
       if (m.type !== 'result') return;
       // chdman ended (done, or failed): its work items are gone, so nothing more is written to them
       if (closed) return;
+      var tr = PROF ? performance.now() : 0;
+      try { takeResult(h, m); } finally { profAdd('take results', tr); }
+    };
+    function takeResult(h, m) {
+      if (PROF && m.ms) { PROF['helpers compressing'] = (PROF['helpers compressing'] || 0) + m.ms[0]; PROF['helpers busy'] = (PROF['helpers busy'] || 0) + m.ms[1]; }
       // results go into chdman's work items only for the batch this helper was given, item by item:
       // an answer for another batch, or for other items, would write over hunks it doesn't hold. And
       // each as the compressor gives it: a codec slot that was tried, shorter than a hunk; -1 (stored)
@@ -1073,19 +1086,20 @@ function setupParallel(M, ports) {
       }
       dispatch();
       maybeWake();
-    };
+    }
   });
 
   // flags: 1 = libdeflate for the deflate codec (--libdeflate)
-  M.parSetup = function (hb, ub, comps, flags) {
+  M.parSetup = function (hb, ub, comps, flags, window) {
     if (!helpers.length) return false;
     // the LaserDisc codec (avhu) reads settings from the CHD's own metadata: keep it single-threaded
     if (comps.indexOf(0x61766875) >= 0) return false;
     hunkbytes = hb;
-    // chdman keeps at most 256 hunks in flight and reads them 128 at a time, so a batch must be
-    // small enough for those 128 to give every helper two batches; otherwise helpers sit idle
-    // (with 4 KiB DVD hunks, 512 KiB batches meant only two helpers ever had work)
-    batchSize = Math.max(1, Math.min(64, Math.floor((512 * 1024) / hb), Math.floor(128 / (2 * helpers.length))));
+    // chdman keeps `window` hunks in flight (256, or up to 1024 small ones in the browser) and reads
+    // half of them at a time, so a batch must be small enough for each read to give every helper two
+    // batches; otherwise helpers sit idle (with 4 KiB DVD hunks, 512 KiB batches meant only two helpers
+    // ever had work). And as large as that allows: each batch costs a message both ways
+    batchSize = Math.max(1, Math.min(64, Math.floor((512 * 1024) / hb), Math.floor((window || 256) / 2 / (2 * helpers.length))));
     scratch = M._malloc(hb + 64);
     if (!scratch) return false; // no memory for it: chdman compresses by itself
     helpers.forEach(function (h) { h.port.postMessage({ type: 'init', hunkbytes: hb, unitbytes: ub, comps: comps, flags: flags || 0 }); });
@@ -1100,13 +1114,17 @@ function setupParallel(M, ports) {
   };
   // codecs: the codec slots the codec plan tries for this hunk, a bit each (15 = all)
   M.parSubmit = function (item, ptr, len, codecs) {
+    var t0 = PROF ? performance.now() : 0;
+    try { parSubmit(item, ptr, len, codecs); } finally { profAdd('hand out hunks', t0); }
+  };
+  function parSubmit(item, ptr, len, codecs) {
     if (!open) open = { n: 0, items: new Uint32Array(batchSize), codecs: new Uint8Array(batchSize), buf: new Uint8Array(batchSize * hunkbytes) };
     open.buf.set(M.HEAPU8.subarray(ptr, ptr + len), open.n * hunkbytes);
     open.codecs[open.n] = codecs;
     open.items[open.n++] = item;
     fifo.push(item);
     if (open.n === batchSize) flushOpen();
-  };
+  }
   // chdman paused after a compression step: resolves when it can go on (its next hunk is in)
   M.parWait = function () {
     return new Promise(function (resolve) {
@@ -1254,9 +1272,12 @@ async function runHelper(msg) {
       if (m.type === 'batch') {
         var n = m.items.length, data = new Uint8Array(m.data), codecs = m.codecs;
         var meta = new Int32Array(n * 3), sha1 = new Uint8Array(n * 20), parts = [], total = 0;
+        var tb = msg.profile ? performance.now() : 0, tc = 0;
         for (var i = 0; i < n; i++) {
           M.HEAPU8.set(data.subarray(i * hb, (i + 1) * hb), inbuf);
+          var t1 = msg.profile ? performance.now() : 0;
           var c = M._wasm_helper_compress(res, sha, codecs ? codecs[i] : 15);
+          if (msg.profile) tc += performance.now() - t1;
           var heap32 = M.HEAPU32, heap8 = M.HEAPU8;
           var len = heap32[res >>> 2], crc = heap32[(res >>> 2) + 1];
           meta[i * 3] = c; meta[i * 3 + 1] = len; meta[i * 3 + 2] = crc;
@@ -1267,8 +1288,8 @@ async function runHelper(msg) {
         var out = new Uint8Array(total), o = 0;
         parts.forEach(function (p) { out.set(p, o); o += p.length; });
         if (msg.lie) m.items[0] += 64; // a test (DEBUG.failHelpers 'lie'): an answer for another hunk
-        port.postMessage({ type: 'result', id: m.id, items: m.items, meta: meta, sha1: sha1, out: out },
-          [m.items.buffer, meta.buffer, sha1.buffer, out.buffer]);
+        port.postMessage({ type: 'result', id: m.id, items: m.items, meta: meta, sha1: sha1, out: out,
+          ms: msg.profile ? [tc, performance.now() - tb] : null }, [m.items.buffer, meta.buffer, sha1.buffer, out.buffer]);
       }
     } catch (err) {
       // (a WebAssembly trap here, which some Safari versions' optimizing compiler causes: the job worker
@@ -1318,21 +1339,30 @@ async function runChdman(M, args) {
   ['chdman'].concat(args).forEach(function (a, i) { var p = M.stringToNewUTF8(a); M.HEAPU32[(argv >>> 2) + i] = p; });
   M.HEAPU32[(argv >>> 2) + args.length + 1] = 0;
   try {
+    var t0 = PROF ? performance.now() : 0;
     var code = M._chdman_begin(args.length + 1, argv);
+    profAdd('in the engine', t0);
     while (code === -1) {
+      t0 = PROF ? performance.now() : 0;
       if (sinkFull()) await sinkDrained();
       if (M.rdBusy && M.rdBusy()) await M.rdWait();
       else if (M.parWait) await M.parWait();
+      profAdd('waiting for helpers', t0);
+      t0 = PROF ? performance.now() : 0;
       code = M._chdman_resume();
+      profAdd('in the engine', t0);
     }
     return code;
   } finally {
     if (M.parClose) M.parClose();
+    // (the engine's time includes its reads, writes and hunks handed out; the wait includes taking results)
+    if (PROF) postMessage({ type: 'notice', level: 'info', message: 'Profile (ms): ' + Object.keys(PROF).map(function (k) { return k + ' ' + Math.round(PROF[k]); }).join(', ') });
   }
 }
 
 async function runJob(msg) {
   if (msg.debugSinkMax) SINK_MAX = msg.debugSinkMax; // testing: a small limit
+  if (msg.debugProfile) PROF = {};
   await loadModule(msg);
   var backing = await makeBacking(msg);
   postMessage({ type: 'storage', mode: backing.mode, reason: memReason });

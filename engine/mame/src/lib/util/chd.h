@@ -623,7 +623,16 @@ private:
 	std::error_condition    m_read_error;       // error during reading, if any
 
 	// work item thread
+#ifdef __EMSCRIPTEN__
+	// Discpress (browser build): room for up to 1024 hunks in flight, so that the batches helper workers
+	// get carry enough work for their messages (see m_window)
+	static constexpr int WORK_BUFFER_HUNKS = 1024;
+#else
 	static constexpr int WORK_BUFFER_HUNKS = 256;
+#endif
+	// Discpress: chdman's own window, which the bytes past the end of a partial last hunk follow (async_read)
+	static constexpr uint32_t CHDMAN_WINDOW = 256;
+	uint32_t                m_window = CHDMAN_WINDOW; // Discpress: hunks in the work buffer, at most WORK_BUFFER_HUNKS
 	osd_work_queue *        m_work_queue;       // queue for doing work on other threads
 	std::vector<uint8_t>    m_work_buffer;      // buffer containing hunk data to work on
 	std::vector<uint8_t>    m_compressed_buffer;// buffer containing compressed data

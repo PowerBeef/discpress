@@ -400,7 +400,7 @@ var Engine = {
           hw.onerror = function (e) { helperFailed(e.message || 'failed to start'); };
           // (tests: DEBUG.failHelpers makes helpers fail as a miscompiling WebAssembly engine does; 'lie': the
           // first one answers for other hunks than it was given)
-          self.post(hw, { type: 'helper', port: ch.port2, fail: o.debugFail === 'all' || (o.debugFail === 'one' && i === 0), lie: o.debugFail === 'lie' && i === 0 }, [ch.port2]);
+          self.post(hw, { type: 'helper', port: ch.port2, fail: o.debugFail === 'all' || (o.debugFail === 'one' && i === 0), lie: o.debugFail === 'lie' && i === 0, profile: !!DEBUG.profile }, [ch.port2]);
           helpers.push(hw);
           ports.push(ch.port1);
         } catch (e) { break; }
@@ -441,7 +441,7 @@ var Engine = {
       self.post(worker, {
         type: 'run', jobId: o.jobId, dirPath: o.dirPath, args: o.args, inputs: o.inputs || [],
         writable: o.writable || [], slots: o.slots || 0, outMode: o.outMode || 'mem', ports: ports, debugStage: DEBUG.stage, debugSinkMax: DEBUG.sinkMax, debugStorage: DEBUG.failStorage,
-        debugFreeze: o.onStall ? DEBUG.freeze : 0
+        debugFreeze: o.onStall ? DEBUG.freeze : 0, debugProfile: !!DEBUG.profile
       }, ports);
     });
     return {
