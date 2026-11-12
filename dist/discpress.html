@@ -9920,6 +9920,7 @@ async function heldLocks() {
 }
 var Store = {
   available: false,
+  ready: null, // init's promise: a job waits for it before choosing where its results go
   session: 's' + Date.now().toString(36) + uid(),
   init: async function () {
     // held while this visit lasts, so other visits can tell it is still open (Recovery)
@@ -9928,6 +9929,7 @@ var Store = {
       await sleep(50);
     }
     var work = null;
+    if (DEBUG.storeDelay) await sleep(DEBUG.storeDelay); // testing: a slow check (Firefox's can be)
     try {
       if (!navigator.storage || !navigator.storage.getDirectory) throw new Error('no private storage');
       var root = await navigator.storage.getDirectory();
@@ -13362,6 +13364,8 @@ async function runJobNow(job) {
     if (job.state !== 'running') return;
   }
   if (job.subScan && await stopped(job.subScan)) return;
+  // (whether private storage is there, which a job started just after the page opened might not know yet)
+  if (Store.ready) await Store.ready;
   var spec = buildJob(job);
   if (settings.storage === 'folder' && outDir && (spec.rename || spec.outMode === 'stream')) {
     var oi = spec.args.indexOf('-o'), main = spec.rename ? outBase(job) + '.chd' : oi >= 0 ? spec.args[oi + 1].replace(/^.*\//, '') : '';
@@ -14422,6 +14426,7 @@ async function cliRun() {
   // results kept in memory, as for a conversion: ask first when they could be too large (what it reads,
   // twice that for an extraction, and the copies of inputs chdman changes)
   var cliOut = /^(info|listtemplates|verify|addmeta|delmeta|dumpmeta)$/.test(args[0]) ? 0 : (/^extract/.test(args[0]) ? 2 : 1) * inputs.reduce(function (n, i) { return n + i.blob.size; }, 0);
+  if (Store.ready) await Store.ready;
   var cliMem = !(settings.storage === 'folder' && outDir) && (settings.storage === 'memory' || !Store.available);
   if (!confirmMemory(memoryNeed({ outMode: cliMem ? 'mem' : 'opfs', slots: cliOut ? 1 : 0, expected: cliOut, writable: writable }))) return;
   // the last command's results give way to this one's (only one command's results are shown)
@@ -14955,7 +14960,8 @@ function init() {
   updateDock();
   updateChips();
 
-  Store.init().then(function () { updateChips(); renderEarlier(); DatStore.load(); });
+  Store.ready = Store.init();
+  Store.ready.then(function () { updateChips(); renderEarlier(); DatStore.load(); });
   $('#datAdd').addEventListener('click', function () { pickFiles('datInput', function (l) { addEntries(filesFromList(l)); }); });
   initHosted();
   initIosTip();
