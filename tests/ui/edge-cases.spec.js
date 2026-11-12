@@ -772,3 +772,33 @@ test('the compression picked stays when the type of CHD changes', async ({ app }
   await expect(card.locator('code.cmd')).toContainText('chdman createcd');
   await expect(card.locator('code.cmd')).toContainText('-c cdzl,cdfl');
 });
+
+// The no-progress watchdog: a running job the page hears nothing from (here a job worker kept silent, DEBUG.freeze)
+// gets a note saying so, which goes once progress comes again
+test('a running job that makes no progress for a while says so, until it goes on', async ({ app }) => {
+  await app.open({ debug: { freeze: 6000, stallMs: 1500 } });
+  await app.add(fixture('ps1-single').add);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await card.locator('.job-foot button.primary').click();
+  const note = card.locator('[data-note="no-progress"]');
+  await expect(note).toBeVisible({ timeout: 5000 });
+  await expect(note).toContainText('No progress for over a minute');
+  await expect(note).toContainText('cancel it and try again');
+  await app.waitState(card, 'done', 60_000);
+  await expect(note).toHaveCount(0);
+});
+
+// time the page is hidden doesn't count: a hidden page's workers may be paused (iOS pauses them all)
+test('the no-progress watchdog doesn\u2019t count time the page is hidden', async ({ app, page }) => {
+  await app.open({ debug: { freeze: 5000, stallMs: 1500 } });
+  await app.add(fixture('ps1-single').add);
+  const card = app.jobs().first();
+  await app.settled(card);
+  await page.evaluate(() => Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }));
+  await card.locator('.job-foot button.primary').click();
+  await app.waitState(card, 'running');
+  await page.waitForTimeout(3500);
+  await expect(card.locator('[data-note="no-progress"]')).toHaveCount(0);
+  await app.waitState(card, 'done', 60_000);
+});

@@ -344,6 +344,19 @@ var Engine = {
       }
     }) : null;
     var ackWait = null;
+    // no-progress watchdog: any message from the job worker is progress; only time the page is
+    // visible counts (a hidden page's workers may be paused, iOS pauses them all). o.onStall(true)
+    // after STALL_MS of none, o.onStall(false) when one comes again
+    var quiet = 0, lastTick = Date.now(), quietSaid = false, watch = o.onStall ? setInterval(function () {
+      var now = Date.now();
+      if (document.visibilityState === 'visible') quiet += now - lastTick;
+      lastTick = now;
+      if (!quietSaid && quiet >= (DEBUG.stallMs || STALL_MS)) { quietSaid = true; o.onStall(true); }
+    }, 1000) : 0;
+    function heard() {
+      quiet = 0;
+      if (quietSaid) { quietSaid = false; o.onStall(false); }
+    }
     // the worker could not read an input itself: read it here and send it over
     async function feedStage(m) {
       var blob = o.inputs[m.index].blob, step = 4 << 20;
@@ -360,6 +373,7 @@ var Engine = {
     }
     function cleanup() {
       finished = true;
+      if (watch) { clearInterval(watch); watch = 0; }
       // a chunk still waiting for the worker's answer: its staging ends (and lets go of the file)
       if (ackWait) { var a = ackWait; ackWait = null; a(); }
       if (worker) worker.terminate();
@@ -394,6 +408,7 @@ var Engine = {
       worker.onmessage = function (e) {
         var m = e.data;
         if (finished) return;
+        heard();
         if (m.type.charAt(0) === 's' && m.type.charAt(1) === '-') { if (sink) sink.handle(m, worker); }
         else if (m.type === 'stage-request') feedStage(m);
         else if (m.type === 'stage-ack') { var a = ackWait; ackWait = null; if (a) a(); }
@@ -425,7 +440,8 @@ var Engine = {
       };
       self.post(worker, {
         type: 'run', jobId: o.jobId, dirPath: o.dirPath, args: o.args, inputs: o.inputs || [],
-        writable: o.writable || [], slots: o.slots || 0, outMode: o.outMode || 'mem', ports: ports, debugStage: DEBUG.stage, debugSinkMax: DEBUG.sinkMax, debugStorage: DEBUG.failStorage
+        writable: o.writable || [], slots: o.slots || 0, outMode: o.outMode || 'mem', ports: ports, debugStage: DEBUG.stage, debugSinkMax: DEBUG.sinkMax, debugStorage: DEBUG.failStorage,
+        debugFreeze: o.onStall ? DEBUG.freeze : 0
       }, ports);
     });
     return {
@@ -2323,6 +2339,8 @@ function renderControls(job) {
     if (settings.compat && /(^|,)(cdzs|zstd)(,|$)/.test(cur[2] || '')) { chint += ' ' + ZSTD_OLD; zwarn = true; }
     if (cur[0] === 'mister' && pfc.noMister) { chint += ' MiSTer has no core that plays ' + sysName(job.ident.sys) + ' games from CHDs.'; zwarn = true; }
     if (pfc.hint && cur[0] !== 'none') chint += ' ' + pfc.hint;
+    // phones and tablets take minutes over a disc: the preset that saves a third of that, suggested (never chosen)
+    if (isMobile && cur[0] === 'default' && presets.some(function (p) { return p[0] === 'plan'; })) chint += ' ' + PLAN_HINT;
     var cfield = selectField('Compression', presets.map(function (p) { return [p[0], p[1]]; }), o.preset, function (v) { o.preset = v; refresh(); }, chint, busy);
     if (zwarn) cfield.lastChild.style.color = 'var(--warn)';
     fields.append(cfield);
@@ -2393,6 +2411,7 @@ function renderNotes(job) {
     else box.append(el('div', { class: 'note warn' }, 'This CHD depends on a parent CHD (SHA-1 ' + job.info.parent.slice(0, 12) + '…). Add the parent .chd file too.'));
   }
   if (job.state === 'error' && job.errorText) box.append(el('div', { class: 'note err' }, job.errorText));
+  if (job.state === 'running' && job.noProgress) box.append(el('div', { class: 'note warn', 'data-note': 'no-progress' }, el('b', null, 'No progress for over a minute. '), STALL_HINT));
   if (job.state === 'canceled') box.append(el('div', { class: 'note' }, 'Canceled.'));
   box.hidden = !box.childNodes.length;
 }
@@ -2719,6 +2738,11 @@ async function pump() {
   }
 }
 
+// the compression hint on phones and tablets (renderControls)
+var PLAN_HINT = 'On a phone or tablet, Nearly as small, faster takes about a third less time, for files at most 0.3% bigger.';
+// the no-progress watchdog (Engine.run): a running job's card says so after this long without a word from it
+var STALL_MS = 90000;
+var STALL_HINT = 'The browser may have paused it, or it may be stuck. You can wait, or cancel it and try again, with fewer CPU threads (Settings) if it stops again.';
 // chdman never finishes when it finds no data: its progress then reads "nan% complete" (0 of 0)
 var STALLED = 'chdman found no data to convert in these files and would never have finished, so it was stopped. Check that the .cue, .gdi or .toc file lists the disc\u2019s tracks.';
 function stalledProgress(t) { return /\bnan% complete/i.test(t); }
@@ -2737,6 +2761,7 @@ async function runJobNow(job) {
     return true;
   }
   job.stalled = false;
+  job.noProgress = false;
   job.log = job.retryLog || []; // a run again after the engine failed keeps the first run's log
   job.retryLog = null;
   job.outputs = [];
@@ -2846,6 +2871,7 @@ async function runJobNow(job) {
       if (/^A helper thread stopped/.test(m.message)) job.helperStopped = true;
     },
     onScan: function (f) { setProgress(job, null, 'Reading the ECM image\u2026 ' + Math.floor(f * 100) + '%'); },
+    onStall: function (on) { job.noProgress = on; if (job.ui) renderNotes(job); },
     onStorage: function (mode, reason) {
       job.storage = mode;
       if (spec.outMode !== 'opfs' || mode !== 'mem') return;
@@ -3865,7 +3891,8 @@ async function cliRun() {
         var m = /([\d.]+)% complete/.exec(t);
         if (m) { prog.querySelector('.bar').classList.remove('indet'); prog.querySelector('.bar').setAttribute('aria-valuenow', Math.round(+m[1])); barI.style.width = m[1] + '%'; ptext.textContent = t.trim(); }
       },
-      onNotice: function (m) { if (m.level !== 'debug') con.textContent += m.message + '\n'; }
+      onNotice: function (m) { if (m.level !== 'debug') con.textContent += m.message + '\n'; },
+      onStall: function (on) { if (on) con.textContent += '[No progress for over a minute] ' + STALL_HINT + '\n'; }
     });
     var r = await cli.run.promise;
     con.textContent += '\n[exit code ' + r.code + (r.error ? ': ' + r.error : '') + ']\n';

@@ -1336,6 +1336,8 @@ async function runJob(msg) {
   await loadModule(msg);
   var backing = await makeBacking(msg);
   postMessage({ type: 'storage', mode: backing.mode, reason: memReason });
+  // testing: silent this long, as a stuck job is (the page's no-progress watchdog, DEBUG.freeze)
+  if (msg.debugFreeze) await new Promise(function (r) { setTimeout(r, msg.debugFreeze); });
 
   // copies of inputs chdman must modify in place (verify --fix, addmeta, delmeta)
   var outFiles = [];
