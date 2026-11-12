@@ -190,6 +190,23 @@ test('typed commands accept single quotes and smart quotes around file names', a
   await expect(page.locator('#cliOuts')).toContainText('my game.chd');
 });
 
+// A command run before the page knew whether there is private storage (its check was still going, as Firefox's can
+// be on a busy machine) kept its results in memory; it waits for the check now (DEBUG.storeDelay slows it)
+test('a command run while private storage is still being checked keeps its results there', async ({ app, page, browserName }) => {
+  test.skip(browserName === 'webkit', 'Playwright\'s WebKit has no navigator.storage');
+  await app.open({ debug: { storeDelay: 4000 } });
+  await page.click('.tab[data-tab="cli"]');
+  await addCliFiles(app, ['twine.cue', 'twine.bin']);
+  expect(await runCli(page)).toContain('[exit code 0]');
+  const dirs = await page.evaluate(async () => {
+    const out = [];
+    const work = await (await navigator.storage.getDirectory()).getDirectoryHandle('chdman-work');
+    for await (const [, s] of work.entries()) for await (const [n] of s.entries()) out.push(n);
+    return out.filter(n => n.startsWith('cli'));
+  });
+  expect(dirs).toHaveLength(1);
+});
+
 // audit, batch 3: each run's results used to stay in private storage until the next visit
 test('a new command, or Clear temporary storage, removes the last command’s results', async ({ app, page, browserName }) => {
   test.skip(browserName === 'webkit', 'Playwright\'s WebKit has no navigator.storage');
