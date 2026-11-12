@@ -704,7 +704,17 @@
  				{
 --- a/src/lib/util/bitstream.h
 +++ b/src/lib/util/bitstream.h
-@@ -226,6 +226,11 @@
+@@ -146,7 +146,8 @@
+ 
+ inline void bitstream_in::remove(int numbits)
+ {
+-	m_buffer <<= numbits;
++	// (all 32 bits, which a crafted v5 map's field width can ask for: the buffer is empty, not shifted by 32)
++	m_buffer = (numbits < 32) ? (m_buffer << numbits) : 0;
+ 	m_bits -= numbits;
+ }
+ 
+@@ -226,6 +227,11 @@
  
  inline void bitstream_out::write(uint32_t newbits, int numbits)
  {

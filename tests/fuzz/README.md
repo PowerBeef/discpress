@@ -71,6 +71,9 @@ Fixed, each with its input in `regressions/`:
   Looking at it turned up a map size computed in 32 bits, which wraps at 358 million hunks, so that the
   map is written past its end (`chd.cpp`; chdman 0.289 segfaults, `engine.spec.js`).
 - **A map's bit widths over 32** (`chd/map-bits-over-32`): the bit reader shifted by a negative count.
+  And of exactly 32 (`chd/map-bits-32`, found by CI's first run without a cached corpus): the reader
+  shifted its 32-bit buffer by 32, which kept its bits on x86 and in WebAssembly, so the next field read
+  them again (`bitstream.h`'s `remove`; chdman 0.289 has it).
 - **A hunk compressed with a codec the CHD has none for** (`chd/codec-missing`): a v3 CHD without
   compression whose map says a hunk is compressed, or a v5 map that names an empty codec slot; a call
   through a null pointer (`chd.cpp`; chdman 0.289 segfaults, `engine.spec.js`).

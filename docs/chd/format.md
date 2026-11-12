@@ -372,7 +372,7 @@ emit tree, all tokens, then pass-2 fields; flush; header as above; append the ma
 | hunkcount | u32 | MAME computes `m_hunkcount*12` in 32 bits, which overflows beyond 357,913,941 hunks. libchdr caps the materialized map at 256 MiB, about 22.37 M hunks: roughly 91 GB at 4 KiB hunks or 438 GB at CD geometry. | `chd.cpp:2217,2780`; `libchdr_chd.c:113,864-884` |
 | compressed length | 24 bits in the expanded entry | **≤ hunkbytes** (see §4.4) | `chd.cpp:2793`; `libchdr_chd.c:3024` |
 | file offsets | 48 bits (256 TiB) | | `chd.h:186` |
-| lengthbits/selfbits/parentbits | stored as u8; MAME writes the bit width of the maximum value | **≤25** for libchdr (all versions); ≤31 for MAME, since `bitstream_in::remove(32)` is an undefined shift; ≤32 for chd-rs **[tested G3, O_map]** | `libchdr_bitstream.c:52`; `bitstream.h:147-151` |
+| lengthbits/selfbits/parentbits | stored as u8; MAME writes the bit width of the maximum value | **≤25** for libchdr (all versions); ≤31 for MAME 0.289, since `bitstream_in::remove(32)` is an undefined shift (Discpress's engine reads 32: it empties the buffer); ≤32 for chd-rs **[tested G3, O_map]** | `libchdr_bitstream.c:52`; `bitstream.h:147-151` |
 | explicit self target | selfbits | < 2^25 hunks for libchdr | derived |
 | explicit parent unit | parentbits | < 2^25 units: 68.7 GB at 2048-byte units, 17 GB at 512-byte units (large HDD parents) | derived |
 | mapbytes | u32 | | |

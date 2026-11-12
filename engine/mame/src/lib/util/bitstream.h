@@ -146,7 +146,8 @@ inline uint32_t bitstream_in::peek(int numbits)
 
 inline void bitstream_in::remove(int numbits)
 {
-	m_buffer <<= numbits;
+	// (all 32 bits, which a crafted v5 map's field width can ask for: the buffer is empty, not shifted by 32)
+	m_buffer = (numbits < 32) ? (m_buffer << numbits) : 0;
 	m_bits -= numbits;
 }
 
