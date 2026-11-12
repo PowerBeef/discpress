@@ -37,7 +37,8 @@ function instantiate(extra) {
   var opts = {
     noInitialRun: true,
     instantiateWasm: function (imports, receive) {
-      WebAssembly.instantiate(wasmModule, imports).then(function (inst) { receive(inst, wasmModule); },
+      // (the page may terminate this worker once it hears 'wasm-ready', or 'fatal': Engine.stop)
+      WebAssembly.instantiate(wasmModule, imports).then(function (inst) { postMessage({ type: 'wasm-ready' }); receive(inst, wasmModule); },
         function (err) { postMessage({ type: 'fatal', message: 'Could not start WebAssembly: ' + err }); });
       return {};
     },
@@ -1334,6 +1335,14 @@ async function runChdman(M, args) {
 async function runJob(msg) {
   if (msg.debugSinkMax) SINK_MAX = msg.debugSinkMax; // testing: a small limit
   await loadModule(msg);
+  // (the engine first: until it is instantiated the page holds off terminating this worker, Engine.stop)
+  var out = makeLineSink(1), err = makeLineSink(2), aborted = null;
+  var M = await instantiate({
+    stdin: function () { return null; },
+    stdout: function (c) { out.put(c); },
+    stderr: function (c) { err.put(c); },
+    onAbort: function (what) { aborted = 'chdman stopped unexpectedly: ' + what; }
+  });
   var backing = await makeBacking(msg);
   postMessage({ type: 'storage', mode: backing.mode, reason: memReason });
   // testing: silent this long, as a stuck job is (the page's no-progress watchdog, DEBUG.freeze)
@@ -1388,14 +1397,6 @@ async function runJob(msg) {
       try { await stages[si].dir.removeEntry(stages[si].slot.name); } catch (e) { /* ignore */ }
     }
   }
-
-  var out = makeLineSink(1), err = makeLineSink(2), aborted = null;
-  var M = await instantiate({
-    stdin: function () { return null; },
-    stdout: function (c) { out.put(c); },
-    stderr: function (c) { err.put(c); },
-    onAbort: function (what) { aborted = 'chdman stopped unexpectedly: ' + what; }
-  });
 
   inStores.forEach(function (st) { if (st.store.setModule) st.store.setModule(M); });
   backing.M = M;
