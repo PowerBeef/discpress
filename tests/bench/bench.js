@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Conversion benchmarks: times real conversions through the Discpress UI in headless
-// Chromium and compares them with native chdman on the same machine.
+// Conversion benchmarks: times real conversions through the Discpress UI in a headless browser
+// (Chromium, or Firefox or WebKit once Playwright has installed them) and compares them with native
+// chdman on the same machine.
 //
 //   node bench/bench.js [options]
 //     --fixtures bench-cd,bench-dvd   fixture keys (see fixtures/make_fixtures.py; --quick uses small ones;
@@ -16,10 +17,11 @@
 //     --no-native-timing              still verify against native chdman, but don't time it
 //     --no-verify                     skip checking outputs against native chdman
 //     --html PATH                     page to test (default dist/discpress.html)
+//     --browser chromium              chromium, firefox or webkit (Safari's engine)
 //     --label NAME                    name for this run (saved as .cache/bench/<time>-<label>.json)
 //     --compare FILE|latest           show the change against an earlier run
 //     --cd-mb 300 --dvd-mb 1024       size of the generated benchmark images
-import { chromium } from '@playwright/test';
+import { chromium, firefox, webkit } from '@playwright/test';
 import { execFileSync, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -48,6 +50,7 @@ const cfg = {
   verify: !flag('no-verify'),
   html: path.resolve(ROOT, opt('html', process.env.DISCPRESS_HTML || 'dist/discpress.html')),
   label: opt('label', 'run'),
+  browser: opt('browser', 'chromium'),
   compare: opt('compare', null),
 };
 const CODECS = {
@@ -118,11 +121,14 @@ await new Promise(r => server.once('listening', r));
 const url = `http://127.0.0.1:${server.address().port}/discpress.html`;
 // Each run gets a fresh persistent profile: like a normal browser window, and unlike an
 // incognito-style context, whose storage quota (tied to free disk space) can be below 1 GB.
-const browserPid = process.pid; // Chromium runs as a child of this process
+const browserPid = process.pid; // the browser runs as a child of this process
+const browserType = { chromium, firefox, webkit }[cfg.browser];
+if (!browserType) throw new Error(`--browser: chromium, firefox or webkit, not ${cfg.browser}`);
+let browserVersion = ''; // (from the first run's user agent)
 
 async function appRun({ fx, op, threads, simd, preset, chdInput }) {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'discpress-bench-'));
-  const ctx = await chromium.launchPersistentContext(profile, { acceptDownloads: true, viewport: { width: 1280, height: 900 } });
+  const ctx = await browserType.launchPersistentContext(profile, { acceptDownloads: true, viewport: { width: 1280, height: 900 } });
   await ctx.addInitScript(o => {
     localStorage.setItem('chdman-web-settings', JSON.stringify({ threads: o.threads }));
     if (!o.simd) {
@@ -134,6 +140,7 @@ async function appRun({ fx, op, threads, simd, preset, chdInput }) {
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   await page.goto(url);
+  if (!browserVersion) browserVersion = await page.evaluate(() => (/(Chrome|Firefox|Version)\/[\d.]+/.exec(navigator.userAgent) || [''])[0]);
   await page.waitForFunction(() => /ready/i.test(document.getElementById('chipEngine')?.textContent || ''), null, { timeout: 60_000 });
   const files = op === 'extract' ? [chdInput] : fx.add.map(n => path.join(FIXTURES, n));
   const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#addFiles')]);
@@ -256,7 +263,7 @@ const outDir = path.join(CACHE, 'bench');
 fs.mkdirSync(outDir, { recursive: true });
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const meta = { label: cfg.label, date: new Date().toISOString(), cpus: cores, cpuModel: os.cpus()[0]?.model, page: path.relative(ROOT, cfg.html),
-  pageSha1: sha1(cfg.html).slice(0, 12), native: cfg.native ? nativeChdman().version : null, config: cfg };
+  pageSha1: sha1(cfg.html).slice(0, 12), browser: `${cfg.browser} ${browserVersion}`, native: cfg.native ? nativeChdman().version : null, config: cfg };
 let previous = null;
 if (cfg.compare) {
   const f = cfg.compare === 'latest' ? fs.readdirSync(outDir).filter(n => n.endsWith('.json')).sort().pop() : cfg.compare;
@@ -270,7 +277,7 @@ const rows = results.map(r => {
   return `| ${r.fixture} | ${r.op} | ${r.preset} | ${r.simd === 'native' ? 'native' : r.simd ? 'SIMD' : 'baseline'} | ${r.threads} | ${r.seconds.toFixed(2)} | ${r.mbps} | ${r.ratio != null ? (100 * r.ratio).toFixed(1) + '%' : ''} | ${r.peakRssMB ?? ''} | ${n ? (r.seconds / n.seconds).toFixed(2) + '×' : ''} | ${p ? ((r.seconds / p.seconds - 1) * 100).toFixed(1) + '%' : ''} | ${r.verified == null ? '' : r.verified ? '✓' : '✗'} |`;
 });
 const md = [`# Discpress benchmark: ${cfg.label}`, '',
-  `${meta.date} · ${cores} × ${meta.cpuModel} · page \`${meta.page}\` (${meta.pageSha1}) · native chdman ${meta.native || 'not used'}` + (previous ? ` · compared with "${previous.meta.label}" (${previous.meta.date})` : ''), '',
+  `${meta.date} · ${cores} × ${meta.cpuModel} · ${meta.browser} · page \`${meta.page}\` (${meta.pageSha1}) · native chdman ${meta.native || 'not used'}` + (previous ? ` · compared with "${previous.meta.label}" (${previous.meta.date})` : ''), '',
   '| fixture | op | preset | build | threads | seconds (median) | MB/s | size | peak RSS MB | vs native | vs previous | same as native |',
   '|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|:-:|', ...rows, '',
   'MB/s is input size for create and output size for extract. "vs native" is app time ÷ native time (lower is better).',
