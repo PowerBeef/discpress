@@ -400,6 +400,8 @@ private:
 
 	// internal helpers
 	uint32_t guess_unitbytes();
+	void check_sizes(uint64_t hunkcount) const; // Discpress
+	bool past_end(uint64_t offset, uint64_t length) const; // Discpress
 	void parse_v3_header(uint8_t *rawheader, util::sha1_t &parentsha1);
 	void parse_v4_header(uint8_t *rawheader, util::sha1_t &parentsha1);
 	void parse_v5_header(uint8_t *rawheader, util::sha1_t &parentsha1);

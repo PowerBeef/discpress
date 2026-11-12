@@ -921,6 +921,13 @@ const char *cdrom_file::get_subtype_string(uint32_t subtype)
  * @return  A std::error_condition.
  */
 
+// Discpress: chd.cpp's formats for the track metadata, with a width for each string that fills its 16-byte
+// buffer at most (the longest a CD has is 15 characters, VMODE2_FORM_MIX); a longer one, in damaged or
+// crafted metadata, doesn't match. 0.289 read them with %s, which wrote past the end of the buffer.
+static const char CDROM_TRACK_METADATA_FORMAT_READ[] = "TRACK:%d TYPE:%15s SUBTYPE:%15s FRAMES:%d";
+static const char CDROM_TRACK_METADATA2_FORMAT_READ[] = "TRACK:%d TYPE:%15s SUBTYPE:%15s FRAMES:%d PREGAP:%d PGTYPE:%15s PGSUB:%15s POSTGAP:%d";
+static const char GDROM_TRACK_METADATA_FORMAT_READ[] = "TRACK:%d TYPE:%15s SUBTYPE:%15s FRAMES:%d PAD:%d PREGAP:%d PGTYPE:%15s PGSUB:%15s POSTGAP:%d";
+
 std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
 {
 	std::string metadata;
@@ -948,12 +955,12 @@ std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
 		// fetch the metadata for this track
 		if (!chd->read_metadata(CDROM_TRACK_METADATA_TAG, toc.numtrks, metadata))
 		{
-			if (sscanf(metadata.c_str(), CDROM_TRACK_METADATA_FORMAT, &tracknum, type, subtype, &frames) != 4)
+			if (sscanf(metadata.c_str(), CDROM_TRACK_METADATA_FORMAT_READ, &tracknum, type, subtype, &frames) != 4)
 				return chd_file::error::INVALID_DATA;
 		}
 		else if (!chd->read_metadata(CDROM_TRACK_METADATA2_TAG, toc.numtrks, metadata))
 		{
-			if (sscanf(metadata.c_str(), CDROM_TRACK_METADATA2_FORMAT, &tracknum, type, subtype, &frames, &pregap, pgtype, pgsub, &postgap) != 8)
+			if (sscanf(metadata.c_str(), CDROM_TRACK_METADATA2_FORMAT_READ, &tracknum, type, subtype, &frames, &pregap, pgtype, pgsub, &postgap) != 8)
 				return chd_file::error::INVALID_DATA;
 		}
 		else
@@ -968,7 +975,7 @@ std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
 			if (err)
 				break;
 
-			if (sscanf(metadata.c_str(), GDROM_TRACK_METADATA_FORMAT, &tracknum, type, subtype, &frames, &padframes, &pregap, pgtype, pgsub, &postgap) != 9)
+			if (sscanf(metadata.c_str(), GDROM_TRACK_METADATA_FORMAT_READ, &tracknum, type, subtype, &frames, &padframes, &pregap, pgtype, pgsub, &postgap) != 9)
 				return chd_file::error::INVALID_DATA;
 
 			toc.flags |= CD_FLAG_GDROM;
@@ -1019,7 +1026,14 @@ std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
 
 	/* if we got any tracks this way, we're done */
 	if (toc.numtrks > 0)
+	{
+		// Discpress: with each track once: a track number that repeats or skips one (damaged or crafted
+		// metadata) left a track of nothing, of 0-byte sectors, which extractcd divided by
+		for (uint32_t i = 0; i < toc.numtrks; i++)
+			if (toc.tracks[i].datasize == 0)
+				return chd_file::error::INVALID_DATA;
 		return std::error_condition();
+	}
 
 	osd_printf_info("toc.numtrks = %u?!\n", toc.numtrks);
 
@@ -1028,6 +1042,9 @@ std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
 	err = chd->read_metadata(CDROM_OLD_METADATA_TAG, 0, oldmetadata);
 	if (err)
 		return err;
+	// Discpress: as long as the table it holds (0.289 read past the end of shorter metadata)
+	if (oldmetadata.size() < 4 + MAX_TRACKS * 6 * 4)
+		return chd_file::error::INVALID_DATA;
 
 	/* reconstruct the TOC from it */
 	auto *mrp = reinterpret_cast<uint32_t *>(&oldmetadata[0]);
@@ -1067,6 +1084,14 @@ std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
 			toc.tracks[i].extraframes = swapendian_int32(toc.tracks[i].extraframes);
 		}
 	}
+
+	// Discpress: no more tracks than the table holds, with sectors a CD has: anything else (damaged or
+	// crafted metadata) made 0.289 read past the end of the table, and of a sector's buffer
+	if (toc.numtrks > MAX_TRACKS)
+		return chd_file::error::INVALID_DATA;
+	for (uint32_t i = 0; i < toc.numtrks; i++)
+		if (toc.tracks[i].datasize == 0 || toc.tracks[i].datasize > MAX_SECTOR_DATA || toc.tracks[i].subsize > MAX_SUBCODE_DATA)
+			return chd_file::error::INVALID_DATA;
 
 	return std::error_condition();
 }
