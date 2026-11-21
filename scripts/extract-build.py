@@ -61,9 +61,9 @@ m = re.search(r'<!-- engine sources sha256 ([0-9a-f]{64}) -->\n?$', page)
 sources = m.group(1) + '\n' if m else None
 
 if if_stale:
-    simd = os.path.join(OUT, 'chdman.wasm')
-    if os.path.exists(simd) and os.path.getmtime(simd) >= os.path.getmtime(SRC):
-        sys.exit(0)  # built (or extracted) after the page was made: keep it
+    need = [os.path.join(OUT, n) for n in NAMES + ((SOURCES,) if sources else ())]
+    if all(os.path.exists(p) for p in need) and min(os.path.getmtime(p) for p in need) > os.path.getmtime(SRC):
+        sys.exit(0)  # all build outputs exist and are strictly newer than the page: keep them
     if (read(os.path.join(OUT, 'chdman.js')) == glue and all(read(os.path.join(OUT, n), 'rb') == wasm[n] for n in wasm)
             and read(os.path.join(OUT, SOURCES)) == sources):
         sys.exit(0)
@@ -85,7 +85,10 @@ print('wrote', ', '.join(os.path.join(OUT, n) for n in NAMES + ((SOURCES,) if so
 with tempfile.TemporaryDirectory() as tmp:
     again = os.path.join(tmp, 'check.html')
     env = dict(os.environ, DISCPRESS_BUILD_DIR=OUT)
-    subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'assemble.py'), again], check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+    res = subprocess.run([sys.executable, os.path.join(ROOT, 'scripts', 'assemble.py'), again],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=env)
+    if res.returncode != 0:
+        sys.stderr.write(res.stderr)
+        sys.exit(res.returncode)
     same = read(again, 'rb') == read(SRC, 'rb')
 print('round trip:', 'identical' if same else 'differs (expected if app/ or db/ changed since %s was built)' % os.path.basename(SRC))

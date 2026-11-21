@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CACHE, FIXTURES, ROOT, TESTS, pageUnderTest } from './paths.js';
+import { CACHE, FIXTURES, ROOT, TESTS, pageUnderTest, pythonBin } from './paths.js';
 import { nativeChdman, engineChdman, APP_CHDMAN_VERSION } from './native.js';
 
 export default async function globalSetup(config) {
@@ -24,7 +24,7 @@ export default async function globalSetup(config) {
   const stamp = path.join(FIXTURES, 'generator.sha256');
   const stale = !fs.existsSync(path.join(FIXTURES, 'manifest.json')) || !fs.existsSync(stamp) || fs.readFileSync(stamp, 'utf8').trim() !== gen.digest('hex');
   if (stale || process.env.REGEN_FIXTURES) {
-    execFileSync('python3', [path.join(TESTS, 'fixtures', 'make_fixtures.py'), '--out', FIXTURES, ...(process.env.REGEN_FIXTURES ? ['--force'] : [])], { stdio: 'inherit' });
+    execFileSync(pythonBin(), [path.join(TESTS, 'fixtures', 'make_fixtures.py'), '--out', FIXTURES, ...(process.env.REGEN_FIXTURES ? ['--force'] : [])], { stdio: 'inherit' });
     for (const d of [path.join(CACHE, 'native'), path.join(FIXTURES, 'chd'), path.join(FIXTURES, 'gen')]) fs.rmSync(d, { recursive: true, force: true });
   }
   // the folders extract() made in earlier runs (native chdman's extracted files)

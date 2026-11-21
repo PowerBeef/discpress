@@ -15,6 +15,12 @@ B = os.environ.get('DISCPRESS_BUILD_DIR') or os.path.join(ROOT, 'build')
 DB = os.path.join(ROOT, 'db', 'db.json.gz')
 
 
+def check(cond, msg):
+    """Explicit invariant check (never disabled by python3 -O / PYTHONOPTIMIZE)."""
+    if not cond:
+        sys.exit(msg)
+
+
 def rd(p, mode='r'):
     with open(p, mode, **({} if 'b' in mode else {'encoding': 'utf-8'})) as f:
         return f.read()
@@ -29,14 +35,26 @@ def gzip_fixed(data):
             struct.pack('<II', zlib.crc32(data) & 0xffffffff, len(data) & 0xffffffff))
 
 
+def replace_once(text, mapping, where):
+    """Verify every placeholder occurs exactly once, then substitute all in a single pass."""
+    for k in mapping:
+        check(text.count(k) == 1, '%s in %s (expected 1, found %d)' % (k, where, text.count(k)))
+    pat = re.compile('|'.join(re.escape(k) for k in mapping))
+    return pat.sub(lambda m: mapping[m.group(0)], text)
+
+
 # what is known of particular games (db/facts/*.tsv, see db/facts/README.md): validated against the
 # database, embedded as {fact: {sys: [serial keys]}} (keys as canonKey in ident.js makes them)
 FACTS = {'libcrypt'}
 SEGA = {'saturn', 'segacd', 'dc', 'naomi', 'naomi2'}
 
 
+def norm_serial(serial):
+    return re.sub('[^A-Z0-9]', '', serial.upper())
+
+
 def canon_key(sys_, serial):
-    k = re.sub('[^A-Z0-9]', '', serial.upper())
+    k = norm_serial(serial)
     return k[2:] if sys_ in SEGA and re.match(r'MK\d', k) else k
 
 
@@ -52,6 +70,14 @@ def game_facts(db):
                 parts = re.split(r'[-\s]+', serial)
                 if len(parts) > 2:
                     ks.add(canon_key(sys_, parts[0] + parts[1]))
+                # Mirror ident.js base-serial rules for Sega two-part suffixes and Sony suffixed serials
+                if sys_ in SEGA:
+                    sg = re.match(r'^(.+)[-\s]\d{1,2}$', serial)
+                    if sg:
+                        ks.add(canon_key(sys_, sg.group(1)))
+                sn = re.match(r'^([A-Z]{4}\d{5})[A-Z0-9]+$', norm_serial(serial))
+                if sn:
+                    ks.add(canon_key(sys_, sn.group(1)))
     out = {}
     fdir = os.environ.get('DISCPRESS_FACTS_DIR') or os.path.join(ROOT, 'db', 'facts')  # (the tests' bad facts)
     for name in sorted(os.listdir(fdir)) if os.path.isdir(fdir) else []:
@@ -62,27 +88,31 @@ def game_facts(db):
                 continue
             where = 'db/facts/%s:%d' % (name, n)
             f = line.split('\t')
-            assert len(f) == 5, where + ': 5 tab-separated fields (sys, serial, fact, value, source)'
+            check(len(f) == 5, where + ': 5 tab-separated fields (sys, serial, fact, value, source)')
             sys_, serial, fact, value, source = f
-            assert sys_ in keys, where + ': no system ' + sys_ + ' in the database'
-            assert canon_key(sys_, serial) in keys[sys_], where + ': no ' + serial + ' in the database for ' + sys_
-            assert fact in FACTS, where + ': unknown fact ' + fact
-            assert value == '1', where + ': value must be 1'
-            assert source.strip(), where + ': no source'
+            check(sys_ in keys, where + ': no system ' + sys_ + ' in the database')
+            check(canon_key(sys_, serial) in keys[sys_], where + ': no ' + serial + ' in the database for ' + sys_)
+            check(fact in FACTS, where + ': unknown fact ' + fact)
+            check(value == '1', where + ': value must be 1')
+            check(bool(source.strip()), where + ': no source')
             out.setdefault(fact, {}).setdefault(sys_, set()).add(canon_key(sys_, serial))
     return {fact: {s: sorted(v) for s, v in by.items()} for fact, by in out.items()}
 
 
-def pack(path):
-    raw = rd(path, 'rb')
+def pack_bytes(raw):
     return base64.b64encode(gzip_fixed(raw)).decode(), len(raw)
+
+
+def pack(path):
+    return pack_bytes(rd(path, 'rb'))
 
 
 def inline_script(src, what):
     """A script inlined in the page must not end it early (</script), nor put the HTML parser in its
     escaped states (<!--, <script), where a later </script> may no longer end it."""
+    low = src.lower()
     for bad in ('</script', '<!--', '<script'):
-        assert bad not in src.lower(), '%s in %s' % (bad, what)
+        check(bad not in low, '%s in %s' % (bad, what))
     return src
 
 
@@ -99,40 +129,51 @@ simd_b64, simd_size = pack(os.path.join(B, 'chdman.wasm'))
 base_b64, base_size = pack(os.path.join(B, 'chdman-nosimd.wasm'))
 
 # Shown in Help > About: every change the engine makes to MAME 0.289 (scripts/engine-diff.sh),
-# plus the new files.
+# plus the new files (gzip+base64 packed and inflated lazily when Help is opened).
 patch = rd(os.path.join(ROOT, 'engine', 'mame-0.289.diff'))
 for path, name, label in [(os.path.join(W, 'wasm_helper.cpp'), 'wasm_helper.cpp', 'new file'),
                           (os.path.join(W, 'ecm.cpp'), 'ecm.cpp', 'new file'),
                           (os.path.join(W, 'par_lib.js'), 'par_lib.js', 'new file, Emscripten JS library'),
+                          (os.path.join(W, 'version.cpp'), 'version.cpp', 'new file'),
+                          (os.path.join(W, 'shim', 'SDL2', 'SDL.h'), 'shim/SDL2/SDL.h', 'new file, minimal SDL header shim'),
+                          (os.path.join(ROOT, 'engine', 'libm', 'flac_libm.h'), 'engine/libm/flac_libm.h', 'new file, libFLAC deterministic libm header'),
                           (os.path.join(ROOT, 'engine', 'libm', 'flac_libm.c'), 'engine/libm/flac_libm.c', 'new file, from Arm optimized-routines')]:
     patch += '\n--- /dev/null\n+++ %s (%s)\n' % (name, label)
     patch += ''.join('+' + l + '\n' for l in rd(path).splitlines())
+patch_b64, patch_size = pack_bytes(patch.encode('utf-8'))
 
-helpc = rd(os.path.join(A, 'help.html')).replace('/*PATCH*/', html.escape(patch)).replace('/*DBVER*/', 'version ' + html.escape(dbver))
-ui_src = rd(os.path.join(A, 'ui.js'))
-for k in ('/*IDENT*/', '/*QUIRKS*/'):
-    assert ui_src.count(k) == 1, k + ' in app/ui.js'
-ui_src = ui_src.replace('/*IDENT*/', rd(os.path.join(A, 'ident.js'))).replace('/*QUIRKS*/', rd(os.path.join(A, 'quirks.js')))
-assert ui_src.count('/*GAMEFACTS*/{}') == 1, '/*GAMEFACTS*/{} in app/ident.js'
-ui = inline_script(ui_src.replace('/*GAMEFACTS*/{}', json.dumps(facts, sort_keys=True, separators=(',', ':'))),
-                   'app/ui.js + app/ident.js + app/quirks.js')
+helpc = replace_once(rd(os.path.join(A, 'help.html')), {'/*DBVER*/': 'version ' + html.escape(dbver)}, 'app/help.html')
+ident_src = replace_once(rd(os.path.join(A, 'ident.js')),
+                         {'/*GAMEFACTS*/{}': json.dumps(facts, sort_keys=True, separators=(',', ':'))},
+                         'app/ident.js')
+ui_src = replace_once(rd(os.path.join(A, 'ui.js')),
+                      {'/*IDENT*/': ident_src, '/*QUIRKS*/': rd(os.path.join(A, 'quirks.js'))},
+                      'app/ui.js')
+ui = inline_script(ui_src, 'app/ui.js + app/ident.js + app/quirks.js')
 style = rd(os.path.join(A, 'style.css'))
-assert '</style' not in style.lower(), '</style in app/style.css'
+check('</style' not in style.lower(), '</style in app/style.css')
 
-page = rd(os.path.join(A, 'index.html'))
-for k, v in [('/*STYLE*/', style), ('<!--HELP-->', helpc), ('/*WORKER*/', wsrc),
-             ('/*SIMD_SIZE*/', str(simd_size)), ('/*WASM_SIMD*/', simd_b64), ('/*BASE_SIZE*/', str(base_size)),
-             ('/*WASM_BASE*/', base_b64), ('/*DB_SIZE*/', str(len(db_json))),
-             ('/*GAMEDB*/', base64.b64encode(db_raw).decode()), ('/*UI*/', ui)]:
-    assert page.count(k) == 1, k
-    page = page.replace(k, v)
+page = replace_once(rd(os.path.join(A, 'index.html')), {
+    '/*STYLE*/': style,
+    '<!--HELP-->': helpc,
+    '/*WORKER*/': wsrc,
+    '/*SIMD_SIZE*/': str(simd_size),
+    '/*WASM_SIMD*/': simd_b64,
+    '/*BASE_SIZE*/': str(base_size),
+    '/*WASM_BASE*/': base_b64,
+    '/*DB_SIZE*/': str(len(db_json)),
+    '/*GAMEDB*/': base64.b64encode(db_raw).decode(),
+    '/*PATCH_SIZE*/': str(patch_size),
+    '/*PATCH*/': patch_b64,
+    '/*UI*/': ui,
+}, 'app/index.html')
 
 # The sources the wasm was built from, after </html> (build.sh writes the file; extract-build.py
 # recovers it from a page).
 src_file = os.path.join(B, 'engine-sources.sha256')
 if os.path.exists(src_file):
     src_hash = rd(src_file).strip()
-    assert re.fullmatch('[0-9a-f]{64}', src_hash), 'no SHA-256 in ' + src_file
+    check(bool(re.fullmatch('[0-9a-f]{64}', src_hash)), 'no SHA-256 in ' + src_file)
     page += '<!-- engine sources sha256 %s -->\n' % src_hash
 else:
     print('warning: no %s, so the page records no engine sources and scripts/check-dist.sh refuses it '

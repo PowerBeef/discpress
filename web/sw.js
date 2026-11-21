@@ -10,7 +10,16 @@ self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(FILES); }).then(function () { return self.skipWaiting(); }));
 });
 self.addEventListener('activate', function (e) {
-  e.waitUntil(self.clients.claim());
+  var scope = self.registration.scope;
+  var keep = new Set(FILES.map(function (f) { return new URL(f, scope).href; }));
+  keep.add(new URL('discpress.html', scope).href);
+  e.waitUntil(
+    caches.open(CACHE).then(function (c) {
+      return c.keys().then(function (reqs) {
+        return Promise.all(reqs.filter(function (r) { return r.url.indexOf(scope) === 0 && !keep.has(r.url); }).map(function (r) { return c.delete(r); }));
+      });
+    }).catch(function () {}).then(function () { return self.clients.claim(); })
+  );
 });
 self.addEventListener('fetch', function (e) {
   var req = e.request;
@@ -20,31 +29,44 @@ self.addEventListener('fetch', function (e) {
   url.search = '';
   url.hash = '';
   url.pathname = url.pathname.replace(/\/index\.html$/, '/');
-  var nav = req.mode === 'navigate';
+  var scope = self.registration.scope;
+  var isAppPage = req.mode === 'navigate' && (url.href === scope || url.href === scope + 'discpress.html');
   function saved() {
-    return caches.match(url.href).then(function (hit) { return hit || (nav ? caches.match('./') : undefined); });
+    return caches.match(url.href, { cacheName: CACHE }).then(function (hit) {
+      return hit || (isAppPage ? caches.match(scope, { cacheName: CACHE }) : undefined);
+    });
   }
-  var saving = Promise.resolve();
+  var done = false, timer = null, saving = Promise.resolve();
+  function canCache(res) {
+    return res && res.status === 200 && res.type === 'basic' && !res.redirected;
+  }
   var net = fetch(req).then(function (res) {
-    if (res.ok) {
-      var copy = res.clone();
-      saving = caches.open(CACHE).then(function (c) { return c.put(url.href, copy); }).catch(function () { /* storage full: not saved */ });
+    if (canCache(res)) {
+      // when the timeout already answered from cache, store res directly instead of cloning a 3 MB stream
+      var toStore = done ? res : res.clone();
+      saving = caches.open(CACHE).then(function (c) { return c.put(url.href, toStore); }).catch(function () { /* storage full: not saved */ });
     }
     return res;
   });
   e.waitUntil(net.then(function () { return saving; }, function () { /* offline */ }));
   e.respondWith(new Promise(function (resolve) {
-    var done = false;
-    function answer(res) { if (!done) { done = true; resolve(res); } }
+    function answer(res) {
+      if (done) return;
+      done = true;
+      if (timer !== null) { clearTimeout(timer); timer = null; }
+      resolve(res);
+    }
     net.then(function (res) {
-      // an error page (the site down, a bad deploy) is no better than being offline: the saved copy, if any
-      if (res.ok || !nav) return answer(res);
+      // pass redirects through unchanged; on an error page for the app itself, serve the saved copy
+      if (res.type === 'opaqueredirect' || res.ok || !isAppPage) return answer(res);
       saved().then(function (hit) { answer(hit || res); }, function () { answer(res); });
     }, function () {
       // (the saved copies unreadable too: an answer all the same, never a page that loads for ever)
       saved().then(function (hit) { answer(hit || Response.error()); }, function () { answer(Response.error()); });
     });
-    setTimeout(function () {
+    timer = setTimeout(function () {
+      timer = null;
+      if (done) return;
       saved().then(function (hit) { if (hit) answer(hit); }, function () { /* the network answers */ });
     }, WAIT);
   }));

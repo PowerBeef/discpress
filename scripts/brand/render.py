@@ -5,12 +5,12 @@ Needs Playwright with Chromium (pip install playwright && playwright install chr
 and internet access for the Nunito / JetBrains Mono web fonts.
 Screenshots of the app itself live in docs/screenshots/ (screenshots.py takes them).
 """
-import os, urllib.request
+import os, pathlib, urllib.request
 from playwright.sync_api import sync_playwright
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, '..', '..', 'docs', 'brand')
-URL = 'file://' + os.path.join(HERE, 'brand.html')
+URL = pathlib.Path(HERE, 'brand.html').as_uri()
 JOBS = [(s, t) for s in ('hero', 'download', 'open', 'steps', 'features', 'formats', 'emulators', 'systems', 'showcase') for t in ('light', 'dark')]
 JOBS += [('divider', 'light'), ('mark', 'light')]
 
@@ -21,8 +21,8 @@ with sync_playwright() as p:
     # the web fonts are fetched here, not by the browser, which may not trust a proxy's certificate
     # (a font that fails to load silently falls back to another, and every graphic changes)
     def font(route):
-        with urllib.request.urlopen(urllib.request.Request(route.request.url, headers={'User-Agent': route.request.headers.get('user-agent', '')})) as r:
-            route.fulfill(status=r.status, headers={'Content-Type': r.headers['Content-Type'], 'Access-Control-Allow-Origin': '*'}, body=r.read())
+        with urllib.request.urlopen(urllib.request.Request(route.request.url, headers={'User-Agent': route.request.headers.get('user-agent', '')}), timeout=30) as r:
+            route.fulfill(status=r.status, headers={'Content-Type': r.headers.get('Content-Type', 'application/octet-stream'), 'Access-Control-Allow-Origin': '*'}, body=r.read())
     pg.route('https://fonts.googleapis.com/**', font)
     pg.route('https://fonts.gstatic.com/**', font)
     def shot(scene, theme, name, flat=False, m=False):

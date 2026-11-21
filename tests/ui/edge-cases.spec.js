@@ -3,7 +3,16 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect, fixture } from '../support/app.js';
 import { FIXTURES } from '../support/paths.js';
-import { engineReference, extract, info, nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
+import { engineReference, extract, info, nativeChdman, reference, sameVersion, sha1File, sharedCopy } from '../support/native.js';
+
+function edgeWrite(rel, data) {
+  const full = path.join(FIXTURES, 'gen', 'edge', rel);
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  const part = `${full}.${process.pid}.tmp`;
+  fs.writeFileSync(part, data);
+  fs.renameSync(part, full);
+  return 'gen/edge/' + rel;
+}
 
 test('a cue with a missing track waits for it, then continues', async ({ app }) => {
   await app.open();
@@ -40,19 +49,18 @@ test('adding the same files twice is ignored', async ({ app, page }) => {
 });
 
 test('files that cannot be converted are skipped with a message', async ({ app, page }) => {
-  const txt = path.join(FIXTURES, 'readme.txt');
-  fs.writeFileSync(txt, 'not a disc');
+  const rel = edgeWrite('readme.txt', 'not a disc');
   await app.open();
-  await app.add(['readme.txt']);
+  await app.add([rel]);
   await expect(page.locator('#toasts')).toContainText('Nothing to convert in 1 file.');
   await expect(app.jobs()).toHaveCount(0);
 });
 
 test('a truncated image gets a warning', async ({ app }) => {
   const src = fs.readFileSync(path.join(FIXTURES, 'lone.bin'));
-  fs.writeFileSync(path.join(FIXTURES, 'truncated.bin'), src.subarray(0, src.length - 1000));
+  const rel = edgeWrite('truncated.bin', src.subarray(0, src.length - 1000));
   await app.open();
-  await app.add(['truncated.bin']);
+  await app.add([rel]);
   const card = app.jobs().first();
   await app.settled(card);
   await expect(card).toContainText('The file size is not a multiple of 2,352 bytes');
@@ -68,9 +76,9 @@ for (const [name, text, why] of [
 ]) {
   test(`a descriptor chdman can't convert is refused: ${name}`, async ({ app }) => {
     const file = name + (text.startsWith('CD_ROM') ? '.toc' : '.cue');
-    fs.writeFileSync(path.join(FIXTURES, file), text);
+    const rel = edgeWrite(`bad/${file}`, text);
     await app.open();
-    await app.add([file, 'lone.bin']);
+    await app.add([rel, 'lone.bin']);
     await expect(app.jobs()).toHaveCount(1);
     const card = app.job(name);
     await app.waitState(card, 'error');
@@ -84,15 +92,16 @@ for (const [name, text, why] of [
 // chdman 0.289 never finished on a TOC without lengths; the engine reads cdrdao's grammar, where a
 // missing length is the rest of the file
 test('a TOC without lengths converts the whole file', async ({ app }) => {
-  fs.writeFileSync(path.join(FIXTURES, 'no length.toc'), 'CD_ROM_XA\n\nTRACK MODE2_RAW\nDATAFILE "lone.bin"\n');
+  const rel = edgeWrite('nolength/no length.toc', 'CD_ROM_XA\n\nTRACK MODE2_RAW\nDATAFILE "lone.bin"\n');
+  sharedCopy(path.join(FIXTURES, 'lone.bin'), path.join(FIXTURES, 'gen', 'edge', 'nolength', 'lone.bin'));
   await app.open();
-  await app.add(['no length.toc', 'lone.bin']);
+  await app.add([rel, 'gen/edge/nolength/lone.bin']);
   const card = app.job('no length');
   await app.settled(card);
   await expect(card.locator('.note.ident')).toContainText('SLUS-00975');
   await app.run(card);
   const [out] = await app.downloads(card);
-  const ref = engineReference('createcd', 'no length.toc');
+  const ref = engineReference('createcd', rel);
   if (ref) expect(sha1File(out.path)).toBe(sha1File(ref));
 });
 
@@ -117,9 +126,9 @@ for (const [name, text, why] of [
   ['not clonecd', '[Settings]\r\nfoo=1\r\n', 'not a CloneCD control file'],
 ]) {
   test(`a CloneCD image that can't be converted is refused: ${name}`, async ({ app }) => {
-    fs.writeFileSync(path.join(FIXTURES, name + '.ccd'), text);
+    const rel = edgeWrite(`ccd/${name}.ccd`, text);
     await app.open();
-    await app.add([name + '.ccd']);
+    await app.add([rel]);
     const card = app.job(name);
     await app.waitState(card, 'error');
     await expect(card.locator('.note.err')).toContainText(why);
@@ -135,12 +144,14 @@ for (const [how, key, bin, bytes] of [
 ]) {
   test(`a cue sheet ${how} converts like a plain one`, async ({ app, page }) => {
     const cue = `twine ${key}.cue`;
-    fs.writeFileSync(path.join(FIXTURES, cue), bytes(`FILE "${bin}" BINARY\r\n  TRACK 01 MODE2/2352\r\n    INDEX 01 00:00:00\r\n`));
+    const cueBuf = bytes(`FILE "${bin}" BINARY\r\n  TRACK 01 MODE2/2352\r\n    INDEX 01 00:00:00\r\n`);
     await app.open();
     // files go in as buffers: a file chooser may drop paths with non-ASCII names when the locale isn't UTF-8
     const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#addFiles')]);
-    await chooser.setFiles([[cue, cue], [bin, 'twine.bin']].map(([name, src]) =>
-      ({ name, mimeType: 'application/octet-stream', buffer: fs.readFileSync(path.join(FIXTURES, src)) })));
+    await chooser.setFiles([
+      { name: cue, mimeType: 'application/octet-stream', buffer: cueBuf },
+      { name: bin, mimeType: 'application/octet-stream', buffer: fs.readFileSync(path.join(FIXTURES, 'twine.bin')) },
+    ]);
     const card = app.job(`twine ${key}`);
     await app.settled(card);
     await expect(card.locator('.sub')).toContainText('CUE + 1 track file');
@@ -155,9 +166,9 @@ for (const [how, key, bin, bytes] of [
 
 test('a binary .toc beside a cue sheet is skipped', async ({ app, page }) => {
   // some disc dumping tools save the drive's raw table of contents as a binary <name>.toc beside the .cue
-  fs.writeFileSync(path.join(FIXTURES, 'twine.toc'), Buffer.from('0012010100140100000000000014aa0000002e10', 'hex'));
+  const tocRel = edgeWrite('bintoc/twine.toc', Buffer.from('0012010100140100000000000014aa0000002e10', 'hex'));
   await app.open();
-  await app.add(['twine.cue', 'twine.toc', 'twine.bin']);
+  await app.add(['twine.cue', tocRel, 'twine.bin']);
   await expect(page.locator('#toasts')).toContainText('ignored 1 file (twine.toc)');
   await expect(app.jobs()).toHaveCount(1);
   await app.settled(app.job('twine'));
@@ -169,18 +180,21 @@ test('a TOC with one file per track, as chdman writes it, keeps every track', as
   // lone length after track 1 as an offset: the later tracks came out empty
   const original = reference('createcd', 'mgs disc1.cue');
   const x = extract('extractcd', original, 'mgs split.toc', ['-sb']);
-  for (const f of x.files) fs.copyFileSync(path.join(x.dir, f), path.join(FIXTURES, f));
-  const toc = fs.readFileSync(path.join(FIXTURES, 'mgs split.toc'), 'utf8');
-  fs.writeFileSync(path.join(FIXTURES, 'mgs split-ref.toc'), toc.replace(/^(DATAFILE "[^"]*" )(\d)/gm, '$1#0 $2'));
+  const sub = 'gen/edge/mgs-split';
+  const dir = path.join(FIXTURES, sub);
+  fs.mkdirSync(dir, { recursive: true });
+  for (const f of x.files) sharedCopy(path.join(x.dir, f), path.join(dir, f));
+  const toc = fs.readFileSync(path.join(dir, 'mgs split.toc'), 'utf8');
+  const refToc = edgeWrite('mgs-split/mgs split-ref.toc', toc.replace(/^(DATAFILE "[^"]*" )(\d)/gm, '$1#0 $2'));
   await app.open();
-  await app.add(x.files);
+  await app.add(x.files.map(f => `${sub}/${f}`));
   const card = app.job('mgs split');
   await app.settled(card);
   await expect(card.locator('.note.ident')).toContainText('SLUS-00594'); // the console is read from the TOC's tracks
   await app.run(card);
   const [out] = await app.downloads(card);
   expect(info(out.path).dataSha1).toBe(info(original).dataSha1);
-  if (sameVersion()) expect(sha1File(out.path)).toBe(sha1File(reference('createcd', 'mgs split-ref.toc')));
+  if (sameVersion()) expect(sha1File(out.path)).toBe(sha1File(reference('createcd', refToc)));
 });
 
 test('an ISO can be switched between DVD and CD', async ({ app }) => {
@@ -231,9 +245,9 @@ test('a compressed ISO can be converted as a CD', async ({ app }) => {
 });
 
 test('a file named .cso that is not a compressed ISO is refused', async ({ app }) => {
-  fs.writeFileSync(path.join(FIXTURES, 'not really.cso'), 'CISO but not really');
+  const rel = edgeWrite('not really.cso', 'CISO but not really');
   await app.open();
-  await app.add(['not really.cso']);
+  await app.add([rel]);
   const card = app.job('not really');
   await app.waitState(card, 'error');
   await expect(card.locator('.note.err')).toContainText('not a CSO or ZSO compressed ISO');
@@ -247,9 +261,9 @@ test('a damaged compressed ISO stops with an error that names the block', async 
   let b = 600;
   while (entry(b) >>> 31) b++;
   src.fill(0xff, (entry(b) & 0x7fffffff) << shift, ((entry(b) & 0x7fffffff) << shift) + 16);
-  fs.writeFileSync(path.join(FIXTURES, 'damaged umd.cso'), src);
+  const rel = edgeWrite('damaged umd.cso', src);
   await app.open();
-  await app.add(['damaged umd.cso']);
+  await app.add([rel]);
   const card = app.job('damaged umd');
   await app.settled(card);
   await expect(card.locator('.ident-how')).toHaveText('Matched by serial number'); // the file system is intact
@@ -277,10 +291,10 @@ function ecmOf(data) {
 
 test('ECM track files find their cue sheet, whichever comes first', async ({ app }) => {
   const t2 = fs.readFileSync(path.join(FIXTURES, 'mgs disc1 (Track 2).bin'));
-  fs.writeFileSync(path.join(FIXTURES, 'mgs disc1 (Track 2).bin.ecm'), ecmOf(t2));
+  const t2Rel = edgeWrite('mgs disc1 (Track 2).bin.ecm', ecmOf(t2));
   await app.open();
   // the data track alone gets a generated cue; a later track waits for its cue sheet
-  await app.add(['mgs disc1 (Track 1).bin.ecm', 'mgs disc1 (Track 2).bin.ecm']);
+  await app.add(['mgs disc1 (Track 1).bin.ecm', t2Rel]);
   await expect(app.jobs()).toHaveCount(2);
   await expect(app.job('mgs disc1 (Track 1)').locator('.sub')).toContainText('.bin.ecm image (no cue)');
   await app.waitState(app.jobs().nth(1), 'blocked');
@@ -311,9 +325,9 @@ test('an ECM image completes a cue sheet that waits for its track', async ({ app
 });
 
 test('a file named .ecm that is not an ECM image is refused', async ({ app }) => {
-  fs.writeFileSync(path.join(FIXTURES, 'not really.bin.ecm'), 'ECM but not really');
+  const rel = edgeWrite('not really.bin.ecm', 'ECM but not really');
   await app.open();
-  await app.add(['not really.bin.ecm']);
+  await app.add([rel]);
   const card = app.job('not really');
   await app.waitState(card, 'error');
   await expect(card.locator('.note.err')).toContainText('This is not an ECM image that Discpress can read.');
@@ -321,9 +335,9 @@ test('a file named .ecm that is not an ECM image is refused', async ({ app }) =>
 });
 
 test('a lone ECM image that holds no data track asks for its cue sheet', async ({ app }) => {
-  fs.writeFileSync(path.join(FIXTURES, 'song.bin.ecm'), ecmOf(fs.readFileSync(path.join(FIXTURES, 'piano.bin'))));
+  const rel = edgeWrite('song.bin.ecm', ecmOf(fs.readFileSync(path.join(FIXTURES, 'piano.bin'))));
   await app.open();
-  await app.add(['song.bin.ecm']);
+  await app.add([rel]);
   const card = app.job('song');
   await app.waitState(card, 'error');
   await expect(card.locator('.note.err')).toContainText('doesn’t start with a CD data track, so its tracks are unknown. Add the .cue file that lists it.');
@@ -334,17 +348,17 @@ test('a damaged ECM image stops with an error, and so does a truncated one', asy
   const src = Buffer.from(fs.readFileSync(path.join(FIXTURES, 'lone.bin.ecm')));
   const unit = 1 + 16 + 1 + 4 + 2048, sector = 400;
   src[4 + sector * unit + 1 + 16 + 1 + 4 + 100] ^= 0x40; // a data byte of sector 400: its EDC and ECC are rebuilt to fit
-  fs.writeFileSync(path.join(FIXTURES, 'damaged lone.bin.ecm'), src);
-  fs.writeFileSync(path.join(FIXTURES, 'cut lone.bin.ecm'), src.subarray(0, Math.floor(src.length * 0.6)));
+  const dmgRel = edgeWrite('damaged lone.bin.ecm', src);
+  const cutRel = edgeWrite('cut lone.bin.ecm', src.subarray(0, Math.floor(src.length * 0.6)));
   await app.open();
-  await app.add(['damaged lone.bin.ecm']);
+  await app.add([dmgRel]);
   const card = app.job('damaged lone');
   await app.settled(card);
   await expect(card.locator('.ident-how')).toHaveText('Matched by serial number'); // the file system is intact
   await app.run(card, { expectState: 'error' });
   // only the checksum of the whole image, at its end, tells
   await expect(card.locator('.note.err')).toContainText('"damaged lone.bin.ecm" is damaged: the image rebuilt from it doesn’t match the checksum it ends with.');
-  await app.add(['cut lone.bin.ecm']);
+  await app.add([cutRel]);
   const cut = app.job('cut lone');
   await app.settled(cut);
   await app.run(cut, { expectState: 'error' });

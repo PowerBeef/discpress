@@ -5,8 +5,9 @@
 # Needs the upstream source (fetched with scripts/fetch-mame.sh if missing).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-UP="$(cd "${MAME_DIR:-$ROOT/third_party/mame}" 2>/dev/null && pwd)" || UP=""
-[ -n "$UP" ] && [ -f "$UP/src/tools/chdman.cpp" ] || { "$ROOT/scripts/fetch-mame.sh"; UP="$ROOT/third_party/mame"; }
+UP="${MAME_DIR:-$ROOT/third_party/mame}"
+[ -f "$UP/src/tools/chdman.cpp" ] || "$ROOT/scripts/fetch-mame.sh" "$UP"
+UP="$(cd "$UP" && pwd)"
 OUT="$ROOT/engine/mame-0.289.diff"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
@@ -19,8 +20,9 @@ if ! "$DIFF" --version 2>/dev/null | grep -qi 'GNU diffutils'; then
   fi
 fi
 
+LC_ALL=C sort -c "$ROOT/engine/FILES" || { echo "engine/FILES is not sorted in C locale" >&2; exit 1; }
 cd "$ROOT/engine/mame"
-while read -r f; do
+while IFS= read -r f; do
   [ -f "$f" ] || { echo "engine/FILES lists $f, which is not in engine/mame" >&2; exit 1; }
   s=0; "$DIFF" -u --label "a/$f" --label "b/$f" "$UP/$f" "$f" >> "$TMP" || s=$?
   [ "$s" -le 1 ] || exit "$s"

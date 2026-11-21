@@ -13,18 +13,20 @@ async function card(app, key, title) {
   return c;
 }
 
-// Kronos, Yabause (Saturn) and jgenesis (Sega CD) fail on any metadata tag that isn't a track's, so a
-// kept cue sheet makes the CHD unbootable there: those jobs give chdman's own CHD instead
-test('with "keep the cue sheet" on, Saturn and Sega CD games leave it out and say why', async ({ app }) => {
+// Kronos, Yabause (Saturn) and jgenesis (Sega CD, PC Engine CD) fail on any metadata tag that isn't a track's,
+// so a kept cue sheet makes the CHD unbootable there: those jobs give chdman's own CHD instead
+test('with "keep the cue sheet" on, Saturn, Sega CD and PC Engine CD games leave it out and say why', async ({ app }) => {
   await app.open({ settings: { keepCue: true } });
   const sat = await card(app, 'saturn', 'albert odyssey');
   const scd = await card(app, 'segacd', 'ax101');
-  for (const c of [sat, scd]) {
+  const pce = await card(app, 'pcecd-iso', 'pce iso');
+  for (const c of [sat, scd, pce]) {
     await expect(c.locator('code.cmd')).not.toContainText('--keepcue');
     await expect(c.locator('.compat-note[data-quirk="keepcue-strict"]')).toBeVisible();
   }
   await expect(sat.locator('[data-quirk="keepcue-strict"]')).toHaveText('Kronos and Yabause reject CHDs that keep their cue sheet, so this one leaves it out (the setting “Keep the cue sheet in CD CHDs” is on).');
   await expect(scd.locator('[data-quirk="keepcue-strict"]')).toContainText('jgenesis rejects CHDs that keep their cue sheet');
+  await expect(pce.locator('[data-quirk="keepcue-strict"]')).toContainText('jgenesis rejects CHDs that keep their cue sheet');
   await app.run(sat);
   const [out] = await app.downloads(sat);
   if (nativeChdman() && sameVersion()) expect(sha1File(out.path)).toBe(sha1File(reference('createcd', 'albert odyssey.cue')));

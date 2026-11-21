@@ -87,19 +87,9 @@ public:
 			{
 				uint64_t msec = timeout * 1000 / osd_ticks_per_second();
 
-				do {
-					if (m_cond.wait_for(lock, std::chrono::milliseconds(msec)) == std::cv_status::timeout)
-					{
-						if (!m_signalled)
-						{
-							return false;
-						}
-						else
-							break;
-					} else
-						break;
-
-				} while (true);
+				auto const deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(msec);
+				if (!m_cond.wait_until(lock, deadline, [this]() { return m_signalled != 0; }))
+					return false;
 			}
 		}
 

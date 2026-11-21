@@ -18,5 +18,5 @@ A new kind of fact also needs its name in `FACTS` in `scripts/assemble.py`, and 
 
 Facts are kept by hand, each with where it comes from: a primary source (the disc, its packaging or manual, Redump's disc page) or a list built from them. Never copy from DuckStation's game database (CC BY-NC-ND), and use GPL or CC BY-SA sources only as checklists to look things up elsewhere.
 
-- `libcrypt.tsv` comes from psxdatacenter's SBI list (2026-10-02), 197 serials of which the database has 195 (the German and French Hogs of War, SLES-02766 and SLES-02767, are not in it).
+- `libcrypt.tsv` comes from psxdatacenter's SBI list (2026-10-02), all 197 serials matched in the database (including the French and German Hogs of War, `SLES-02766` and `SLES-02767`, which Redump lists under `SLES-027662` and `SLES-027672`).
 - Saturn games that need a RAM cartridge are not listed yet: no primary source checked so far.

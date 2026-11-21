@@ -6,7 +6,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { test, expect, fixture } from '../support/app.js';
 import { FIXTURES, ROOT } from '../support/paths.js';
-import { chdman, nativeChdman, reference, sha1File } from '../support/native.js';
+import { chdman, info, nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
 
 const fx = fixture('ps1-verified');
 
@@ -65,7 +65,11 @@ test('converting starts before the checksum finishes, and results are renamed af
   await expect(card.locator('.result .out .nm')).toContainText(`${fx.name}.chd`);
   const [out] = await app.downloads(card);
   expect(out.name).toBe(`${fx.name}.chd`);
-  if (nativeChdman()) expect(sha1File(out.path)).toBe(sha1File(reference('createcd', 'verified.cue')));
+  if (nativeChdman()) {
+    const ref = reference('createcd', 'verified.cue');
+    if (sameVersion()) expect(sha1File(out.path)).toBe(sha1File(ref));
+    else expect(info(out.path).dataSha1).toBe(info(ref).dataSha1);
+  }
 });
 
 // A finished card removed while its checksum still ran: the checksum's rename then recorded results
@@ -157,7 +161,11 @@ test('starting while identification is still running uses the game name and disc
   await expect(card.locator('code.cmd')).toContainText('chdman createcd');
   const [out] = await app.downloads(card);
   expect(out.name).toBe(`${iso.name}.chd`);
-  if (nativeChdman()) expect(sha1File(out.path)).toBe(sha1File(reference('createcd', 'tnd.iso')));
+  if (nativeChdman()) {
+    const ref = reference('createcd', 'tnd.iso');
+    if (sameVersion()) expect(sha1File(out.path)).toBe(sha1File(ref));
+    else expect(info(out.path).dataSha1).toBe(info(ref).dataSha1);
+  }
 });
 
 // A music CD's tracks are just sizes: among 40,000 discs one often has the size of some game's. The

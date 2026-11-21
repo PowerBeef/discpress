@@ -22,20 +22,22 @@ M="${MAME_DIR:-$ROOT/engine/mame}"   # the tree build/obj-native was built from
 export LAB
 mkdir -p "$LAB"/{corpus,src,out,bin}
 
-CXXFLAGS="-O2 -std=c++20 -DNDEBUG -DLSB_FIRST -DCRLF=2 -DSDLMAME_UNIX -DOSD_SDL -DSDLMAME_LINUX -DUTF8PROC_STATIC -D_FILE_OFFSET_BITS=64 \
- -I$M/src/osd -I$M/src/lib/util -I$M/3rdparty -I$M/3rdparty/zlib -I$M/3rdparty/zstd/lib -I$M/3rdparty/flac/include -I$M/src/lib -I$ROOT/wasm/shim -I$ROOT/engine/libdeflate -Wno-deprecated-declarations"
+JOBS="${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)}"
+CXXFLAGS=(-O2 -std=c++20 -DNDEBUG -DLSB_FIRST -DCRLF=2 -DSDLMAME_UNIX -DOSD_SDL -DSDLMAME_LINUX -DUTF8PROC_STATIC -D_FILE_OFFSET_BITS=64
+  "-I$M/src/osd" "-I$M/src/lib/util" "-I$M/3rdparty" "-I$M/3rdparty/zlib" "-I$M/3rdparty/zstd/lib" "-I$M/3rdparty/flac/include"
+  "-I$M/src/lib" "-I$ROOT/wasm/shim" "-I$ROOT/engine/libdeflate" -Wno-deprecated-declarations)
 
 clone() { [ -d "$LAB/src/$2" ] || git clone -q --depth 1 "https://github.com/$1" "$LAB/src/$2"; }
 
 case "${1:-}" in
 fetch)
 	cd "$LAB/corpus"
-	[ -f freedoom.zip ] || curl -sSL -o freedoom.zip https://github.com/freedoom/freedoom/releases/download/v0.13.0/freedoom-0.13.0.zip
+	[ -f freedoom.zip ] || curl -fsSL -o freedoom.zip https://github.com/freedoom/freedoom/releases/download/v0.13.0/freedoom-0.13.0.zip
 	# NIN "The Slip" (CC BY-NC-SA 4.0) and Musopen Chopin (CC0), 24-bit sources resampled to CD format by build_corpus.py
-	[ -f nin_01.flac ] || curl -sSL -o nin_01.flac "https://archive.org/download/nine-inch-nails-the-slip_202607/01%20-%20CD%20%28Album%29/01%20-%20999%2C999.flac"
-	[ -f nin_07.flac ] || curl -sSL -o nin_07.flac "https://archive.org/download/nine-inch-nails-the-slip_202607/01%20-%20CD%20%28Album%29/07%20-%20Lights%20in%20the%20Sky.flac"
-	[ -f chopin_albumleaf.flac ] || curl -sSL -o chopin_albumleaf.flac "https://archive.org/download/musopen-chopin-complete-works-flac/Albumleaf%20in%20E%20major.flac"
-	[ -f chopin_berceuse.flac ] || curl -sSL -o chopin_berceuse.flac "https://archive.org/download/musopen-chopin-complete-works-flac/Berceuse%20in%20D-flat%20major%2C%20Op.%2057%20.flac"
+	[ -f nin_01.flac ] || curl -fsSL -o nin_01.flac "https://archive.org/download/nine-inch-nails-the-slip_202607/01%20-%20CD%20%28Album%29/01%20-%20999%2C999.flac"
+	[ -f nin_07.flac ] || curl -fsSL -o nin_07.flac "https://archive.org/download/nine-inch-nails-the-slip_202607/01%20-%20CD%20%28Album%29/07%20-%20Lights%20in%20the%20Sky.flac"
+	[ -f chopin_albumleaf.flac ] || curl -fsSL -o chopin_albumleaf.flac "https://archive.org/download/musopen-chopin-complete-works-flac/Albumleaf%20in%20E%20major.flac"
+	[ -f chopin_berceuse.flac ] || curl -fsSL -o chopin_berceuse.flac "https://archive.org/download/musopen-chopin-complete-works-flac/Berceuse%20in%20D-flat%20major%2C%20Op.%2057%20.flac"
 	clone google/zopfli zopfli; clone rtissera/libchdr libchdr
 	;;
 corpus)
@@ -44,23 +46,31 @@ corpus)
 build)
 	OBJ="$ROOT/build/obj-native"
 	[ -d "$OBJ" ] || { echo "run ./scripts/build-native.sh first" >&2; exit 1; }
-	ALL=$(ls "$OBJ"/*.o | grep -v src_tools_chdman.o)
+	ALL=()
+	BASE_OBJS=()
+	for o in "$OBJ"/*.o; do
+		case "$(basename "$o")" in
+			src_tools_chdman.o) BASE_OBJS+=("$o") ;;
+			src_lib_util_chdcodec.o|src_lib_util_flac.o) ALL+=("$o") ;;
+			*) ALL+=("$o"); BASE_OBJS+=("$o") ;;
+		esac
+	done
 	# 1. per-hunk harness against MAME's own codecs
-	g++ $CXXFLAGS "$HERE/harness.cpp" $ALL -o "$LAB/bin/harness" -lpthread
+	g++ "${CXXFLAGS[@]}" "$HERE/harness.cpp" "${ALL[@]}" -o "$LAB/bin/harness" -lpthread
 	# 2. chdman with environment-selectable encoder variants (without them, the engine's own bytes).
 	#    -F0: a diff that no longer fits the engine's file fails here instead of landing somewhere else
 	V="$LAB/variant"; rm -rf "$V"; mkdir -p "$V/obj"
 	cp "$M/src/lib/util/chdcodec.cpp" "$V/chdcodec.cpp"; patch -s -F0 "$V/chdcodec.cpp" < "$HERE/chdcodec-variants.diff"
 	cp "$M/src/lib/util/flac.cpp" "$V/flac.cpp"; patch -s -F0 "$V/flac.cpp" < "$HERE/flac-variants.diff"
 	for f in "$LAB"/src/zopfli/src/zopfli/{blocksplitter,cache,deflate,gzip_container,hash,katajainen,lz77,squeeze,tree,util,zlib_container,zopfli_lib}.c; do gcc -O2 -c "$f" -o "$V/obj/zopfli_$(basename "$f" .c).o"; done
-	g++ $CXXFLAGS -I"$LAB/src/zopfli/src" -c "$V/chdcodec.cpp" -o "$V/obj/chdcodec_variant.o"
-	g++ $CXXFLAGS -c "$V/flac.cpp" -o "$V/obj/flac_variant.o"
-	g++ -O2 $(ls "$OBJ"/*.o | grep -v -E "src_lib_util_chdcodec.o|src_lib_util_flac.o") "$V"/obj/*.o -o "$LAB/bin/chdman-variant" -lpthread
+	g++ "${CXXFLAGS[@]}" "-I$LAB/src/zopfli/src" -c "$V/chdcodec.cpp" -o "$V/obj/chdcodec_variant.o"
+	g++ "${CXXFLAGS[@]}" -c "$V/flac.cpp" -o "$V/obj/flac_variant.o"
+	g++ -O2 "${BASE_OBJS[@]}" "$V"/obj/*.o -o "$LAB/bin/chdman-variant" -lpthread
 	# 3. libchdr reader (writes the logical data of a CHD to stdout)
 	L="$LAB/src/libchdr"
 	cmake -S "$L" -B "$L/build" -DBUILD_SHARED_LIBS=OFF -DCHDR_WANT_TESTS=OFF -DCMAKE_BUILD_TYPE=Release >/dev/null
-	cmake --build "$L/build" -j"$(nproc)" >/dev/null
-	gcc -O2 -I"$L/include" "$HERE/chdread.c" "$L/build/libchdr-static.a" "$L"/build/deps/*/lib*.a -lm -lstdc++ -o "$LAB/bin/chdread"
+	cmake --build "$L/build" -j"$JOBS" >/dev/null
+	gcc -O2 "-I$L/include" "$HERE/chdread.c" "$L/build/libchdr-static.a" "$L"/build/deps/*/lib*.a -lm -lstdc++ -o "$LAB/bin/chdread"
 	# sanity: without CHDV_* variables the variant build must match the engine's chdman byte for byte
 	[ -f "$ROOT/tests/.cache/fixtures/mgs disc1.cue" ] || { echo "no test fixtures: run 'npm run fixtures' in tests/ for this check" >&2; exit 1; }
 	"$ROOT/build/chdman-native" createcd -i "$ROOT/tests/.cache/fixtures/mgs disc1.cue" -o "$LAB/out/stock.chd" -f >/dev/null 2>&1
@@ -69,10 +79,10 @@ build)
 	;;
 harness)
 	C="$LAB/corpus"; O="$LAB/out"
-	"$LAB/bin/harness" cd "$C/data_m2.bin" --codecs cdlz,cdzl,cdfl,cdzs --dump "$O/data_m2.csv" > "$O/data_m2.json" &
-	"$LAB/bin/harness" cd "$C/audio.bin" --audio --codecs cdlz,cdzl,cdfl,cdzs --dump "$O/audio.csv" > "$O/audio.json" &
-	"$LAB/bin/harness" dvd "$C/payload.iso" --codecs lzma,zlib,huff,flac,zstd --dump "$O/dvd.csv" > "$O/dvd.json" &
-	wait
+	"$LAB/bin/harness" cd "$C/data_m2.bin" --codecs cdlz,cdzl,cdfl,cdzs --dump "$O/data_m2.csv" > "$O/data_m2.json" & p1=$!
+	"$LAB/bin/harness" cd "$C/audio.bin" --audio --codecs cdlz,cdzl,cdfl,cdzs --dump "$O/audio.csv" > "$O/audio.json" & p2=$!
+	"$LAB/bin/harness" dvd "$C/payload.iso" --codecs lzma,zlib,huff,flac,zstd --dump "$O/dvd.csv" > "$O/dvd.json" & p3=$!
+	wait "$p1"; wait "$p2"; wait "$p3"
 	python3 "$HERE/analyze.py" "$O"
 	;;
 variants) python3 "$HERE/run_variants.py" "${@:2}" ;;

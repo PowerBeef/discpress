@@ -5,6 +5,7 @@ import { test, expect } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { FIXTURES, ROOT } from '../support/paths.js';
 import { engineSourcesNewest } from '../support/native.js';
@@ -786,9 +787,12 @@ test('a TOC track whose data ends inside a sector gets the rest of the sector as
 // LBA as the page does: now each is the disc's, and a gap the CHD doesn't hold is zeros.
 test('logical reads give each pregap its own data, and zeros where the CHD holds none', () => {
   test.setTimeout(600_000);
-  const probe = path.join(ROOT, 'build', 'cdprobe-native');
-  const make = spawnSync('make', ['-s', '-C', path.join(ROOT, 'wasm'), 'T=native', `O=${path.join(ROOT, 'build', 'obj-native')}`, 'cdprobe'], { timeout: 590_000 });
-  expect(make.status, String(make.stderr)).toBe(0);
+  const probe = process.env.CDPROBE_ENGINE ? path.resolve(process.env.CDPROBE_ENGINE) : path.join(ROOT, 'build', 'cdprobe-native');
+  if (!process.env.CDPROBE_ENGINE) {
+    const jobs = String(os.availableParallelism ? os.availableParallelism() : 4);
+    const make = spawnSync('make', ['-s', '-j' + jobs, '-C', path.join(ROOT, 'wasm'), 'T=native', 'M=../engine/mame', 'O=../build/obj-native', 'cdprobe'], { timeout: 590_000 });
+    expect(make.status, String(make.stderr)).toBe(0);
+  }
   const F = 2352, t1 = noise(90, 301 * F), pg2 = noise(91, 150 * F), t2 = noise(92, 200 * F), t3 = noise(93, 100 * F), t4 = noise(94, 50 * F);
   write('l1.bin', t1);
   write('l2.bin', Buffer.concat([pg2, t2]));
@@ -801,9 +805,9 @@ test('logical reads give each pregap its own data, and zeros where the CHD holds
     'FILE "l4.bin" BINARY\n  TRACK 04 AUDIO\n    INDEX 01 00:00:00\n');
   const chd = tmp('l.chd'), out = tmp('l.raw');
   expect(run(UPSTREAM, ['createcd', '-i', cue, '-o', chd, '-f']).code).toBe(0);
-  const r = spawnSync(probe, [chd, out]);
-  expect(r.status, String(r.stderr)).toBe(0);
-  const text = r.stdout.toString();
+  const r = run(probe, [chd, out]);
+  expect({ code: r.code, signal: r.signal }, r.err).toEqual({ code: 0, signal: null });
+  const text = r.out.toString();
   expect(text).not.toContain('fail');
   expect(text).toContain('leadout 906');
   // each LBA is its track's from INDEX 00 on
@@ -1210,4 +1214,79 @@ test('INDEX points out of order, or a track without data, are an error', () => {
   expect(run(ENGINE, ['createcd', '-i', ok, '-o', en, '-f']).code).toBe(0);
   expect(run(UPSTREAM, ['createcd', '-i', ok, '-o', up, '-f']).code).toBe(0);
   expect(sha1of(en)).toBe(sha1of(up));
+});
+
+test('hostile CHD headers, metadata cycles, and >8 MiB hunks fail cleanly without crashing', () => {
+  const D = Buffer.alloc(4096, 0x42);
+  const base = craftChd([{ data: D }]);
+  // hunkbytes = 0, unitbytes = 0, huge map length, and self-pointing metadata cycle
+  const cases = [
+    ['zero-hunk.chd', b => b.writeUInt32BE(0, 56)],
+    ['zero-unit.chd', b => b.writeUInt32BE(0, 60)],
+    ['huge-map.chd', b => { const mo = Number(b.readBigUInt64BE(40)); b.writeUInt32BE(0x7fffffff, mo); }],
+    ['meta-cycle.chd', b => {
+      const m = Buffer.alloc(16);
+      m.write('TEST', 0, 'latin1');
+      m.writeUInt32BE(0, 4);
+      m.writeBigUInt64BE(BigInt(b.length), 8); // next points to itself
+      const out = Buffer.concat([b, m]);
+      out.writeBigUInt64BE(BigInt(b.length), 48); // metaoffset
+      return out;
+    }],
+  ];
+  for (const [name, mutate] of cases) {
+    const buf = Buffer.from(base);
+    const out = mutate(buf) || buf;
+    const p = tmp(name);
+    fs.writeFileSync(p, out);
+    const cmds = name === 'meta-cycle.chd'
+      ? [['info', '-i', p], ['dumpmeta', '-i', p, '-o', tmp(name + '.bin'), '-t', 'NOPE']]
+      : [['info', '-i', p], ['verify', '-i', p], ['extractraw', '-i', p, '-o', tmp(name + '.raw'), '-f']];
+    for (const cmd of cmds) {
+      const r = run(ENGINE, cmd);
+      expect(r.signal, `${name} ${cmd[0]}`).toBeNull();
+      expect(r.code, `${name} ${cmd[0]}`).toBe(1);
+    }
+  }
+  // >8 MiB hunk (16 MiB): extractraw and verify must not fail or OOB on hunks larger than the 8 MiB batch size
+  const bigRaw = tmp('big16m.raw'), bigChd = tmp('big16m.chd'), bigOut = tmp('big16m-out.raw');
+  const payload = noise(123, 16 << 20);
+  fs.writeFileSync(bigRaw, payload);
+  expect(run(ENGINE, ['createraw', '-i', bigRaw, '-o', bigChd, '-hs', String(16 << 20), '-us', '4096', '-c', 'none', '-f']).code).toBe(0);
+  expect(run(ENGINE, ['verify', '-i', bigChd]).code).toBe(0);
+  expect(run(ENGINE, ['extractraw', '-i', bigChd, '-o', bigOut, '-f']).code).toBe(0);
+  expect(sha1of(bigOut)).toBe(sha1of(bigRaw));
+});
+
+test('TOSEC GD-ROM with mixed 2048/2352 tracks extracts cleanly with --redump', () => {
+  // 2048-byte data track + 2352-byte audio track + 2352-byte HD track: exercises --redump sector-size conversion
+  const t1 = noise(131, 300 * 2048);
+  const t2 = noise(132, 300 * 2352);
+  const t3 = noise(133, 600 * 2352);
+  write('tosec01.iso', t1);
+  write('tosec02.raw', t2);
+  write('tosec03.bin', t3);
+  const gdi = write('tosec.gdi', '3\n1 0 4 2048 tosec01.iso 0\n2 450 0 2352 tosec02.raw 0\n3 45000 4 2352 tosec03.bin 0\n');
+  const chd = tmp('tosec.chd'), dir = tmp('tosec-redump'), back = tmp('tosec-back.chd');
+  fs.mkdirSync(dir, { recursive: true });
+  expect(run(ENGINE, ['createcd', '-i', gdi, '-o', chd, '-f']).code).toBe(0);
+  const rx = run(ENGINE, ['extractcd', '-i', chd, '-o', path.join(dir, 'tosec.cue'), '--redump']);
+  expect({ code: rx.code, signal: rx.signal }, rx.err).toEqual({ code: 0, signal: null });
+  const rb = run(ENGINE, ['createcd', '-i', path.join(dir, 'tosec.cue'), '-o', back, '-f']);
+  expect({ code: rb.code, signal: rb.signal }, rb.err).toEqual({ code: 0, signal: null });
+});
+
+test('malformed WAV, CUE, and GDI inputs fail cleanly without crashing', () => {
+  write('tiny.bin', noise(140, 10 * 2352));
+  const badWav = write('trunc.wav', Buffer.from('RIFF\xff\xff\xff\x7fWAVEfmt \x10\0\0\0\x01\0\x02\0', 'latin1'));
+  const badCases = [
+    ['trunc-wav.cue', `FILE "${path.basename(badWav)}" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:00:00\n`],
+    ['unclosed.cue', 'FILE "tiny.bin BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n'],
+    ['bad-gdi.gdi', '999\n1 0 4 2352 tiny.bin 0\n'],
+  ];
+  for (const [name, text] of badCases) {
+    const p = write(name, text);
+    const r = run(ENGINE, ['createcd', '-i', p, '-o', tmp(name + '.chd'), '-f']);
+    expect({ code: r.code, signal: r.signal }, name).toEqual({ code: 1, signal: null });
+  }
 });

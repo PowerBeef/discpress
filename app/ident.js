@@ -61,8 +61,10 @@ var REGION_AREA = [
 ];
 // 1 if the release may be the disc of these area symbols (or its name gives no region), else 0
 function regionFits(name, area) {
-  var m = /\(([^)]*)\)/.exec(name || ''), letters = '';
-  if (m) m[1].split(/,\s*/).forEach(function (w) { REGION_AREA.forEach(function (r) { if (r[0].test(w)) letters += r[1]; }); });
+  var re = /\(([^)]*)\)/g, m, letters = '';
+  while ((m = re.exec(name || ''))) {
+    m[1].split(/,\s*/).forEach(function (w) { REGION_AREA.forEach(function (r) { if (r[0].test(w)) letters += r[1]; }); });
+  }
   if (!letters) return 1;
   for (var i = 0; i < letters.length; i++) if (area.indexOf(letters[i]) >= 0) return 1;
   return 0;
@@ -88,13 +90,28 @@ function titleFits(title, name) {
 // facts about particular games (db/facts/*.tsv, checked and embedded by scripts/assemble.py):
 // {fact: {sys: [serial keys]}}
 var GAME_FACTS = /*GAMEFACTS*/{};
+function serialKeys(sys, serial) {
+  var out = [];
+  var push = function (s) { var k = canonKey(sys, s); if (k && out.indexOf(k) < 0) out.push(k); };
+  if (!serial) return out;
+  push(serial);
+  var parts = serial.split(/[-\s]+/);
+  if (parts.length > 2) push(parts[0] + parts[1]);
+  if (serial.indexOf('/') > 0) push(serial.split('/')[0]);
+  var sg = SEGA_SYS.test(sys) && /^(.+)[-\s]\d{1,2}$/.exec(serial);
+  if (sg) push(sg[1]);
+  var sn = /^([A-Z]{4}\d{5})[A-Z0-9]+$/.exec(normSerial(serial));
+  if (sn) push(sn[1]);
+  return out;
+}
 var GameFacts = {
   // the facts known of a disc of this system and these serials (the disc's and its release's)
   of: function (sys, serials) {
-    var out = {};
+    var out = {}, keys = [];
+    serials.forEach(function (s) { serialKeys(sys, s).forEach(function (k) { if (keys.indexOf(k) < 0) keys.push(k); }); });
     Object.keys(GAME_FACTS).forEach(function (fact) {
       var list = (GAME_FACTS[fact] || {})[sys];
-      if (list && serials.some(function (s) { return s && list.indexOf(canonKey(sys, s)) >= 0; })) out[fact] = true;
+      if (list && keys.some(function (k) { return list.indexOf(k) >= 0; })) out[fact] = true;
     });
     return out;
   }
@@ -203,6 +220,7 @@ function fileReader(file, start, sectorSize, stride) {
       if (off + sectorSize > file.size) return null;
       var b = new Uint8Array(await file.slice(off, off + sectorSize).arrayBuffer());
       if (sectorSize === 2048) return b;
+      if (sectorSize === 2324) return b.subarray(0, 2048);
       if (sectorSize === 2336) return b.subarray(8, 2056);
       var o = b[15] === 2 ? 24 : 16;
       return b.subarray(o, o + 2048);
@@ -386,8 +404,9 @@ async function isoDir(rd, lba, size) {
     var off = 0;
     while (off < 2048) {
       var len = b[off];
-      if (!len) break;
+      if (!len || len < 34 || off + len > 2048) break;
       var nlen = b[off + 32];
+      if (33 + nlen > len) break;
       var name = asc(b, off + 33, nlen).replace(/;\d+$/, '').replace(/\.$/, '').toUpperCase();
       if (nlen > 1 || (b[off + 33] > 1)) out.set(name, { lba: u32le(b, off + 2), size: u32le(b, off + 10), dir: !!(b[off + 25] & 2) });
       off += len;
@@ -408,13 +427,16 @@ async function isoFile(rd, ent, max) {
 }
 function parseSfo(b) {
   var res = {};
-  if (asc(b, 0, 4) !== '\0PSF') return res;
+  if (b.length < 20 || asc(b, 0, 4) !== '\0PSF') return res;
   var keyT = u32le(b, 8), dataT = u32le(b, 12), cnt = u32le(b, 16);
   for (var i = 0; i < cnt && i < 64; i++) {
-    var e = 20 + i * 16, ko = b[e] | (b[e + 1] << 8), len = u32le(b, e + 4), dof = u32le(b, e + 12);
+    var e = 20 + i * 16;
+    if (e + 16 > b.length) break;
+    var ko = b[e] | (b[e + 1] << 8), len = u32le(b, e + 4), dof = u32le(b, e + 12);
     var k = '';
-    for (var p = keyT + ko; b[p]; p++) k += String.fromCharCode(b[p]);
-    res[k] = new TextDecoder().decode(b.subarray(dataT + dof, dataT + dof + len)).replace(/\0+$/, '');
+    for (var p = keyT + ko; p < b.length && b[p]; p++) k += String.fromCharCode(b[p]);
+    if (!k || dataT + dof >= b.length) continue;
+    res[k] = new TextDecoder().decode(b.subarray(dataT + dof, Math.min(b.length, dataT + dof + len))).replace(/\0+$/, '');
   }
   return res;
 }
@@ -503,9 +525,20 @@ async function detectTrack(rd) {
     if (asc(b, 0x20, 23) === 'PC Engine CD-ROM SYSTEM') return { sys: 'pcecd' };
     if (asc(b, 0, 15) === 'PC-FX:Hu_CD-ROM') return { sys: 'pcfx' };
   }
-  var pvd = await rd.read(16);
-  if (pvd && asc(pvd, 1, 5) === 'CD-I ') return { sys: 'cdi', title: clean(asc(pvd, 40, 32)) };
-  if (pvd && asc(pvd, 1, 5) === 'CD001') {
+  var pvd = null, cdiPvd = null;
+  for (var vd = 16; vd < 32; vd++) {
+    var vb = null;
+    try { vb = await rd.read(vd); } catch (e) { break; }
+    if (!vb) break;
+    var sig = asc(vb, 1, 5);
+    if (sig === 'CD-I ') { cdiPvd = vb; break; }
+    if (sig === 'CD001') {
+      if (vb[0] === 1) { pvd = vb; break; }
+      if (vb[0] === 255) break;
+    } else if (vd === 16) break;
+  }
+  if (cdiPvd) return { sys: 'cdi', title: clean(asc(cdiPvd, 40, 32)) };
+  if (pvd) {
     var sysId = clean(asc(pvd, 8, 32)), volId = clean(asc(pvd, 40, 32));
     var files = new Map();
     try { files = await isoDir(rd, u32le(pvd, 158), u32le(pvd, 166)); } catch (e) { /* ignore */ }
@@ -531,9 +564,10 @@ async function detectTrack(rd) {
     var exe = null;
     files.forEach(function (v, k) { if (!exe && /^[A-Z]{4}_\d{3}\.\d{2}(;1)?$/.test(k)) exe = k; });
     if (files.has('SYSTEM.CNF')) {
-      var cnf = new TextDecoder().decode(await isoFile(rd, files.get('SYSTEM.CNF'), 2048));
+      var cnf = '';
+      try { cnf = new TextDecoder().decode(await isoFile(rd, files.get('SYSTEM.CNF'), 2048)); } catch (e) { /* unreadable */ }
       var b2 = /BOOT2\s*=\s*([^\r\n]+)/i.exec(cnf), b1 = /BOOT\s*=\s*([^\r\n]+)/i.exec(cnf);
-      if (b2) return { sys: 'ps2', serial: psSerial(b2[1].trim()), boot: bootName(b2[1]), title: volId, udf: await hasUdf(rd) };
+      if (b2) return { sys: 'ps2', serial: psSerial(b2[1].trim()) || (exe ? psSerial(exe) : ''), boot: bootName(b2[1]), title: volId, udf: await hasUdf(rd) };
       if (b1) return { sys: 'ps1', serial: psSerial(b1[1].trim()) || (exe ? psSerial(exe) : ''), boot: bootName(b1[1]), title: volId };
     }
     // no boot line: a PS2 DVD still has its UDF volume (a PS1 disc never has one)
@@ -591,42 +625,107 @@ function msfFrames(s) {
 // whether it is a GD-ROM's (REM HIGH-DENSITY AREA), and whether it has audio, CD+G or gaps
 function cueModel(text) {
   var m = { tracks: [], sessions: 1, gd: /^\s*REM\s+HIGH-DENSITY AREA/im.test(text), audio: false, cdg: false, gaps: false };
-  var cur = null, session = 1;
+  var cur = null, session = 1, fileNo = 0;
   text.split(/\r?\n/).forEach(function (ln) {
     var r;
-    if ((r = /^\s*REM\s+SESSION\s+0*(\d+)/i.exec(ln))) { session = +r[1]; m.sessions = Math.max(m.sessions, session); }
+    if (/^\s*FILE\s/i.test(ln)) fileNo++;
+    else if ((r = /^\s*REM\s+SESSION\s+0*(\d+)/i.exec(ln))) { session = +r[1]; m.sessions = Math.max(m.sessions, session); }
     else if ((r = /^\s*TRACK\s+(\d+)\s+(\S+)/i.exec(ln))) {
-      cur = { no: +r[1], mode: r[2].toUpperCase(), session: session, index: {}, pregap: 0, postgap: 0, pregapCmd: false };
+      cur = { no: +r[1], mode: r[2].toUpperCase(), session: session, index: {}, indexFile: {}, pregap: 0, postgap: 0, pregapCmd: false };
       m.tracks.push(cur);
-    } else if (cur && (r = /^\s*INDEX\s+(\d+)\s+(\S+)/i.exec(ln))) cur.index[+r[1]] = msfFrames(r[2]);
-    else if (cur && (r = /^\s*(PREGAP|POSTGAP)\s+(\S+)/i.exec(ln))) {
-      cur[r[1].toLowerCase()] = msfFrames(r[2]);
-      if (r[1].toUpperCase() === 'PREGAP') cur.pregapCmd = true; // a virtual pregap (not in the file)
+    } else if (cur && (r = /^\s*INDEX\s+(\d+)\s+(\S+)/i.exec(ln))) {
+      var idx = +r[1];
+      cur.index[idx] = msfFrames(r[2]);
+      cur.indexFile[idx] = fileNo;
+    } else if (cur && (r = /^\s*(PREGAP|POSTGAP)\s+(\S+)/i.exec(ln))) {
+      var kind = r[1].toLowerCase(), fr = msfFrames(r[2]);
+      cur[kind] = fr;
+      if (kind === 'pregap' && fr > 0) cur.pregapCmd = true; // a virtual pregap (not in the file)
     }
+  });
+  m.tracks.forEach(function (t) {
+    if ((0 in t.index) && (1 in t.index) && t.indexFile[0] === t.indexFile[1] && t.index[0] === t.index[1]) delete t.index[0];
   });
   m.audio = m.tracks.some(function (t) { return t.mode === 'AUDIO'; });
   m.cdg = m.tracks.some(function (t) { return t.mode === 'CDG'; });
-  m.gaps = /^\s*(INDEX\s+0*0\s|PREGAP\b|POSTGAP\b)/im.test(text);
+  m.gaps = m.tracks.some(function (t) { return (0 in t.index) || t.pregap > 0 || t.postgap > 0; });
   return m;
 }
-// the same of a TOC file (cdrdao's), as far as the rules need it: its tracks with their modes as a cue
-// sheet names them, a START (a pregap stored in the file) as INDEX 00, a PREGAP (one that isn't) as a
-// cue sheet's PREGAP; a TOC has no postgaps and one session
+// the same of a TOC file (cdrdao's), mirroring cdrom.cpp: leading ZERO/SILENCE/PREGAP runs up to
+// START are virtual pregaps (not in the file), while file data before START is a stored pregap (INDEX 00)
 var TOC_MODES = { AUDIO: 'AUDIO', MODE1: 'MODE1/2048', MODE1_RAW: 'MODE1/2352', MODE2: 'MODE2/2336', MODE2_RAW: 'MODE2/2352',
-  MODE2_FORM1: 'MODE2/2048', MODE2_FORM2: 'MODE2/2324', MODE2_FORM_MIX: 'MODE2/2336' };
+  MODE2_FORM1: 'MODE2/2048', MODE2_FORM2: 'MODE2/2324', MODE2_FORM_MIX: 'MODE2_FORM_MIX' };
 function tocModel(text) {
-  var m = { tracks: [], sessions: 1, gd: false, audio: false, cdg: false, gaps: /^\s*(PREGAP|START)\b/m.test(text) }, cur = null;
+  var m = { tracks: [], sessions: 1, gd: false, audio: false, cdg: false, gaps: false }, cur = null;
+  var units = function (w, stride, sample) {
+    if (/^\d+:\d+:\d+$/.test(w)) return msfFrames(w) * stride;
+    return (+w || 0) * (sample ? 4 : 1);
+  };
+  var frames = function (w) { return /:/.test(w) ? msfFrames(w) : +w || 0; };
+  var num = function (w) { return /^\d/.test(w || '') || /^#\d/.test(w || ''); };
   text.split(/\r?\n/).forEach(function (ln) {
     var a = tokenize(ln.replace(/\/\/.*$/, '')), k = (a[0] || '').toUpperCase();
     if (k === 'TRACK' && a[1]) {
-      cur = { no: m.tracks.length + 1, mode: TOC_MODES[a[1].toUpperCase()] || a[1].toUpperCase(), session: 1, index: { 1: 0 }, pregap: 0, postgap: 0, pregapCmd: false };
+      var mode = TOC_MODES[a[1].toUpperCase()] || a[1].toUpperCase();
+      var ss = { MODE1: 2048, MODE2_FORM1: 2048, MODE2: 2336, MODE2_FORM_MIX: 2336, MODE2_FORM2: 2324, MODE1_RAW: 2352, MODE2_RAW: 2352, AUDIO: 2352 }[a[1].toUpperCase()] || 2352;
+      cur = { no: m.tracks.length + 1, mode: mode, session: 1, index: { 1: 0 }, pregap: 0, postgap: 0, pregapCmd: false,
+        _stride: ss + (/^RW(_RAW)?$/i.test(a[2] || '') ? 96 : 0), _runs: [], _frames: 0, _start: 0 };
       m.tracks.push(cur);
-    } else if (cur && k === 'PREGAP' && a[1]) {
-      cur.pregap = msfFrames(a[1]);
-      cur.pregapCmd = true;
-    } else if (cur && k === 'START') cur.index[0] = 0;
+    } else if (!cur) return;
+    else if (/^(DATAFILE|AUDIOFILE|FILE)$/.test(k) && a[1] != null) {
+      var i = a[2] === 'SWAP' ? 3 : 2, audio = k !== 'DATAFILE';
+      if (/^#\d/.test(a[i] || '')) i++;
+      if (num(a[i]) && (audio || num(a[i + 1]))) i++;
+      var lenB = num(a[i]) ? units(a[i], cur._stride, audio) : 0;
+      var fr = lenB > 0 ? Math.ceil(lenB / cur._stride) : 1;
+      cur._runs.push({ file: true, frames: fr });
+      cur._frames += fr;
+    } else if ((k === 'ZERO' || k === 'SILENCE') && num(a[a.length - 1])) {
+      var zf = Math.ceil(units(a[a.length - 1], cur._stride, k === 'SILENCE') / cur._stride);
+      cur._runs.push({ file: false, frames: zf });
+      cur._frames += zf;
+    } else if (k === 'PREGAP' && a[1]) {
+      var pf = frames(a[1]);
+      cur._runs.push({ file: false, frames: pf });
+      cur._frames += pf;
+      cur._start = cur._frames;
+    } else if (k === 'START') {
+      cur._start = a[1] ? frames(a[1]) : cur._frames;
+    }
+  });
+  m.tracks.forEach(function (t) {
+    var zeros = 0;
+    for (var i = 0; i < t._runs.length && !t._runs[i].file; i++) zeros += t._runs[i].frames;
+    if (t._start > 0 && t._start <= zeros) {
+      t.pregap = t._start;
+      t.pregapCmd = true;
+    } else if (t._start > 0) {
+      t.index[0] = 0;
+      t.index[1] = t._start;
+    }
+    delete t._stride; delete t._runs; delete t._frames; delete t._start;
   });
   m.audio = m.tracks.some(function (t) { return t.mode === 'AUDIO'; });
+  m.gaps = m.tracks.some(function (t) { return (0 in t.index) || t.pregap > 0 || t.postgap > 0; });
+  return m;
+}
+function nrgModel(nrg) {
+  if (!nrg || !nrg.length) return null;
+  var m = { tracks: [], sessions: 1, gd: false, audio: false, cdg: false, gaps: false };
+  nrg.forEach(function (t) {
+    var mode = t.mode === 0x700 ? 'AUDIO'
+      : t.mode === 0 ? (t.size === 2048 ? 'MODE1/2048' : 'MODE1/2352')
+      : t.mode === 0x600 ? (t.size === 2048 ? 'MODE2/2048' : t.size === 2336 ? 'MODE2/2336' : 'MODE2/2352')
+      : 'MODE1/' + (t.size || 2352);
+    var index = { 1: 0 };
+    if (t.index1 > t.index0) {
+      index[0] = 0;
+      index[1] = Math.round((t.index1 - t.index0) / (t.size || 2352));
+    }
+    m.tracks.push({ no: t.no, mode: mode, session: 1, index: index, pregap: 0, postgap: 0, pregapCmd: false });
+  });
+  m.audio = m.tracks.some(function (t) { return t.mode === 'AUDIO'; });
+  m.gaps = m.tracks.some(function (t) { return 0 in t.index; });
   return m;
 }
 // data tracks + hashable files of a "create" job; images: the stand-ins for its ECM files (ecmImages);
@@ -634,25 +733,49 @@ function tocModel(text) {
 function probePlan(job, images, nrg) {
   var readers = [], hashes = [], audio = [];
   var fileOf = function (f) { return f && (f.ecm || f.pbp ? images && images.get(f) : f.file); };
+  var normNfc = function (s) { return s.normalize ? s.normalize('NFC') : s; };
   var byName = function (n) {
-    var lc = base(n).toLowerCase();
-    return fileOf(job.files.find(function (x) { return x.name.toLowerCase() === lc || (x.ref && base(x.ref).toLowerCase() === lc); }));
+    var full = normNfc(String(n || '').replace(/\\/g, '/').replace(/^\.\//, '')).toLowerCase();
+    var lc = base(full);
+    return fileOf(job.files.find(function (x) {
+      return (x.ref && normNfc(x.ref.replace(/\\/g, '/').replace(/^\.\//, '')).toLowerCase() === full) ||
+        normNfc(x.name).toLowerCase() === lc ||
+        (x.ref && normNfc(base(x.ref)).toLowerCase() === lc);
+    }));
   };
   if (job.src === 'cue' && job.descText) {
-    var cur = null, curMode = null, fileTracks = [], session = 1;
+    var curFile = null, curTrack = null, fileTracks = [], byFile = new Map(), session = 1;
+    var slotOf = function (f) {
+      if (!f) return null;
+      var ft = byFile.get(f);
+      if (!ft) { ft = { file: f, tracks: [] }; byFile.set(f, ft); fileTracks.push(ft); }
+      return ft;
+    };
+    var attach = function (t, f) {
+      if (!t || t.attached) return;
+      t.attached = true;
+      var ft = slotOf(f || t.file);
+      if (ft) ft.tracks.push(t);
+    };
     job.descText.split(/\r?\n/).forEach(function (ln) {
       var m, fw = refWord('cue', ln);
-      if (fw) { cur = byName(fw.text); fileTracks.push({ file: cur, tracks: [] }); }
+      if (fw) { curFile = byName(fw.text); slotOf(curFile); }
       else if ((m = /^\s*REM\s+SESSION\s+0*(\d+)/i.exec(ln))) session = +m[1];
-      else if ((m = /^\s*TRACK\s+(\d+)\s+(\S+)/i.exec(ln))) { curMode = m[2].toUpperCase(); fileTracks.length && fileTracks[fileTracks.length - 1].tracks.push({ no: +m[1], mode: curMode, index: 0, session: session }); }
-      else if ((m = /^\s*INDEX\s+0*1\s+(\S+)/i.exec(ln))) { var ft = fileTracks[fileTracks.length - 1]; if (ft && ft.tracks.length) ft.tracks[ft.tracks.length - 1].index = msfFrames(m[1]); }
+      else if ((m = /^\s*TRACK\s+(\d+)\s+(\S+)/i.exec(ln))) {
+        if (curTrack) attach(curTrack, curTrack.file);
+        curTrack = { no: +m[1], mode: m[2].toUpperCase(), index: 0, session: session, file: curFile, attached: false };
+      } else if (curTrack && (m = /^\s*INDEX\s+0*1\s+(\S+)/i.exec(ln))) {
+        curTrack.index = msfFrames(m[1]);
+        attach(curTrack, curFile);
+      }
     });
+    if (curTrack) attach(curTrack, curTrack.file);
     fileTracks.forEach(function (ft) {
       if (!ft.file) return;
       hashes.push({ file: ft.file, track: ft.tracks.length === 1 ? ft.tracks[0].no : 0 });
       ft.tracks.forEach(function (t) {
         if (t.mode === 'AUDIO') return;
-        var ss = /2048/.test(t.mode) ? 2048 : /2336/.test(t.mode) ? 2336 : 2352;
+        var ss = /2048/.test(t.mode) ? 2048 : /2324/.test(t.mode) ? 2324 : /2336/.test(t.mode) ? 2336 : 2352;
         readers.push(fileReader(ft.file, t.index * ss, ss));
       });
     });
@@ -680,7 +803,7 @@ function probePlan(job, images, nrg) {
     job.descText.split(/\r?\n/).forEach(function (ln) {
       var a = tokenize(ln.replace(/\/\/.*$/, '')), t = tt[tt.length - 1], k = a[0];
       if (k === 'TRACK' && a[1]) {
-        var ss = { MODE1: 2048, MODE2_FORM1: 2048, MODE2: 2336, MODE2_FORM_MIX: 2336, MODE1_RAW: 2352, MODE2_RAW: 2352 }[a[1]] || 0;
+        var ss = { MODE1: 2048, MODE2_FORM1: 2048, MODE2: 2336, MODE2_FORM_MIX: 2336, MODE2_FORM2: 2324, MODE1_RAW: 2352, MODE2_RAW: 2352 }[a[1]] || 0;
         tt.push({ no: tt.length + 1, size: ss, stride: (ss || 2352) + (/^RW(_RAW)?$/.test(a[2] || '') ? 96 : 0), runs: [], bytes: 0, start: null });
         return;
       }
@@ -691,7 +814,8 @@ function probePlan(job, images, nrg) {
         off = /^#\d/.test(a[i] || '') ? +a[i++].slice(1) : 0;
         // AUDIOFILE/FILE: the start in the file; chdman 0.289's DATAFILE "f" start length: likewise
         if (num(a[i]) && (audio || num(a[i + 1]))) off += units(a[i++], t.stride, audio);
-        var len = num(a[i]) ? units(a[i], t.stride, audio) : f ? Math.max(0, f.size - off) : 0;
+        var rawLen = num(a[i]) ? units(a[i], t.stride, audio) : 0;
+        var len = rawLen > 0 ? rawLen : f ? Math.max(0, f.size - off) : 0;
         len = sectors(len, t.stride);
         t.runs.push({ file: f, offset: off, bytes: len });
         t.bytes += len;
@@ -725,11 +849,12 @@ function probePlan(job, images, nrg) {
     // a Nero image: one file, its track list at the end (read by nrgTracks); each track's data from index1
     var nf = fileOf(job.files[0]);
     nrg.forEach(function (t) {
-      if (t.size === 2352) hashes.push({ file: nf.slice(t.no === 1 ? t.index1 : t.index0, t.end), track: t.no });
+      var st = t.no === 1 ? t.index1 : t.index0;
+      if (t.size === 2352 && t.end > st) hashes.push({ file: nf, start: st, end: t.end, size: t.end - st, track: t.no });
       if (t.mode === 0 || t.mode === 0x600) readers.push(fileReader(nf, t.index1, t.size));
     });
   } else if (job.src === 'gdi' && job.descText) {
-    job.descText.split(/\r?\n/).slice(1).forEach(function (ln) {
+    job.descText.replace(/\r/g, '').split('\n').slice(1).forEach(function (ln) {
       var t = tokenize(ln);
       if (t.length < 5) return;
       var f = byName(t[4]);
@@ -772,8 +897,11 @@ async function nrgTracks(file) {
     var h = await bytes(at, 8), id = asc(h, 0, 4), len = u32be(h, 4);
     if (id === 'END!') break;
     if (id === 'DAOX') {
-      var c = await bytes(at + 8, Math.min(len, 22 + 99 * 42)), first = c[20], last = c[21], out = [];
-      if (last < first || last > 99) return null;
+      if (len < 22) return null;
+      var c = await bytes(at + 8, Math.min(len, 22 + 99 * 42));
+      if (c.length < 22) return null;
+      var first = c[20], last = c[21], out = [];
+      if (first < 1 || last < first || last > 99) return null;
       for (var t = first; t <= last; t++) {
         var o = 22 + (t - first) * 42;
         if (o + 42 > c.length) break;
@@ -808,7 +936,24 @@ async function identifyJob(job, onStatus, onProvisional) {
           var dt = await detectTrack({ read: (function (tt) { return function (lba) { return chd.read(tt, lba); }; })(t) });
           if (dt && (!det || !dt.weak)) det = dt;
         }
-        chd.tracks.forEach(function (tr) { sizes.push(tr.frames * 2352); if (tr.type !== 7) dataSizes.push(tr.frames * 2352); });
+        // audio-only CD CHD: check for Jaguar CD boot marker in track 2
+        if (!det && chd.tracks.length > 1 && chd.tracks.every(function (tr) { return tr.type === 7; })) {
+          var jFound = false;
+          for (var jl = 0; jl < 32 && !jFound; jl++) {
+            var jb = null;
+            try { jb = await chd.read(1, jl); } catch (e) { break; }
+            if (!jb) break;
+            var js = asc(jb, 0, jb.length), jw = '';
+            for (var ji = 0; ji + 1 < jb.length; ji += 2) jw += String.fromCharCode(jb[ji + 1], jb[ji]);
+            if (js.indexOf(JAG_MARK) >= 0 || jw.indexOf(JAG_MARK) >= 0) jFound = true;
+          }
+          if (jFound) det = { sys: 'jagcd' };
+        }
+        chd.tracks.forEach(function (tr) {
+          var sz = tr.frames * (tr.datasize || 2352);
+          sizes.push(sz);
+          if (tr.type !== 7) dataSizes.push(sz);
+        });
       } else if (chd.kind === 2) {
         det = await detectTrack({ read: function (lba) { return chd.read(0, lba); } });
         sizes.push(chd.logical);
@@ -825,7 +970,9 @@ async function identifyJob(job, onStatus, onProvisional) {
         images = new Map();
         ecms.forEach(function (f, i) { if (ei.views[i]) { images.set(f, ei.views[i]); f.imageSize = ei.views[i].size; } });
       }
-      var plan = probePlan(job, images, job.src === 'nrg' ? await nrgTracks(job.files[0].file) : null);
+      var nrg = job.src === 'nrg' ? await nrgTracks(job.files[0].file) : null;
+      if (nrg) job.nrgTracks = nrg;
+      var plan = probePlan(job, images, nrg);
       if (job.src === 'cso') {
         chd = await chdReader(job.files[0].file, true);
         plan.readers.push({ read: function (lba) { return chd.read(0, lba); } });
@@ -846,21 +993,22 @@ async function identifyJob(job, onStatus, onProvisional) {
         var size = hsh.size != null ? hsh.size : hsh.file.size;
         sizes.push(size);
         var bySize = GameDB.size(size);
+        if (hsh.track) bySize = bySize.filter(function (e) { return !e.track || e.track === hsh.track; });
         if (det && !det.weak) {
           var same = bySize.filter(function (e) { return sameSys(e.sys, det.sys); });
           if (same.length) bySize = same;
         }
         // the checksum of what a CSO/ZSO or ECM file holds: a worker unpacks it again
         var pk = hsh.file.pack;
-        if (bySize.length) toHash.push({ file: pk ? pk.file : hsh.file, size: size, how: hsh.ciso ? 'ciso' : pk ? pk.how : '', bySize: bySize });
+        if (bySize.length) toHash.push({ file: pk ? pk.file : hsh.file, start: hsh.start || 0, end: hsh.end != null ? hsh.end : size, size: size, how: hsh.ciso ? 'ciso' : pk ? pk.how : '', bySize: bySize });
       });
       if (toHash.length && onProvisional) onProvisional(result(null, true));
       for (var k = 0; k < toHash.length && !exact; k++) {
         var th = toHash[k];
         onStatus && onStatus('Checking against the game database…', 0);
         var crc = null;
-        try { crc = await crcCached(th.file, 0, th.size, function (p) { onStatus && onStatus('Checking against the game database…', p); }, th.how); }
-        catch (e) { if (!th.how) throw e; damaged = e.message; } // a damaged compressed ISO or ECM image: no exact match, and the card says why
+        try { crc = await crcCached(th.file, th.start, th.end, function (p) { onStatus && onStatus('Checking against the game database…', p); }, th.how); }
+        catch (e) { if ((e && e.aborted) || !th.how) throw e; damaged = e.message; } // a damaged compressed ISO or ECM image: no exact match, and the card says why
         var hits = th.bySize.filter(function (e) { return e.crc === crc; });
         if (hits.length) exact = hits;
       }
@@ -927,19 +1075,21 @@ async function identifyJob(job, onStatus, onProvisional) {
     if (/^naomi2?$/.test(det.sys)) collect(det.sys === 'naomi' ? 'naomi2' : 'naomi');
     if (!hits.length) collect(null);
     if (!hits.length) return [];
-    if (det.disc && det.disc.of > 1) {
-      var same = hits.filter(function (h) { return discNo(h.e.name) === det.disc.n; });
-      if (same.length) hits = same;
-    }
     hits.forEach(function (h) {
       h.size = sizes.indexOf(h.e.size) >= 0;
       h.region = det.area ? regionFits(h.e.name, det.area) : 1;
       h.score = [h.size ? 0 : 1, h.kind, 2 - h.region];
     });
     // a release found only without the disc's suffix or under a base serial, for another region than
-    // the disc's: not this disc
+    // the disc's: not this disc (filtered before disc-number matching so wrong-region sets don't hide it)
     hits = hits.filter(function (h) { return h.size || !h.kind || h.region; });
     if (!hits.length) return [];
+    if (det.disc) {
+      var same = det.disc.of > 1
+        ? hits.filter(function (h) { return discNo(h.e.name) === det.disc.n; })
+        : hits.filter(function (h) { return discNo(h.e.name) === null; });
+      if (same.length) hits = same;
+    }
     var cmp = function (a, b) { for (var i = 0; i < 3; i++) if (a.score[i] !== b.score[i]) return a.score[i] - b.score[i]; return 0; };
     var best = hits.slice().sort(cmp)[0];
     var top = hits.filter(function (h) { return !cmp(h, best); });
@@ -988,7 +1138,7 @@ var Dats = {
   },
   size: function (n) { return this.bySize.get(n) || []; }
 };
-function datCrc(v) { return ('00000000' + String(v || '').replace(/^0x/i, '')).slice(-8).toUpperCase(); }
+function datCrc(v) { return ('00000000' + String(v || '').trim().replace(/^0x/i, '')).slice(-8).toUpperCase(); }
 // a DAT file's text: {meta, games} or null if it isn't one
 function parseDat(text) {
   var head = text.slice(0, 65536), games = [], meta = { name: '', description: '', version: '' };
@@ -1009,18 +1159,33 @@ function parseDat(text) {
       if (roms.length) games.push({ name: g.getAttribute('name') || '', roms: roms });
     }
   } else if (/^\s*clrmamepro\s*\(/m.test(head)) {
-    // clrmamepro's format: key value pairs in nested parentheses, strings in double quotes
+    // clrmamepro's format: key value pairs in nested parentheses, strings in double quotes;
+    // skip # and // comments outside quotes, unescape \" and \\, and recognize unary flags
+    var UNARY = { baddump: 1, nodump: 1, verified: 1, good: 1 };
+    var lines = text.split(/\r?\n/), cleanLines = [];
+    for (var li = 0; li < lines.length; li++) {
+      var ln = lines[li], inQ = false, esc = false, cut = ln.length;
+      for (var ci = 0; ci < ln.length; ci++) {
+        var ch = ln[ci];
+        if (esc) { esc = false; continue; }
+        if (ch === '\\' && inQ) { esc = true; continue; }
+        if (ch === '"') { inQ = !inQ; continue; }
+        if (!inQ && (ch === '#' || (ch === '/' && ln[ci + 1] === '/'))) { cut = ci; break; }
+      }
+      cleanLines.push(ln.slice(0, cut));
+    }
+    var src = cleanLines.join('\n');
     var re = /"((?:[^"\\]|\\.)*)"|([()])|([^\s()"]+)/g, m, stack = [], cur = null, key = null;
-    var top = null;
-    while ((m = re.exec(text))) {
-      var tok = m[1] != null ? m[1] : m[2] || m[3];
-      if (m[2] === '(') {
+    while ((m = re.exec(src))) {
+      var quoted = m[1] != null;
+      var tok = quoted ? m[1].replace(/\\(.)/g, '$1') : m[2] || m[3];
+      if (!quoted && m[2] === '(') {
         var blk = { name: key, fields: {}, kids: [] };
-        if (cur) cur.kids.push(blk); else top = blk;
+        if (cur) cur.kids.push(blk);
         stack.push(cur); cur = blk; key = null;
         continue;
       }
-      if (m[2] === ')') {
+      if (!quoted && m[2] === ')') {
         var done_ = cur; cur = stack.pop();
         if (!cur && done_) {
           if (done_.name === 'clrmamepro') { meta.name = done_.fields.name || ''; meta.description = done_.fields.description || ''; meta.version = done_.fields.version || ''; }
@@ -1034,9 +1199,13 @@ function parseDat(text) {
         continue;
       }
       if (!cur) { key = tok; continue; }
-      if (key == null) key = tok; else { cur.fields[key] = tok; key = null; }
+      if (key == null) {
+        if (!quoted && UNARY[tok.toLowerCase()]) cur.fields[tok.toLowerCase()] = true;
+        else key = tok;
+      } else {
+        cur.fields[key] = tok; key = null;
+      }
     }
-    void top;
   } else return null;
   if (!games.length) return null;
   meta.games = games.length;
@@ -1044,31 +1213,45 @@ function parseDat(text) {
   meta.id = 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   return { meta: meta, games: games };
 }
-// files: [{size, crc}] with their checksums: the game they match best, and how well
+// files: [{size, crc}] with their checksums: the game they match best, and how well (1-to-1 multiset)
 function datMatch(files) {
-  var hits = new Map();
+  var avail = new Map();
   files.forEach(function (f) {
     if (!f.crc) return;
-    Dats.size(f.size).forEach(function (h) {
-      if (h.rom.crc !== f.crc) return;
-      var k = h.dat.id + '\n' + h.game.name, e = hits.get(k);
-      if (!e) hits.set(k, e = { dat: h.dat, game: h.game, roms: new Set() });
-      e.roms.add(h.rom);
+    var k = f.size + ':' + f.crc;
+    avail.set(k, (avail.get(k) || 0) + 1);
+  });
+  var games = new Map();
+  avail.forEach(function (cnt, k) {
+    var sep = k.indexOf(':'), sz = +k.slice(0, sep), crc = k.slice(sep + 1);
+    Dats.size(sz).forEach(function (h) {
+      if (h.rom.crc !== crc) return;
+      if (!games.has(h.game)) games.set(h.game, { dat: h.dat, game: h.game });
     });
   });
   var desc = function (r) { return /\.(cue|gdi|toc|ccd)$/i.test(r.name); };
   var best = null;
-  hits.forEach(function (e) {
+  games.forEach(function (e) {
     var tracks = e.game.roms.filter(function (r) { return !desc(r); });
-    var got = tracks.filter(function (r) { return e.roms.has(r); }).length;
-    var score = got * 1000 - (tracks.length - got);
-    if (!best || score > best.score) best = { e: e, tracks: tracks, got: got, score: score };
+    if (!tracks.length) return;
+    var rem = new Map(avail), got = 0, missing = [];
+    tracks.forEach(function (r) {
+      var k = r.size + ':' + r.crc, left = rem.get(k) || 0;
+      if (left > 0) { rem.set(k, left - 1); got++; }
+      else missing.push(r.name);
+    });
+    if (!got) return;
+    var full = got === tracks.length;
+    var score = (full ? 1e9 : 0) + got * 1000 - (tracks.length - got);
+    if (!best || score > best.score) {
+      var descs = e.game.roms.filter(desc);
+      var descMatch = descs.some(function (r) { return (rem.get(r.size + ':' + r.crc) || 0) > 0; });
+      best = { e: e, tracks: tracks, got: got, missing: missing, full: full, descDiffers: descs.length > 0 && !descMatch, score: score };
+    }
   });
-  if (!best || !best.got) return { none: true };
-  var missing = best.tracks.filter(function (r) { return !best.e.roms.has(r); }).map(function (r) { return r.name; });
-  var descs = best.e.game.roms.filter(desc);
+  if (!best) return { none: true };
   return {
-    dat: best.e.dat, game: best.e.game.name, total: best.tracks.length, matched: best.got, missing: missing,
-    full: best.got === best.tracks.length, descDiffers: descs.length > 0 && !descs.some(function (r) { return best.e.roms.has(r); })
+    dat: best.e.dat, game: best.e.game.name, total: best.tracks.length, matched: best.got, missing: best.missing,
+    full: best.full, descDiffers: best.descDiffers
   };
 }

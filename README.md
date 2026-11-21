@@ -93,14 +93,14 @@ There is nothing to install, and your files never leave your device. **Download 
 **Converting**
 
 - **Real chdman output.** Standard CHD v5 files, byte for byte the same as desktop chdman 0.289 makes on Linux, with the same checksums as any chdman 0.289.
-- **The right command, picked for you:** `createcd`, `createdvd`, `createhd`, `createld`, `extractcd`, `extractdvd`, `extracthd`, `extractld`, `extractraw`, `verify` and `info`, with the type and hunk size each console's emulators need. The **Advanced** tab has every chdman command and option, including `copy`, parent CHDs, `addmeta` and hard disk templates.
+- **The right command, picked for you:** `createcd`, `createdvd`, `createhd`, `createraw`, `createld`, `extractcd`, `extractdvd`, `extracthd`, `extractld`, `extractraw`, `verify` and `info`, with the type and hunk size each console's emulators need. The **Advanced** tab has every chdman command and option, including `copy`, parent CHDs, `addmeta` and hard disk templates.
 - **Compression to suit you.** *Smallest* (the default) is chdman's own. *Nearly as small, faster* tries each track only with the codec that suits it: about 1.7 times as fast for CDs, at most 0.3% bigger, same checksums. *Faster to create*, *Faster to load (Zstd)*, *For MiSTer FPGA* and *No compression* are there too.
 - **Fast.** Compression is spread over several CPU cores, as many as make it faster on your device (a one-off speed test decides; Settings has the choice), with WebAssembly SIMD when your browser supports it. Extracting and verifying use several cores too.
 - **Back again.** A CD CHD extracts to its Redump dump: the same cue sheet and one `.bin` per track, so the files match Redump's checksums. A GD-ROM comes back as its `.gdi` set, a DVD as its `.iso`. Settings → *Keep the cue sheet in CD CHDs* also keeps what a CHD doesn't otherwise hold (CATALOG, FLAGS, ISRC, extra indexes), for discs that have it.
 
 **Knowing your games**
 
-- **Game recognition.** Discpress reads the disc's own boot files to find the console, the serial number, which disc of a set it is and its region. It then looks the game up in a built-in copy of the [Redump](http://redump.org) database (over 33,000 discs). When the size and CRC-32 match, the dump is marked as verified. When several releases still fit, you choose which one.
+- **Game recognition.** Discpress reads the disc's own boot files to find the console, the serial number, which disc of a set it is and its region. It then looks the game up in a built-in copy of the [Redump](https://redump.org) database (over 33,000 discs). When the size and CRC-32 match, the dump is marked as verified. When several releases still fit, you choose which one.
 - **Official names.** For example `Metal Gear Solid (USA) (Disc 1).chd`. You can also type your own name, turn renaming off, or use **Rename** to fix the name of a CHD you already have.
 - **Your DAT files.** Add Redump or No-Intro DAT files (the `.dat` or `.xml`, or the `.zip` they come in) and every track of a disc is checked against them by size and CRC-32: before converting, and for a CHD after **Verify**, without extracting it. A disc whose every track matches is named after its DAT entry. The DATs are kept in the browser for your next visits.
 - **Verify** checks a CHD's own checksums, then compares it with Redump without extracting it.
@@ -285,7 +285,7 @@ Keep the default, <i>Smallest</i>, unless you have a reason not to: every emulat
 <summary><b>How do I check my games against Redump or No-Intro?</b></summary>
 <br>
 
-Every disc is already looked up in the built-in Redump database, which lists one file per game: the ISO, the only <code>.bin</code> or the main data track. To check <i>every</i> track, download the DAT files for your consoles from <a href="http://redump.org/downloads/">Redump</a> or No-Intro and add them, with your games or in Settings → <i>Your DAT files</i>. Each disc then says whether all its tracks match a game in them, before you convert it; a CHD says so after <b>Verify</b>. A fully matched disc is named after the DAT entry.
+Every disc is already looked up in the built-in Redump database, which lists one file per game: the ISO, the only <code>.bin</code> or the main data track. To check <i>every</i> track, download the DAT files for your consoles from <a href="https://redump.org/downloads/">Redump</a> or No-Intro and add them, with your games or in Settings → <i>Your DAT files</i>. Each disc then says whether all its tracks match a game in them, before you convert it; a CHD says so after <b>Verify</b>. A fully matched disc is named after the DAT entry.
 </details>
 
 <details>
@@ -294,11 +294,12 @@ Every disc is already looked up in the built-in Redump database, which lists one
 
 | Browser | Support |
 |---|---|
-| Safari 16.4+ (iPhone, iPad, Mac) | Full |
-| Chrome and Edge 102+ (desktop, Android) | Full, plus saving straight into a folder |
-| Firefox 111+ | Full |
+| Safari 16.4+ (iPhone, iPad, Mac) | Full (DAT persistence and disk-backed zip unpacking need Safari 26+ for `createWritable()`) |
+| Chrome and Edge 103+ (desktop) | Full, plus saving straight into a folder |
+| Chrome and Edge 103+ (Android) | Full |
+| Firefox 113+ | Full |
 
-Older browsers keep results in memory instead of on disk, and so do Chrome and Edge when Discpress is opened as a downloaded file. That limits how big a disc can be, and a reload loses the results not saved yet (the page then says which). Choose a folder for results in Chrome and Edge, or use the online version. Unpacking deflated files from a `.zip` also uses disk storage where there is some, else memory, up to 1 GB.
+Older browsers keep results in memory instead of on disk, and so do Chrome and Edge when Discpress is opened as a downloaded file. That limits how big a disc can be, and a reload loses the results not saved yet (the page then says which). Choose a folder for results in desktop Chrome and Edge, or use the online version. Unpacking deflated files from a `.zip` needs Chrome/Edge 103+, Firefox 113+ or Safari 16.4+ (`DecompressionStream('deflate-raw')`) and uses disk storage where `createWritable()` is supported, else memory up to 1 GB.
 
 The downloaded file and the online version work the same in each of them. On iPhone and iPad, use the [online version](https://powerbeef.github.io/discpress/) in Safari. Apps that open HTML files, such as Sitecase, run it too, but they can't save results over about 512 MB (most DVD, PSP and PS2 games): the page tells you when that's the case. Lockdown Mode turns off WebAssembly, which Discpress needs.
 </details>
@@ -321,7 +322,7 @@ No. Hacks, translations, homebrew and modified dumps aren't in the Redump databa
 <summary><b>Can I turn a CHD back into a .cue/.bin or .iso?</b></summary>
 <br>
 
-Yes. Add the <code>.chd</code> and choose Extract. A CD comes back as its Redump dump: the same cue sheet and <code>.bin</code> files. For discs whose cue sheet holds more than a CHD stores (CATALOG, FLAGS, ISRC, extra indexes: common on PC Engine CD, 3DO and CD-i), turn on Settings → <i>Keep the cue sheet in CD CHDs</i> before converting, and that sheet comes back too. Saturn and Sega CD games leave it out, since Kronos, Yabause and jgenesis can't open a CHD that keeps one. You can also verify a CHD's checksums, which compares it with Redump too, or view its details.
+Yes. Add the <code>.chd</code> and choose Extract. A CD comes back as its Redump dump: the same cue sheet and <code>.bin</code> files. For discs whose cue sheet holds more than a CHD stores (CATALOG, FLAGS, ISRC, extra indexes: common on PC Engine CD, 3DO and CD-i), turn on Settings → <i>Keep the cue sheet in CD CHDs</i> before converting, and that sheet comes back too. Saturn, Sega CD and PC Engine CD games leave it out, since Kronos, Yabause and jgenesis can't open a CHD that keeps one. You can also verify a CHD's checksums, which compares it with Redump too, or view its details.
 </details>
 
 <details>
@@ -391,7 +392,7 @@ source ~/emsdk/emsdk_env.sh
 
 ## Credits and license
 
-Discpress is released under the [BSD 3-Clause license](LICENSE). It is built on **chdman** and MAME's `lib/util` (BSD 3-Clause, © Aaron Giles, R. Belmont, Vas Crabb and the MAMEdev team), with zlib, LZMA SDK, FLAC, Zstandard, libdeflate and a few smaller libraries. Game data comes from [Redump](http://redump.org) via [libretro-database](https://github.com/libretro/libretro-database). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full list.
+Discpress is released under the [BSD 3-Clause license](LICENSE). It is built on **chdman** and MAME's `lib/util` (BSD 3-Clause, © Aaron Giles, R. Belmont, Vas Crabb, Olivier Galibert, Nathan Woods, Mietek Bak and the MAMEdev team), with zlib, LZMA SDK, FLAC, Zstandard, libdeflate and a few smaller libraries. Game data comes from [Redump](https://redump.org) via [libretro-database](https://github.com/libretro/libretro-database). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full list.
 
 Discpress is not affiliated with the MAME team, Redump or libretro.
 

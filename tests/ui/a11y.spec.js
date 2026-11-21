@@ -32,10 +32,12 @@ for (const theme of ['light', 'dark']) {
     found.jobs = await audit(page, `${theme}-jobs`);
     await page.click('.tab[data-tab="cli"]');
     found.advanced = await audit(page, `${theme}-advanced`);
+    await page.click('#cliEditToggle');
+    found.advancedText = await audit(page, `${theme}-advanced-text`);
     await page.click('.tab[data-tab="help"]');
     found.help = await audit(page, `${theme}-help`);
     await page.click('#settingsBtn');
     found.settings = await audit(page, `${theme}-settings`);
-    expect(found).toEqual({ start: [], jobs: [], advanced: [], help: [], settings: [] });
+    expect(found).toEqual({ start: [], jobs: [], advanced: [], advancedText: [], help: [], settings: [] });
   });
 }

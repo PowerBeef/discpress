@@ -26,7 +26,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { CACHE, FIXTURES, ROOT, TESTS } from '../support/paths.js';
+import { CACHE, FIXTURES, ROOT, TESTS, pythonBin } from '../support/paths.js';
 import { engineChdman, nativeChdman, sameVersion } from '../support/native.js';
 
 // ------------------------------------------------------------------ options
@@ -58,7 +58,7 @@ const PRESET_LABEL = { default: 'Smallest (default)', plan: 'Nearly as small, fa
 
 // ------------------------------------------------------------------ fixtures
 const needBench = cfg.fixtures.some(k => k.startsWith('bench-'));
-execFileSync('python3', [path.join(TESTS, 'fixtures', 'make_fixtures.py'), '--out', FIXTURES,
+execFileSync(pythonBin(), [path.join(TESTS, 'fixtures', 'make_fixtures.py'), '--out', FIXTURES,
   ...(needBench ? ['--bench', '--cd-mb', opt('cd-mb', '300'), '--dvd-mb', opt('dvd-mb', '1024')] : [])], { stdio: 'inherit' });
 const manifest = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'manifest.json'), 'utf8'));
 const fixtures = cfg.fixtures.map(k => manifest.find(f => f.key === k) || die(`unknown fixture ${k}`));
@@ -188,6 +188,7 @@ for (const fx of fixtures) {
     for (const op of cfg.ops) {
       const chdInput = op === 'extract' ? (cfg.native ? nativeRef(fx, preset) : null) : null;
       if (op === 'extract' && !chdInput) { log('extract needs native chdman to make the input CHD; skipped'); continue; }
+      let extractBytes = null;
       for (const simd of cfg.simd.map(s => s === 'on')) {
         for (const threads of cfg.threads) {
           const runs = [];
@@ -220,6 +221,7 @@ for (const fx of fixtures) {
           }
           const secs = median(runs.map(x => x.seconds));
           const outBytes = last.outs.reduce((s, o) => s + o.size, 0);
+          if (op === 'extract') extractBytes = outBytes;
           results.push({
             fixture: fx.key, op, preset, simd, threads, seconds: +secs.toFixed(3), runs: runs.map(x => +x.seconds.toFixed(3)),
             inputMB: +((op === 'create' ? inBytes : fs.statSync(chdInput).size) / 1048576).toFixed(1),
@@ -230,18 +232,31 @@ for (const fx of fixtures) {
           });
         }
       }
-      // native baseline for the same work
+      // native baseline for the same work (native extract is single-threaded, so run once per fixture/preset)
       if (cfg.native && cfg.nativeTiming) {
-        const threadsList = cfg.threads;
+        const threadsList = op === 'create' ? cfg.threads : [1];
         for (const threads of threadsList) {
           const times = [];
+          let nativeOutBytes = extractBytes;
           for (let r = 0; r < cfg.repeat; r++) {
-            if (op === 'create') times.push(nativeRun([fx.command, '-i', nativeInput(fx), '-o', path.join(work, 'n.chd'), '-f', '-np', String(threads), ...codecs(fx, preset)]));
-            else { const d = fs.mkdtempSync(path.join(work, 'n-')); const ext = { cd: '.cue', gdrom: '.gdi', dvd: '.iso', hd: '.img' }[fx.disc]; times.push(nativeRun([`extract${fx.disc === 'gdrom' ? 'cd' : fx.disc}`, '-i', chdInput, '-o', path.join(d, 'o' + ext)])); fs.rmSync(d, { recursive: true }); }
+            if (op === 'create') {
+              const outChd = path.join(work, 'n.chd');
+              times.push(nativeRun([fx.command, '-i', nativeInput(fx), '-o', outChd, '-f', '-np', String(threads), ...codecs(fx, preset)]));
+              nativeOutBytes = fs.statSync(outChd).size;
+            } else {
+              const d = fs.mkdtempSync(path.join(work, 'n-'));
+              const ext = { cd: '.cue', gdrom: '.gdi', dvd: '.iso', hd: '.img' }[fx.disc];
+              times.push(nativeRun([`extract${fx.disc === 'gdrom' ? 'cd' : fx.disc}`, '-i', chdInput, '-o', path.join(d, 'o' + ext)]));
+              nativeOutBytes = fs.readdirSync(d).reduce((s, f) => s + fs.statSync(path.join(d, f)).size, 0);
+              fs.rmSync(d, { recursive: true });
+            }
           }
           const secs = median(times);
+          const workBytes = op === 'create' ? inBytes : (nativeOutBytes ?? inBytes);
           results.push({ fixture: fx.key, op, preset, simd: 'native', threads, seconds: +secs.toFixed(3), runs: times.map(x => +x.toFixed(3)),
-            inputMB: +((op === 'create' ? inBytes : fs.statSync(chdInput).size) / 1048576).toFixed(1), mbps: +((op === 'create' ? inBytes : results.at(-1).outputMB * 1048576) / 1048576 / secs).toFixed(1) });
+            inputMB: +((op === 'create' ? inBytes : fs.statSync(chdInput).size) / 1048576).toFixed(1),
+            outputMB: nativeOutBytes != null ? +(nativeOutBytes / 1048576).toFixed(1) : null,
+            mbps: +(workBytes / 1048576 / secs).toFixed(1) });
           log(`  ${fx.key} ${op} ${preset} native threads=${threads}: ${secs.toFixed(2)} s`);
         }
       }
@@ -264,7 +279,7 @@ if (cfg.compare) {
 }
 const keyOf = r => [r.fixture, r.op, r.preset, r.simd, r.threads].join('|');
 const prev = new Map((previous?.results || []).map(r => [keyOf(r), r]));
-const nativeOf = r => results.find(n => n.simd === 'native' && n.fixture === r.fixture && n.op === r.op && n.preset === r.preset && n.threads === r.threads);
+const nativeOf = r => results.find(n => n.simd === 'native' && n.fixture === r.fixture && n.op === r.op && n.preset === r.preset && (r.op === 'extract' || n.threads === r.threads));
 const rows = results.map(r => {
   const n = r.simd !== 'native' ? nativeOf(r) : null, p = prev.get(keyOf(r));
   return `| ${r.fixture} | ${r.op} | ${r.preset} | ${r.simd === 'native' ? 'native' : r.simd ? 'SIMD' : 'baseline'} | ${r.threads} | ${r.seconds.toFixed(2)} | ${r.mbps} | ${r.ratio != null ? (100 * r.ratio).toFixed(1) + '%' : ''} | ${r.peakRssMB ?? ''} | ${n ? (r.seconds / n.seconds).toFixed(2) + '×' : ''} | ${p ? ((r.seconds / p.seconds - 1) * 100).toFixed(1) + '%' : ''} | ${r.verified == null ? '' : r.verified ? '✓' : '✗'} |`;

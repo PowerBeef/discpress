@@ -67,7 +67,7 @@ private:
 
 	static constexpr int MAX_ZLIB_ALLOCS = 64;
 
-	uint32_t *                m_allocptr[MAX_ZLIB_ALLOCS];
+	uint8_t *                 m_allocptr[MAX_ZLIB_ALLOCS]; // Discpress: matches new uint8_t[] / delete[]
 };
 
 
@@ -166,7 +166,7 @@ private:
 	static void fast_free(ISzAllocPtr p, void *address);
 
 	static constexpr int MAX_LZMA_ALLOCS = 64;
-	uint32_t *m_allocptr[MAX_LZMA_ALLOCS];
+	uint8_t *m_allocptr[MAX_LZMA_ALLOCS]; // Discpress: matches new uint8_t[] / delete[]
 };
 
 
@@ -437,13 +437,19 @@ public:
 	virtual void decompress(const uint8_t *src, uint32_t complen, uint8_t *dest, uint32_t destlen) override
 	{
 		// determine header bytes
+		if (destlen != hunkbytes())
+			throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
 		uint32_t frames = destlen / cdrom_file::FRAME_SIZE;
 		uint32_t complen_bytes = (destlen < 65536) ? 2 : 3;
 		uint32_t ecc_bytes = (frames + 7) / 8;
 		uint32_t header_bytes = ecc_bytes + complen_bytes;
+		if (complen < header_bytes) // Discpress: don't over-read or underflow on damaged hunks
+			throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
 
 		// extract compressed length of base
 		uint32_t complen_base = (complen_bytes > 2) ? get_u24be(&src[ecc_bytes]) : get_u16be(&src[ecc_bytes]);
+		if (complen_base > complen - header_bytes)
+			throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
 
 		// reset and decode
 		m_base_decompressor.decompress(&src[header_bytes], complen_base, &m_buffer[0], frames * cdrom_file::MAX_SECTOR_DATA);
@@ -880,27 +886,32 @@ voidpf chd_zlib_allocator::fast_alloc(voidpf opaque, uInt items, uInt size)
 	// reuse a hunk if we can
 	for (int scan = 0; scan < MAX_ZLIB_ALLOCS; scan++)
 	{
-		uint32_t *ptr = codec->m_allocptr[scan];
-		if (ptr != nullptr && size == *ptr)
+		uint8_t *raw = codec->m_allocptr[scan];
+		if (raw != nullptr)
 		{
-			// set the low bit of the size so we don't match next time
-			*ptr |= 1;
-			return reinterpret_cast<uint8_t *>(ptr) + ALLOC_HEADER; // Discpress: aligned (0.289: ptr + 1)
+			auto *ptr = reinterpret_cast<uint32_t *>(raw);
+			if (size == *ptr)
+			{
+				// set the low bit of the size so we don't match next time
+				*ptr |= 1;
+				return raw + ALLOC_HEADER; // Discpress: aligned (0.289: ptr + 1)
+			}
 		}
 	}
 
 	// alloc a new one and put it into the list
-	auto *ptr = reinterpret_cast<uint32_t *>(new uint8_t[size + ALLOC_HEADER]);
+	auto *raw = new uint8_t[size + ALLOC_HEADER];
+	auto *ptr = reinterpret_cast<uint32_t *>(raw);
 	for (int scan = 0; scan < MAX_ZLIB_ALLOCS; scan++)
 		if (codec->m_allocptr[scan] == nullptr)
 		{
-			codec->m_allocptr[scan] = ptr;
+			codec->m_allocptr[scan] = raw;
 			break;
 		}
 
 	// set the low bit of the size so we don't match next time
 	*ptr = size | 1;
-	return reinterpret_cast<uint8_t *>(ptr) + ALLOC_HEADER;
+	return raw + ALLOC_HEADER;
 }
 
 
@@ -914,12 +925,12 @@ void chd_zlib_allocator::fast_free(voidpf opaque, voidpf address)
 	auto *codec = reinterpret_cast<chd_zlib_allocator *>(opaque);
 
 	// find the hunk
-	uint32_t *ptr = reinterpret_cast<uint32_t *>(reinterpret_cast<uint8_t *>(address) - ALLOC_HEADER);
+	uint8_t *raw = reinterpret_cast<uint8_t *>(address) - ALLOC_HEADER;
 	for (int scan = 0; scan < MAX_ZLIB_ALLOCS; scan++)
-		if (ptr == codec->m_allocptr[scan])
+		if (raw == codec->m_allocptr[scan])
 		{
 			// clear the low bit of the size to allow matches
-			*ptr &= ~1;
+			*reinterpret_cast<uint32_t *>(raw) &= ~1;
 			return;
 		}
 }
@@ -937,6 +948,15 @@ void chd_zlib_allocator::fast_free(voidpf opaque, voidpf address)
 chd_zlib_compressor::chd_zlib_compressor(chd_file &chd, uint32_t hunkbytes, bool lossy)
 	: chd_compressor(chd, hunkbytes, lossy)
 {
+	// Discpress: libdeflate at its level 9, if asked for (zlib's level 9 is its best); skip allocating an unused zlib stream
+	if (chd.libdeflate())
+	{
+		m_libdeflate = libdeflate_alloc_compressor(9);
+		if (!m_libdeflate)
+			throw std::bad_alloc();
+		return;
+	}
+
 	// initialize the deflater
 	m_deflater.next_in = (Bytef *)this; // bogus, but that's ok
 	m_deflater.avail_in = 0;
@@ -948,13 +968,6 @@ chd_zlib_compressor::chd_zlib_compressor(chd_file &chd, uint32_t hunkbytes, bool
 		throw std::bad_alloc();
 	else if (zerr != Z_OK)
 		throw std::error_condition(chd_file::error::CODEC_ERROR);
-
-	// Discpress: libdeflate at its level 9, if asked for (zlib's level 9 is its best)
-	if (chd.libdeflate() && !(m_libdeflate = libdeflate_alloc_compressor(9)))
-	{
-		deflateEnd(&m_deflater);
-		throw std::bad_alloc();
-	}
 }
 
 
@@ -964,9 +977,10 @@ chd_zlib_compressor::chd_zlib_compressor(chd_file &chd, uint32_t hunkbytes, bool
 
 chd_zlib_compressor::~chd_zlib_compressor()
 {
-	deflateEnd(&m_deflater);
 	if (m_libdeflate)
 		libdeflate_free_compressor(m_libdeflate);
+	else
+		deflateEnd(&m_deflater);
 }
 
 
@@ -1246,27 +1260,32 @@ void *chd_lzma_allocator::fast_alloc(ISzAllocPtr p, size_t size)
 	// reuse a hunk if we can
 	for (int scan = 0; scan < MAX_LZMA_ALLOCS; scan++)
 	{
-		uint32_t *ptr = codec->m_allocptr[scan];
-		if (ptr != nullptr && size == *ptr)
+		uint8_t *raw = codec->m_allocptr[scan];
+		if (raw != nullptr)
 		{
-			// set the low bit of the size so we don't match next time
-			*ptr |= 1;
-			return reinterpret_cast<uint8_t *>(ptr) + ALLOC_HEADER; // Discpress: aligned (0.289: ptr + 1)
+			auto *ptr = reinterpret_cast<uint32_t *>(raw);
+			if (size == *ptr)
+			{
+				// set the low bit of the size so we don't match next time
+				*ptr |= 1;
+				return raw + ALLOC_HEADER; // Discpress: aligned (0.289: ptr + 1)
+			}
 		}
 	}
 
 	// alloc a new one and put it into the list
-	auto *ptr = reinterpret_cast<uint32_t *>(new uint8_t[size + ALLOC_HEADER]);
+	auto *raw = new uint8_t[size + ALLOC_HEADER];
+	auto *ptr = reinterpret_cast<uint32_t *>(raw);
 	for (int scan = 0; scan < MAX_LZMA_ALLOCS; scan++)
 		if (codec->m_allocptr[scan] == nullptr)
 		{
-			codec->m_allocptr[scan] = ptr;
+			codec->m_allocptr[scan] = raw;
 			break;
 		}
 
 	// set the low bit of the size so we don't match next time
 	*ptr = size | 1;
-	return reinterpret_cast<uint8_t *>(ptr) + ALLOC_HEADER;
+	return raw + ALLOC_HEADER;
 }
 
 
@@ -1283,12 +1302,12 @@ void chd_lzma_allocator::fast_free(ISzAllocPtr p, void *address)
 	auto *const codec = static_cast<chd_lzma_allocator *>(const_cast<ISzAlloc *>(p));
 
 	// find the hunk
-	uint32_t *ptr = reinterpret_cast<uint32_t *>(reinterpret_cast<uint8_t *>(address) - ALLOC_HEADER);
+	uint8_t *raw = reinterpret_cast<uint8_t *>(address) - ALLOC_HEADER;
 	for (int scan = 0; scan < MAX_LZMA_ALLOCS; scan++)
-		if (ptr == codec->m_allocptr[scan])
+		if (raw == codec->m_allocptr[scan])
 		{
 			// clear the low bit of the size to allow matches
-			*ptr &= ~1;
+			*reinterpret_cast<uint32_t *>(raw) &= ~1;
 			return;
 		}
 }
@@ -1625,6 +1644,9 @@ chd_flac_decompressor::chd_flac_decompressor(chd_file &chd, uint32_t hunkbytes, 
 
 void chd_flac_decompressor::decompress(const uint8_t *src, uint32_t complen, uint8_t *dest, uint32_t destlen)
 {
+	if (complen < 2) // Discpress: need endian marker plus FLAC payload
+		throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
+
 	// determine the endianness
 	bool swap_endian;
 	if (src[0] == 'L')
@@ -1720,7 +1742,7 @@ uint32_t chd_cd_flac_compressor::compress(const uint8_t *src, uint32_t srclen, u
 
 	// finish up
 	uint32_t complen = m_encoder.finish();
-	if (!encoded || complen >= m_limit)
+	if (!encoded || complen >= std::min(m_limit, hunkbytes()))
 		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
 
 	// deflate the subcode data
@@ -1843,6 +1865,8 @@ chd_cd_flac_decompressor::~chd_cd_flac_decompressor()
 void chd_cd_flac_decompressor::decompress(const uint8_t *src, uint32_t complen, uint8_t *dest, uint32_t destlen)
 {
 	// reset and decode
+	if (destlen != hunkbytes())
+		throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
 	uint32_t frames = destlen / cdrom_file::FRAME_SIZE;
 	if (!m_decoder.reset(44100, 2, chd_cd_flac_compressor::blocksize(frames * cdrom_file::MAX_SECTOR_DATA), src, complen))
 		throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
@@ -1852,6 +1876,8 @@ void chd_cd_flac_decompressor::decompress(const uint8_t *src, uint32_t complen, 
 
 	// inflate the subcode data
 	uint32_t offset = m_decoder.finish();
+	if (offset > complen) // Discpress: don't underflow on damaged FLAC
+		throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
 	m_inflater.next_in = const_cast<Bytef *>(src + offset);
 	m_inflater.avail_in = complen - offset;
 	m_inflater.total_in = 0;

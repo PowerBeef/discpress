@@ -10,6 +10,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 bad=0
+# Verify no unexpected top-level entries entered engine/
+for entry in engine/*; do
+  base="${entry#engine/}"
+  case "$base" in
+    mame|libdeflate|libm|FILES|mame-0.289.diff|README.md|AGENTS.md) ;;
+    *) echo "unexpected entry in engine/: $entry" >&2; bad=1 ;;
+  esac
+done
+
 while IFS= read -r f; do
   # files that may carry another permissive license than BSD-3-Clause, with the license they must say
   case "$f" in
@@ -20,14 +29,14 @@ while IFS= read -r f; do
     echo "$f: its first lines don't say \"$want\"" >&2
     bad=1
   fi
-done < <(git ls-files engine/mame/src)
+done < <(git ls-files --cached --others --exclude-standard engine/mame/src)
 
-if git grep -nI -e 'license:GPL' -e 'license:LGPL' -- engine >&2; then
-  echo "GPL-licensed MAME files are in engine/ (above)" >&2
+if git grep --untracked -nIi -e 'license:A\?L\?GPL' -e 'license:CC-BY-NC' -- engine >&2; then
+  echo "GPL/LGPL/AGPL/CC-BY-NC-licensed MAME files are in engine/ (above)" >&2
   bad=1
 fi
-if git grep -nI -e 'GNU General Public' -e 'GNU Lesser General' -e 'SPDX-License-Identifier: *L\?GPL' -- engine >&2; then
-  echo "GPL- or LGPL-licensed code is in engine/ (above)" >&2
+if git grep --untracked -nIi -e 'GNU General Public' -e 'GNU Lesser General' -e 'GNU Affero General' -e 'SPDX-License-Identifier: *A\?L\?GPL' -e 'SPDX-License-Identifier: *CC-BY-NC' -- engine >&2; then
+  echo "GPL-, LGPL-, AGPL-, or CC-BY-NC-licensed code is in engine/ (above)" >&2
   bad=1
 fi
 for f in engine/libdeflate/COPYING engine/libm/LICENSE; do

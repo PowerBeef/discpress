@@ -9,7 +9,7 @@
 #     workflow.
 # Usage: scripts/check-dist.sh [page]   (default dist/discpress.html)
 set -euo pipefail
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
+ROOT=${DISCPRESS_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
 PAGE=${1:-$ROOT/dist/discpress.html}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

@@ -56,7 +56,9 @@ int main(int argc, char **argv)
 				std::printf("fail %u\n", lba);
 				std::fill(sector.begin(), sector.end(), 0);
 			}
-			std::fwrite(sector.data(), 1, toc.tracks[track].datasize, out);
+			uint32_t const sz = (track < uint32_t(toc.numtrks) && toc.tracks[track].datasize <= sector.size())
+					? toc.tracks[track].datasize : cdrom_file::MAX_SECTOR_DATA;
+			std::fwrite(sector.data(), 1, sz, out);
 		}
 		std::fclose(out);
 	}

@@ -1,5 +1,7 @@
 /build/
 /third_party/
 /.venv/
+/wasm/obj-*
+/wasm/cdprobe-native
 __pycache__/
 .DS_Store

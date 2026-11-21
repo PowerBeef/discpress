@@ -1725,6 +1725,13 @@ static void create_output_chd(
 
 static chdman_task compress_common(chd_file_compressor &chd)
 {
+	// Discpress: stop reader/worker threads before derived compressor destructors run on any exit path
+	struct compressor_guard
+	{
+		chd_file_compressor &chd;
+		~compressor_guard() { chd.compress_abort(); }
+	} guard{ chd };
+
 	// begin compressing
 	chd.compress_begin();
 
@@ -1942,8 +1949,10 @@ static void do_info(parameters_map &params)
 		chd_metadata_tag metatag;
 		uint8_t metaflags;
 		std::error_condition err = input_chd.read_metadata(CHDMETATAG_WILDCARD, index, buffer, metatag, metaflags);
-		if (err)
+		if (err == chd_file::error::METADATA_NOT_FOUND)
 			break;
+		if (err)
+			report_error(1, "Error reading metadata from CHD file (%s): %s", *params.find(OPTION_INPUT)->second, err.message());
 
 		// determine our index
 		uint32_t metaindex = ~0;
@@ -2070,8 +2079,8 @@ static chdman_task do_verify(parameters_map &params)
 	if (raw_sha1 == util::sha1_t::null)
 		report_error(0, "No verification to be done; CHD has no checksum");
 
-	// create an array to read into
-	std::vector<uint8_t> buffer((TEMP_BUFFER_SIZE / input_chd.hunk_bytes()) * input_chd.hunk_bytes());
+	// create an array to read into (Discpress: at least one hunk when hunk_bytes > TEMP_BUFFER_SIZE)
+	std::vector<uint8_t> buffer(size_t(std::max<uint32_t>(1, TEMP_BUFFER_SIZE / input_chd.hunk_bytes())) * input_chd.hunk_bytes());
 
 	// read all the data and build up an SHA-1
 	util::sha1_creator rawsha1;
@@ -2915,8 +2924,8 @@ static chdman_task do_extract_raw(parameters_map &params)
 		if (filerr)
 			report_error(1, "Unable to open file (%s): %s", *output_file_str->second, filerr.message());
 
-		// copy all data
-		std::vector<uint8_t> buffer((TEMP_BUFFER_SIZE / input_chd.hunk_bytes()) * input_chd.hunk_bytes());
+		// copy all data (Discpress: at least one hunk when hunk_bytes > TEMP_BUFFER_SIZE)
+		std::vector<uint8_t> buffer(size_t(std::max<uint32_t>(1, TEMP_BUFFER_SIZE / input_chd.hunk_bytes())) * input_chd.hunk_bytes());
 		for (uint64_t offset = input_start; offset < input_end; )
 		{
 			progress(false, "Extracting, %.1f%% complete... \r", 100.0 * double(offset - input_start) / double(input_end - input_start));
@@ -2972,7 +2981,7 @@ static chdman_task do_extract_raw(parameters_map &params)
 //  track's (track_types: cue_track_type of each).
 //-------------------------------------------------
 
-static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::vector<std::string> &track_filenames, const std::vector<std::string> &track_types)
+static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::vector<std::string> &track_filenames, const std::vector<std::string> &track_types, const cdrom_file::toc *gd_toc = nullptr)
 {
 	std::vector<std::string> files;
 	for (size_t i = 0; i < track_filenames.size(); i++)
@@ -2993,10 +3002,53 @@ static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::
 			at++;
 		return true;
 	};
+	auto const parse_msf = [] (std::string_view line, size_t at) -> int
+	{
+		size_t end = at;
+		while (end < line.size() && !isspace(uint8_t(line[end])))
+			end++;
+		std::string_view const tok = line.substr(at, end - at);
+		unsigned m = 0, s = 0, f = 0;
+		size_t p1 = tok.find(':');
+		if (p1 == std::string_view::npos)
+			return -1;
+		size_t p2 = tok.find(':', p1 + 1);
+		if (p2 == std::string_view::npos || tok.find(':', p2 + 1) != std::string_view::npos)
+			return -1;
+		auto const num = [] (std::string_view v, unsigned &out) -> bool
+		{
+			if (v.empty() || v.size() > 3)
+				return false;
+			unsigned n = 0;
+			for (char c : v)
+			{
+				if (c < '0' || c > '9')
+					return false;
+				n = n * 10 + unsigned(c - '0');
+			}
+			out = n;
+			return true;
+		};
+		if (!num(tok.substr(0, p1), m) || !num(tok.substr(p1 + 1, p2 - p1 - 1), s) || !num(tok.substr(p2 + 1), f) || s >= 60 || f >= 75)
+			return -1;
+		return int((m * 60 + s) * 75 + f);
+	};
 
 	std::string const text(sheet.begin(), sheet.end());
 	std::string out;
 	size_t file = 0, tracks = 0, file_tracks = 0;
+	int cur_pregap = 0, cur_idx0 = -1, cur_idx1 = -1;
+	auto const check_gd_track = [&] (size_t t) -> bool
+	{
+		if (!gd_toc)
+			return true;
+		const cdrom_file::track_info &ti = gd_toc->tracks[t];
+		if (ti.splitframes > 0)
+			return cur_pregap == 0 && cur_idx0 == 0 && cur_idx1 == int(ti.splitframes);
+		if (ti.pregap > 0 && ti.pgdatasize == 0)
+			return cur_pregap == int(ti.pregap) && cur_idx0 == -1 && cur_idx1 == 0;
+		return cur_pregap == 0 && cur_idx0 == -1 && cur_idx1 == 0;
+	};
 	for (size_t pos = 0; pos < text.size(); )
 	{
 		size_t const nl = text.find('\n', pos);
@@ -3011,6 +3063,8 @@ static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::
 			at++;
 		if (keyword(line, at, "FILE"))
 		{
+			if (tracks > 0 && !check_gd_track(tracks - 1))
+				return std::string();
 			if ((file > 0 && file_tracks != 1) || file >= files.size())
 				return std::string();
 			size_t const name_start = at;
@@ -3040,6 +3094,8 @@ static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::
 		}
 		else if (keyword(line, at, "TRACK"))
 		{
+			if (tracks > 0 && !check_gd_track(tracks - 1))
+				return std::string();
 			// its number, then its type: the CHD's track's
 			while (at < line.size() && !isspace(uint8_t(line[at])))
 				at++;
@@ -3052,14 +3108,46 @@ static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::
 				type = "MODE2/" + type.substr(4);
 			if (tracks >= track_types.size() || type != track_types[tracks])
 				return std::string();
+			cur_pregap = 0;
+			cur_idx0 = -1;
+			cur_idx1 = -1;
 			file_tracks++;
 			tracks++;
+		}
+		else if (gd_toc && tracks > 0)
+		{
+			if (keyword(line, at, "PREGAP"))
+			{
+				int const frames = parse_msf(line, at);
+				if (frames < 0)
+					return std::string();
+				cur_pregap = frames;
+			}
+			else if (keyword(line, at, "INDEX"))
+			{
+				size_t num_end = at;
+				while (num_end < line.size() && !isspace(uint8_t(line[num_end])))
+					num_end++;
+				int const idx = atoi(line.substr(at, num_end - at).c_str());
+				at = num_end;
+				while (at < line.size() && isspace(uint8_t(line[at])))
+					at++;
+				int const frames = parse_msf(line, at);
+				if (frames < 0)
+					return std::string();
+				if (idx == 0)
+					cur_idx0 = frames;
+				else if (idx == 1)
+					cur_idx1 = frames;
+			}
 		}
 		out += line;
 		if (nl != std::string::npos)
 			out += '\n';
 	}
 	if (file != files.size() || file_tracks != 1 || tracks != track_filenames.size())
+		return std::string();
+	if (tracks > 0 && !check_gd_track(tracks - 1))
 		return std::string();
 	return out;
 }
@@ -3275,70 +3363,9 @@ static chdman_task do_extract_cd(parameters_map &params)
 			track_filenames.push_back(filename_formatted);
 		}
 
-		// Discpress: with --redump, the cue sheet createcd --keepcue stored, if it fits these files
-		std::string kept_cue;
-		if (redump)
-		{
-			std::vector<uint8_t> sheet;
-			if (!input_chd.read_metadata(CUE_SHEET_METADATA_TAG, 0, sheet))
-			{
-				std::vector<std::string> track_types;
-				for (int t = 0; t < toc.numtrks; t++)
-					track_types.push_back(cue_track_type(toc.tracks[t]));
-				kept_cue = kept_cue_sheet(sheet, track_filenames, track_types);
-			}
-			if (!kept_cue.empty())
-			{
-				util::stream_format(std::cout, "Cue sheet:    the one kept when the CHD was made\n");
-				toc_out.printf("%s", kept_cue);
-			}
-		}
-
-		// GDI must start with the # of tracks
-		if (mode == MODE_GDI)
-		{
-			toc_out.printf("%d\n", toc.numtrks);
-		}
-		else if (mode == MODE_NORMAL)
-		{
-			bool mode1 = false;
-			bool mode2 = false;
-			bool cdda = false;
-
-			for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
-			{
-				switch (toc.tracks[tracknum].trktype)
-				{
-					case cdrom_file::CD_TRACK_MODE1:
-					case cdrom_file::CD_TRACK_MODE1_RAW:
-						mode1 = true;
-						break;
-
-					case cdrom_file::CD_TRACK_MODE2:
-					case cdrom_file::CD_TRACK_MODE2_FORM1:
-					case cdrom_file::CD_TRACK_MODE2_FORM2:
-					case cdrom_file::CD_TRACK_MODE2_FORM_MIX:
-					case cdrom_file::CD_TRACK_MODE2_RAW:
-						mode2 = true;
-						break;
-
-					case cdrom_file::CD_TRACK_AUDIO:
-						cdda = true;
-						break;
-				}
-			}
-
-			if (mode2)
-				toc_out.printf("CD_ROM_XA\n\n\n");
-			else if (cdda && !mode1)
-				toc_out.printf("CD_DA\n\n\n");
-			else
-				toc_out.printf("CD_ROM\n\n\n");
-		}
-
 		if (cdrom->is_gdrom() && mode == MODE_CUEBIN)
 		{
-			// modify TOC to match Redump cue/bin format as best as possible
+			// modify TOC to match Redump cue/bin format as best as possible (Discpress: run before kept_cue_sheet so kept GD-ROM cues are validated against splitframes/pregap)
 			cdrom_file::toc *trackinfo = (cdrom_file::toc*)&toc;
 
 			// TOSEC GDI-based CHDs have the padframes field set to non-0 where the pregaps for the next track would be
@@ -3356,7 +3383,9 @@ static chdman_task do_extract_cd(parameters_map &params)
 				if (toc.tracks[tracknum].physframeofs == 45000)
 					continue;
 
-				if (!has_physical_pregap)
+				// Discpress: never split physical pregap frames across tracks with different sector sizes (e.g. TOSEC MODE1/2048 + AUDIO/2352)
+				const bool same_sector_size = toc.tracks[tracknum-1].datasize == toc.tracks[tracknum].datasize;
+				if (!has_physical_pregap || !same_sector_size)
 				{
 					// NOTE: This will generate a cue with PREGAP commands instead of INDEX 00 because the pregap data isn't baked into the bins
 					trackinfo->tracks[tracknum].pregap += trackinfo->tracks[tracknum-1].padframes;
@@ -3364,7 +3393,7 @@ static chdman_task do_extract_cd(parameters_map &params)
 					// "type 1" (only one data track in high-density area) and "type 2" (1 data and then the rest of the tracks being audio tracks in high-density area) don't require any adjustments
 					if (tracknum + 1 >= toc.numtrks && toc.tracks[tracknum].trktype != cdrom_file::CD_TRACK_AUDIO)
 					{
-						if (toc.tracks[tracknum-1].trktype != cdrom_file::CD_TRACK_AUDIO)
+						if (toc.tracks[tracknum-1].trktype != cdrom_file::CD_TRACK_AUDIO && same_sector_size)
 						{
 							// "type 3" where the high-density area is just two data tracks
 							// there shouldn't be any pregap in the padframes from the previous track in this case, and the full 3s pregap is baked into the previous track
@@ -3415,6 +3444,67 @@ static chdman_task do_extract_cd(parameters_map &params)
 					trackinfo->tracks[tracknum].pgtype = trackinfo->tracks[tracknum].trktype;
 				}
 			}
+		}
+
+		// Discpress: with --redump, the cue sheet createcd --keepcue stored, if it fits these files
+		std::string kept_cue;
+		if (redump)
+		{
+			std::vector<uint8_t> sheet;
+			if (!input_chd.read_metadata(CUE_SHEET_METADATA_TAG, 0, sheet))
+			{
+				std::vector<std::string> track_types;
+				for (int t = 0; t < toc.numtrks; t++)
+					track_types.push_back(cue_track_type(toc.tracks[t]));
+				kept_cue = kept_cue_sheet(sheet, track_filenames, track_types, cdrom->is_gdrom() ? &toc : nullptr);
+			}
+			if (!kept_cue.empty())
+			{
+				util::stream_format(std::cout, "Cue sheet:    the one kept when the CHD was made\n");
+				toc_out.printf("%s", kept_cue);
+			}
+		}
+
+		// GDI must start with the # of tracks
+		if (mode == MODE_GDI)
+		{
+			toc_out.printf("%d\n", toc.numtrks);
+		}
+		else if (mode == MODE_NORMAL)
+		{
+			bool mode1 = false;
+			bool mode2 = false;
+			bool cdda = false;
+
+			for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
+			{
+				switch (toc.tracks[tracknum].trktype)
+				{
+					case cdrom_file::CD_TRACK_MODE1:
+					case cdrom_file::CD_TRACK_MODE1_RAW:
+						mode1 = true;
+						break;
+
+					case cdrom_file::CD_TRACK_MODE2:
+					case cdrom_file::CD_TRACK_MODE2_FORM1:
+					case cdrom_file::CD_TRACK_MODE2_FORM2:
+					case cdrom_file::CD_TRACK_MODE2_FORM_MIX:
+					case cdrom_file::CD_TRACK_MODE2_RAW:
+						mode2 = true;
+						break;
+
+					case cdrom_file::CD_TRACK_AUDIO:
+						cdda = true;
+						break;
+				}
+			}
+
+			if (mode2)
+				toc_out.printf("CD_ROM_XA\n\n\n");
+			else if (cdda && !mode1)
+				toc_out.printf("CD_DA\n\n\n");
+			else
+				toc_out.printf("CD_ROM\n\n\n");
 		}
 
 		// iterate over tracks and copy all data
@@ -3468,12 +3558,21 @@ static chdman_task do_extract_cd(parameters_map &params)
 				output_frame_size = trackinfo.datasize;
 			}
 
-			// resize the buffer for the track
-			buffer.resize((TEMP_BUFFER_SIZE / output_frame_size) * output_frame_size);
+			// resize the buffer for the track (Discpress: ensure at least one full CD frame fits)
+			buffer.resize(std::max<size_t>(size_t(std::max<uint32_t>(1, TEMP_BUFFER_SIZE / output_frame_size)) * output_frame_size, cdrom_file::FRAME_SIZE));
 
 			// now read and output the actual data
 			uint32_t bufferoffs = 0;
 			uint32_t actualframes = trackinfo.frames - trackinfo.padframes + trackinfo.splitframes;
+			auto const flush_buffer = [&] (uint32_t frame)
+			{
+				output_bin_file->seek(outputoffs, SEEK_SET);
+				auto const [writerr, byteswritten] = write(*output_bin_file, buffer.data(), bufferoffs);
+				if (writerr)
+					report_error(1, "Error writing frame %d to file (%s): %s\n", frame, *output_file_str->second, "Write error");
+				outputoffs += bufferoffs;
+				bufferoffs = 0;
+			};
 			for (uint32_t frame = 0; frame < actualframes; frame++)
 			{
 				progress(false, "Extracting, %.1f%% complete... \r", 100.0 * double(totaloutputoffs + outputoffs) / double(total_bytes));
@@ -3490,6 +3589,11 @@ static chdman_task do_extract_cd(parameters_map &params)
 					trk = tracknum;
 					frameofs = frame - trackinfo.splitframes;
 				}
+
+				// Discpress: flush before reading if the next frame would not fit (prevents overflow if sector sizes differ)
+				uint32_t const frame_bytes = toc.tracks[trk].datasize + ((toc.tracks[trk].subtype != cdrom_file::CD_SUB_NONE && mode == MODE_NORMAL) ? toc.tracks[trk].subsize : 0);
+				if (bufferoffs > 0 && bufferoffs + frame_bytes > buffer.size())
+					flush_buffer(frame);
 
 				// Discpress: helper workers decompress a buffer's worth of hunks ahead (browser only)
 				uint64_t const chdoffs = uint64_t(toc.tracks[trk].chdframeofs + frameofs) * cdrom_file::FRAME_SIZE;
@@ -3526,15 +3630,10 @@ static chdman_task do_extract_cd(parameters_map &params)
 
 				// write it out if we need to
 				if (bufferoffs == buffer.size() || frame == actualframes - 1)
-				{
-					output_bin_file->seek(outputoffs, SEEK_SET);
-					auto const [writerr, byteswritten] = write(*output_bin_file, &buffer[0], bufferoffs);
-					if (writerr)
-						report_error(1, "Error writing frame %d to file (%s): %s\n", frame, *output_file_str->second, "Write error");
-					outputoffs += bufferoffs;
-					bufferoffs = 0;
-				}
+					flush_buffer(frame);
 			}
+			if (bufferoffs > 0)
+				flush_buffer(actualframes);
 
 			discoffs += trackinfo.padframes;
 		}
@@ -3952,9 +4051,8 @@ struct chdman_run
 	parameters_map parameters;
 	chdman_task task;
 
-	// Discpress: the options' values are allocated as the command line is read (0.289 never freed them); the
-	// command, which refers to them, goes first
-	~chdman_run() { task.reset(); for (auto &param : parameters) delete param.second; }
+	// Discpress: clear s_paused before destroying the coroutine frames (and destroy the command before its parameters)
+	~chdman_run() { s_paused = nullptr; task.reset(); for (auto &param : parameters) delete param.second; }
 };
 
 std::unique_ptr<chdman_run> s_run;
@@ -4079,6 +4177,12 @@ static int chdman_parse(int argc, char *argv[])
 
 static int chdman_start(int argc, char *argv[])
 {
+	// Discpress: tear down any prior run (and osd_output stack) before creating a new one, and reset per-run globals
+	s_run.reset();
+	s_paused = nullptr;
+	lastprogress = 0;
+	extern int osd_num_processors;
+	osd_num_processors = 0;
 	s_run = std::make_unique<chdman_run>();
 	int const result = chdman_parse(argc, argv);
 	if (result != CHDMAN_PAUSED)
@@ -4090,6 +4194,8 @@ static int chdman_start(int argc, char *argv[])
 // runs the command until it finishes (returns the exit code) or pauses (returns CHDMAN_PAUSED)
 static int chdman_continue()
 {
+	if (!s_run)
+		return 1;
 	std::coroutine_handle<> const next = s_paused ? std::exchange(s_paused, nullptr) : s_run->task.get();
 	next.resume();
 	if (!s_run->task.done())

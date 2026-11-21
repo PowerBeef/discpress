@@ -8,9 +8,9 @@ name: Sanitizers
 on:
   push:
     branches: [main]
-    paths: ['engine/**', 'wasm/**', 'scripts/build-sanitized.sh', 'tests/ui/engine.spec.js', 'tests/support/lsan.supp', 'tests/fixtures/**', '.github/workflows/sanitizers.yml']
+    paths: ['engine/**', 'wasm/**', 'scripts/build-sanitized.sh', 'scripts/build-upstream.sh', 'scripts/fetch-mame.sh', 'tests/ui/engine.spec.js', 'tests/support/cdprobe.cpp', 'tests/support/lsan.supp', 'tests/support/native.js', 'tests/support/paths.js', 'tests/fixtures/**', '.github/workflows/sanitizers.yml']
   pull_request:
-    paths: ['engine/**', 'wasm/**', 'scripts/build-sanitized.sh', 'tests/ui/engine.spec.js', 'tests/support/lsan.supp', 'tests/fixtures/**', '.github/workflows/sanitizers.yml']
+    paths: ['engine/**', 'wasm/**', 'scripts/build-sanitized.sh', 'scripts/build-upstream.sh', 'scripts/fetch-mame.sh', 'tests/ui/engine.spec.js', 'tests/support/cdprobe.cpp', 'tests/support/lsan.supp', 'tests/support/native.js', 'tests/support/paths.js', 'tests/fixtures/**', '.github/workflows/sanitizers.yml']
   schedule:
     - cron: '41 5 * * 1'
   workflow_dispatch:
@@ -28,6 +28,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
@@ -45,7 +47,7 @@ jobs:
           path: |
             third_party/mame
             build/chdman-0.289
-          key: mame-0.289-${{ runner.os }}-${{ hashFiles('scripts/fetch-mame.sh', 'scripts/build-upstream.sh', 'wasm/**') }}
+          key: mame-0.289-ubuntu-24.04-${{ hashFiles('scripts/fetch-mame.sh', 'scripts/build-upstream.sh', 'wasm/Makefile', 'wasm/sources.mk', 'wasm/shim/**') }}
       - name: Unmodified chdman 0.289
         run: '[ -x build/chdman-0.289 ] || ./scripts/build-upstream.sh'
       - name: The engine with sanitizers
@@ -59,6 +61,7 @@ jobs:
         working-directory: tests
         env:
           CHDMAN_ENGINE: ../build/chdman-san
+          CDPROBE_ENGINE: ../build/cdprobe-san
           ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1
           LSAN_OPTIONS: suppressions=${{ github.workspace }}/tests/support/lsan.supp
           UBSAN_OPTIONS: print_stacktrace=1

@@ -4,12 +4,12 @@
 
 var ERR = { ENOENT: 44, EPERM: 63, EIO: 29, EINVAL: 28, EEXIST: 20, ENOTEMPTY: 55, ENOSPC: 51, EISDIR: 31 };
 var S_IFDIR = 0o040000, S_IFREG = 0o100000;
-var DIR_MODE = S_IFDIR | 0o777, FILE_MODE = S_IFREG | 0o777;
+var DIR_MODE = S_IFDIR | 0o777, FILE_MODE = S_IFREG | 0o777, RO_FILE_MODE = S_IFREG | 0o555;
 var BLOCK = 1 << 20;
 // an error for people: the stores throw {errno} objects, which print as "[object Object]"
 function errText(err) {
   if (err && typeof err.errno === 'number') {
-    return err.errno === ERR.ENOSPC ? 'the browser\u2019s storage is full. Free some space, or delete earlier results (Settings \u2192 Clear temporary storage), and try again'
+    return err.errno === ERR.ENOSPC ? 'the browser\u2019s storage is full. Free some space, or delete earlier results (Settings \u2192 Free temporary storage), and try again'
       : err.errno === ERR.EIO ? 'a file could not be read or written' : 'file system error ' + err.errno;
   }
   return String(err && err.message || err);
@@ -34,19 +34,21 @@ async function loadModule(msg) {
 }
 
 function instantiate(extra) {
-  var opts = {
-    noInitialRun: true,
-    instantiateWasm: function (imports, receive) {
-      WebAssembly.instantiate(wasmModule, imports).then(function (inst) { receive(inst, wasmModule); },
-        function (err) { postMessage({ type: 'fatal', message: 'Could not start WebAssembly: ' + err }); });
-      return {};
-    },
-    locateFile: function (p) { return p; },
-    print: function () {},
-    printErr: function () {}
-  };
-  for (var k in extra) opts[k] = extra[k];
-  return createChdman(opts);
+  return new Promise(function (resolve, reject) {
+    var opts = {
+      noInitialRun: true,
+      instantiateWasm: function (imports, receive) {
+        WebAssembly.instantiate(wasmModule, imports).then(function (inst) { receive(inst, wasmModule); },
+          function (err) { reject(new Error('Could not start WebAssembly: ' + err)); });
+        return {};
+      },
+      locateFile: function (p) { return p; },
+      print: function () {},
+      printErr: function () {}
+    };
+    for (var k in extra) opts[k] = extra[k];
+    createChdman(opts).then(resolve, reject);
+  });
 }
 
 /* ---------------- storage backends ---------------- */
@@ -141,11 +143,16 @@ MemStore.prototype.truncate = function (n) {
   }
   this.sizeV = n;
 };
+var zeroBlock = null;
 MemStore.prototype.toBlob = function () {
   var parts = [], remaining = this.sizeV;
   for (var i = 0; remaining > 0; i++) {
     var n = Math.min(BLOCK, remaining);
-    var c = this.chunks[i] || new Uint8Array(BLOCK);
+    var c = this.chunks[i];
+    if (!c) {
+      if (!zeroBlock) zeroBlock = new Uint8Array(BLOCK);
+      c = zeroBlock;
+    }
     parts.push(n === BLOCK ? c : c.subarray(0, n));
     remaining -= n;
   }
@@ -167,6 +174,8 @@ function CisoStore(base, chunkBytes, label) {
   this.v2 = !this.zso && h[20] === 2;
   this.sizeV = dv.getUint32(8, true) + dv.getUint32(12, true) * 4294967296;
   this.bs = dv.getUint32(16, true);
+  if (h[21] > 20) throw new Error('unusual CSO alignment ' + h[21]);
+  if (!Number.isSafeInteger(this.sizeV)) throw new Error('unusual CSO image size');
   this.shift = Math.pow(2, h[21]);
   if (!this.bs || this.bs > (1 << 24) || this.bs % 2048) throw new Error('unusual CSO block size ' + this.bs);
   this.nblocks = Math.ceil(this.sizeV / this.bs);
@@ -217,23 +226,33 @@ CisoStore.prototype.chunk = function (c) {
   for (var i = 0; i < this.chunks.length; i++) if (this.chunks[i].first === c) return this.chunks[i].data;
   var first = c * this.chunkBlocks, last = Math.min(this.nblocks, first + this.chunkBlocks);
   var b0 = this.block(first), end = (this.index[last] & 0x7fffffff) * this.shift;
+  // aligned CSOs may omit trailing EOF alignment padding on the last block
+  if (last === this.nblocks && this.base.sizeV != null && end > this.base.sizeV && end - this.base.sizeV < this.shift) end = this.base.sizeV;
   // blocks are at most a little larger than block_size (padding; deflate's worst case), unless damaged
   if (!(end >= b0.start && end - b0.start <= (last - first) * (2 * this.bs + this.shift) + 4096)) throw this.damaged(first);
   var stored = new Uint8Array(end - b0.start), got = this.base.read(stored, b0.start, stored.length);
   var bs = this.bs, out = new Uint8Array((last - first) * bs), M = this.M;
   for (var b = first; b < last; b++) {
     var blk = this.block(b), at = blk.start - b0.start, want = Math.min(bs, this.sizeV - b * bs), o = (b - first) * bs;
-    if (!(blk.len >= 0 && at + blk.len <= got)) throw this.damaged(b);
+    var blen = blk.len;
+    if (b === this.nblocks - 1 && blen > got - at && blen - (got - at) < this.shift) blen = got - at;
+    if (!(blen >= 0 && at >= 0 && at + blen <= got)) throw this.damaged(b);
     if (blk.how === 0) {
-      if (blk.len < want) throw this.damaged(b);
+      if (blen < want) throw this.damaged(b);
       out.set(stored.subarray(at, at + want), o);
     } else if (blk.how === 2) {
-      if (lz4Block(stored, at, at + blk.len, out, o, want) !== want) throw this.damaged(b);
+      if (lz4Block(stored, at, at + blen, out, o, want) !== want) throw this.damaged(b);
     } else {
       if (!M) throw this.damaged(b);
-      if (blk.len > this.srcCap) { M._free(this.src); this.srcCap = blk.len; this.src = wasmAlloc(M, blk.len); }
-      M.HEAPU8.set(stored.subarray(at, at + blk.len), this.src);
-      if (M._wasm_inflate_raw(this.src, blk.len, this.dst, want) !== want) throw this.damaged(b);
+      if (blen > this.srcCap || !this.src) {
+        if (this.src) M._free(this.src);
+        this.src = 0;
+        this.srcCap = 0;
+        this.src = wasmAlloc(M, blen);
+        this.srcCap = blen;
+      }
+      M.HEAPU8.set(stored.subarray(at, at + blen), this.src);
+      if (M._wasm_inflate_raw(this.src, blen, this.dst, want) !== want) throw this.damaged(b);
       out.set(M.HEAPU8.subarray(this.dst, this.dst + want), o);
     }
   }
@@ -289,12 +308,25 @@ PbpStore.prototype.setModule = function (M) {
   this.src = wasmAlloc(M, PBP_BLOCK + 64);
   this.dst = wasmAlloc(M, PBP_BLOCK);
 };
+PbpStore.prototype.readBase = function (dst, pos, len) {
+  if (this.base instanceof BlobStore) return this.base.read(dst, pos, len);
+  // buffer 1 MiB at a time when staged in OPFS/MemStore so 37 KiB blocks don't each incur a sync-handle read
+  if (!this.rbuf) { this.rbuf = new Uint8Array(BLOCK); this.rpos = -1; this.rlen = 0; }
+  if (len > BLOCK) return this.base.read(dst, pos, len);
+  if (pos < this.rpos || pos + len > this.rpos + this.rlen) {
+    this.rpos = pos;
+    this.rlen = this.base.read(this.rbuf, pos, BLOCK);
+  }
+  var n = Math.min(len, Math.max(0, this.rpos + this.rlen - pos));
+  if (n > 0) dst.set(this.rbuf.subarray(pos - this.rpos, pos - this.rpos + n), 0);
+  return n;
+};
 PbpStore.prototype.block = function (b) {
   for (var i = 0; i < this.cache.length; i++) if (this.cache[i].b === b) return this.cache[i].data;
   var blk = this.blocks[b], want = Math.min(PBP_BLOCK, this.sizeV - b * PBP_BLOCK), M = this.M;
   if (!blk || !blk.len || blk.len > PBP_BLOCK) throw this.damaged(b);
   var stored = new Uint8Array(blk.len);
-  if (this.base.read(stored, blk.start, blk.len) !== blk.len) throw this.damaged(b);
+  if (this.readBase(stored, blk.start, blk.len) !== blk.len) throw this.damaged(b);
   var out;
   if (blk.len === PBP_BLOCK) out = stored.subarray(0, want);
   else {
@@ -397,8 +429,22 @@ EcmStore.prototype.damaged = function (o, why) {
 };
 EcmStore.prototype.setModule = function (M) {
   this.M = M;
-  this.src = wasmAlloc(M, Math.max(1, this.maxIn));
-  this.dst = wasmAlloc(M, Math.max(1, this.maxOut));
+  // share one growable scratch buffer pair across all ECM tracks in this WASM instance
+  var sc = M._ecmScratch || (M._ecmScratch = { src: 0, srcCap: 0, dst: 0, dstCap: 0 });
+  var needIn = Math.max(1, this.maxIn), needOut = Math.max(1, this.maxOut);
+  if (needIn > sc.srcCap) {
+    if (sc.src) M._free(sc.src);
+    sc.src = 0; sc.srcCap = 0;
+    sc.src = wasmAlloc(M, needIn);
+    sc.srcCap = needIn;
+  }
+  if (needOut > sc.dstCap) {
+    if (sc.dst) M._free(sc.dst);
+    sc.dst = 0; sc.dstCap = 0;
+    sc.dst = wasmAlloc(M, needOut);
+    sc.dstCap = needOut;
+  }
+  this.scratch = sc;
 };
 // the window holding image offset p
 EcmStore.prototype.find = function (p) {
@@ -417,15 +463,16 @@ EcmStore.prototype.window = function (w) {
   if (this.bad) throw this.damaged(0);
   for (var i = 0; i < this.windows.length; i++) if (this.windows[i].w === w) return this.windows[i].data;
   var M = this.M, cp = this.cp, inLen = cp.inp[w + 1] - cp.inp[w], outLen = cp.out[w + 1] - cp.out[w];
-  if (!M) throw this.damaged(cp.out[w]);
-  if (this.base.read(M.HEAPU8.subarray(this.src, this.src + inLen), cp.inp[w], inLen) !== inLen) throw this.damaged(cp.out[w]);
-  if (M._wasm_ecm_decode(this.src, inLen, this.dst, outLen, cp.type[w], cp.left[w]) !== inLen) throw this.damaged(cp.out[w]);
+  if (!M || !this.scratch) throw this.damaged(cp.out[w]);
+  var src = this.scratch.src, dst = this.scratch.dst;
+  if (this.base.read(M.HEAPU8.subarray(src, src + inLen), cp.inp[w], inLen) !== inLen) throw this.damaged(cp.out[w]);
+  if (M._wasm_ecm_decode(src, inLen, dst, outLen, cp.type[w], cp.left[w]) !== inLen) throw this.damaged(cp.out[w]);
   if (cp.out[w] === this.edcAt) {
-    this.edc = M._wasm_ecm_edc(this.edc, this.dst, outLen) >>> 0;
+    this.edc = M._wasm_ecm_edc(this.edc, dst, outLen) >>> 0;
     this.edcAt += outLen;
     if (this.edcAt === this.sizeV && this.edc !== this.edcWant) { this.bad = true; throw this.damaged(0, 'the image rebuilt from it doesn’t match the checksum it ends with.'); }
   }
-  var data = M.HEAPU8.slice(this.dst, this.dst + outLen);
+  var data = M.HEAPU8.slice(dst, dst + outLen);
   this.windows = [{ w: w, data: data }].concat(this.windows.slice(0, 1));
   return data;
 };
@@ -452,7 +499,14 @@ function lz4Block(src, from, to, out, o, want) {
   var i = from, start = o, end = o + want;
   while (i < to && o < end) {
     var token = src[i++], n = token >>> 4;
-    if (n === 15) { var b; do { b = src[i++]; n += b; } while (b === 255 && i < to); }
+    if (n === 15) {
+      var b;
+      do {
+        if (i >= to) return -1;
+        b = src[i++];
+        n += b;
+      } while (b === 255);
+    }
     if (i + n > to) return -1;
     var lit = Math.min(n, end - o);
     out.set(src.subarray(i, i + lit), o);
@@ -462,8 +516,15 @@ function lz4Block(src, from, to, out, o, want) {
     var off = src[i] | (src[i + 1] << 8);
     i += 2;
     var m = (token & 15) + 4;
-    if ((token & 15) === 15) { var c; do { c = src[i++]; m += c; } while (c === 255 && i < to); }
-    if (i > to || !off || off > o - start) return -1; // a length running past the block: damaged
+    if ((token & 15) === 15) {
+      var c;
+      do {
+        if (i >= to) return -1;
+        c = src[i++];
+        m += c;
+      } while (c === 255);
+    }
+    if (!off || off > o - start) return -1; // invalid back-reference
     m = Math.min(m, end - o);
     if (off >= m) out.copyWithin(o, o - off, o - off + m);
     else for (var k = 0; k < m; k++) out[o + k] = out[o + k - off]; // overlapping: repeats the last bytes
@@ -498,9 +559,8 @@ OpfsStore.prototype.put = function (src, pos) {
 };
 OpfsStore.prototype.flushBuf = function (b) {
   if (!b.len) return;
-  var len = b.len;
+  this.put(b.data.subarray(0, b.len), b.pos);
   b.len = 0;
-  this.put(b.data.subarray(0, len), b.pos);
 };
 // write out buffered ranges overlapping [pos, pos + len), except `keep`
 OpfsStore.prototype.flushRange = function (pos, len, keep) {
@@ -551,7 +611,12 @@ OpfsStore.prototype.write = function (src, pos) {
     this.flushRange(pos, len, b);
     if (!b) {
       for (i = 0; i < this.bufs.length && !b; i++) if (!this.bufs[i].len) b = this.bufs[i];
-      if (!b && this.bufs.length < NBUF) this.bufs.push(b = { pos: 0, len: 0, tick: 0, data: new Uint8Array(WBUF) });
+      if (!b && this.bufs.length < NBUF) {
+        var mem;
+        try { mem = new Uint8Array(WBUF); }
+        catch (e) { throw { errno: ERR.ENOSPC }; }
+        this.bufs.push(b = { pos: 0, len: 0, tick: 0, data: mem });
+      }
       if (!b) {
         b = this.bufs[0];
         for (i = 1; i < this.bufs.length; i++) if (this.bufs[i].tick < b.tick) b = this.bufs[i];
@@ -567,23 +632,55 @@ OpfsStore.prototype.write = function (src, pos) {
   return len;
 };
 OpfsStore.prototype.truncate = function (n) {
-  this.flush();
+  for (var i = 0; i < this.bufs.length; i++) {
+    var b = this.bufs[i];
+    if (!b.len) continue;
+    if (b.pos >= n) b.len = 0;
+    else if (b.pos + b.len > n) b.len = n - b.pos;
+  }
+  if (n > 0) this.flush();
   try { this.h.truncate(n); }
   catch (e) { throw { errno: e && e.name === 'QuotaExceededError' ? ERR.ENOSPC : ERR.EIO }; }
   this.sizeV = n;
 };
+OpfsStore.prototype.discard = function () {
+  this.bufs = [];
+  if (lastWriter === this) lastWriter = null;
+  try { this.h.truncate(0); } catch (e) { /* ignore */ }
+  this.sizeV = 0;
+};
 
 /* Stream store: results go straight to a folder the user picked. The page writes
    the chunks to disk; only the first few MB (headers, metadata) stay readable here. */
-var PIN = 8;
+var PIN = 8, PIN_MAX = 64;
 var streamSeq = 0;
 function StreamStore(name) {
   this.id = ++streamSeq;
   this.chunks = [];
   this.flushed = [];
   this.sizeV = 0;
+  this.scanned = 0;
+  this.pin = PIN;
   postMessage({ type: 's-open', id: this.id, name: name });
 }
+StreamStore.prototype.checkPin = function () {
+  var c0 = this.chunks[0];
+  if (!c0 || this.sizeV < 64) return;
+  // Uncompressed CHD v5 keeps a 4-byte map entry per hunk at mapoffset, plus metadata right after it:
+  // pin the map region (up to 64 MiB) so large uncompressed DVDs don't thrash 4-byte disk writes or fail metadata reads.
+  if (c0[0] !== 0x4d || c0[1] !== 0x43 || c0[2] !== 0x6f || c0[3] !== 0x6d ||
+      c0[4] !== 0x70 || c0[5] !== 0x72 || c0[6] !== 0x48 || c0[7] !== 0x44) return;
+  var dv = new DataView(c0.buffer, c0.byteOffset, 64);
+  if (dv.getUint32(8, false) !== 124 || dv.getUint32(12, false) !== 5) return;
+  if (dv.getUint32(16, false) || dv.getUint32(20, false) || dv.getUint32(24, false) || dv.getUint32(28, false)) return;
+  var logical = dv.getUint32(32, false) * 4294967296 + dv.getUint32(36, false);
+  var mapOff = dv.getUint32(40, false) * 4294967296 + dv.getUint32(44, false);
+  var hb = dv.getUint32(56, false);
+  if (!hb || !logical) return;
+  var mapEnd = mapOff + Math.ceil(logical / hb) * 4 + 65536;
+  var want = Math.min(PIN_MAX, Math.max(PIN, Math.ceil(mapEnd / BLOCK)));
+  if (want > this.pin) this.pin = want;
+};
 StreamStore.prototype.read = function (dst, pos, len) {
   if (pos >= this.sizeV) return 0;
   len = Math.min(len, this.sizeV - pos);
@@ -600,26 +697,32 @@ StreamStore.prototype.read = function (dst, pos, len) {
   return done;
 };
 StreamStore.prototype.write = function (src, pos) {
-  var len = src.length, done = 0;
+  var len = src.length, done = 0, touched0 = false;
   while (done < len) {
     var p = pos + done, ci = Math.floor(p / BLOCK), off = p - ci * BLOCK;
     var n = Math.min(len - done, BLOCK - off);
     if (this.flushed[ci]) {
       // region already on disk: forward a positional write
+      var slice = src.slice(done, done + n);
       sinkPending += n;
-      postMessage({ type: 's-write', id: this.id, pos: p, data: src.slice(done, done + n) });
+      postMessage({ type: 's-write', id: this.id, pos: p, data: slice }, [slice.buffer]);
     } else {
       var c = this.chunks[ci];
-      if (!c) c = this.chunks[ci] = new Uint8Array(BLOCK);
+      if (!c) {
+        try { c = this.chunks[ci] = new Uint8Array(BLOCK); }
+        catch (e) { throw { errno: ERR.ENOSPC }; }
+      }
       c.set(src.subarray(done, done + n), off);
+      if (ci === 0) touched0 = true;
+      if (ci >= this.pin && ci < this.scanned) this.scanned = ci;
     }
     done += n;
   }
   if (pos + len > this.sizeV) this.sizeV = pos + len;
+  if (touched0 && this.pin === PIN) this.checkPin();
   // hand finished chunks (well behind the write position) to the page
-  // (from where the last scan stopped: a chunk written again behind it goes at finish())
   var upto = Math.floor(pos / BLOCK) - 1;
-  for (var k = Math.max(PIN, this.scanned || 0); k < upto; k++) {
+  for (var k = Math.max(this.pin, this.scanned); k < upto; k++) {
     var ch = this.chunks[k];
     if (ch) {
       this.chunks[k] = null;
@@ -628,13 +731,16 @@ StreamStore.prototype.write = function (src, pos) {
       postMessage({ type: 's-write', id: this.id, pos: k * BLOCK, data: ch }, [ch.buffer]);
     }
   }
-  if (upto > (this.scanned || 0)) this.scanned = upto;
+  if (upto > this.scanned) this.scanned = upto;
   return len;
 };
 StreamStore.prototype.truncate = function (n) {
   if (n < this.sizeV) {
     var keep = Math.ceil(n / BLOCK);
-    for (var k = keep; k < this.chunks.length; k++) { this.chunks[k] = null; }
+    for (var k = keep; k < this.chunks.length; k++) this.chunks[k] = null;
+    for (var f = keep; f < this.flushed.length; f++) this.flushed[f] = false;
+    this.flushed.length = Math.min(this.flushed.length, keep);
+    if (this.scanned > keep) this.scanned = keep;
     var tail = n - (keep - 1) * BLOCK;
     if (keep > 0 && this.chunks[keep - 1] && tail < BLOCK) this.chunks[keep - 1].fill(0, tail);
   }
@@ -689,10 +795,18 @@ function makeFS(FS) {
       throw e;
     }
   }
+  function findKey(parent, name) {
+    if (parent.contents[name]) return name;
+    var lower = name.toLowerCase();
+    for (var k in parent.contents) if (k.toLowerCase() === lower) return k;
+    return null;
+  }
   var CHDFS = {
     mount: function (mount) {
       var root = CHDFS.createNode(null, '/', DIR_MODE, null);
-      (mount.opts.files || []).forEach(function (f) { CHDFS.createNode(root, f.name, FILE_MODE, f.store); });
+      (mount.opts.files || []).forEach(function (f) {
+        CHDFS.createNode(root, f.name, f.store && f.store.readonly ? RO_FILE_MODE : FILE_MODE, f.store);
+      });
       return root;
     },
     createNode: function (parent, name, mode, store) {
@@ -700,7 +814,7 @@ function makeFS(FS) {
       node.node_ops = CHDFS.node_ops;
       node.stream_ops = CHDFS.stream_ops;
       node.atime = node.mtime = node.ctime = Date.now();
-      if (FS.isDir(mode)) node.contents = {};
+      if (FS.isDir(mode)) node.contents = Object.create(null);
       else { node.store = store; store.name = name; }
       if (parent) parent.contents[name] = node;
       return node;
@@ -722,41 +836,54 @@ function makeFS(FS) {
         }
       },
       lookup: function (parent, name) {
-        var lower = name.toLowerCase();
-        for (var k in parent.contents) if (k.toLowerCase() === lower) return parent.contents[k];
+        var k = findKey(parent, name);
+        if (k !== null) return parent.contents[k];
         fail(ERR.ENOENT);
       },
       mknod: function (parent, name, mode, dev) {
-        if (FS.isDir(mode)) return CHDFS.createNode(parent, name, DIR_MODE, null);
         var backing = parent.mount && parent.mount.opts.backing;
         if (!backing) fail(ERR.EPERM);
+        if (FS.isDir(mode)) return CHDFS.createNode(parent, name, DIR_MODE, null);
         return CHDFS.createNode(parent, name, FILE_MODE, backing.create(name));
       },
       rename: function (oldNode, newDir, newName) {
-        var existing = newDir.contents[newName];
-        if (existing) {
+        var backing = newDir.mount && newDir.mount.opts.backing;
+        if (!backing || (oldNode.store && oldNode.store.readonly)) fail(ERR.EPERM);
+        var oldKey = findKey(oldNode.parent, oldNode.name);
+        var exKey = findKey(newDir, newName);
+        var existing = exKey !== null ? newDir.contents[exKey] : null;
+        if (existing && existing !== oldNode) {
           if (FS.isDir(existing.mode) && Object.keys(existing.contents).length) fail(ERR.ENOTEMPTY);
-          if (existing.store) existing.store.deleted = true;
+          if (existing.store) {
+            if (existing.store.readonly) fail(ERR.EPERM);
+            existing.store.deleted = true;
+            try { if (existing.store.discard) existing.store.discard(); else existing.store.truncate(0); } catch (e) { /* ignore */ }
+          }
           FS.hashRemoveNode(existing);
+          delete newDir.contents[exKey];
         }
-        delete oldNode.parent.contents[oldNode.name];
+        if (oldKey !== null) delete oldNode.parent.contents[oldKey];
         newDir.contents[newName] = oldNode;
         oldNode.name = newName;
         if (oldNode.store) oldNode.store.name = newName;
       },
       unlink: function (parent, name) {
-        var node = parent.contents[name];
+        var k = findKey(parent, name);
+        var node = k !== null ? parent.contents[k] : null;
         if (node && node.store) {
           if (node.store.readonly) fail(ERR.EPERM);
           node.store.deleted = true;
-          try { node.store.truncate(0); } catch (e) { /* ignore */ }
+          try { if (node.store.discard) node.store.discard(); else node.store.truncate(0); } catch (e) { /* ignore */ }
         }
-        delete parent.contents[name];
+        if (k !== null) delete parent.contents[k];
       },
       rmdir: function (parent, name) {
-        var node = parent.contents[name];
+        var backing = parent.mount && parent.mount.opts.backing;
+        if (!backing) fail(ERR.EPERM);
+        var k = findKey(parent, name);
+        var node = k !== null ? parent.contents[k] : null;
         if (node && Object.keys(node.contents).length) fail(ERR.ENOTEMPTY);
-        delete parent.contents[name];
+        if (k !== null) delete parent.contents[k];
       },
       readdir: function (node) { return ['.', '..'].concat(Object.keys(node.contents)); },
       symlink: function () { fail(ERR.EPERM); }
@@ -804,7 +931,7 @@ var memReason = '';
 async function makeBacking(msg) {
   var registry = [], slots = [], dir = null;
   memReason = '';
-  if (msg.outMode === 'opfs' && msg.slots > 0) {
+  if ((msg.outMode === 'opfs' || (msg.writable && msg.writable.length)) && msg.slots > 0) {
     try {
       // testing: storage that fails, held by another run ('lock') or missing ('other')
       if (msg.debugStorage) throw new DOMException('test', msg.debugStorage === 'lock' ? 'NoModificationAllowedError' : 'NotSupportedError');
@@ -911,19 +1038,26 @@ function storeReadable(st) {
 }
 
 async function stageTarget(msg, name, stages) {
+  var h = null;
   try {
     var dir = await navigator.storage.getDirectory();
     var path = msg.dirPath || ['chdman-work', msg.jobId];
     for (var i = 0; i < path.length; i++) dir = await dir.getDirectoryHandle(path[i], { create: true });
     var fname = 'stage-' + stages.length;
     var fh = await dir.getFileHandle(fname, { create: true });
-    var h = await fh.createSyncAccessHandle();
+    h = await openSyncHandle(fh);
     var t = h.truncate(0);
-    if (t && typeof t.then === 'function') throw new Error('async handles');
+    if (t && typeof t.then === 'function') {
+      try { await t; await h.close(); } catch (x) { /* ignore */ }
+      h = null;
+      throw new Error('async handles');
+    }
     var slot = { name: fname, handle: h, used: true };
     stages.push({ dir: dir, slot: slot });
+    h = null;
     return new OpfsStore(slot);
   } catch (e) {
+    if (h) { try { h.close(); } catch (x) { /* ignore */ } }
     return new MemStore();
   }
 }
@@ -931,6 +1065,7 @@ async function stageTarget(msg, name, stages) {
 async function stageInput(msg, index, stages) {
   var inp = msg.inputs[index], blob = inp.blob, size = blob.size;
   var dst = await stageTarget(msg, inp.name, stages);
+  dst.name = inp.name;
   var step = 4 << 20, pos = 0, last = 0;
   postMessage({ type: 'notice', level: 'info', message: 'This browser cannot read "' + inp.name + '" directly in the background, so it is copied to private storage first.' });
   function prog() {
@@ -947,12 +1082,16 @@ async function stageInput(msg, index, stages) {
   } catch (e) {
     if (e && typeof e.errno === 'number') throw e; // the copy couldn't be written (storage full): not a read problem
     // async reads fail too: let the page read the file and send it over
-    await new Promise(function (resolve, reject) {
-      stageWaiter = { dst: dst, resolve: resolve, reject: reject, size: size, at: pos, onChunk: function (p) { pos = p; prog(); } };
-      postMessage({ type: 'stage-request', index: index, from: pos });
-    });
-    stageWaiter = null;
+    try {
+      await new Promise(function (resolve, reject) {
+        stageWaiter = { dst: dst, resolve: resolve, reject: reject, size: size, at: pos, onChunk: function (p) { pos = p; prog(); } };
+        postMessage({ type: 'stage-request', index: index, from: pos });
+      });
+    } finally {
+      stageWaiter = null;
+    }
   }
+  if (dst.release) dst.release();
   dst.sizeV = size;
   dst.readonly = true;
   return dst;
@@ -995,7 +1134,12 @@ function setupParallel(M, ports) {
   }
   function maybeWake() {
     if (!sleeper) return;
-    if (failed || fifo.length === 0 || done.has(fifo[0])) {
+    if (failed) {
+      sleeper = null;
+      postMessage({ type: 'fatal', engine: true, message: 'Multi-core compression failed (' + failed + ').' });
+      return;
+    }
+    if (fifo.length === 0 || done.has(fifo[0])) {
       headDone();
       var s = sleeper; sleeper = null; wake(s);
     }
@@ -1025,6 +1169,8 @@ function setupParallel(M, ports) {
   helpers.forEach(function (h) {
     h.port.onmessage = function (e) {
       var m = e.data;
+      // chdman ended (done, or failed): its work items and CHD handles are gone, so nothing more is written to them
+      if (closed) return;
       if (m.type === 'error') { helperDown(h, m.message); return; }
       if (h.dead) return; // a result it sent before failing: its batches were given to the others
       if (m.type === 'dresult') {
@@ -1043,8 +1189,6 @@ function setupParallel(M, ports) {
         return;
       }
       if (m.type !== 'result') return;
-      // chdman ended (done, or failed): its work items are gone, so nothing more is written to them
-      if (closed) return;
       // results go into chdman's work items only for the batch this helper was given, item by item:
       // an answer for another batch, or for other items, would write over hunks it doesn't hold. And
       // each as the compressor gives it: a codec slot that was tried, shorter than a hunk; -1 (stored)
@@ -1078,25 +1222,32 @@ function setupParallel(M, ports) {
 
   // flags: 1 = libdeflate for the deflate codec (--libdeflate)
   M.parSetup = function (hb, ub, comps, flags) {
-    if (!helpers.length) return false;
+    var live = liveHelpers();
+    if (!live.length) return false;
     // the LaserDisc codec (avhu) reads settings from the CHD's own metadata: keep it single-threaded
     if (comps.indexOf(0x61766875) >= 0) return false;
     hunkbytes = hb;
     // chdman keeps at most 256 hunks in flight and reads them 128 at a time, so a batch must be
     // small enough for those 128 to give every helper two batches; otherwise helpers sit idle
     // (with 4 KiB DVD hunks, 512 KiB batches meant only two helpers ever had work)
-    batchSize = Math.max(1, Math.min(64, Math.floor((512 * 1024) / hb), Math.floor(128 / (2 * helpers.length))));
+    batchSize = Math.max(1, Math.min(64, Math.floor((512 * 1024) / hb), Math.floor(128 / (2 * live.length))));
     scratch = M._malloc(hb + 64);
     if (!scratch) return false; // no memory for it: chdman compresses by itself
-    helpers.forEach(function (h) { h.port.postMessage({ type: 'init', hunkbytes: hb, unitbytes: ub, comps: comps, flags: flags || 0 }); });
+    live.forEach(function (h) { h.port.postMessage({ type: 'init', hunkbytes: hb, unitbytes: ub, comps: comps, flags: flags || 0 }); });
     M.parActive = true;
-    postMessage({ type: 'notice', level: 'debug', message: 'multi-core compression: ' + helpers.length + ' helper threads, batch ' + batchSize });
+    postMessage({ type: 'notice', level: 'debug', message: 'multi-core compression: ' + live.length + ' helper threads, batch ' + batchSize });
     return true;
   };
-  // chdman has ended: late answers are dropped (their work items no longer exist)
+  // chdman has ended: late answers are dropped (their work items and CHD handles no longer exist)
   M.parClose = function () {
     closed = true;
-    helpers.forEach(function (h) { h.sent = {}; });
+    M.parActive = false;
+    rd.chd = 0;
+    rd.gen++;
+    rd.queue = [];
+    rd.open = null;
+    rd.busy = 0;
+    helpers.forEach(function (h) { h.sent = {}; h.dsent = {}; });
   };
   // codecs: the codec slots the codec plan tries for this hunk, a bit each (15 = all)
   M.parSubmit = function (item, ptr, len, codecs) {
@@ -1166,17 +1317,19 @@ function setupParallel(M, ports) {
     if (rd.waiting) { var w = rd.waiting; rd.waiting = null; wake(w); }
   }
   M.rdSetup = function (chd, hb, ub, comps) {
-    if (!helpers.length || rd.chd) return false;
+    var live = liveHelpers();
+    if (!live.length || rd.chd) return false;
     // the LaserDisc codec (avhu) reads settings from the CHD's own metadata
     if (comps.indexOf(0x61766875) >= 0) return false;
     rd.chd = chd; rd.gen++; rd.hb = hb;
     rd.batch = Math.max(1, Math.min(64, Math.floor((512 * 1024) / hb)));
-    helpers.forEach(function (h) { h.port.postMessage({ type: 'dinit', hunkbytes: hb, unitbytes: ub, comps: comps }); });
-    postMessage({ type: 'notice', level: 'debug', message: 'multi-core decompression: ' + helpers.length + ' helper threads, batch ' + rd.batch });
+    live.forEach(function (h) { h.port.postMessage({ type: 'dinit', hunkbytes: hb, unitbytes: ub, comps: comps }); });
+    postMessage({ type: 'notice', level: 'debug', message: 'multi-core decompression: ' + live.length + ' helper threads, batch ' + rd.batch });
     return true;
   };
   M.rdSubmit = function (chd, hunk, codec, ptr, len) {
     if (chd !== rd.chd) return;
+    if (!liveHelpers().length) { M._wasm_rd_done(chd, hunk, 0); return; }
     if (!rd.open) rd.open = { gen: rd.gen, n: 0, used: 0, meta: new Uint32Array(3 * rd.batch), data: new Uint8Array(rd.batch * rd.hb) };
     var o = rd.open;
     o.data.set(M.HEAPU8.subarray(ptr, ptr + len), o.used);
@@ -1253,26 +1406,30 @@ async function runHelper(msg) {
       }
       if (m.type === 'batch') {
         var n = m.items.length, data = new Uint8Array(m.data), codecs = m.codecs;
-        var meta = new Int32Array(n * 3), sha1 = new Uint8Array(n * 20), parts = [], total = 0;
+        var meta = new Int32Array(n * 3), sha1 = new Uint8Array(n * 20), out = new Uint8Array(n * hb), total = 0;
         for (var i = 0; i < n; i++) {
           M.HEAPU8.set(data.subarray(i * hb, (i + 1) * hb), inbuf);
           var c = M._wasm_helper_compress(res, sha, codecs ? codecs[i] : 15);
+          if (c < -2) throw new Error('codec compression failed (' + c + ')');
           var heap32 = M.HEAPU32, heap8 = M.HEAPU8;
           var len = heap32[res >>> 2], crc = heap32[(res >>> 2) + 1];
+          if (len > hb) throw new Error('compressed hunk exceeds hunk size');
           meta[i * 3] = c; meta[i * 3 + 1] = len; meta[i * 3 + 2] = crc;
           sha1.set(heap8.subarray(sha, sha + 20), i * 20);
-          parts.push(heap8.slice(outbuf, outbuf + len));
-          total += len;
+          if (len > 0) {
+            out.set(heap8.subarray(outbuf, outbuf + len), total);
+            total += len;
+          }
         }
-        var out = new Uint8Array(total), o = 0;
-        parts.forEach(function (p) { out.set(p, o); o += p.length; });
+        var view = total === out.length ? out : out.subarray(0, total);
         if (msg.lie) m.items[0] += 64; // a test (DEBUG.failHelpers 'lie'): an answer for another hunk
-        port.postMessage({ type: 'result', id: m.id, items: m.items, meta: meta, sha1: sha1, out: out },
+        port.postMessage({ type: 'result', id: m.id, items: m.items, meta: meta, sha1: sha1, out: view },
           [m.items.buffer, meta.buffer, sha1.buffer, out.buffer]);
       }
     } catch (err) {
       // (a WebAssembly trap here, which some Safari versions' optimizing compiler causes: the job worker
       // stops using this helper and gives its batches to the others)
+      port.onmessage = null;
       port.postMessage({ type: 'error', id: m && m.id, message: errText(err) });
     }
   };
@@ -1337,30 +1494,45 @@ async function runJob(msg) {
   var backing = await makeBacking(msg);
   postMessage({ type: 'storage', mode: backing.mode, reason: memReason });
 
+  var stages = [], inStores = [];
+  async function dropStages() {
+    for (var si = 0; si < stages.length; si++) {
+      try { stages[si].slot.handle.close(); } catch (e) { /* ignore */ }
+      try { await stages[si].dir.removeEntry(stages[si].slot.name); } catch (e) { /* ignore */ }
+    }
+    stages = [];
+  }
+
   // copies of inputs chdman must modify in place (verify --fix, addmeta, delmeta)
   var outFiles = [];
   var wl = msg.writable || [];
   for (var wi = 0; wi < wl.length; wi++) {
     var w = wl[wi];
-    var store = backing.create(w.name, true), step = 8 << 20;
-    for (var pos = 0; pos < w.blob.size; pos += step) {
-      var part = w.blob.slice(pos, Math.min(w.blob.size, pos + step)), chunk;
-      try { chunk = new Uint8Array(getReader().readAsArrayBuffer(part)); }
-      catch (e) { chunk = new Uint8Array(await part.arrayBuffer()); }
-      store.write(chunk, pos);
+    try {
+      var store = backing.create(w.name, true), step = 8 << 20;
+      for (var pos = 0; pos < w.blob.size; pos += step) {
+        var part = w.blob.slice(pos, Math.min(w.blob.size, pos + step)), chunk;
+        try { chunk = new Uint8Array(getReader().readAsArrayBuffer(part)); }
+        catch (e) { chunk = new Uint8Array(await part.arrayBuffer()); }
+        store.write(chunk, pos);
+      }
+      outFiles.push({ name: w.name, store: store });
+    } catch (e) {
+      await backing.finalize(false);
+      await dropStages();
+      postMessage({ type: 'done', code: -1, error: 'Could not prepare "' + w.name + '": ' + errText(e), outputs: [] });
+      return;
     }
-    outFiles.push({ name: w.name, store: store });
   }
 
   // inputs: read directly when possible, otherwise staged first
-  var stages = [], inStores = [];
   var inputs = msg.inputs || [];
   for (var ii = 0; ii < inputs.length; ii++) {
     var bs = new BlobStore(inputs[ii].blob);
     if (msg.debugStage || !storeReadable(bs)) {
       try { bs = await stageInput(msg, ii, stages); }
       catch (e) {
-        stages.forEach(function (st) { try { st.slot.handle.close(); } catch (x) { /* ignore */ } });
+        await dropStages();
         await backing.finalize(false);
         var full = e && typeof e.errno === 'number';
         postMessage({ type: 'done', code: -1, readFail: !full, error: full ? 'Could not copy "' + inputs[ii].name + '" to private storage: ' + errText(e) + '.' : 'The browser could not read "' + inputs[ii].name + '": ' + errText(e), outputs: [] });
@@ -1380,30 +1552,30 @@ async function runJob(msg) {
     }
     inStores.push({ name: inputs[ii].name, store: bs });
   }
-  async function dropStages() {
-    for (var si = 0; si < stages.length; si++) {
-      try { stages[si].slot.handle.close(); } catch (e) { /* ignore */ }
-      try { await stages[si].dir.removeEntry(stages[si].slot.name); } catch (e) { /* ignore */ }
-    }
+
+  var out = makeLineSink(1), err = makeLineSink(2), aborted = null, M;
+  try {
+    M = await instantiate({
+      stdin: function () { return null; },
+      stdout: function (c) { out.put(c); },
+      stderr: function (c) { err.put(c); },
+      onAbort: function (what) { aborted = 'chdman stopped unexpectedly: ' + what; }
+    });
+    inStores.forEach(function (st) { if (st.store.setModule) st.store.setModule(M); });
+    backing.M = M;
+    M.outFull = sinkFull; // wasm_out_full: chdman pauses while a folder is behind
+    var FS = M.FS, CHDFS = makeFS(FS);
+    FS.mkdir('/in');
+    FS.mount(CHDFS, { files: inStores }, '/in');
+    FS.mkdir('/out');
+    FS.mount(CHDFS, { files: outFiles, backing: backing }, '/out');
+    FS.chdir('/out');
+  } catch (e) {
+    await backing.finalize(false);
+    await dropStages();
+    postMessage({ type: 'done', code: -1, error: aborted || errText(e), outputs: [] });
+    return;
   }
-
-  var out = makeLineSink(1), err = makeLineSink(2), aborted = null;
-  var M = await instantiate({
-    stdin: function () { return null; },
-    stdout: function (c) { out.put(c); },
-    stderr: function (c) { err.put(c); },
-    onAbort: function (what) { aborted = 'chdman stopped unexpectedly: ' + what; }
-  });
-
-  inStores.forEach(function (st) { if (st.store.setModule) st.store.setModule(M); });
-  backing.M = M;
-  M.outFull = sinkFull; // wasm_out_full: chdman pauses while a folder is behind
-  var FS = M.FS, CHDFS = makeFS(FS);
-  FS.mkdir('/in');
-  FS.mount(CHDFS, { files: inStores }, '/in');
-  FS.mkdir('/out');
-  FS.mount(CHDFS, { files: outFiles, backing: backing }, '/out');
-  FS.chdir('/out');
 
   if (msg.ports && msg.ports.length) setupParallel(M, msg.ports);
 
@@ -1426,7 +1598,7 @@ async function runJob(msg) {
     postMessage({ type: 'done', code: -1, error: flushError, outputs: [], ms: performance.now() - started });
     return;
   }
-  var outputs = await backing.finalize(true);
+  var outputs = await backing.finalize(code === 0);
   await dropStages();
   postMessage({ type: 'done', code: code, outputs: outputs, ms: performance.now() - started },
     []);
@@ -1549,7 +1721,7 @@ async function runCrc(msg) {
   // msg.ecm: of the CD image inside an ECM file (and that image's EDC is checked)
   if (msg.ciso || msg.ecm || msg.pbp) {
     if (!M) throw new Error('cannot decompress');
-    iso = msg.ciso ? new CisoStore(new BlobStore(blob)) : msg.pbp ? new PbpStore(new BlobStore(blob), msg.pbp, blob.name) : new EcmStore(new BlobStore(blob), blob.name);
+    iso = msg.ciso ? new CisoStore(new BlobStore(blob), 0, blob.name) : msg.pbp ? new PbpStore(new BlobStore(blob), msg.pbp, blob.name) : new EcmStore(new BlobStore(blob), blob.name);
     iso.setModule(M);
     if (msg.end == null) end = iso.sizeV;
   }
@@ -1561,6 +1733,7 @@ async function runCrc(msg) {
       crc = M._crc32(crc, buf, n) >>> 0;
     } else {
       var chunk = new Uint8Array(r.readAsArrayBuffer(blob.slice(pos, pos + n)));
+      if (chunk.length !== n) throw new Error('truncated image');
       if (M) { M.HEAPU8.set(chunk, buf); crc = M._crc32(crc, buf, chunk.length) >>> 0; }
       else crc = crcUpdate(crc, chunk);
     }

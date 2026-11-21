@@ -2,7 +2,7 @@ include sources.mk
 T ?= wasm
 SIMD ?= -msimd128
 # EXTRA: additional compiler flags for experiments (e.g. EXTRA=-fno-inline). Not -flto, which breaks C++
-# exceptions here, nor flags that change results, such as -ffast-math (CLAUDE.md)
+# exceptions here, nor flags that change results, such as -ffast-math (AGENTS.md)
 EXTRA ?=
 ifeq ($(T),wasm)
 CC := emcc
@@ -15,11 +15,11 @@ CXX := g++
 OPT := -O2 -g0
 PLAT := -DSDLMAME_LINUX
 endif
-O ?= obj-$(T)
+O ?= ../build/obj-$(T)
 COMMON := $(OPT) -DNDEBUG -DLSB_FIRST -DCRLF=2 -DSDLMAME_UNIX -DOSD_SDL -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE $(if $(UPSTREAM),-DUTF8PROC_STATIC '-DBARE_VCS_REVISION="mame0289"')
 INC := -I$(M)/src/osd -I$(M)/src/lib/util -I$(M)/3rdparty -I$(M)/3rdparty/zlib -I$(M)/3rdparty/zstd/lib -I$(M)/3rdparty/flac/include $(if $(UPSTREAM),-I$(M)/3rdparty/utf8proc) -I$(M)/src/lib -Ishim $(if $(UPSTREAM),,-I$(M)/../libdeflate)
 CXXFLAGS := $(COMMON) $(PLAT) -std=c++20 $(INC) -Wno-deprecated-declarations
-FLACDEF := -DHAVE_CONFIG_H -DENABLE_64_BIT_WORDS=1 -DOGG_FOUND=0 -DFLAC__HAS_OGG=0 -DHAVE_LROUND=1 -DHAVE_INTTYPES_H -DHAVE_STDBOOL_H -DHAVE_STDINT_H -DHAVE_STDIO_H -DHAVE_STDLIB_H -DHAVE_STRING_H -DCPU_IS_BIG_ENDIAN=0 -DCPU_IS_LITTLE_ENDIAN=1 -DWORDS_BIGENDIAN=0 -DHAVE_BSWAP16 -DHAVE_BSWAP32 -DFLAC__NO_ASM -I$(M)/3rdparty/flac/src/libFLAC/include -I$(M)/3rdparty/flac/include $(if $(UPSTREAM),,-I$(M)/../libm)
+FLACDEF := -ffp-contract=off -DHAVE_CONFIG_H -DENABLE_64_BIT_WORDS=1 -DOGG_FOUND=0 -DFLAC__HAS_OGG=0 -DHAVE_LROUND=1 -DHAVE_INTTYPES_H -DHAVE_STDBOOL_H -DHAVE_STDINT_H -DHAVE_STDIO_H -DHAVE_STDLIB_H -DHAVE_STRING_H -DCPU_IS_BIG_ENDIAN=0 -DCPU_IS_LITTLE_ENDIAN=1 -DWORDS_BIGENDIAN=0 -DHAVE_BSWAP16 -DHAVE_BSWAP32 -DFLAC__NO_ASM -I$(M)/3rdparty/flac/src/libFLAC/include -I$(M)/3rdparty/flac/include $(if $(UPSTREAM),,-I$(M)/../libm)
 ZSTDDEF := -DXXH_NAMESPACE=ZSTD_ -DDEBUGLEVEL=0 -DZSTD_DISABLE_ASM -DZSTD_MULTITHREAD=0
 LZMADEF := -DZ7_PPMD_SUPPORT -DZ7_ST
 

@@ -40,10 +40,10 @@ def write(name, data):
         f.write(data)
 
 
-def fixture(key, files, **info):
+def fixture(key, files, force=False, **info):
     """Register a fixture; `files` maps file name -> zero-arg function returning bytes."""
     names = list(files)
-    if FORCE or not all(os.path.exists(os.path.join(OUT, n)) for n in names):
+    if FORCE or force or not all(os.path.exists(os.path.join(OUT, n)) for n in names):
         print('generating', key, file=sys.stderr)
         for n, make in files.items():
             write(n, make())
@@ -634,7 +634,7 @@ fixture('pcecd-gaps', {
     'pce gaps (Track 2).bin': lambda: pce_data(197, {2048 + 0x20: b'PC Engine CD-ROM SYSTEM'}),
     'pce gaps (Track 3).bin': lambda: g.audio(150, 198),
 }, add=['pce gaps.cue', 'pce gaps (Track 1).bin', 'pce gaps (Track 2).bin', 'pce gaps (Track 3).bin'], job='create', disc='cd',
-   command='createcd', sys='pcecd', ident='none', name='pce gaps', warning='Beetle PCE and Geargrafx read the tracks after a POSTGAP line',
+   command='createcd', sys='pcecd', ident='none', name='pce gaps', warning='Beetle PCE, Geargrafx and jgenesis read the tracks after a POSTGAP line',
    quirks=['postgap', 'ares-pregap'])
 fixture('pcfx-postgap', {
     'pcfx postgap.cue': lambda: text_cue([
@@ -913,6 +913,9 @@ fixture('ps1-pbp-bad', {
 
 # ---------------------------------------------------------------- benchmark images
 if args.bench:
+    bench_stamp = os.path.join(OUT, 'bench.stamp')
+    bench_cfg = '%d:%d' % (args.cd_mb, args.dvd_mb)
+    force_bench = FORCE or not os.path.exists(bench_stamp) or open(bench_stamp).read().strip() != bench_cfg
     cd_audio_frames = int(args.cd_mb * 0.3 * (1 << 20)) // 2352 // 3
     cd_data = int(args.cd_mb * 0.7 * (1 << 20)) // 2048 * 2048
     tr = [('bench-cd (Track 1).bin', 'MODE2/2352', 0)] + [('bench-cd (Track %d).bin' % i, 'AUDIO', 150) for i in (2, 3, 4)]
@@ -920,21 +923,23 @@ if args.bench:
              'bench-cd (Track 1).bin': lambda: g.raw_sectors_chunked(ps1_iso('SLUS_005.94', 'BENCH', cd_data >> 20, 91), 2)}
     for i in (2, 3, 4):
         files['bench-cd (Track %d).bin' % i] = (lambda s: lambda: g.audio(cd_audio_frames, s, silence=150))(90 + i)
-    fixture('bench-cd', files, add=list(files), job='create', disc='cd', command='createcd', sys='ps1', bench=True)
+    fixture('bench-cd', files, force=force_bench, add=list(files), job='create', disc='cd', command='createcd', sys='ps1', bench=True)
     fixture('bench-dvd', {
         'bench-dvd.iso': lambda: g.pad_sectors(g.iso9660({
             'SYSTEM.CNF': b'BOOT2 = cdrom0:\\SLUS_202.65;1\r\nVER = 1.00\r\n', 'SLUS_202.65': exe('SLUS_202.65'),
             'DATA.BIN': g.filler((args.dvd_mb << 20) - (1 << 20), 95)}, 'BENCH', 'PLAYSTATION')),
-    }, add=['bench-dvd.iso'], job='create', disc='dvd', command='createdvd', sys='ps2', bench=True)
+    }, force=force_bench, add=['bench-dvd.iso'], job='create', disc='dvd', command='createdvd', sys='ps2', bench=True)
     # its data track as an ECM image: what rebuilding the sectors while converting costs
     fixture('bench-cd-ecm', {
         'bench-cd (Track 1).bin.ecm': lambda: ecm_of('bench-cd (Track 1).bin'),
-    }, add=['bench-cd.cue', 'bench-cd (Track 1).bin.ecm'] + ['bench-cd (Track %d).bin' % i for i in (2, 3, 4)], ref='bench-cd.cue',
+    }, force=force_bench, add=['bench-cd.cue', 'bench-cd (Track 1).bin.ecm'] + ['bench-cd (Track %d).bin' % i for i in (2, 3, 4)], ref='bench-cd.cue',
        job='create', disc='cd', command='createcd', sys='ps1', bench=True)
     # the same image as a CSO: what decompressing it while converting costs
     fixture('bench-dvd-cso', {
         'bench-dvd.cso': lambda: g.ciso(open(os.path.join(OUT, 'bench-dvd.iso'), 'rb').read()),
-    }, add=['bench-dvd.cso'], ref='bench-dvd.iso', job='create', disc='dvd', command='createdvd', sys='ps2', bench=True)
+    }, force=force_bench, add=['bench-dvd.cso'], ref='bench-dvd.iso', job='create', disc='dvd', command='createdvd', sys='ps2', bench=True)
+    with open(bench_stamp, 'w') as f:
+        f.write(bench_cfg + '\n')
 
 # extra database rows for the page served with ?testdb=1 (see tests/support/server.js)
 def row(name, serial, data, ext):

@@ -979,15 +979,15 @@ std::error_condition chd_file::codec_process_hunk(uint32_t hunknum)
 		case 3:
 		case 4:
 			{
-				uint8_t const *const rawmap = &m_rawmap[16 * hunknum];
+				uint8_t const *const rawmap = &m_rawmap[size_t(16) * hunknum];
 				uint64_t const blockoffs = get_u64be(&rawmap[0]);
 				switch (rawmap[15] & V34_MAP_ENTRY_FLAG_TYPE_MASK)
 				{
 				case V34_MAP_ENTRY_TYPE_COMPRESSED:
 					{
 						uint32_t const blocklen = get_u16be(&rawmap[12]) | (uint32_t(rawmap[14]) << 16);
-						// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
-						if (UNEXPECTED(blocklen > m_compressed.size()))
+						// Discpress: more than the buffer holds, or no codec in slot 0 (a damaged or crafted map)
+						if (UNEXPECTED(blocklen > m_compressed.size() || !m_decompressor[0]))
 							return std::error_condition(error::INVALID_DATA);
 						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
 						if (UNEXPECTED(err))
@@ -1025,7 +1025,7 @@ std::error_condition chd_file::codec_process_hunk(uint32_t hunknum)
 					return std::error_condition(error::UNSUPPORTED_FORMAT);
 
 				// compressed case
-				uint8_t const *const rawmap = &m_rawmap[m_mapentrybytes * hunknum];
+				uint8_t const *const rawmap = &m_rawmap[size_t(m_mapentrybytes) * hunknum];
 				uint32_t const blocklen = get_u24be(&rawmap[1]);
 				uint64_t const blockoffs = get_u48be(&rawmap[4]);
 				switch (rawmap[0])
@@ -1035,8 +1035,8 @@ std::error_condition chd_file::codec_process_hunk(uint32_t hunknum)
 				case COMPRESSION_TYPE_2:
 				case COMPRESSION_TYPE_3:
 					{
-						// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
-						if (UNEXPECTED(blocklen > m_compressed.size()))
+						// Discpress: more than the buffer holds, or unused codec slot (a damaged or crafted map)
+						if (UNEXPECTED(blocklen > m_compressed.size() || !m_decompressor[rawmap[0]]))
 							return std::error_condition(error::INVALID_DATA);
 						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
 						if (UNEXPECTED(err))
@@ -1123,7 +1123,7 @@ std::error_condition chd_file::read_hunk(uint32_t hunknum, void *buffer)
 		case 3:
 		case 4:
 			{
-				uint8_t const *const rawmap = &m_rawmap[16 * hunknum];
+				uint8_t const *const rawmap = &m_rawmap[size_t(16) * hunknum];
 				uint64_t const blockoffs = get_u64be(&rawmap[0]);
 				util::crc32_t const blockcrc = get_u32be(&rawmap[8]);
 				bool const nocrc = rawmap[15] & V34_MAP_ENTRY_FLAG_NO_CRC;
@@ -1132,8 +1132,8 @@ std::error_condition chd_file::read_hunk(uint32_t hunknum, void *buffer)
 				case V34_MAP_ENTRY_TYPE_COMPRESSED:
 					{
 						uint32_t const blocklen = get_u16be(&rawmap[12]) | (uint32_t(rawmap[14]) << 16);
-						// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
-						if (UNEXPECTED(blocklen > m_compressed.size()))
+						// Discpress: more than the buffer holds, or no codec in slot 0 (a damaged or crafted map)
+						if (UNEXPECTED(blocklen > m_compressed.size() || !m_decompressor[0]))
 							return std::error_condition(error::INVALID_DATA);
 						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
 						if (UNEXPECTED(err))
@@ -1183,7 +1183,7 @@ std::error_condition chd_file::read_hunk(uint32_t hunknum, void *buffer)
 		// v5 map entries
 		case 5:
 			{
-				uint8_t const *const rawmap = &m_rawmap[m_mapentrybytes * hunknum];
+				uint8_t const *const rawmap = &m_rawmap[size_t(m_mapentrybytes) * hunknum];
 
 				if (!compressed())
 				{
@@ -1217,8 +1217,8 @@ std::error_condition chd_file::read_hunk(uint32_t hunknum, void *buffer)
 							if (wasm_read_cached(hunknum, rawmap[0], dest))
 								return (util::crc16_creator::simple(dest, m_hunkbytes) != blockcrc) ? std::error_condition(error::DECOMPRESSION_ERROR) : std::error_condition();
 #endif
-							// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
-							if (UNEXPECTED(blocklen > m_compressed.size()))
+							// Discpress: more than the buffer holds, or unused codec slot (a damaged or crafted map)
+							if (UNEXPECTED(blocklen > m_compressed.size() || !m_decompressor[rawmap[0]]))
 								return std::error_condition(error::INVALID_DATA);
 							std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
 							if (UNEXPECTED(err))
@@ -1630,12 +1630,15 @@ std::error_condition chd_file::read_metadata(chd_metadata_tag searchtag, uint32_
 	if (err)
 		return err;
 
-	// read the metadata
+	// read the metadata (Discpress: avoid &output[0] UB when length is 0)
 	try { output.resize(metaentry.length); }
 	catch (std::bad_alloc const &) { return std::errc::not_enough_memory; }
-	err = file_read(metaentry.offset + METADATA_HEADER_SIZE, &output[0], metaentry.length);
-	if (UNEXPECTED(err))
-		return err;
+	if (metaentry.length > 0)
+	{
+		err = file_read(metaentry.offset + METADATA_HEADER_SIZE, output.data(), metaentry.length);
+		if (UNEXPECTED(err))
+			return err;
+	}
 	resulttag = metaentry.metatag;
 	resultflags = metaentry.flags;
 	return std::error_condition();
@@ -1982,7 +1985,7 @@ uint32_t chd_file::guess_unitbytes()
 	// look for hard disk metadata; if found, then the unit size == sector size
 	std::string metadata;
 	int i0, i1, i2, i3;
-	if (!read_metadata(HARD_DISK_METADATA_TAG, 0, metadata) && sscanf(metadata.c_str(), HARD_DISK_METADATA_FORMAT, &i0, &i1, &i2, &i3) == 4)
+	if (!read_metadata(HARD_DISK_METADATA_TAG, 0, metadata) && sscanf(metadata.c_str(), HARD_DISK_METADATA_FORMAT, &i0, &i1, &i2, &i3) == 4 && i3 > 0)
 		return i3;
 
 	// look for CD-ROM metadata; if found, then the unit size == CD frame size
@@ -2025,6 +2028,8 @@ void chd_file::parse_v3_header(uint8_t *rawheader, util::sha1_t &parentsha1)
 	m_metaoffset = get_u64be(&rawheader[36]);
 	m_hunkbytes = get_u32be(&rawheader[76]);
 	m_hunkcount = get_u32be(&rawheader[24]);
+	if (UNEXPECTED(m_hunkbytes == 0 || m_hunkcount == 0))
+		throw std::error_condition(error::INVALID_FILE);
 
 	// extract parent SHA-1
 	uint32_t flags = get_u32be(&rawheader[16]);
@@ -2057,7 +2062,9 @@ void chd_file::parse_v3_header(uint8_t *rawheader, util::sha1_t &parentsha1)
 
 	// guess at the units based on snooping the metadata
 	m_unitbytes = guess_unitbytes();
-	m_unitcount = (m_logicalbytes + m_unitbytes - 1) / m_unitbytes;
+	if (UNEXPECTED(m_unitbytes == 0))
+		throw std::error_condition(error::INVALID_FILE);
+	m_unitcount = (m_logicalbytes / m_unitbytes) + ((m_logicalbytes % m_unitbytes) ? 1 : 0);
 }
 
 /**
@@ -2088,6 +2095,8 @@ void chd_file::parse_v4_header(uint8_t *rawheader, util::sha1_t &parentsha1)
 	m_metaoffset = get_u64be(&rawheader[36]);
 	m_hunkbytes = get_u32be(&rawheader[44]);
 	m_hunkcount = get_u32be(&rawheader[24]);
+	if (UNEXPECTED(m_hunkbytes == 0 || m_hunkcount == 0))
+		throw std::error_condition(error::INVALID_FILE);
 
 	// extract parent SHA-1
 	uint32_t flags = get_u32be(&rawheader[16]);
@@ -2120,7 +2129,9 @@ void chd_file::parse_v4_header(uint8_t *rawheader, util::sha1_t &parentsha1)
 
 	// guess at the units based on snooping the metadata
 	m_unitbytes = guess_unitbytes();
-	m_unitcount = (m_logicalbytes + m_unitbytes - 1) / m_unitbytes;
+	if (UNEXPECTED(m_unitbytes == 0))
+		throw std::error_condition(error::INVALID_FILE);
+	m_unitcount = (m_logicalbytes / m_unitbytes) + ((m_logicalbytes % m_unitbytes) ? 1 : 0);
 }
 
 /**
@@ -2142,14 +2153,19 @@ void chd_file::parse_v5_header(uint8_t *rawheader, util::sha1_t &parentsha1)
 	if (UNEXPECTED(get_u32be(&rawheader[8]) != V5_HEADER_SIZE))
 		throw std::error_condition(error::INVALID_FILE);
 
-	// extract core info
+	// extract core info (Discpress: validate non-zero hunk/unit sizes, divisibility and 32-bit hunkcount)
 	m_logicalbytes = get_u64be(&rawheader[32]);
 	m_mapoffset = get_u64be(&rawheader[40]);
 	m_metaoffset = get_u64be(&rawheader[48]);
 	m_hunkbytes = get_u32be(&rawheader[56]);
-	m_hunkcount = (m_logicalbytes + m_hunkbytes - 1) / m_hunkbytes;
 	m_unitbytes = get_u32be(&rawheader[60]);
-	m_unitcount = (m_logicalbytes + m_unitbytes - 1) / m_unitbytes;
+	if (UNEXPECTED(m_hunkbytes == 0 || m_unitbytes == 0 || (m_hunkbytes % m_unitbytes) != 0))
+		throw std::error_condition(error::INVALID_FILE);
+	uint64_t const hunkcount = (m_logicalbytes / m_hunkbytes) + ((m_logicalbytes % m_hunkbytes) ? 1 : 0);
+	if (UNEXPECTED(hunkcount == 0 || hunkcount > UINT32_MAX))
+		throw std::error_condition(error::INVALID_FILE);
+	m_hunkcount = uint32_t(hunkcount);
+	m_unitcount = (m_logicalbytes / m_unitbytes) + ((m_logicalbytes % m_unitbytes) ? 1 : 0);
 
 	// determine compression
 	m_compression[0] = get_u32be(&rawheader[16]);
@@ -2290,12 +2306,15 @@ std::error_condition chd_file::compress_v5_map()
 		// for COMPRESSION_SELF: selfbits
 		// for COMPRESSION_PARENT: parentbits
 		// the overall size is clamped later with bitbuf.flush()
-		int nbits_needed = (8*16) + (12 + std::max<int>({lengthbits+16, selfbits, parentbits}))*m_hunkcount;
+		uint64_t nbits_needed = (8 * 16) + uint64_t(12 + std::max<int>({ lengthbits + 16, selfbits, parentbits })) * m_hunkcount;
 		// Discpress: plus the tree, at most 8 bits for each of the 16 codes. 0.289 left it out, which only
 		// matters for a few hunks: then the map overflowed, was cut short, and the CHD couldn't be read.
 		// Where 0.289's map fit, it is the same; the size of the buffer doesn't change what goes into it.
 		nbits_needed += 16 * 8;
-		std::vector<uint8_t> compressed(nbits_needed / 8 + 1);
+		uint64_t const compbytes = nbits_needed / 8 + 1;
+		if (UNEXPECTED(compbytes > SIZE_MAX))
+			throw std::bad_alloc();
+		std::vector<uint8_t> compressed(static_cast<size_t>(compbytes));
 		bitstream_out bitbuf(&compressed[16], compressed.size() - 16);
 
 		// compute a tree and export it to the buffer
@@ -2438,12 +2457,18 @@ void chd_file::decompress_v5_map()
 	uint8_t const selfbits = rawbuf[13];
 	uint8_t const parentbits = rawbuf[14];
 
+	// Discpress: validate map header bounds before allocating or shifting (0.289 had shift UB and unbounded alloc)
+	uint64_t filelen = 0;
+	if (UNEXPECTED(mapbytes == 0 || lengthbits > 24 || selfbits > 31 || parentbits > 48 ||
+			(!m_file->length(filelen) && (m_mapoffset > filelen || filelen - m_mapoffset < 16 || mapbytes > filelen - m_mapoffset - 16))))
+		throw std::error_condition(error::INVALID_FILE);
+
 	// now read the map
 	std::vector<uint8_t> compressed(mapbytes);
-	ioerr = file_read(m_mapoffset + 16, &compressed[0], mapbytes);
+	ioerr = file_read(m_mapoffset + 16, compressed.data(), mapbytes);
 	if (UNEXPECTED(ioerr))
 		throw ioerr;
-	bitstream_in bitbuf(&compressed[0], compressed.size());
+	bitstream_in bitbuf(compressed.data(), compressed.size());
 
 	// first decode the compression types
 	huffman_decoder<16, 8> decoder;
@@ -2454,7 +2479,7 @@ void chd_file::decompress_v5_map()
 	int repcount = 0;
 	for (uint32_t hunknum = 0; hunknum < m_hunkcount; hunknum++)
 	{
-		uint8_t *rawmap = &m_rawmap[hunknum * 12];
+		uint8_t *rawmap = &m_rawmap[size_t(hunknum) * 12];
 		if (repcount > 0)
 			rawmap[0] = lastcomp, repcount--;
 		else
@@ -2475,7 +2500,7 @@ void chd_file::decompress_v5_map()
 	uint64_t last_parent = 0;
 	for (uint32_t hunknum = 0; hunknum < m_hunkcount; hunknum++)
 	{
-		uint8_t *rawmap = &m_rawmap[hunknum * 12];
+		uint8_t *rawmap = &m_rawmap[size_t(hunknum) * 12];
 		uint64_t offset = curoffset;
 		uint32_t length = 0;
 		uint16_t crc = 0;
@@ -2500,7 +2525,9 @@ void chd_file::decompress_v5_map()
 				break;
 
 			case COMPRESSION_PARENT:
-				offset = bitbuf.read(parentbits);
+				offset = (parentbits > 31)
+						? ((uint64_t(bitbuf.read(parentbits - 24)) << 24) | bitbuf.read(24))
+						: uint64_t(bitbuf.read(parentbits));
 				last_parent = offset;
 				break;
 
@@ -2566,7 +2593,7 @@ std::error_condition chd_file::create_common()
 			throw std::error_condition(error::UNSUPPORTED_VERSION);
 
 		// must be an even number of units per hunk
-		if (UNEXPECTED(m_hunkbytes % m_unitbytes != 0))
+		if (UNEXPECTED(m_hunkbytes == 0 || m_unitbytes == 0 || m_hunkbytes % m_unitbytes != 0))
 			throw std::error_condition(std::errc::invalid_argument);
 		if (UNEXPECTED(m_parent && m_unitbytes != m_parent->unit_bytes()))
 			throw std::error_condition(std::errc::invalid_argument);
@@ -2618,12 +2645,12 @@ std::error_condition chd_file::create_common()
 		// write out the map (if not compressed)
 		if (!compressed())
 		{
-			uint32_t mapsize = m_mapentrybytes * m_hunkcount;
+			uint64_t mapsize = uint64_t(m_mapentrybytes) * m_hunkcount;
 			uint8_t buffer[4096] = { 0 };
 			uint64_t offset = m_mapoffset;
 			while (mapsize != 0)
 			{
-				uint32_t const bytes_to_write = std::min<size_t>(mapsize, sizeof(buffer));
+				uint32_t const bytes_to_write = uint32_t(std::min<uint64_t>(mapsize, sizeof(buffer)));
 				err = file_write(offset, buffer, bytes_to_write);
 				if (UNEXPECTED(err))
 					throw err;
@@ -2640,6 +2667,11 @@ std::error_condition chd_file::create_common()
 		// handle errors by closing ourself
 		close();
 		return err;
+	}
+	catch (std::bad_alloc const &)
+	{
+		close();
+		return std::errc::not_enough_memory;
 	}
 	catch (...)
 	{
@@ -2735,6 +2767,11 @@ std::error_condition chd_file::open_common(bool writeable, const open_parent_fun
 		close();
 		return err;
 	}
+	catch (std::bad_alloc const &)
+	{
+		close();
+		return std::errc::not_enough_memory;
+	}
 }
 
 /**
@@ -2759,14 +2796,18 @@ void chd_file::create_open_common()
 	}
 
 	// read the map; v5+ compressed drives need to read and decompress their map
-	m_rawmap.resize(m_hunkcount * m_mapentrybytes);
+	// Discpress: compute map size in 64 bits (0.289 overflowed 32-bit multiply on crafted headers)
+	uint64_t const mapsize = uint64_t(m_hunkcount) * m_mapentrybytes;
+	if (UNEXPECTED(mapsize > (uint64_t(1) << 30)))
+		throw std::error_condition(error::INVALID_FILE);
+	m_rawmap.resize(size_t(mapsize));
 	if (m_version >= 5 && compressed())
 	{
 		decompress_v5_map();
 	}
 	else
 	{
-		std::error_condition err = file_read(m_mapoffset, &m_rawmap[0], m_rawmap.size());
+		std::error_condition err = file_read(m_mapoffset, m_rawmap.data(), m_rawmap.size());
 		if (UNEXPECTED(err))
 			throw err;
 	}
@@ -2938,9 +2979,14 @@ std::error_condition chd_file::metadata_find(chd_metadata_tag metatag, int32_t m
 		metaentry.offset = metaentry.next;
 	}
 
-	// loop until we run out of options
+	// loop until we run out of options (Discpress: Brent cycle detection + cap so cyclic metadata cannot hang)
+	uint64_t tortoise = metaentry.offset;
+	uint32_t steps = 0, power = 1, total = 0;
 	while (metaentry.offset != 0)
 	{
+		if (UNEXPECTED(++total > 100000))
+			return error::INVALID_METADATA;
+
 		// read the raw header
 		uint8_t raw_meta_header[METADATA_HEADER_SIZE];
 		std::error_condition err = file_read(metaentry.offset, raw_meta_header, sizeof(raw_meta_header));
@@ -2961,6 +3007,17 @@ std::error_condition chd_file::metadata_find(chd_metadata_tag metatag, int32_t m
 		// no match, fetch the next link
 		metaentry.prev = metaentry.offset;
 		metaentry.offset = metaentry.next;
+		if (metaentry.offset != 0)
+		{
+			if (UNEXPECTED(metaentry.offset == tortoise))
+				return error::INVALID_METADATA;
+			if (++steps == power)
+			{
+				tortoise = metaentry.offset;
+				power *= 2;
+				steps = 0;
+			}
+		}
 	}
 
 	// if we get here, we didn't find it
@@ -3065,18 +3122,24 @@ chd_file_compressor::chd_file_compressor() :
 	m_walking_parent(false),
 	m_total_in(0),
 	m_total_out(0),
-	m_read_queue(nullptr),
 	m_read_queue_offset(0),
 	m_read_done_offset(0),
-	m_work_queue(nullptr),
+	m_has_read_error(false),
+#ifndef __EMSCRIPTEN__
+	m_abort(false),
+	m_read_pending(0),
+	m_read_active(false),
+	m_read_stop(false),
+	m_work_head(0),
+	m_work_tail(0),
+	m_work_count(0),
+	m_work_stop(false),
+#endif
 	m_write_hunk(0)
 {
-	// zap arrays
-	std::fill(std::begin(m_codecs), std::end(m_codecs), nullptr);
-
-	// allocate work queues
-	m_read_queue = osd_work_queue_alloc(WORK_QUEUE_FLAG_IO);
-	m_work_queue = osd_work_queue_alloc(WORK_QUEUE_FLAG_MULTI);
+#ifndef __EMSCRIPTEN__
+	std::fill(std::begin(m_work_ring), std::end(m_work_ring), nullptr);
+#endif
 }
 
 /**
@@ -3089,21 +3152,126 @@ chd_file_compressor::chd_file_compressor() :
 
 chd_file_compressor::~chd_file_compressor()
 {
-	// Discpress: after an error, hunks are still out, and the queue frees only the work items it holds (0.289 leaked
-	// the others): let the reads finish, then release them
-	osd_work_queue_wait(m_read_queue, 30 * osd_ticks_per_second());
-	for (work_item &item : m_work_item)
-		if (item.m_osd)
-			osd_work_item_release(std::exchange(item.m_osd, nullptr));
-
-	// free the work queues
-	osd_work_queue_free(m_read_queue);
-	osd_work_queue_free(m_work_queue);
-
-	// delete allocated arrays
-	for (auto & elem : m_codecs)
-		delete elem;
+	compress_abort();
 }
+
+void chd_file_compressor::compress_abort() noexcept
+{
+#ifndef __EMSCRIPTEN__
+	m_abort.store(true, std::memory_order_release);
+	{
+		std::lock_guard<std::mutex> lock(m_read_mutex);
+		m_read_stop = true;
+		m_read_pending = 0;
+	}
+	m_read_cv.notify_all();
+	if (m_read_thread.joinable())
+		m_read_thread.join();
+
+	{
+		std::lock_guard<std::mutex> lock(m_work_mutex);
+		m_work_stop = true;
+		m_work_head = m_work_tail = m_work_count = 0;
+	}
+	m_work_cv.notify_all();
+	for (auto &t : m_workers)
+		if (t.joinable())
+			t.join();
+	m_workers.clear();
+
+	m_read_stop = false;
+	m_read_active = false;
+	m_work_stop = false;
+	m_abort.store(false, std::memory_order_relaxed);
+#endif
+}
+
+#ifndef __EMSCRIPTEN__
+void chd_file_compressor::wait_read_idle()
+{
+	if (!m_read_thread.joinable())
+		return;
+	std::unique_lock<std::mutex> lock(m_read_mutex);
+	m_read_cv.wait(lock, [this]() { return m_read_pending == 0 && !m_read_active; });
+}
+
+void chd_file_compressor::reader_loop()
+{
+	while (true)
+	{
+		{
+			std::unique_lock<std::mutex> lock(m_read_mutex);
+			m_read_cv.wait(lock, [this]() { return m_read_stop || m_read_pending > 0; });
+			if (m_read_stop)
+				return;
+			m_read_pending--;
+			m_read_active = true;
+		}
+		async_read();
+		{
+			std::lock_guard<std::mutex> lock(m_read_mutex);
+			m_read_active = false;
+		}
+		m_read_cv.notify_all();
+	}
+}
+
+void chd_file_compressor::worker_loop(uint32_t threadid)
+{
+	while (true)
+	{
+		work_item *item = nullptr;
+		{
+			std::unique_lock<std::mutex> lock(m_work_mutex);
+			m_work_cv.wait(lock, [this]() { return m_work_stop || m_work_count > 0; });
+			if (m_work_stop)
+				return;
+			item = m_work_ring[m_work_head];
+			m_work_head = (m_work_head + 1) % WORK_BUFFER_HUNKS;
+			m_work_count--;
+		}
+		if (!m_abort.load(std::memory_order_acquire) && !m_has_read_error.load(std::memory_order_acquire))
+		{
+			try
+			{
+				if (item->m_walking_parent)
+					async_walk_parent(*item);
+				else
+					async_compress_hunk(*item, threadid);
+			}
+			catch (std::error_condition const &err)
+			{
+				{
+					std::lock_guard<std::mutex> lock(m_done_mutex);
+					if (!m_has_read_error.load(std::memory_order_relaxed))
+					{
+						m_read_error = err;
+						m_has_read_error.store(true, std::memory_order_release);
+					}
+				}
+				m_done_cv.notify_one();
+			}
+			catch (...)
+			{
+				{
+					std::lock_guard<std::mutex> lock(m_done_mutex);
+					if (!m_has_read_error.load(std::memory_order_relaxed))
+					{
+						m_read_error = std::errc::not_enough_memory;
+						m_has_read_error.store(true, std::memory_order_release);
+					}
+				}
+				m_done_cv.notify_one();
+			}
+		}
+		item->m_status.store(WS_COMPLETE, std::memory_order_release);
+		{
+			std::lock_guard<std::mutex> lock(m_done_mutex);
+		}
+		m_done_cv.notify_one();
+	}
+}
+#endif
 
 /**
  * @fn  void chd_file_compressor::compress_begin()
@@ -3115,9 +3283,11 @@ chd_file_compressor::~chd_file_compressor()
 
 void chd_file_compressor::compress_begin()
 {
+	compress_abort();
+
 	// reset state
 	m_walking_parent = bool(m_parent);
-	m_total_in = 0;
+	m_total_in.store(0, std::memory_order_relaxed);
 	m_total_out = 0;
 	m_compsha1.reset();
 
@@ -3127,34 +3297,58 @@ void chd_file_compressor::compress_begin()
 
 	// reset read state
 	m_read_queue_offset = 0;
-	m_read_done_offset = 0;
+	m_read_done_offset.store(0, std::memory_order_relaxed);
+	m_has_read_error.store(false, std::memory_order_relaxed);
 	m_read_error.clear();
 
 	// reset work item state
-	m_work_buffer.resize(hunk_bytes() * (WORK_BUFFER_HUNKS + 1));
-	memset(&m_work_buffer[0], 0, m_work_buffer.size());
-	m_compressed_buffer.resize(hunk_bytes() * WORK_BUFFER_HUNKS);
+	m_work_buffer.resize(size_t(hunk_bytes()) * (WORK_BUFFER_HUNKS + 1));
+	memset(m_work_buffer.data(), 0, m_work_buffer.size());
+	m_compressed_buffer.resize(size_t(hunk_bytes()) * WORK_BUFFER_HUNKS);
 	for (int itemnum = 0; itemnum < WORK_BUFFER_HUNKS; itemnum++)
 	{
 		work_item &item = m_work_item[itemnum];
 		item.m_compressor = this;
-		item.m_data = &m_work_buffer[hunk_bytes() * itemnum];
-		item.m_compressed = &m_compressed_buffer[hunk_bytes() * itemnum];
+		item.m_status.store(WS_READY, std::memory_order_relaxed);
+		item.m_data = &m_work_buffer[size_t(hunk_bytes()) * itemnum];
+		item.m_compressed = &m_compressed_buffer[size_t(hunk_bytes()) * itemnum];
 		item.m_hash.resize(hunk_bytes() / unit_bytes());
 	}
 
-	// initialize codec instances
-	for (auto & elem : m_codecs)
-	{
-		delete elem;
-		elem = new chd_compressor_group(*this, m_compression);
-	}
+	// initialize codec instances (Discpress: 1 in browser; 1 per native worker with no 16-thread cap)
+#ifdef __EMSCRIPTEN__
+	uint32_t const nworkers = 1;
+#else
+	extern int osd_num_processors;
+	uint32_t const hw = std::max<uint32_t>(1, std::thread::hardware_concurrency());
+	uint32_t const req = (osd_num_processors > 0) ? uint32_t(osd_num_processors) : hw;
+	uint32_t const cap = std::min<uint32_t>(WORK_BUFFER_HUNKS, std::max<uint32_t>(4 * hw, 64));
+	uint32_t const nworkers = std::min(req, cap);
+#endif
+	m_codecs.clear();
+	m_codecs.reserve(nworkers);
+	for (uint32_t i = 0; i < nworkers; i++)
+		m_codecs.push_back(std::make_unique<chd_compressor_group>(*this, m_compression));
 
 	// reset write state
 	m_write_hunk = 0;
 
 #ifdef __EMSCRIPTEN__
 	s_wasm_par = compressed() ? wasm_par_enabled(hunk_bytes(), unit_bytes(), m_compression, m_libdeflate ? 1 : 0) : 0; // flags: 1 = libdeflate
+#else
+	if (nworkers > 1)
+	{
+		m_read_pending = 0;
+		m_read_active = false;
+		m_read_stop = false;
+		m_work_head = m_work_tail = m_work_count = 0;
+		m_work_stop = false;
+		m_abort.store(false, std::memory_order_relaxed);
+		m_read_thread = std::thread(&chd_file_compressor::reader_loop, this);
+		m_workers.reserve(nworkers);
+		for (uint32_t i = 0; i < nworkers; i++)
+			m_workers.emplace_back(&chd_file_compressor::worker_loop, this, i);
+	}
 #endif
 }
 
@@ -3174,17 +3368,30 @@ void chd_file_compressor::compress_begin()
 std::error_condition chd_file_compressor::compress_continue(double &progress, double &ratio)
 {
 	// if we got an error, return the error
-	if (UNEXPECTED(m_read_error))
+	if (UNEXPECTED(m_has_read_error.load(std::memory_order_acquire)))
+	{
+#ifndef __EMSCRIPTEN__
+		std::lock_guard<std::mutex> lock(m_done_mutex);
+#endif
 		return m_read_error;
+	}
 
 	// if done reading, queue some more
-	while (m_read_queue_offset < m_logicalbytes && osd_work_queue_items(m_read_queue) < 2)
+	while (m_read_queue_offset < m_logicalbytes)
 	{
+#ifndef __EMSCRIPTEN__
+		if (!m_workers.empty())
+		{
+			std::lock_guard<std::mutex> lock(m_read_mutex);
+			if (m_read_pending + (m_read_active ? 1 : 0) >= 2)
+				break;
+		}
+#endif
 		// see if we have enough free work items to read the next half of a buffer
-		uint32_t const startitem = m_read_queue_offset / hunk_bytes();
+		uint32_t const startitem = uint32_t(m_read_queue_offset / hunk_bytes());
 		uint32_t const enditem = startitem + WORK_BUFFER_HUNKS / 2;
 		uint32_t curitem = startitem;
-		while ((curitem < enditem) && (m_work_item[curitem % WORK_BUFFER_HUNKS].m_status == WS_READY))
+		while ((curitem < enditem) && (m_work_item[curitem % WORK_BUFFER_HUNKS].m_status.load(std::memory_order_acquire) == WS_READY))
 			++curitem;
 
 		// if it's not all clear, defer
@@ -3193,27 +3400,43 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 
 		// if we're walking the parent, we want one more item to have cleared so we
 		// can read an extra hunk there
-		if (m_walking_parent && m_work_item[curitem % WORK_BUFFER_HUNKS].m_status != WS_READY)
+		if (m_walking_parent && m_work_item[curitem % WORK_BUFFER_HUNKS].m_status.load(std::memory_order_acquire) != WS_READY)
 			break;
 
 		// queue the next read
 		for (curitem = startitem; curitem < enditem; curitem++)
-			m_work_item[curitem % WORK_BUFFER_HUNKS].m_status = WS_READING;
-		osd_work_item_queue(m_read_queue, async_read_static, this, WORK_ITEM_FLAG_AUTO_RELEASE);
-		m_read_queue_offset += WORK_BUFFER_HUNKS * hunk_bytes() / 2;
+			m_work_item[curitem % WORK_BUFFER_HUNKS].m_status.store(WS_READING, std::memory_order_release);
+		m_read_queue_offset += uint64_t(WORK_BUFFER_HUNKS / 2) * hunk_bytes();
+#ifndef __EMSCRIPTEN__
+		if (!m_workers.empty())
+		{
+			{
+				std::lock_guard<std::mutex> lock(m_read_mutex);
+				m_read_pending++;
+			}
+			m_read_cv.notify_one();
+		}
+		else
+#endif
+		{
+			async_read();
+			if (UNEXPECTED(m_has_read_error.load(std::memory_order_acquire)))
+				return m_read_error;
+		}
 	}
 
 	// flush out any finished items
-	while (m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status == WS_COMPLETE)
+	while (m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status.load(std::memory_order_acquire) == WS_COMPLETE)
 	{
-		work_item &item = m_work_item[m_write_hunk % WORK_BUFFER_HUNKS];
-
-		// free any OSD work item
-		if (item.m_osd)
+		if (UNEXPECTED(m_has_read_error.load(std::memory_order_acquire)))
 		{
-			osd_work_item_release(item.m_osd);
-			item.m_osd = nullptr;
+#ifndef __EMSCRIPTEN__
+			std::lock_guard<std::mutex> lock(m_done_mutex);
+#endif
+			return m_read_error;
 		}
+
+		work_item &item = m_work_item[m_write_hunk % WORK_BUFFER_HUNKS];
 
 		if (m_walking_parent)
 		{
@@ -3225,7 +3448,7 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 			for (uint32_t unit = 0; unit < units; unit++)
 			{
 				if (m_parent_map.find(item.m_hash[unit].m_crc16, item.m_hash[unit].m_sha1) == hashmap::NOT_FOUND)
-					m_parent_map.add(item.m_hunknum * uph + unit, item.m_hash[unit].m_crc16, item.m_hash[unit].m_sha1);
+					m_parent_map.add(uint64_t(item.m_hunknum) * uph + unit, item.m_hash[unit].m_crc16, item.m_hash[unit].m_sha1);
 			}
 		}
 		else if (!compressed())
@@ -3270,25 +3493,34 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 		}
 
 		// reset the item and advance
-		item.m_status = WS_READY;
+		item.m_status.store(WS_READY, std::memory_order_release);
 		m_write_hunk++;
 
 		// if we hit the end, finalize
 		if (m_write_hunk == m_hunkcount)
 		{
+#ifndef __EMSCRIPTEN__
+			wait_read_idle();
+			if (UNEXPECTED(m_has_read_error.load(std::memory_order_acquire)))
+			{
+				std::lock_guard<std::mutex> lock(m_done_mutex);
+				return m_read_error;
+			}
+#endif
 			if (m_walking_parent)
 			{
 				// if this is just walking the parent, reset and get ready for compression
 				m_walking_parent = false;
-				m_read_queue_offset = m_read_done_offset = 0;
+				m_read_queue_offset = 0;
+				m_read_done_offset.store(0, std::memory_order_relaxed);
 				m_write_hunk = 0;
 				for (auto &elem : m_work_item)
-					elem.m_status = WS_READY;
+					elem.m_status.store(WS_READY, std::memory_order_relaxed);
 			}
 			else
 			{
-				// wait for all reads to finish and if we're compressed, write the final SHA1 and map
-				osd_work_queue_wait(m_read_queue, 30 * osd_ticks_per_second());
+				// stop threads and if we're compressed, write the final SHA1 and map
+				compress_abort();
 				if (!compressed())
 					return std::error_condition();
 				std::error_condition err = set_raw_sha1(m_compsha1.finish());
@@ -3301,39 +3533,25 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 
 	// update progress and ratio
 	if (m_walking_parent)
-		progress = double(m_read_done_offset) / double(logical_bytes());
+		progress = double(m_read_done_offset.load(std::memory_order_relaxed)) / double(logical_bytes());
 	else
 		progress = double(m_write_hunk) / double(m_hunkcount);
-	ratio = (m_total_in == 0) ? 1.0 : double(m_total_out) / double(m_total_in);
+	uint64_t const total_in = m_total_in.load(std::memory_order_relaxed);
+	ratio = (total_in == 0) ? 1.0 : double(m_total_out) / double(total_in);
 
-	// if we're waiting for work, wait
-	// sometimes code can get here with .m_status == WS_READY and .m_osd != nullptr, TODO find out why this happens
-	while ((m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status != WS_READY) &&
-			(m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status != WS_COMPLETE) &&
-			m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_osd)
-		osd_work_item_wait(m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_osd, osd_ticks_per_second());
+	// if we're waiting for work, sleep on the condition variable until the next hunk finishes or errors
+#ifndef __EMSCRIPTEN__
+	if (!m_workers.empty())
+	{
+		std::unique_lock<std::mutex> lock(m_done_mutex);
+		m_done_cv.wait(lock, [this]() {
+			int32_t const st = m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status.load(std::memory_order_acquire);
+			return st == WS_COMPLETE || st == WS_READY || m_has_read_error.load(std::memory_order_acquire);
+		});
+	}
+#endif
 
 	return m_walking_parent ? error::WALKING_PARENT : error::COMPRESSING;
-}
-
-/**
- * @fn  void *chd_file_compressor::async_walk_parent_static(void *param, int threadid)
- *
- * @brief   -------------------------------------------------
- *            async_walk_parent - handle asynchronous parent walking operations
- *          -------------------------------------------------.
- *
- * @param [in,out]  param   If non-null, the parameter.
- * @param   threadid        The threadid.
- *
- * @return  null if it fails, else a void*.
- */
-
-void *chd_file_compressor::async_walk_parent_static(void *param, int threadid)
-{
-	auto *const item = reinterpret_cast<work_item *>(param);
-	item->m_compressor->async_walk_parent(*item);
-	return nullptr;
 }
 
 /**
@@ -3355,31 +3573,10 @@ void chd_file_compressor::async_walk_parent(work_item &item)
 		item.m_hash[unit].m_crc16 = util::crc16_creator::simple(item.m_data + unit * unit_bytes(), hunk_bytes());
 		item.m_hash[unit].m_sha1 = util::sha1_creator::simple(item.m_data + unit * unit_bytes(), hunk_bytes());
 	}
-	item.m_status = WS_COMPLETE;
 }
 
 /**
- * @fn  void *chd_file_compressor::async_compress_hunk_static(void *param, int threadid)
- *
- * @brief   -------------------------------------------------
- *            async_compress_hunk - handle asynchronous hunk compression
- *          -------------------------------------------------.
- *
- * @param [in,out]  param   If non-null, the parameter.
- * @param   threadid        The threadid.
- *
- * @return  null if it fails, else a void*.
- */
-
-void *chd_file_compressor::async_compress_hunk_static(void *param, int threadid)
-{
-	auto *const item = reinterpret_cast<work_item *>(param);
-	item->m_compressor->async_compress_hunk(*item, threadid);
-	return nullptr;
-}
-
-/**
- * @fn  void chd_file_compressor::async_compress_hunk(work_item &item, int threadid)
+ * @fn  void chd_file_compressor::async_compress_hunk(work_item &item, uint32_t threadid)
  *
  * @brief   Asynchronous compress hunk.
  *
@@ -3387,11 +3584,11 @@ void *chd_file_compressor::async_compress_hunk_static(void *param, int threadid)
  * @param   threadid        The threadid.
  */
 
-void chd_file_compressor::async_compress_hunk(work_item &item, int threadid)
+void chd_file_compressor::async_compress_hunk(work_item &item, uint32_t threadid)
 {
 	// use our thread's codec
-	assert(threadid < std::size(m_codecs));
-	item.m_codecs = m_codecs[threadid];
+	assert(threadid < m_codecs.size());
+	item.m_codecs = m_codecs[threadid].get();
 
 	// compute CRC-16 and SHA-1 hashes
 	item.m_hash[0].m_crc16 = util::crc16_creator::simple(item.m_data, hunk_bytes());
@@ -3399,13 +3596,9 @@ void chd_file_compressor::async_compress_hunk(work_item &item, int threadid)
 
 	// find the best compression scheme, unless we already have a self or parent match
 	// (note we may miss a self match from blocks not yet added, but this just results in extra work)
-	// TODO: data race
 	if ((m_current_map.find(item.m_hash[0].m_crc16, item.m_hash[0].m_sha1) == hashmap::NOT_FOUND) &&
 			(m_parent_map.find(item.m_hash[0].m_crc16, item.m_hash[0].m_sha1) == hashmap::NOT_FOUND))
 		item.m_compression = item.m_codecs->find_best_compressor(item.m_data, item.m_compressed, item.m_complen, item.m_try);
-
-	// mark us complete
-	item.m_status = WS_COMPLETE;
 }
 
 //-------------------------------------------------
@@ -3441,25 +3634,6 @@ uint32_t chd_file_compressor::codec_plan_codecs(hunk_content content) const noex
 }
 
 /**
- * @fn  void *chd_file_compressor::async_read_static(void *param, int threadid)
- *
- * @brief   -------------------------------------------------
- *            async_read - handle asynchronous source file reading
- *          -------------------------------------------------.
- *
- * @param [in,out]  param   If non-null, the parameter.
- * @param   threadid        The threadid.
- *
- * @return  null if it fails, else a void*.
- */
-
-void *chd_file_compressor::async_read_static(void *param, int threadid)
-{
-	reinterpret_cast<chd_file_compressor *>(param)->async_read();
-	return nullptr;
-}
-
-/**
  * @fn  void chd_file_compressor::async_read()
  *
  * @brief   Asynchronous read.
@@ -3467,31 +3641,38 @@ void *chd_file_compressor::async_read_static(void *param, int threadid)
 
 void chd_file_compressor::async_read()
 {
-	// if in the error or complete state, stop
-	if (UNEXPECTED(m_read_error))
+	// if in the error or abort state, stop
+#ifndef __EMSCRIPTEN__
+	if (UNEXPECTED(m_abort.load(std::memory_order_acquire)))
+		return;
+#endif
+	if (UNEXPECTED(m_has_read_error.load(std::memory_order_acquire)))
+		return;
+
+	uint64_t const read_done = m_read_done_offset.load(std::memory_order_relaxed);
+	if (UNEXPECTED(read_done >= logical_bytes()))
 		return;
 
 	// determine parameters for the read
-	uint32_t const work_buffer_bytes = WORK_BUFFER_HUNKS * hunk_bytes();
-	uint32_t numbytes = work_buffer_bytes / 2;
-	if ((m_read_done_offset + numbytes) > logical_bytes())
-		numbytes = logical_bytes() - m_read_done_offset;
+	uint64_t const work_buffer_bytes = uint64_t(WORK_BUFFER_HUNKS) * hunk_bytes();
+	uint32_t numbytes = uint32_t(std::min<uint64_t>(work_buffer_bytes / 2, logical_bytes() - read_done));
 
-	uint8_t *const dest = &m_work_buffer[0] + (m_read_done_offset % work_buffer_bytes);
-	assert((&m_work_buffer[0] == dest) || (&m_work_buffer[work_buffer_bytes / 2] == dest));
-	assert(!(m_read_done_offset % hunk_bytes()));
-	uint64_t const end_offset = m_read_done_offset + numbytes;
+	uint8_t *const dest = m_work_buffer.data() + (read_done % work_buffer_bytes);
+	assert((m_work_buffer.data() == dest) || (&m_work_buffer[work_buffer_bytes / 2] == dest));
+	assert(!(read_done % hunk_bytes()));
+	uint64_t const end_offset = read_done + numbytes;
+	bool const walking_parent = m_walking_parent;
 
 	// catch any exceptions coming out of here
 	try
 	{
 		// do the read
-		if (m_walking_parent)
+		if (walking_parent)
 		{
 			// if walking the parent, read in hunks from the parent CHD
-			uint64_t curoffs = m_read_done_offset;
+			uint64_t curoffs = read_done;
 			uint8_t *curdest = dest;
-			uint32_t curhunk = m_read_done_offset / hunk_bytes();
+			uint32_t curhunk = uint32_t(read_done / hunk_bytes());
 			while (curoffs < end_offset + 1)
 			{
 				std::error_condition err = m_parent->read_hunk(curhunk, curdest);
@@ -3505,50 +3686,118 @@ void chd_file_compressor::async_read()
 		else
 		{
 			// otherwise, call the virtual function
-			read_data(dest, m_read_done_offset, numbytes);
+			read_data(dest, read_done, numbytes);
 		}
 
-		// spawn off work for each hunk
-		for (uint64_t curoffs = m_read_done_offset; curoffs < end_offset; curoffs += hunk_bytes())
+		// continue the running SHA-1 and advance read pointer before handing off to workers
+		if (!walking_parent)
 		{
-			uint32_t hunknum = curoffs / hunk_bytes();
-			work_item &item = m_work_item[hunknum % WORK_BUFFER_HUNKS];
-			assert(item.m_status == WS_READING);
-			item.m_status = WS_QUEUED;
-			item.m_hunknum = hunknum;
-			item.m_try = (m_codec_plan && !m_walking_parent) ? codec_plan_codecs(read_content(curoffs, hunk_bytes())) : 0x0f;
-#ifdef __EMSCRIPTEN__
-			if (s_wasm_par && !m_walking_parent && compressed())
+			if (compressed())
+				m_compsha1.append(dest, numbytes);
+			m_total_in.fetch_add(numbytes, std::memory_order_relaxed);
+		}
+		m_read_done_offset.store(end_offset, std::memory_order_relaxed);
+
+		// spawn off work for each hunk
+#ifndef __EMSCRIPTEN__
+		if (!m_workers.empty())
+		{
+			if (!compressed() && !walking_parent)
 			{
-				item.m_osd = nullptr;
-				item.m_codecs = m_codecs[0];
+				for (uint64_t curoffs = read_done; curoffs < end_offset; curoffs += hunk_bytes())
+				{
+					uint32_t const hunknum = uint32_t(curoffs / hunk_bytes());
+					work_item &item = m_work_item[hunknum % WORK_BUFFER_HUNKS];
+					assert(item.m_status.load(std::memory_order_relaxed) == WS_READING);
+					item.m_hunknum = hunknum;
+					item.m_walking_parent = false;
+					item.m_status.store(WS_COMPLETE, std::memory_order_release);
+				}
+				{
+					std::lock_guard<std::mutex> lock(m_done_mutex);
+				}
+				m_done_cv.notify_one();
+				return;
+			}
+			{
+				std::lock_guard<std::mutex> lock(m_work_mutex);
+				for (uint64_t curoffs = read_done; curoffs < end_offset; curoffs += hunk_bytes())
+				{
+					uint32_t const hunknum = uint32_t(curoffs / hunk_bytes());
+					work_item &item = m_work_item[hunknum % WORK_BUFFER_HUNKS];
+					assert(item.m_status.load(std::memory_order_relaxed) == WS_READING);
+					item.m_hunknum = hunknum;
+					item.m_walking_parent = walking_parent;
+					item.m_try = (m_codec_plan && !walking_parent) ? codec_plan_codecs(read_content(curoffs, hunk_bytes())) : 0x0f;
+					item.m_status.store(WS_QUEUED, std::memory_order_release);
+					m_work_ring[m_work_tail] = &item;
+					m_work_tail = (m_work_tail + 1) % WORK_BUFFER_HUNKS;
+					m_work_count++;
+				}
+			}
+			m_work_cv.notify_all();
+			return;
+		}
+#endif
+		for (uint64_t curoffs = read_done; curoffs < end_offset; curoffs += hunk_bytes())
+		{
+			uint32_t const hunknum = uint32_t(curoffs / hunk_bytes());
+			work_item &item = m_work_item[hunknum % WORK_BUFFER_HUNKS];
+			assert(item.m_status.load(std::memory_order_relaxed) == WS_READING);
+			item.m_hunknum = hunknum;
+			item.m_walking_parent = walking_parent;
+			item.m_try = (m_codec_plan && !walking_parent) ? codec_plan_codecs(read_content(curoffs, hunk_bytes())) : 0x0f;
+#ifdef __EMSCRIPTEN__
+			if (s_wasm_par && !walking_parent && compressed())
+			{
+				item.m_codecs = m_codecs[0].get();
+				item.m_status.store(WS_QUEUED, std::memory_order_release);
 				wasm_par_submit(&item, item.m_data, hunk_bytes(), item.m_try);
 				continue;
 			}
 #endif
-			item.m_osd = osd_work_item_queue(m_work_queue, m_walking_parent ? async_walk_parent_static : async_compress_hunk_static, &item, 0);
+			if (!compressed() && !walking_parent)
+			{
+				item.m_status.store(WS_COMPLETE, std::memory_order_release);
+				continue;
+			}
+			item.m_status.store(WS_QUEUED, std::memory_order_release);
+			if (walking_parent)
+				async_walk_parent(item);
+			else
+				async_compress_hunk(item, 0);
+			item.m_status.store(WS_COMPLETE, std::memory_order_release);
 		}
-
-		// continue the running SHA-1
-		if (!m_walking_parent)
-		{
-			if (compressed())
-				m_compsha1.append(dest, numbytes);
-			m_total_in += numbytes;
-		}
-
-		// advance the read pointer
-		m_read_done_offset += numbytes;
 	}
 	catch (std::error_condition const &err)
 	{
 		fprintf(stderr, "CHD error occurred: %s\n", err.message().c_str());
+#ifndef __EMSCRIPTEN__
+		{
+			std::lock_guard<std::mutex> lock(m_done_mutex);
+			m_read_error = err;
+			m_has_read_error.store(true, std::memory_order_release);
+		}
+		m_done_cv.notify_one();
+#else
 		m_read_error = err;
+		m_has_read_error.store(true, std::memory_order_release);
+#endif
 	}
 	catch (std::exception const &ex)
 	{
 		fprintf(stderr, "exception occurred: %s\n", ex.what());
+#ifndef __EMSCRIPTEN__
+		{
+			std::lock_guard<std::mutex> lock(m_done_mutex);
+			m_read_error = std::errc::io_error; // TODO: revisit this error code
+			m_has_read_error.store(true, std::memory_order_release);
+		}
+		m_done_cv.notify_one();
+#else
 		m_read_error = std::errc::io_error; // TODO: revisit this error code
+		m_has_read_error.store(true, std::memory_order_release);
+#endif
 	}
 }
 
@@ -3570,7 +3819,8 @@ chd_file_compressor::hashmap::hashmap() :
 	m_block_list(new entry_block(nullptr))
 {
 	// initialize the map to empty
-	memset(m_map, 0, sizeof(m_map));
+	for (auto &slot : m_map)
+		slot.store(nullptr, std::memory_order_relaxed);
 }
 
 /**
@@ -3607,7 +3857,8 @@ void chd_file_compressor::hashmap::reset()
 	m_block_list->m_nextalloc = 0;
 
 	// reset the hash
-	memset(m_map, 0, sizeof(m_map));
+	for (auto &slot : m_map)
+		slot.store(nullptr, std::memory_order_relaxed);
 }
 
 /**
@@ -3626,7 +3877,7 @@ void chd_file_compressor::hashmap::reset()
 uint64_t chd_file_compressor::hashmap::find(util::crc16_t crc16, util::sha1_t sha1) const noexcept
 {
 	// look up the entry in the map
-	for (entry_t *entry = m_map[crc16]; entry; entry = entry->m_next)
+	for (entry_t *entry = m_map[crc16].load(std::memory_order_acquire); entry; entry = entry->m_next)
 		if (entry->m_sha1 == sha1)
 			return entry->m_itemnum;
 	return NOT_FOUND;
@@ -3652,8 +3903,8 @@ void chd_file_compressor::hashmap::add(uint64_t itemnum, util::crc16_t crc16, ut
 	entry_t *entry = &m_block_list->m_array[m_block_list->m_nextalloc++];
 	entry->m_itemnum = itemnum;
 	entry->m_sha1 = sha1;
-	entry->m_next = m_map[crc16];
-	m_map[crc16] = entry;
+	entry->m_next = m_map[crc16].load(std::memory_order_relaxed);
+	m_map[crc16].store(entry, std::memory_order_release);
 }
 
 std::error_condition chd_file::check_is_hd() const noexcept
@@ -3786,14 +4037,14 @@ bool chd_file::wasm_read_ahead(uint32_t first, uint32_t count)
 			if ((type > COMPRESSION_TYPE_3) || !m_decompressor[type] || m_decompressor[type]->lossy())
 				continue;
 			uint32_t const blocklen = get_u24be(&rawmap[1]);
-			if (blocklen > m_compressed.size())
-				continue; // more than a hunk holds (a damaged map): read_hunk will report it
+			if (blocklen == 0 || blocklen > m_compressed.size())
+				continue; // empty or larger than a hunk (a damaged map): read_hunk will report it
 			uint8_t const *data = span ? (span + (blockoffs - lo)) : nullptr;
 			if (!data)
 			{
-				if (file_read(blockoffs, &m_compressed[0], blocklen))
+				if (file_read(blockoffs, m_compressed.data(), blocklen))
 					continue; // read_hunk will report it
-				data = &m_compressed[0];
+				data = m_compressed.data();
 			}
 			if (m_wasm_rd > 0)
 			{
@@ -3805,6 +4056,7 @@ bool chd_file::wasm_read_ahead(uint32_t first, uint32_t count)
 				m_wasm_ahead[hunknum] = wasm_ahead_hunk{ std::vector<uint8_t>(data, data + blocklen), 3 };
 			}
 		}
+		std::vector<uint8_t>().swap(m_wasm_span); // release the up-to-16 MiB span immediately after slicing
 		m_wasm_queued = end;
 	}
 
@@ -3854,10 +4106,14 @@ bool chd_file::wasm_read_cached(uint32_t hunknum, uint8_t type, void *dest)
 	{
 	case 1: // decompressed by a helper
 	case 4: // stored uncompressed
-		memcpy(dest, &ahead.data[0], m_hunkbytes);
+		if (ahead.data.size() < m_hunkbytes)
+			return false;
+		memcpy(dest, ahead.data.data(), m_hunkbytes);
 		return true;
 	case 3: // compressed bytes
-		m_decompressor[type]->decompress(&ahead.data[0], ahead.data.size(), reinterpret_cast<uint8_t *>(dest), m_hunkbytes);
+		if (ahead.data.empty() || !m_decompressor[type])
+			return false;
+		m_decompressor[type]->decompress(ahead.data.data(), ahead.data.size(), reinterpret_cast<uint8_t *>(dest), m_hunkbytes);
 		return true;
 	default:
 		return false;

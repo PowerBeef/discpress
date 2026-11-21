@@ -573,8 +573,8 @@ uint32_t flac_decoder::finish()
 	if (position == 0)
 		return 0;
 	if (m_compressed_start == reinterpret_cast<const FLAC__byte *>(m_custom_header))
-		position -= m_compressed_length;
-	return position;
+		position = (position >= m_compressed_length) ? (position - m_compressed_length) : 0; // Discpress: don't underflow on damaged FLAC
+	return (position > UINT32_MAX) ? UINT32_MAX : uint32_t(position);
 }
 
 

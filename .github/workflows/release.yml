@@ -36,13 +36,15 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+  group: release
+  cancel-in-progress: false
 
 jobs:
   # A tag pushed or a release published by hand: run this workflow on main for that tag.
   forward:
     if: github.event_name != 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     permissions:
       actions: write
     steps:
@@ -50,11 +52,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name || github.ref_name }}
-        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "${{ github.event.repository.default_branch }}" -f tag="$TAG"
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH" -f tag="$TAG"
 
   prepare:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write # only to see draft releases (drafts need write access to read)
       actions: read # CI's runs on the release's commit
@@ -66,11 +70,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Pick the release's commit
         id: pick
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           # Every release becomes the latest and goes online, so a prerelease (v1.4.0-rc1) can't be one:
           # it would replace the current version, and sort -V puts v1.4.0 before it.
@@ -78,10 +84,12 @@ jobs:
             echo "::error::The tag must be a version such as v1.3.5 (no prereleases such as v1.4.0-rc1), got '$TAG'"
             exit 1
           fi
+          # Keep main's check-dist.sh before switching to the release's commit.
+          cp scripts/check-dist.sh "$RUNNER_TEMP/check-dist.sh"
           # the site shows the newest version: an older tag's re-run updates only its release
           # (asked with this commit's script, before checking out the release's)
           latest=$(scripts/newest-release.sh "$TAG")
-          draft=$(gh release view "$TAG" --json isDraft,targetCommitish --jq 'select(.isDraft) | .targetCommitish' 2>/dev/null || true)
+          draft=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,targetCommitish --jq 'select(.isDraft) | .targetCommitish' 2>/dev/null || true)
           if git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null; then
             sha=$(git rev-parse "$TAG^{commit}")
           elif [ -n "$draft" ]; then
@@ -91,7 +99,7 @@ jobs:
             sha=$GITHUB_SHA
           fi
           # only what main holds is released (a v* tag pushed on another branch's commit isn't)
-          main="origin/${{ github.event.repository.default_branch }}"
+          main="origin/$DEFAULT_BRANCH"
           git merge-base --is-ancestor "$sha" "$main" || { echo "::error::$sha isn't on $main: release only what main holds"; exit 1; }
           git checkout -q "$sha"
           test -f dist/discpress.html || { echo "::error::dist/discpress.html is missing at $sha"; exit 1; }
@@ -113,30 +121,39 @@ jobs:
             exit 1
           fi
       - name: Check that the page matches its sources
-        run: scripts/check-dist.sh
+        run: DISCPRESS_ROOT="$PWD" bash "$RUNNER_TEMP/check-dist.sh"
       - name: Pack the download and the site
+        env:
+          LATEST: ${{ steps.pick.outputs.latest }}
         run: |
-          mkdir -p files _site
+          mkdir -p files
           cp dist/discpress.html files/
           (cd files && sha256sum discpress.html > discpress.html.sha256)
-          cp dist/discpress.html _site/index.html
-          cp files/discpress.html.sha256 web/sw.js web/manifest.webmanifest web/*.png _site/
+          if [ "$LATEST" = true ]; then
+            mkdir -p _site
+            cp dist/discpress.html _site/index.html
+            cp files/discpress.html.sha256 web/sw.js web/manifest.webmanifest web/*.png _site/
+          fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: download
           path: files
-      - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
+      - if: steps.pick.outputs.latest == 'true'
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
         with:
           path: _site
 
   release:
     needs: prepare
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
       # main, for the release notes
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: download
@@ -150,22 +167,24 @@ jobs:
           DIGEST: ${{ needs.prepare.outputs.digest }}
         run: |
           NOTES=".github/release-notes/$TAG.md"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            if [ -f "$NOTES" ]; then gh release edit "$TAG" --notes-file "$NOTES"; fi
-            # replace the download only if it differs: replacing removes it for a moment
-            have=$(gh release download "$TAG" -p discpress.html.sha256 -O - 2>/dev/null | awk '{print $1}' || true)
-            if [ "$have" = "$DIGEST" ]; then echo "$TAG already has this download"; exit 0; fi
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [ -f "$NOTES" ]; then gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$NOTES"; fi
+            # replace the download only if both assets exist and the digest matches: replacing removes it for a moment
+            has_html=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq 'any(.assets[]; .name == "discpress.html")' 2>/dev/null || echo false)
+            have=$(gh release download "$TAG" --repo "$GITHUB_REPOSITORY" -p discpress.html.sha256 -O - 2>/dev/null | awk '{print $1; exit}' || true)
+            if [ "$has_html" = true ] && [ "$have" = "$DIGEST" ]; then echo "$TAG already has this download"; exit 0; fi
           else
             # a draft until the site is deployed (publish job); the tag is made when it is published
             if [ -f "$NOTES" ]; then notes=(--notes-file "$NOTES"); else notes=(--generate-notes); fi
-            gh release create "$TAG" --draft --target "$SHA" --title "Discpress $TAG" --latest="$LATEST" "${notes[@]}"
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --target "$SHA" --title "Discpress $TAG" --latest="$LATEST" "${notes[@]}"
           fi
-          gh release upload "$TAG" files/discpress.html files/discpress.html.sha256 --clobber
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" files/discpress.html files/discpress.html.sha256 --clobber
 
   pages:
     needs: [prepare, release]
     if: needs.prepare.outputs.latest == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write # only to see draft releases (scripts/newest-release.sh)
       pages: write
@@ -184,6 +203,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           sparse-checkout: scripts
+          persist-credentials: false
       # asked again here, not taken from prepare: re-running this job of an older run (Re-run failed
       # jobs) must not deploy it over a version released, or drafted, since
       - name: Check that this is still the newest version
@@ -204,7 +224,8 @@ jobs:
     needs: [prepare, release, pages]
     # after the site (or without it, for an older tag), never after a failed deploy
     if: ${{ !cancelled() && needs.release.result == 'success' && (needs.pages.result == 'success' || needs.pages.result == 'skipped') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: write
     outputs:
@@ -214,6 +235,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           sparse-checkout: scripts
+          persist-credentials: false
       - name: Make the release public
         id: publish
         env:
@@ -227,15 +249,20 @@ jobs:
           echo "latest=$latest" >> "$GITHUB_OUTPUT"
           if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true ]; then
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$latest"
+          elif [ "$latest" = true ]; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --latest=true
           else
             echo "$TAG is already public"
           fi
 
   verify:
     needs: [prepare, publish]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: Check the download and the online version
         env:
           TAG: ${{ inputs.tag }}
@@ -243,5 +270,8 @@ jobs:
           LATEST: ${{ needs.publish.outputs.latest }}
         # GitHub Pages caches pages for up to 10 minutes
         run: |
-          if [ "$LATEST" = true ]; then site=(); else site=(--no-site); fi
-          scripts/check-release.sh "$TAG" --expect "$DIGEST" --wait 900 "${site[@]}"
+          if [ "$LATEST" = true ]; then
+            scripts/check-release.sh latest --expect "$DIGEST" --wait 900
+          else
+            scripts/check-release.sh "$TAG" --expect "$DIGEST" --wait 900 --no-site
+          fi

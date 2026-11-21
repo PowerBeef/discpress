@@ -26,16 +26,21 @@ function withTestDb(html) {
 
 // For tests of the online version's service worker, whose requests the browser's routing can't see:
 // /alt/<id>/... serves the same files as /..., except that after GET /__slow/<id> the page takes
-// 60 s to answer, after GET /__fail/<id> it is answered with 503 Service Unavailable, and under
-// /alt/nosw-<id>/ the web/ files are missing (a copy on another site).
+// 60 s to answer, after GET /__fail/<id> it is answered with 503 Service Unavailable, GET /__reset/<id>
+// clears both toggles for <id>, and under /alt/nosw-<id>/ the web/ files are missing (a copy on another site).
 const slow = new Set();
 const failing = new Set();
 
 const port = +(process.argv[2] || process.env.PORT || 4173);
 http.createServer(async (req, res) => {
   let [url, query = ''] = req.url.split('?');
-  const toggle = /^\/__(slow|fail)\/([\w-]+)$/.exec(url);
-  if (toggle) { (toggle[1] === 'slow' ? slow : failing).add(toggle[2]); res.end('ok'); return; }
+  const toggle = /^\/__(slow|fail|reset)\/([\w-]+)$/.exec(url);
+  if (toggle) {
+    if (toggle[1] === 'reset') { slow.delete(toggle[2]); failing.delete(toggle[2]); }
+    else (toggle[1] === 'slow' ? slow : failing).add(toggle[2]);
+    res.end('ok');
+    return;
+  }
   const alt = /^\/alt\/([\w-]+)(\/.*)$/.exec(url);
   if (alt) {
     url = alt[2];
@@ -48,8 +53,9 @@ http.createServer(async (req, res) => {
   if (url === '/blank.html') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); res.end('<!doctype html><title>blank</title>'); return; }
   if (url === '/' || url === '/discpress.html') {
     // read on every request so a rebuilt page is picked up without restarting
-    let html = fs.readFileSync(pageUnderTest(), 'utf8');
+    let html;
     try {
+      html = fs.readFileSync(pageUnderTest(), 'utf8');
       if (/(^|&)testdb=1(&|$)/.test(query)) html = withTestDb(html);
     } catch (e) {
       res.writeHead(500); res.end(String(e)); return;

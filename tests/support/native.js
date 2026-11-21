@@ -100,8 +100,13 @@ export function engineChdman() {
 }
 
 function makeReference(bin, version, command, input, extra) {
-  // keyed by the binary's content too: a rebuild from another MAME revision keeps the same path and version
-  const key = crypto.createHash('sha1').update([binaryHash(bin), version, command, input, ...extra].join('\0')).digest('hex').slice(0, 16);
+  // keyed by the binary's content, fixtures dir, and input stat so modified inputs never hit stale cached CHDs
+  let statKey = '';
+  try {
+    const st = fs.statSync(path.resolve(FIXTURES, input));
+    statKey = `${st.size}:${Math.trunc(st.mtimeMs)}`;
+  } catch { /* let chdman report missing input */ }
+  const key = crypto.createHash('sha1').update([binaryHash(bin), version, FIXTURES, command, input, statKey, ...extra].join('\0')).digest('hex').slice(0, 16);
   const dir = path.join(CACHE, 'native');
   fs.mkdirSync(dir, { recursive: true });
   const out = path.join(dir, `${key}.chd`);

@@ -12,5 +12,5 @@ SAN="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-fram
 # (command-line variables override the Makefile's: its native flags are -O2 -g0;
 #  relative paths avoid breaking GNU Make if the repo path contains spaces)
 make -s -C "$ROOT/wasm" -j"$JOBS" T=native M=../engine/mame OPT="-O1 -g $SAN" CXX="g++ $SAN" CC="gcc" \
-  O=../build/obj-san NATIVE=../build/chdman-san native
+  O=../build/obj-san NATIVE=../build/chdman-san CDPROBE=../build/cdprobe-san native cdprobe
 { ASAN_OPTIONS=detect_leaks=0 "$ROOT/build/chdman-san" || true; } 2>&1 | head -1

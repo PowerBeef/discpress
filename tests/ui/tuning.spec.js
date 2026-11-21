@@ -1,7 +1,7 @@
 // The automatic thread count: a one-off speed test per device decides how many
 // compression threads to use, instead of guessing from the device.
 import { test, expect, fixture } from '../support/app.js';
-import { nativeChdman, reference, sha1File } from '../support/native.js';
+import { info, nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
 
 const tuning = page => page.evaluate(() => JSON.parse(localStorage.getItem('chdman-web-tuning') || 'null'));
 
@@ -23,7 +23,11 @@ test('the first conversion measures the device once, then uses the result', asyn
   test.info().annotations.push({ type: 'speed test', description: t.steps.map(([n, r]) => `${n}: ${r} MB/s`).join(', ') + ` -> ${t.threads}` });
   await expect(page.locator('#chipThreads')).toHaveText(`Auto · ${t.threads} thread${t.threads > 1 ? 's' : ''}`);
   const [out] = await app.downloads(card);
-  if (nativeChdman()) expect(sha1File(out.path)).toBe(sha1File(reference('createdvd', 'agent.iso')));
+  if (nativeChdman()) {
+    const ref = reference('createdvd', 'agent.iso');
+    if (sameVersion()) expect(sha1File(out.path)).toBe(sha1File(ref));
+    else expect(info(out.path).dataSha1).toBe(info(ref).dataSha1);
+  }
 
   // a second conversion reuses the stored result
   await app.add(fixture('homebrew-iso').add);

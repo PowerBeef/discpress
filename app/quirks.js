@@ -10,7 +10,7 @@
    ============================================================ */
 var QUIRKS = [
   {
-    id: 'keepcue-strict', sys: ['saturn', 'segacd'], act: 'nokeepcue',
+    id: 'keepcue-strict', sys: ['saturn', 'segacd', 'pcecd'], act: 'nokeepcue',
     when: function (c) { return c.keepCue; },
     text: function (c) {
       return (c.sys === 'saturn' ? 'Kronos and Yabause reject' : 'jgenesis rejects') + ' CHDs that keep their cue sheet, so this one leaves it out (the setting \u201cKeep the cue sheet in CD CHDs\u201d is on).';
@@ -18,7 +18,7 @@ var QUIRKS = [
     src: 'docs/chd/ecosystem-other.md §0 finding 4, §2.5, §3.2, §3.3: readers that fail on any metadata tag but a track\u2019s'
   },
   {
-    id: 'naomi-name', sys: ['naomi', 'naomi2'], act: 'norename',
+    id: 'naomi-name', sys: ['naomi', 'naomi2'], act: 'norename', chd: true,
     when: function () { return settings.rename; },
     text: 'MAME and Flycast find a NAOMI GD-ROM by its file name in the game\u2019s romset (such as gds-0014.chd), so this CHD keeps its file\u2019s name.',
     src: 'docs/chd/ecosystem-sony-dreamcast.md §5.1 (Flycast gdcartridge.cpp: <romset>/<gdrom>.chd), §5.4'
@@ -40,9 +40,9 @@ var QUIRKS = [
   },
   {
     // a PAL PlayStation disc protected by LibCrypt (db/facts/libcrypt.tsv), without its .sbi or .lsd
-    // (paired by name: sbiJob) or a CloneCD .sub to make one from (scanSub)
+    // (paired by name: sbiJob) or an in-progress CloneCD .sub scan (scanSub)
     id: 'libcrypt-missing', sys: ['ps1'], warn: true,
-    when: function (c) { return c.facts.libcrypt && !c.job.sbi && !c.job.subFile; },
+    when: function (c) { return c.facts.libcrypt && !c.job.sbi && !c.job.subScanning; },
     text: 'This game is protected by LibCrypt: without its .sbi file next to the CHD, emulators stop it partway or make it misbehave. Add the game\u2019s .sbi file (Redump has one for each protected disc) with its other files, and it is saved with the CHD, under its name.',
     src: 'db/facts/libcrypt.tsv'
   },
@@ -71,10 +71,10 @@ var QUIRKS = [
     src: 'docs/chd/optical-media.md §3.2, §3.5; docs/chd/ecosystem-sony-dreamcast.md §5.1 (Flycast 0abac34)'
   },
   {
-    // chdman stores MODE2/2048 and MODE2/2324 tracks as MODE2_FORM1 and MODE2_FORM2, which Flycast refuses
+    // chdman stores MODE2/2048, MODE2/2324 and MODE2_FORM_MIX tracks as Mode 2 Form 1/2/Mix, which Flycast refuses
     id: 'dc-mode2-form', sys: ['dc', 'naomi', 'naomi2'], warn: true,
-    when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return /^MODE2\/(2048|2324)$/.test(t.mode); }); },
-    text: 'Flycast can\u2019t load CHDs with MODE2/2048 or MODE2/2324 tracks, as this disc has (chdman stores them as Mode 2 Form 1 and Form 2). Keep the original files for Flycast.',
+    when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return /^MODE2\/(2048|2324)$|^MODE2_FORM_MIX$/.test(t.mode); }); },
+    text: 'Flycast can\u2019t load CHDs with MODE2/2048, MODE2/2324 or MODE2_FORM_MIX tracks, as this disc has (chdman stores them as Mode 2 Form 1/2/Mix). Keep the original files for Flycast.',
     src: 'docs/chd/ecosystem-sony-dreamcast.md §5.1 (core/imgread/chd.cpp: track types)'
   },
   {
@@ -82,8 +82,11 @@ var QUIRKS = [
     id: 'ps1-cooked', sys: ['ps1'], warn: true,
     when: function (c) {
       var j = c.job;
-      // (a lone .bin or .img of 2,048-byte sectors too)
-      return (j.src === 'iso' && !j.autoCue && !j.files.some(function (f) { return f.ecm || f.pbp; })) || j.autoCue === 'MODE1/2048' ||
+      // (a CSO/ZSO, a lone 2,048-byte .iso/.bin/.img, or a descriptor/NRG with 2,048-byte tracks)
+      return j.src === 'cso' ||
+        (j.src === 'iso' && !j.autoCue && !j.files.some(function (f) { return f.ecm || f.pbp; })) ||
+        (j.src === 'img' && !j.syncMode) ||
+        j.autoCue === 'MODE1/2048' ||
         (c.disc && c.disc.tracks.some(function (t) { return /\/2048$/.test(t.mode) || t.mode === 'MODE1'; }));
     },
     text: 'This is a 2,048-byte copy of a PlayStation disc, without its raw sectors: the videos and sound stored in them may be missing, and Beetle PSX can\u2019t load its CHD (it takes only raw Mode 2 tracks). Convert the .bin and .cue dump instead, if you have it.',
@@ -101,9 +104,9 @@ var QUIRKS = [
   },
   {
     id: 'segacd-long', sys: ['segacd'],
-    when: function (c) { return c.disc && discMinutes(c.job) >= 80; },
+    when: function (c) { return c.disc && discMinutes(c.job, c.disc) >= 80; },
     text: function (c) {
-      var m = discMinutes(c.job);
+      var m = discMinutes(c.job, c.disc);
       return 'PicoDrive doesn\u2019t load Sega CD images of 80 minutes or more, and this one is ' + Math.floor(m) + ' minutes long' + (m > 100 ? '; Genesis Plus GX takes up to 100.' : '. Genesis Plus GX takes up to 100.');
     },
     src: 'docs/chd/ecosystem-other.md §2.1 (over 100 minutes rejected), §2.2 (80 minutes or more rejected)'
@@ -118,30 +121,38 @@ var QUIRKS = [
   {
     // Beetle Saturn, Kronos and Yabause take every pregap as stored and leave postgaps out of the image
     id: 'saturn-gapcmd', sys: ['saturn'], warn: true,
-    when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return t.pregapCmd || t.postgap; }); },
+    when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return (t.pregapCmd && t.pregap > 0) || t.postgap > 0; }); },
     text: 'Beetle Saturn, Kronos and Yabause read the tracks after a PREGAP or POSTGAP line from the wrong place, and this cue sheet has one. A Redump dump (with INDEX 00 lines instead) doesn\u2019t have this problem.',
     src: 'docs/chd/ecosystem-other.md §3.1 to §3.3 (PGTYPE ignored, postgap ignored)'
   },
   {
-    // the Beetle PCE family, Beetle PC-FX, Geargrafx and Beetle PSX count a postgap into the file offset
-    id: 'postgap', sys: ['pcecd', 'pcfx', 'ps1'], warn: true,
-    when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return t.postgap; }); },
+    // the Beetle PCE family, Beetle PC-FX, Geargrafx and Beetle PSX count a postgap into the file offset;
+    // jgenesis (Sega CD, PCE CD) ignores postgaps
+    id: 'postgap', sys: ['pcecd', 'pcfx', 'ps1', 'segacd'], warn: true,
+    when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return t.postgap > 0; }); },
     text: function (c) {
-      return { pcecd: 'Beetle PCE and Geargrafx', pcfx: 'Beetle PC-FX', ps1: 'Beetle PSX' }[c.sys] + ' read the tracks after a POSTGAP line from the wrong place, and this cue sheet has one (chdman keeps no postgap data).';
+      return (c.sys === 'segacd' ? 'jgenesis reads' : { pcecd: 'Beetle PCE, Geargrafx and jgenesis', pcfx: 'Beetle PC-FX', ps1: 'Beetle PSX' }[c.sys] + ' read') + ' the tracks after a POSTGAP line from the wrong place, and this cue sheet has one (chdman keeps no postgap data).';
     },
-    src: 'docs/chd/ecosystem-other.md §4.1 to §4.3 (fileOffset += postgap); docs/chd/ecosystem-sony-dreamcast.md §2.3'
+    src: 'docs/chd/ecosystem-other.md §2.5, §4.1 to §4.3; docs/chd/ecosystem-sony-dreamcast.md §2.3'
   },
   {
-    // ares drops a virtual pregap of track 2 or later from its TOC
+    // ares drops a virtual pregap of track 2 or later from its TOC; jgenesis (Sega CD, PCE CD) and
+    // PCSX ReARMed (PS1) ignore PGTYPE and assume every pregap is stored
     id: 'ares-pregap', sys: ['pcecd', 'segacd', 'ps1'],
-    when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return t.no > 1 && t.pregapCmd; }); },
-    text: 'ares leaves this disc\u2019s PREGAP lines out of its track list, so the tracks after one start earlier there than on the disc.',
-    src: 'docs/chd/ecosystem-other.md §11.2 (a virtual pregap on track 2 or later is dropped)'
+    when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return t.pregapCmd && t.pregap > 0; }); },
+    text: function (c) {
+      var hasLater = c.disc.tracks.some(function (t) { return t.no > 1 && t.pregapCmd && t.pregap > 0; });
+      var other = c.sys === 'ps1' ? 'PCSX ReARMed' : 'jgenesis';
+      return hasLater
+        ? 'ares leaves this disc\u2019s PREGAP lines out of its track list, and ' + other + ' reads tracks after a virtual PREGAP from the wrong place.'
+        : other + ' reads tracks after a virtual PREGAP line from the wrong place, and this cue sheet has one.';
+    },
+    src: 'docs/chd/ecosystem-other.md §2.5, §11.2; docs/chd/ecosystem-sony-dreamcast.md §2.4'
   },
   {
     // NeoCD takes MODE1 and AUDIO tracks only, and misreads virtual pregaps from track 3 on
     id: 'ngcd-layout', sys: ['ngcd'], warn: true,
-    when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return /^MODE2/.test(t.mode) || (t.no > 2 && t.pregapCmd); }); },
+    when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return /^MODE2/.test(t.mode) || (t.no > 2 && t.pregapCmd && t.pregap > 0); }); },
     text: function (c) {
       return c.disc.tracks.some(function (t) { return /^MODE2/.test(t.mode); })
         ? 'NeoCD can\u2019t load this CHD: it takes only Mode 1 data tracks, and this disc has a Mode 2 one.'
@@ -159,18 +170,43 @@ function quirkCtx(job) {
 }
 // the rules that apply to a job: [{id, act, warn, text}]
 function quirks(job) {
-  if (job.kind !== 'create') return [];
   var ctx = quirkCtx(job);
-  return QUIRKS.filter(function (r) { return (!r.sys || r.sys.indexOf(ctx.sys) >= 0) && r.when(ctx); }).map(function (r) {
+  return QUIRKS.filter(function (r) {
+    if (job.kind !== 'create' && !r.chd) return false;
+    return (!r.sys || r.sys.indexOf(ctx.sys) >= 0) && r.when(ctx);
+  }).map(function (r) {
     return { id: r.id, act: r.act || '', warn: !!r.warn, text: typeof r.text === 'function' ? r.text(ctx) : r.text || '' };
   });
 }
 function quirkAct(job, act) { return quirks(job).some(function (q) { return q.act === act; }); }
-// the layout of the CD a cue sheet or TOC describes (cueModel), kept with the job; null for other jobs
-// how long a CD job's disc is, in minutes (its track files, as raw sectors)
-function discMinutes(job) { return jobImageBytes(job) / 2352 / 75 / 60; }
+// how long a CD job's disc is, in minutes (sector-size-aware for 2,048-byte vs raw tracks)
+function discMinutes(job, disc) {
+  if (disc && disc.tracks && disc.tracks.length) {
+    if (job.files.length === disc.tracks.length && job.src !== 'nrg') {
+      var frames = 0;
+      for (var i = 0; i < disc.tracks.length; i++) {
+        var f = job.files[i];
+        var sz = f.ecm && f.imageSize ? f.imageSize : f.pbp ? f.pbp.sectors * 2352 : f.file.size;
+        var mode = disc.tracks[i].mode;
+        var ss = /\/2048$|^MODE1$/.test(mode) ? 2048 : /\/2324$/.test(mode) ? 2324 : /\/2336$/.test(mode) ? 2336 : 2352;
+        frames += sz / ss;
+      }
+      return frames / 75 / 60;
+    }
+    if (disc.tracks.every(function (t) { return /\/2048$|^MODE1$/.test(t.mode); })) return jobImageBytes(job) / 2048 / 75 / 60;
+  } else if (job.autoCue === 'MODE1/2048' || (job.src === 'iso' && !job.autoCue) || job.src === 'cso') {
+    return jobImageBytes(job) / 2048 / 75 / 60;
+  }
+  return jobImageBytes(job) / 2352 / 75 / 60;
+}
+// the layout of the CD a cue sheet, TOC or Nero image describes; null for other jobs
 function discModel(job) {
-  if (job.kind !== 'create' || (job.disc !== 'cd' && job.disc !== 'gdrom') || (job.src !== 'cue' && job.src !== 'toc') || !job.descText) return null;
+  if (job.kind !== 'create' || (job.disc !== 'cd' && job.disc !== 'gdrom')) return null;
+  if (job.src === 'nrg' && job.nrgTracks) {
+    if (job.discModelOf !== job.nrgTracks) { job.discModelOf = job.nrgTracks; job.discModelVal = nrgModel(job.nrgTracks); }
+    return job.discModelVal;
+  }
+  if ((job.src !== 'cue' && job.src !== 'toc') || !job.descText) return null;
   if (job.discModelOf !== job.descText) { job.discModelOf = job.descText; job.discModelVal = job.src === 'cue' ? cueModel(job.descText) : tocModel(job.descText); }
   return job.discModelVal;
 }

@@ -10,7 +10,12 @@ COMMIT=f34f02505e32c1993c6a782b6814232cbfc74e36   # MAME 0.289 (release tag mame
 
 fresh=
 if [ ! -d "$DEST/.git" ]; then
-  git clone --filter=blob:none --no-checkout https://github.com/mamedev/mame.git "$DEST"
+  mkdir -p "$(dirname "$DEST")"
+  TMP_DEST="${DEST}.tmp.$$"
+  trap 'rm -rf "$TMP_DEST"' EXIT
+  git clone --filter=blob:none --no-checkout https://github.com/mamedev/mame.git "$TMP_DEST"
+  mv "$TMP_DEST" "$DEST"
+  trap - EXIT
   fresh=1
 fi
 cd "$DEST"
@@ -22,5 +27,8 @@ if [ -z "$fresh" ] && [ -n "$(git status --porcelain --untracked-files=no 2>/dev
 fi
 git sparse-checkout set 3rdparty/flac 3rdparty/lzma 3rdparty/utf8proc 3rdparty/zlib 3rdparty/zstd \
   src/lib/util src/osd src/tools
+if ! git cat-file -e "$COMMIT^{commit}" 2>/dev/null; then
+  git fetch --filter=blob:none origin "$COMMIT"
+fi
 git checkout -q "$COMMIT"
 echo "MAME $COMMIT (0.289) ready: $DEST"

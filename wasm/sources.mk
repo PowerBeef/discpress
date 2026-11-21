@@ -2,7 +2,7 @@
 # M can point at a MAME 0.289 checkout instead, with UPSTREAM=1 (scripts/build-upstream.sh).
 # (set once: MAKEFILE_LIST changes as the Makefile includes the objects' .d files)
 ifndef M
-M := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))../engine/mame)
+M := ../engine/mame
 endif
 UTIL := avhuff aviio bitmap cdrom chd chdcodec corefile corestr flac hashing huffman ioprocs palette path strformat unicode vbiparse vecstream
 UTIL_SRC := $(addprefix $(M)/src/lib/util/,$(addsuffix .cpp,$(UTIL)))

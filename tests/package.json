@@ -4,7 +4,7 @@
   "description": "UI tests and conversion benchmarks for Discpress (not part of the app).",
   "type": "module",
   "scripts": {
-    "fixtures": "python3 fixtures/make_fixtures.py",
+    "fixtures": "sh -c 'py=python3; [ -x ../.venv/bin/python3 ] && py=../.venv/bin/python3; exec \"$py\" fixtures/make_fixtures.py \"$@\"' _",
     "native": "../scripts/build-native.sh",
     "dev-page": "python3 ../scripts/extract-build.py --if-stale && python3 ../scripts/assemble.py ../build/discpress-dev.html",
     "test": "playwright test",

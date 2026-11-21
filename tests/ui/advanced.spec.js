@@ -92,10 +92,15 @@ for (const [label, file, text, message] of [
   ['a TOC whose track holds no data', 'nolength.toc', 'CD_ROM\nTRACK MODE1_RAW\nNO COPY\n', 'track 1 holds no data'],
 ]) {
   test(`a command chdman would never finish is an error: ${label}`, async ({ app, page }) => {
-    if (text) fs.writeFileSync(path.join(FIXTURES, file), text);
+    const rel = text ? 'gen/cli-stuck/' + file : file;
+    if (text) {
+      const dir = path.join(FIXTURES, 'gen', 'cli-stuck');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, file), text);
+    }
     await app.open({ settings: { threads: 4 } });
     await page.click('.tab[data-tab="cli"]');
-    await addCliFiles(app, text ? [file, 'lone.bin'] : [file]);
+    await addCliFiles(app, text ? [rel, 'lone.bin'] : [rel]);
     await page.click('#cliEditToggle');
     await page.locator('#cliText').fill(`chdman createcd -i ${file} -o stuck.chd`);
     await page.click('#cliRun');
@@ -157,10 +162,8 @@ test('addmeta edits a copy of the CHD in place, exactly like desktop chdman', as
   test.skip(!nativeChdman(), 'needs native chdman');
   // metadata can only be added to uncompressed CHDs; chdman rewrites parts of the file in place
   const src = reference('createdvd', 'homebrew.iso', ['-c', 'none']);
-  const dir = path.join(FIXTURES, 'chd');
-  fs.mkdirSync(dir, { recursive: true });
-  const input = path.join(dir, 'meta.chd');
-  fs.copyFileSync(src, input);
+  const input = path.join(FIXTURES, 'chd', 'meta.chd');
+  sharedCopy(src, input);
   const expected = test.info().outputPath('expected.chd');
   fs.copyFileSync(src, expected);
   chdman(['addmeta', '-i', expected, '-t', 'TEST', '-vt', 'hello from the tests']);
@@ -179,11 +182,9 @@ test('addmeta edits a copy of the CHD in place, exactly like desktop chdman', as
 
 // audit, batch 3: typed commands read quotes the way the form writes them, and as phones type them
 test('typed commands accept single quotes and smart quotes around file names', async ({ app, page }) => {
-  const dir = path.join(FIXTURES, 'gen');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.copyFileSync(path.join(FIXTURES, 'agent.iso'), path.join(dir, 'my game.iso'));
+  sharedCopy(path.join(FIXTURES, 'agent.iso'), path.join(FIXTURES, 'gen', 'cli-quotes', 'my game.iso'));
   await openCli(app, page);
-  await addCliFiles(app, ['gen/my game.iso']);
+  await addCliFiles(app, ['gen/cli-quotes/my game.iso']);
   await page.click('#cliEditToggle');
   await page.locator('#cliText').fill("chdman createdvd -i 'my game.iso' -o “my game.chd” -c none");
   expect(await runCli(page)).toContain('[exit code 0]');
@@ -218,11 +219,9 @@ test('a new command, or Clear temporary storage, removes the last command’s re
 });
 
 test('typed commands accept backslash escapes, as a shell does', async ({ app, page }) => {
-  const dir = path.join(FIXTURES, 'gen');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.copyFileSync(path.join(FIXTURES, 'agent.iso'), path.join(dir, 'my game.iso'));
+  sharedCopy(path.join(FIXTURES, 'agent.iso'), path.join(FIXTURES, 'gen', 'cli-escapes', 'my game.iso'));
   await openCli(app, page);
-  await addCliFiles(app, ['gen/my game.iso']);
+  await addCliFiles(app, ['gen/cli-escapes/my game.iso']);
   await page.click('#cliEditToggle');
   await page.locator('#cliText').fill('chdman createdvd -i my\\ game.iso -o "the \\"best\\" game.chd" -c none');
   expect(await runCli(page)).toContain('[exit code 0]');
@@ -302,8 +301,12 @@ test('delmeta edits a copy of the CHD in place, exactly like desktop chdman', as
   const dir = path.join(FIXTURES, 'chd');
   fs.mkdirSync(dir, { recursive: true });
   const input = path.join(dir, 'delmeta.chd');
-  sharedCopy(reference('createdvd', 'homebrew.iso', ['-c', 'none']), input);
-  chdman(['addmeta', '-i', input, '-t', 'TEST', '-vt', 'to be removed']);
+  if (!fs.existsSync(input)) {
+    const tmpChd = `${input}.${process.pid}.tmp`;
+    fs.copyFileSync(reference('createdvd', 'homebrew.iso', ['-c', 'none']), tmpChd);
+    chdman(['addmeta', '-i', tmpChd, '-t', 'TEST', '-vt', 'to be removed']);
+    fs.renameSync(tmpChd, input);
+  }
   const expected = test.info().outputPath('expected.chd');
   fs.copyFileSync(input, expected);
   chdman(['delmeta', '-i', expected, '-t', 'TEST']);
@@ -314,6 +317,18 @@ test('delmeta edits a copy of the CHD in place, exactly like desktop chdman', as
   const [got] = await cliResults(page);
   expect(got.name).toBe('delmeta.chd');
   expect(sha1File(got.path)).toBe(sha1File(expected));
+});
+
+test('copy rejects writing over its own input file', async ({ app, page }) => {
+  test.skip(!nativeChdman(), 'needs native chdman');
+  const src = nativeChd('copy self.chd', 'createdvd', 'homebrew.iso', ['-c', 'none']);
+  await openCli(app, page);
+  await addCliFiles(app, [src.rel]);
+  await page.click('#cliEditToggle');
+  await page.locator('#cliText').fill('chdman copy -i "copy self.chd" -o "copy self.chd" --compression none');
+  const out = await runCli(page);
+  expect(out).toContain('[exit code 1]');
+  await expect(page.locator('#cliOuts')).toBeEmpty();
 });
 
 test('verify --fix on a sound CHD leaves it as it was', async ({ app, page }) => {

@@ -84,11 +84,15 @@ test('a disc in no DAT file says so; files that aren’t DATs are ignored', asyn
   await expect(card.locator('.dat-note')).toHaveText('Not in your DAT files.');
 });
 
-test('a CHD is checked against the DAT files after Verify, every track', async ({ app }) => {
+test('a CHD is checked against the DAT files after Verify, every track', async ({ app, page }) => {
   test.skip(!nativeChdman(), 'needs native chdman to make the CHD');
   const chd = reference('createcd', 'twine.cue');
   fs.mkdirSync(dir, { recursive: true });
-  fs.copyFileSync(chd, path.join(dir, 'twine.chd'));
+  const dst = path.join(dir, 'twine.chd');
+  if (!fs.existsSync(dst)) {
+    fs.copyFileSync(chd, dst + '.tmp' + process.pid);
+    fs.renameSync(dst + '.tmp' + process.pid, dst);
+  }
   const dat = writeDat('twine.dat', xmlDat('Twine (Test)', [{ name: 'Twine (DAT Test)', roms: [rom('Twine (DAT Test).cue', 'twine.cue'), rom('Twine (DAT Test).bin', 'twine.bin')] }]));
   await app.open();
   await app.add([dat, 'gen/dat/twine.chd']);
@@ -97,4 +101,25 @@ test('a CHD is checked against the DAT files after Verify, every track', async (
   await card.locator('.seg button', { hasText: 'Verify' }).click();
   await app.run(card);
   await expect(card.locator('.dat-note')).toContainText('✓ Verified with your DAT file. It matches “Twine (DAT Test)” in Twine (Test).');
+  // removing the DAT restores the built-in identification without throwing
+  await page.click('#settingsBtn');
+  await page.locator('#datList button[aria-label="Remove Twine (Test)"]').click();
+  await page.click('#settingsClose');
+  await expect(card.locator('.dat-note')).toHaveCount(0);
+  await expect(card.locator('.ident-name')).toHaveText('007 - The World Is Not Enough (USA)');
+});
+
+test('a full DAT match outranks a larger partial match, and duplicate tracks match 1-to-1', async ({ app }) => {
+  const t1 = rom('Game (Track 1).bin', 'mgs disc1 (Track 1).bin');
+  const t2 = rom('Game (Track 2).bin', 'mgs disc1 (Track 2).bin');
+  const bigPartial = { name: 'Partial Match (3 tracks)', roms: [t1, t2, rom('Extra.bin', 'twine.bin')] };
+  const exactMatch = { name: 'Exact Match (2 tracks)', roms: [t1, t2] };
+  const dat = writeDat('rank.dat', xmlDat('Rank (Test)', [bigPartial, exactMatch]));
+  await app.open();
+  await app.add([dat]);
+  await app.add(fixture('ps1-multitrack').add);
+  const card = app.job('mgs disc1');
+  await app.settled(card);
+  await expect(card.locator('.dat-note')).toHaveText('✓ Verified with your DAT file. All 2 tracks match “Exact Match (2 tracks)” in Rank (Test).');
+  await expect(card.locator('h3')).toHaveText('Exact Match (2 tracks)');
 });

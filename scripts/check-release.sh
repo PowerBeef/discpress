@@ -11,12 +11,19 @@
 set -euo pipefail
 REPO=${GITHUB_REPOSITORY:-PowerBeef/discpress}
 SITE=${DISCPRESS_SITE:-https://powerbeef.github.io/discpress/}
+SITE="${SITE%/}/"
 tag=latest expect='' site=1 wait=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --expect) expect=$2; shift 2 ;;
+    --expect)
+      [ $# -ge 2 ] || { echo "missing value for --expect" >&2; exit 2; }
+      expect=$2; shift 2 ;;
     --no-site) site=0; shift ;;
-    --wait) wait=$2; shift 2 ;;
+    --wait)
+      [ $# -ge 2 ] || { echo "missing value for --wait" >&2; exit 2; }
+      [[ $2 =~ ^[0-9]+$ ]] || { echo "invalid --wait seconds: $2" >&2; exit 2; }
+      wait=$2; shift 2 ;;
+    -*) echo "unknown option: $1" >&2; exit 2 ;;
     *) tag=$1; shift ;;
   esac
 done
@@ -24,8 +31,8 @@ if [ "$tag" = latest ]; then dl="https://github.com/$REPO/releases/latest/downlo
 else dl="https://github.com/$REPO/releases/download/$tag"; fi
 
 # Each prints nothing and fails when the file can't be fetched.
-hash_url() { local h; h=$(curl -fsSL -H 'Cache-Control: no-cache' "$1" | sha256sum) || return 1; echo "${h%% *}"; }
-listed() { local l; l=$(curl -fsSL -H 'Cache-Control: no-cache' "$1") || return 1; awk '{print $1; exit}' <<<"$l"; }
+hash_url() { local h; h=$(curl -fsSL --connect-timeout 15 --max-time 60 -H 'Cache-Control: no-cache' "$1" | sha256sum) || return 1; echo "${h%% *}"; }
+listed() { local l; l=$(curl -fsSL --connect-timeout 15 --max-time 60 -H 'Cache-Control: no-cache' "$1") || return 1; awk '{print $1; exit}' <<<"$l"; }
 
 deadline=$((SECONDS + wait))
 while :; do
@@ -33,15 +40,18 @@ while :; do
   file=$(hash_url "$dl/discpress.html" || echo unavailable)
   list=$(listed "$dl/discpress.html.sha256" || echo unavailable)
   want=${expect:-$file} # without --expect: the download as it is now, which may still change
-  [ "$file" = "$want" ] || problems+=("download $file")
-  [ "$list" = "$want" ] || problems+=("download's .sha256 $list")
-  if [ "$site" = 1 ]; then
-    page=$(hash_url "$SITE?check=$RANDOM$RANDOM" || echo unavailable)
-    slist=$(listed "${SITE}discpress.html.sha256?check=$RANDOM$RANDOM" || echo unavailable)
-    [ "$page" = "$want" ] || problems+=("online version $page")
-    [ "$slist" = "$want" ] || problems+=("online .sha256 $slist")
+  if [ "$want" = unavailable ]; then
+    problems+=("the download is unavailable")
+  else
+    [ "$file" = "$want" ] || problems+=("download $file")
+    [ "$list" = "$want" ] || problems+=("download's .sha256 $list")
+    if [ "$site" = 1 ]; then
+      page=$(hash_url "$SITE?check=$RANDOM$RANDOM" || echo unavailable)
+      slist=$(listed "${SITE}discpress.html.sha256?check=$RANDOM$RANDOM" || echo unavailable)
+      [ "$page" = "$want" ] || problems+=("online version $page")
+      [ "$slist" = "$want" ] || problems+=("online .sha256 $slist")
+    fi
   fi
-  if [ "$want" = unavailable ]; then problems+=("the download is unavailable"); fi
   if [ ${#problems[@]} -eq 0 ]; then
     if [ "$site" = 1 ]; then echo "$tag: the download and the online version are the same file ($want)"
     else echo "$tag: the download matches its .sha256 ($want)"; fi

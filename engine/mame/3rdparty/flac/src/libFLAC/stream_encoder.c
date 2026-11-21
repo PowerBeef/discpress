@@ -4126,7 +4126,7 @@ uint32_t find_best_partition_order_(
 					residual,
 #endif
 					abs_residual_partition_sums+sum,
-					raw_bits_per_partition+sum,
+					raw_bits_per_partition ? raw_bits_per_partition+sum : 0, /* Discpress: avoid NULL+offset UB when !do_escape_coding */
 					residual_samples,
 					predictor_order,
 					rice_parameter_limit,

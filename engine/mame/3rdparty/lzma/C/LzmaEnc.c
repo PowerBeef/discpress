@@ -1857,8 +1857,11 @@ static unsigned GetOptimum(CLzmaEnc *p, UInt32 position)
         offs += 2;
       dist = MATCHES[(size_t)offs + 1];
       
-      // if (dist >= kNumFullDistances)
-      GetPosSlot2(dist, posSlot)
+      /* Discpress: guard GetPosSlot2 so dist < 2 cannot trigger __builtin_clz(0) or shift-by-UINT32_MAX UB on ARM64 */
+      if (dist >= kNumFullDistances)
+      {
+        GetPosSlot2(dist, posSlot)
+      }
       
       for (len = /*2*/ startLen; ; len++)
       {

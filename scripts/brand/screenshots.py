@@ -26,8 +26,9 @@ if not os.path.exists(os.path.join(FIX, 'agent.iso')):
 SEED = '''t => {
   localStorage.clear();
   localStorage.setItem('chdman-web-settings', JSON.stringify({ theme: t }));
-  localStorage.setItem('chdman-web-tuning', JSON.stringify({ key: navigator.hardwareConcurrency + '|' + navigator.userAgent,
-    threads: 4, rate: 1, steps: [[1, 1]], cores: navigator.hardwareConcurrency, date: Date.now() }));
+  const cores = navigator.hardwareConcurrency || 4;
+  localStorage.setItem('chdman-web-tuning', JSON.stringify({ key: cores + '|' + navigator.userAgent,
+    threads: 4, rate: 1, steps: [[1, 1]], cores, date: Date.now() }));
 }'''
 SETTLED = '''n => {
   const cards = [...document.querySelectorAll('#jobs article.job')];
@@ -80,7 +81,9 @@ with sync_playwright() as p:
             pg.wait_for_function(SETTLED, arg=n, timeout=120000)
         first = pg.locator('#jobs article.job').first
         first.locator('.job-foot button.primary').click()
-        pg.wait_for_function("document.querySelector('#jobs article.job').dataset.state === 'done'", timeout=120000)
+        pg.wait_for_function("/^(done|error)$/.test(document.querySelector('#jobs article.job').dataset.state)", timeout=120000)
+        if pg.evaluate("document.querySelector('#jobs article.job').dataset.state") != 'done':
+            sys.exit('first job failed while taking desktop-%s.png' % theme)
         pg.evaluate('window.scrollTo(0, 0)')
         shot(pg, 'desktop-%s.png' % theme)
         ctx.close()

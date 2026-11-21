@@ -17,6 +17,7 @@
   --accent-3: #ffe14d;
   --link: #c2185b; /* the accent pink is too light for body text on the cream surfaces */
   --cyan: #13a9ba;
+  --focus: #0b7d8a; /* darker teal for >= 3:1 focus ring contrast on cream surfaces */
   --on-accent: #1c1733;
   --ok: #11703d;
   --ok-soft: #ddf2e3;
@@ -24,6 +25,10 @@
   --warn-soft: #fff0cc;
   --err: #c01f42;
   --err-soft: #fde2e8;
+  --toast-bg: var(--ink);
+  --toast-fg: #ffffff;
+  --toast-err-bg: var(--err);
+  --toast-err-fg: #ffffff;
   --shadow: 3px 3px 0 var(--ink);
   --shadow-lg: 5px 5px 0 var(--ink);
   --radius: 16px;
@@ -38,15 +43,19 @@
   :root:not([data-theme="light"]) {
     --bg: #15122b; --dots: rgba(255, 255, 255, .055); --surface: #1f1a3c; --surface-2: #29234d; --ink: #07060f; --edge: #7468b8;
     --text: #f5f2ff; --muted: #aaa3d2; --line: #3b346a; --accent: #ff6fa3; --accent-hi: #ff8db6; --accent-2: #ffc24f;
-    --accent-3: #ffe266; --cyan: #3fe0d0; --on-accent: #1a1030; --ok: #5fe39c; --ok-soft: #173a2b; --link: #ff6fa3; --warn: #ffcf5c;
-    --warn-soft: #3a2e12; --err: #ff7d95; --err-soft: #3e1626; color-scheme: dark;
+    --accent-3: #ffe266; --cyan: #3fe0d0; --focus: #3fe0d0; --on-accent: #1a1030; --ok: #5fe39c; --ok-soft: #173a2b; --link: #ff6fa3; --warn: #ffcf5c;
+    --warn-soft: #3a2e12; --err: #ff7d95; --err-soft: #3e1626;
+    --toast-bg: #29234d; --toast-fg: #f5f2ff; --toast-err-bg: #3e1626; --toast-err-fg: #ff9ab0;
+    color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #15122b; --dots: rgba(255, 255, 255, .055); --surface: #1f1a3c; --surface-2: #29234d; --ink: #07060f; --edge: #7468b8;
   --text: #f5f2ff; --muted: #aaa3d2; --line: #3b346a; --accent: #ff6fa3; --accent-hi: #ff8db6; --accent-2: #ffc24f;
-  --accent-3: #ffe266; --cyan: #3fe0d0; --on-accent: #1a1030; --ok: #5fe39c; --ok-soft: #173a2b; --link: #ff6fa3; --warn: #ffcf5c;
-  --warn-soft: #3a2e12; --err: #ff7d95; --err-soft: #3e1626; color-scheme: dark;
+  --accent-3: #ffe266; --cyan: #3fe0d0; --focus: #3fe0d0; --on-accent: #1a1030; --ok: #5fe39c; --ok-soft: #173a2b; --link: #ff6fa3; --warn: #ffcf5c;
+  --warn-soft: #3a2e12; --err: #ff7d95; --err-soft: #3e1626;
+  --toast-bg: #29234d; --toast-fg: #f5f2ff; --toast-err-bg: #3e1626; --toast-err-fg: #ff9ab0;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -86,7 +95,8 @@ html.mode-shell.has-dock .scroller { scroll-padding-bottom: 110px; }
    The page is exactly as tall as the measured visible area (--app-h, set from
    window.innerHeight), so a host that insets the web view has nothing to scroll. */
 html.mode-shell, html.mode-shell body { height: 100%; overflow: hidden; overscroll-behavior: none; }
-html.mode-shell body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; height: var(--app-h, 100dvh); }
+html.mode-shell body { display: flex; flex-direction: column; height: 100vh; height: var(--app-h, 100vh); }
+@supports (height: 100dvh) { html.mode-shell body { height: var(--app-h, 100dvh); } }
 /* nothing scrolls under this header, so no frosted glass. And sticky (nothing scrolls it, so it stays put):
    since iOS 26, a Home Screen web app gets a Liquid Glass blur over its top edge (the status bar and
    ~40pt below, our header) unless a fixed or sticky box with a plain background colour and no backdrop
@@ -154,7 +164,7 @@ code { font-family: var(--mono); font-size: .92em; background: var(--surface-2);
 .chip { display: block; flex: 0 0 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .chip + .chip { margin-left: 9px; padding-left: 9px; border-left: 1.5px solid var(--line); }
 #chipThreads { flex-shrink: 100; }
-#chipStore { flex-shrink: 1; }
+#chipStore:not(.warn):not(.err) { flex-shrink: 1; }
 .chip.warn, .chip.err { flex-shrink: 0; }
 .chip.squeezed { display: none; }
 .chip i { width: 7px; height: 7px; border-radius: 2px; background: var(--muted); display: inline-block; margin-right: 6px; vertical-align: 1px; }
@@ -247,7 +257,7 @@ h2, h3 { font-family: var(--display); letter-spacing: -.01em; }
 #tab-convert:not(.has-jobs) .drop { max-width: 760px; width: 100%; margin: 12px auto 0; }
 
 /* results of an earlier visit (renderEarlier) */
-#tab-convert:not(.has-jobs) #earlier, #tab-convert:not(.has-jobs) #iosTip { max-width: 760px; width: 100%; margin: 16px auto 0; }
+#tab-convert:not(.has-jobs) #earlier, #tab-convert:not(.has-jobs) #iosTip, #tab-convert:not(.has-jobs) #memTip { max-width: 760px; width: 100%; margin: 16px auto 0; }
 #iosTip .btn { margin-top: 6px; }
 .earlier .out + .out, .earlier .note + h2, .earlier .note + .note { margin-top: 10px; }
 
@@ -297,8 +307,8 @@ input[type="text"], input[type="number"], select, textarea {
 }
 select { appearance: none; -webkit-appearance: none; padding-right: 36px; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%); background-position: calc(100% - 18px) 55%, calc(100% - 13px) 55%; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }
 textarea { font-family: var(--mono); font-size: 0.875rem; min-height: 80px; resize: vertical; }
-input:focus-visible, select:focus-visible, textarea:focus-visible { border-color: var(--cyan); box-shadow: 0 0 0 3px color-mix(in srgb, var(--cyan) 30%, transparent); }
-button:focus-visible, a:focus-visible { outline: 3px solid var(--cyan); outline-offset: 2px; }
+input:focus-visible, select:focus-visible, textarea:focus-visible { border-color: var(--focus); box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 30%, transparent); }
+button:focus-visible, a:focus-visible, summary:focus-visible, pre[tabindex]:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .check { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
 .check input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
 
@@ -351,7 +361,7 @@ details.opts[open] > .fields { margin-top: 10px; }
 .out { display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 14px; border: 2px solid var(--edge); border-radius: 12px; background: var(--surface-2); }
 .out .nm { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 700; font-size: 0.9062rem; }
 .out .nm small { display: block; font: 600 0.75rem/1.4 var(--mono); color: var(--muted); margin-top: 2px; }
-.out .row { flex-wrap: nowrap; }
+.out .row { flex-wrap: wrap; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; font-size: 0.8438rem; margin: 0; }
 .kv dt { color: var(--muted); font: 700 0.6875rem/1.7 var(--mono); text-transform: uppercase; letter-spacing: .05em; }
 .kv dd { margin: 0; overflow-wrap: anywhere; font-family: var(--mono); font-size: 0.7812rem; }
@@ -371,7 +381,7 @@ code.cmd { display: block; font: 0.7812rem/1.55 var(--mono); background: var(--s
 /* ---------- floating dock ---------- */
 .dock {
   position: fixed; z-index: 15; left: 50%; transform: translateX(-50%);
-  bottom: calc(14px + var(--sa-bottom)); width: min(760px, calc(100vw - 24px));
+  bottom: calc(14px + var(--sa-bottom)); width: min(760px, calc(100vw - max(24px, env(safe-area-inset-left) + env(safe-area-inset-right) + 16px)));
   background: var(--surface); border: 2px solid var(--edge); border-radius: 18px; box-shadow: var(--shadow-lg); padding: 10px 10px 10px 16px;
 }
 .dock .wrap { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 0; max-width: none; }
@@ -403,27 +413,27 @@ code.cmd { display: block; font: 0.7812rem/1.55 var(--mono); background: var(--s
 /* ---------- advanced tab ---------- */
 #tab-cli { max-width: 900px; margin: 0 auto; }
 .files-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
-.files-list li { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px; border-radius: 10px; background: var(--surface-2); border: 1.5px solid var(--line); font-size: 0.875rem; }
-.files-list li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.files-list li small { color: var(--muted); white-space: nowrap; font-family: var(--mono); }
+.files-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 6px 6px 12px; border-radius: 10px; background: var(--surface-2); border: 1.5px solid var(--line); font-size: 0.875rem; }
+.files-list li span { flex: 1 1 120px; min-width: 0; overflow-wrap: anywhere; }
+.files-list li small { color: var(--muted); font-family: var(--mono); overflow-wrap: anywhere; }
 
 /* ---------- settings dialog / sheet ---------- */
 dialog { border: 2px solid var(--edge); border-radius: 20px; background: var(--surface); color: var(--text); padding: 0; width: min(540px, calc(100vw - 32px)); max-height: min(86vh, 760px); box-shadow: 6px 6px 0 var(--ink); }
-dialog::backdrop { background: rgba(12, 9, 28, .55); backdrop-filter: blur(3px); }
+dialog::backdrop { background: rgba(12, 9, 28, .55); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
 dialog .dhead { display: flex; align-items: center; padding: 16px 12px 8px 20px; position: sticky; top: 0; background: var(--surface); z-index: 1; }
 dialog .dhead h2 { margin: 0; font-size: 1.25rem; flex: 1; font-weight: 900; }
 dialog .dbody { padding: 6px 20px 22px; display: grid; gap: 16px; }
+dialog .dbody > * { min-width: 0; }
 @media (max-width: 560px) {
-  dialog[open] { margin: auto 0 0; width: 100vw; max-width: 100vw; border-radius: 22px 22px 0 0; border-bottom: 0; box-shadow: none; padding-bottom: var(--sa-bottom); animation: sheet .22s ease-out; }
+  dialog[open] { margin: auto 0 0; width: 100vw; max-width: 100vw; border-radius: 22px 22px 0 0; border-bottom: 0; box-shadow: none; animation: sheet .22s ease-out; }
+  dialog[open] .dbody { padding-bottom: calc(22px + var(--sa-bottom)); }
   @keyframes sheet { from { transform: translateY(40px); opacity: .5; } }
 }
 
 /* ---------- toasts ---------- */
 .toasts { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(100px + var(--sa-bottom)); z-index: 30; display: grid; gap: 8px; width: min(520px, calc(100vw - 32px)); pointer-events: none; }
-.toast { background: var(--ink); color: #fff; border: 2px solid var(--edge); padding: 11px 15px; border-radius: 12px; font-size: 0.875rem; font-weight: 600; box-shadow: 3px 3px 0 var(--accent); animation: tin .2s ease; pointer-events: auto; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .toast { background: var(--surface-2); } }
-:root[data-theme="dark"] .toast { background: var(--surface-2); }
-.toast.err { background: var(--err); color: #fff; box-shadow: 3px 3px 0 var(--ink); }
+.toast { background: var(--toast-bg); color: var(--toast-fg); border: 2px solid var(--edge); padding: 11px 15px; border-radius: 12px; font-size: 0.875rem; font-weight: 600; box-shadow: 3px 3px 0 var(--accent); animation: tin .2s ease; pointer-events: auto; }
+.toast.err { background: var(--toast-err-bg); color: var(--toast-err-fg); border-color: var(--err); box-shadow: 3px 3px 0 var(--ink); }
 @keyframes tin { from { opacity: 0; transform: translateY(8px); } }
 .fatal { margin-top: 12px; }
 .empty { text-align: center; color: var(--muted); font-size: 0.875rem; padding: 6px 0 0; }
@@ -453,7 +463,15 @@ dialog .dbody { padding: 6px 20px 22px; display: grid; gap: 16px; }
   .top-row { min-height: 52px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  * { animation: none !important; transition: none !important; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+@media (forced-colors: active) {
+  .tab[aria-selected="true"], .seg button[aria-pressed="true"], .btn.primary {
+    forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight;
+  }
+  .bar i { forced-color-adjust: none; background: Highlight; -webkit-mask: none; mask: none; }
+  .chip i, .dot { forced-color-adjust: none; background: CanvasText; border: 1px solid CanvasText; }
+  select { appearance: auto; -webkit-appearance: auto; background-image: none; padding-right: 12px; }
 }
 @media print {
   html, body { height: auto !important; overflow: visible !important; display: block !important; }
@@ -528,8 +546,9 @@ dialog .dbody { padding: 6px 20px 22px; display: grid; gap: 16px; }
 }
 /* phones in landscape: the start screen's button in view without scrolling (the picture goes) */
 @media (max-height: 440px) and (orientation: landscape) { #tab-convert:not(.has-jobs) .drop-art { display: none; } }
-/* landscape phones: the slim tabs stay comfortable to tap */
+/* landscape phones: the slim tabs and header icon button stay comfortable to tap */
 @media (pointer: coarse) and (max-height: 520px) { .tab { min-height: 36px; } }
+@media (pointer: coarse) { .top .icon-btn { width: 44px; height: 44px; } }
 /* hide the floating bar while typing on touch devices so it never covers the field */
 html.kb-open .dock { display: none; }
 dialog { max-height: min(calc(var(--app-h, 100vh) * .88), 760px); }

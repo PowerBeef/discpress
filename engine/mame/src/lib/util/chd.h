@@ -22,9 +22,13 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 #ifdef __EMSCRIPTEN__
 #include <unordered_map>
-#include <vector>
+#else
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #endif
 
 
@@ -485,6 +489,7 @@ public:
 	// compression management
 	void compress_begin();
 	std::error_condition compress_continue(double &progress, double &ratio);
+	void compress_abort() noexcept; // Discpress: stop worker/reader threads before derived destructors run
 
 	// Discpress: the codec plan (chdman's --codecplan). Each hunk is tried only with the codecs
 	// meant for what it holds, instead of all of them: CD audio with cdfl, CD data with cdlz, and
@@ -543,8 +548,8 @@ private:
 			entry_t             m_array[16384];     // array of entries
 		};
 
-		// internal state
-		entry_t *           m_map[65536];           // map, hashed by CRC-16
+		// internal state (Discpress: atomic bucket heads for lock-free release/acquire reads from workers)
+		std::atomic<entry_t *> m_map[65536];        // map, hashed by CRC-16
 		entry_block *       m_block_list;           // list of allocated blocks
 	};
 
@@ -568,8 +573,7 @@ private:
 	struct work_item
 	{
 		work_item()
-			: m_osd(nullptr)
-			, m_compressor(nullptr)
+			: m_compressor(nullptr)
 			, m_status(WS_READY)
 			, m_hunknum(0)
 			, m_data(nullptr)
@@ -578,12 +582,10 @@ private:
 			, m_compression(0)
 			, m_codecs(nullptr)
 			, m_try(0x0f)
+			, m_walking_parent(false)
 		{ }
 
-		osd_work_item *     m_osd;              // OSD work item running on this block
 		chd_file_compressor *m_compressor;      // pointer back to the compressor
-		// TODO: had to change this to be able to use atomic_* functions on this
-		//volatile work_status m_status;          // current status of this item
 		std::atomic<int32_t>  m_status;           // current status of this item
 		uint32_t              m_hunknum;          // number of the hunk we're working on
 		uint8_t *             m_data;             // pointer to the data we are working on
@@ -592,21 +594,24 @@ private:
 		int8_t                m_compression;      // type of compression used
 		chd_compressor_group *m_codecs;         // codec instance
 		uint32_t              m_try;              // Discpress: codec slots to try (the codec plan)
+		bool                  m_walking_parent;   // Discpress: snapshot of mode for this item
 		std::vector<hash_pair> m_hash;        // array of hashes
 	};
 
 	// internal helpers
-	static void *async_walk_parent_static(void *param, int threadid);
 	void async_walk_parent(work_item &item);
-	static void *async_compress_hunk_static(void *param, int threadid);
-	void async_compress_hunk(work_item &item, int threadid);
-	static void *async_read_static(void *param, int threadid);
+	void async_compress_hunk(work_item &item, uint32_t threadid);
 	void async_read();
+#ifndef __EMSCRIPTEN__
+	void reader_loop();
+	void worker_loop(uint32_t threadid);
+	void wait_read_idle();
+#endif
 
 	// current compression status
 	bool                    m_codec_plan = false; // Discpress: try each hunk only with the codecs for its content
 	bool                    m_walking_parent;   // are we building the parent map?
-	uint64_t                m_total_in;         // total bytes in
+	std::atomic<uint64_t>   m_total_in;         // total bytes in
 	uint64_t                m_total_out;        // total bytes out
 	util::sha1_creator      m_compsha1;         // running SHA-1 on raw data
 
@@ -614,19 +619,40 @@ private:
 	hashmap                 m_parent_map;       // hash map for parent
 	hashmap                 m_current_map;      // hash map for current
 
-	// read I/O thread
-	osd_work_queue *        m_read_queue;       // work queue for reading
+	// read state
 	uint64_t                m_read_queue_offset;// next offset to enqueue
-	uint64_t                m_read_done_offset; // next offset that will complete
+	std::atomic<uint64_t>   m_read_done_offset; // next offset that will complete
+	std::atomic<bool>       m_has_read_error;   // whether m_read_error is set
 	std::error_condition    m_read_error;       // error during reading, if any
 
-	// work item thread
+	// work item buffers and codecs (Discpress: C++20 native thread pool, single codec group in browser)
 	static constexpr int WORK_BUFFER_HUNKS = 256;
-	osd_work_queue *        m_work_queue;       // queue for doing work on other threads
 	std::vector<uint8_t>    m_work_buffer;      // buffer containing hunk data to work on
 	std::vector<uint8_t>    m_compressed_buffer;// buffer containing compressed data
 	work_item               m_work_item[WORK_BUFFER_HUNKS]; // status of each hunk
-	chd_compressor_group *  m_codecs[WORK_MAX_THREADS]; // codecs to use
+	std::vector<std::unique_ptr<chd_compressor_group>> m_codecs; // codecs to use (1 per worker)
+
+#ifndef __EMSCRIPTEN__
+	std::atomic<bool>       m_abort;            // stop requested
+	std::mutex              m_read_mutex;
+	std::condition_variable m_read_cv;
+	std::thread             m_read_thread;
+	int                     m_read_pending;
+	bool                    m_read_active;
+	bool                    m_read_stop;
+
+	std::mutex              m_work_mutex;
+	std::condition_variable m_work_cv;
+	std::vector<std::thread> m_workers;
+	work_item *             m_work_ring[WORK_BUFFER_HUNKS];
+	uint32_t                m_work_head;
+	uint32_t                m_work_tail;
+	uint32_t                m_work_count;
+	bool                    m_work_stop;
+
+	std::mutex              m_done_mutex;
+	std::condition_variable m_done_cv;
+#endif
 
 	// output state
 	uint32_t                m_write_hunk;       // next hunk to write

@@ -9,3 +9,10 @@ updates:
     groups:
       actions:
         patterns: ['*']
+  - package-ecosystem: npm
+    directory: /tests
+    schedule:
+      interval: monthly
+    groups:
+      tests:
+        patterns: ['*']

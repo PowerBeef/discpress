@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect, fixture } from '../support/app.js';
 import { FIXTURES } from '../support/paths.js';
-import { chdman, nativeChdman } from '../support/native.js';
+import { chdman, nativeChdman, reference, sharedCopy } from '../support/native.js';
 
 function fakeFolder(delay = 0) {
   const files = new Map(); // name -> Uint8Array
@@ -113,15 +113,24 @@ test('a cancelled conversion leaves no new file behind', async ({ app, page }) =
 for (const threads of [1, 4]) {
   test(`writing into a slow folder keeps little waiting in memory (${threads} thread${threads > 1 ? 's' : ''})`, async ({ app, page }) => {
     test.skip(!nativeChdman(), 'needs native chdman to make the CHD');
-    // a 64 MB DVD image, stored uncompressed (quick to make and to read)
+    // a 64 MB DVD image, stored uncompressed (quick to make and to read); built atomically so parallel workers don't race
     const dir = path.join(FIXTURES, 'gen');
     fs.mkdirSync(dir, { recursive: true });
     const size = 64 << 20;
-    if (!fs.existsSync(path.join(dir, 'big.chd'))) {
+    const bigChd = path.join(dir, 'big.chd');
+    if (!fs.existsSync(bigChd)) {
+      const isoTmp = path.join(dir, `big.${process.pid}.${threads}.iso.tmp`);
+      const chdTmp = path.join(dir, `big.${process.pid}.${threads}.chd.tmp`);
       const iso = Buffer.alloc(size);
       for (let i = 0; i < size; i += 2048) iso.writeUInt32LE(i, i); // no two sectors alike
-      fs.writeFileSync(path.join(dir, 'big.iso'), iso);
-      chdman(['createdvd', '-i', 'gen/big.iso', '-o', 'gen/big.chd', '-c', 'none', '-f']);
+      try {
+        fs.writeFileSync(isoTmp, iso);
+        chdman(['createdvd', '-i', isoTmp, '-o', chdTmp, '-c', 'none', '-f']);
+        fs.renameSync(chdTmp, bigChd);
+      } finally {
+        fs.rmSync(isoTmp, { force: true });
+        fs.rmSync(chdTmp, { force: true });
+      }
     }
     await page.addInitScript(fakeFolder, 25); // 25 ms per 1 MiB write: about 40 MB/s
     // the bytes the page has received to write but not written yet, at most
@@ -199,8 +208,7 @@ test('a job worker that crashes leaves no half-written file in the folder', asyn
 // folder's own without a word (second review)
 test('extracting into a folder asks before replacing any file already there, track files too', async ({ app, page }) => {
   test.skip(!nativeChdman(), 'needs native chdman to make the CHD');
-  fs.mkdirSync(path.join(FIXTURES, 'gen'), { recursive: true });
-  chdman(['createcd', '-i', 'mgs disc1.cue', '-o', 'gen/mgs-x.chd', '-f']);
+  sharedCopy(reference('createcd', 'mgs disc1.cue'), path.join(FIXTURES, 'gen', 'mgs-x.chd'));
   await page.addInitScript(fakeFolder);
   await app.open({ settings: { storage: 'folder', rename: false, threads: 1 } });
   const extractOnce = async () => {
@@ -303,8 +311,7 @@ test('saving all into a folder never lets two results of the same name replace e
 // before it stayed, and so did the failed one, empty (audit 2026-10-05, L1)
 test('a result whose last file fails to close leaves none of its files in the folder', async ({ app, page }) => {
   test.skip(!nativeChdman(), 'needs native chdman to make the CHD');
-  fs.mkdirSync(path.join(FIXTURES, 'gen'), { recursive: true });
-  chdman(['createcd', '-i', 'mgs disc1.cue', '-o', 'gen/mgs-close.chd', '-f']);
+  sharedCopy(reference('createcd', 'mgs disc1.cue'), path.join(FIXTURES, 'gen', 'mgs-close.chd'));
   await page.addInitScript(fakeFolder);
   await page.addInitScript(() => { // a track file's close fails, as when the drive is full
     const m = window.__folder, set = m.set.bind(m);
@@ -324,8 +331,7 @@ test('a result whose last file fails to close leaves none of its files in the fo
 // the first pause for the folder's writes, instead of decompressing by itself (audit 2026-10-05, L25)
 test('an extract into a folder goes on by itself when every helper fails', async ({ app, page }) => {
   test.skip(!nativeChdman(), 'needs native chdman to make the CHD');
-  fs.mkdirSync(path.join(FIXTURES, 'gen'), { recursive: true });
-  chdman(['createdvd', '-i', 'agent.iso', '-o', 'gen/agent-folder.chd', '-f']);
+  sharedCopy(reference('createdvd', 'agent.iso'), path.join(FIXTURES, 'gen', 'agent-folder.chd'));
   await page.addInitScript(fakeFolder, 25); // slow: the worker pauses for the folder's writes
   await app.open({ settings: { storage: 'folder', rename: false, threads: 4 }, debug: { failHelpers: 'always', sinkMax: 1 << 20 } });
   await app.add(['gen/agent-folder.chd']);

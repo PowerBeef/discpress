@@ -6,21 +6,22 @@
 # Usage: scripts/newest-release.sh TAG   (needs gh, GH_TOKEN with contents: write to see drafts, and
 # GITHUB_REPOSITORY)
 set -euo pipefail
-TAG=$1
+TAG=${1:?Usage: newest-release.sh TAG}
 REPO=${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is not set}
-version='^v[0-9]+\.[0-9]+\.[0-9]+$'
+version='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
 [[ $TAG =~ $version ]] || { echo "$TAG is not a vX.Y.Z version" >&2; exit 2; }
 tags=$(gh api --paginate "repos/$REPO/git/matching-refs/tags/v" --jq '.[].ref | sub("^refs/tags/"; "")')
-drafts=$(gh api --paginate "repos/$REPO/releases?per_page=100" --jq '.[] | select(.draft) | .tag_name')
-releases=$(gh api --paginate "repos/$REPO/releases?per_page=100" --jq '.[] | select(.draft | not) | .tag_name')
+rel_json=$(gh api --paginate "repos/$REPO/releases?per_page=100" --jq '.[] | "\(.draft)\t\(.tag_name)"')
+drafts=$(awk -F'\t' '$1 == "true" {print $2}' <<<"$rel_json")
+releases=$(awk -F'\t' '$1 != "true" {print $2}' <<<"$rel_json")
 # only final versions count (sort -V would put v1.4.0 before v1.4.0-rc1)
-top=$(printf '%s\n' "$tags" "$drafts" "$releases" "$TAG" | grep -E "$version" | sort -V | tail -1)
+top=$(printf '%s\n' "$tags" "$drafts" "$releases" "$TAG" | grep -E "$version" | LC_ALL=C sort -V | tail -1)
 if [ "$top" = "$TAG" ]; then
   echo "$TAG is the newest version" >&2
   echo true
 else
-  if grep -qx "$top" <<<"$tags"; then where="its tag exists"
-  elif grep -qx "$top" <<<"$drafts"; then where="a draft release, not published yet: delete it if it was abandoned"
+  if grep -qxF "$top" <<<"$tags"; then where="its tag exists"
+  elif grep -qxF "$top" <<<"$drafts"; then where="a draft release, not published yet: delete it if it was abandoned"
   else where="a release"; fi
   echo "$TAG is not the newest version: $top is ($where)" >&2
   echo false

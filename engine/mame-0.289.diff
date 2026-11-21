@@ -467,6 +467,17 @@
  		if(bps >= 0.0)
  			return bps;
  		else
+--- a/3rdparty/flac/src/libFLAC/stream_encoder.c
++++ b/3rdparty/flac/src/libFLAC/stream_encoder.c
+@@ -4126,7 +4126,7 @@
+ 					residual,
+ #endif
+ 					abs_residual_partition_sums+sum,
+-					raw_bits_per_partition+sum,
++					raw_bits_per_partition ? raw_bits_per_partition+sum : 0, /* Discpress: avoid NULL+offset UB when !do_escape_coding */
+ 					residual_samples,
+ 					predictor_order,
+ 					rice_parameter_limit,
 --- a/3rdparty/flac/src/libFLAC/window.c
 +++ b/3rdparty/flac/src/libFLAC/window.c
 @@ -39,6 +39,7 @@
@@ -608,7 +619,21 @@
    BoolInt finished;
    BoolInt multiThread;
    BoolInt needInit;
-@@ -2321,6 +2322,7 @@
+@@ -1856,8 +1857,11 @@
+         offs += 2;
+       dist = MATCHES[(size_t)offs + 1];
+       
+-      // if (dist >= kNumFullDistances)
+-      GetPosSlot2(dist, posSlot)
++      /* Discpress: guard GetPosSlot2 so dist < 2 cannot trigger __builtin_clz(0) or shift-by-UINT32_MAX UB on ARM64 */
++      if (dist >= kNumFullDistances)
++      {
++        GetPosSlot2(dist, posSlot)
++      }
+       
+       for (len = /*2*/ startLen; ; len++)
+       {
+@@ -2321,6 +2325,7 @@
  static void LzmaEnc_Construct(CLzmaEnc *p)
  {
    RangeEnc_Construct(&p->rc);
@@ -616,7 +641,7 @@
    MatchFinder_Construct(&MFB);
    
    #ifndef Z7_ST
-@@ -2672,6 +2674,10 @@
+@@ -2672,6 +2677,10 @@
          p->nowPos64 += nowPos32 - startPos32;
          return CheckErrors(p);
        }
@@ -627,7 +652,7 @@
      }
    }
  
-@@ -3064,7 +3070,12 @@
+@@ -3064,7 +3073,12 @@
        while (v < dictSize);
      }
  
@@ -641,7 +666,7 @@
      return SZ_OK;
    }
  }
-@@ -3092,6 +3103,7 @@
+@@ -3092,6 +3106,7 @@
  
    p->writeEndMark = writeEndMark;
    p->rc.outStream = &outStream.vt;
@@ -649,7 +674,7 @@
  
    res = LzmaEnc_MemPrepare(p, src, srcLen, 0, alloc, allocBig);
    
-@@ -3101,6 +3113,7 @@
+@@ -3101,6 +3116,7 @@
      if (res == SZ_OK && p->nowPos64 != srcLen)
        res = SZ_ERROR_FAIL;
    }
@@ -904,7 +929,7 @@
 +	memcpy(&v, p, 8);
 +	return v;
 +}
-+
+ 
 +// eight bytes, each multiplied by 2 in GF(2^8)
 +inline uint64_t ecc_mul2x8(uint64_t a)
 +{
@@ -912,13 +937,13 @@
 +	return ((a & 0x7f7f7f7f7f7f7f7full) << 1) ^ ((high >> 7) * 0x1d);
 +}
  
-+} // anonymous namespace
- 
 -//-------------------------------------------------
 -//  ecc_source_byte - return data from the sector
 -//  at the given offset, masking anything
 -//  particular to a mode
 -//-------------------------------------------------
++} // anonymous namespace
++
 +/**
 + * @fn  void ecc_region(const uint8_t *sector, uint8_t *region)
 + *
@@ -940,12 +965,12 @@
  
  /**
 - * @fn  void ecc_compute_bytes(const uint8_t *sector, const uint16_t *row, int rowlen, uint8_t &val1, uint8_t &val2)
-+ * @fn  void ecc_parity(const uint8_t *region, bool q, uint8_t *parity)
-  *
+- *
 - * @brief   -------------------------------------------------
 - *            ecc_compute_bytes - calculate an ECC value (P or Q)
 - *          -------------------------------------------------.
-- *
++ * @fn  void ecc_parity(const uint8_t *region, bool q, uint8_t *parity)
+  *
 - * @param   sector          The sector.
 - * @param   row             The row.
 - * @param   rowlen          The rowlen.
@@ -962,10 +987,7 @@
 +	uint64_t a[11] = { }, b[11] = { };
 +	int const count = q ? ECC_Q_NUM_BYTES : ECC_P_NUM_BYTES;
 +	if (!q)
- 	{
--		val1 ^= ecc_source_byte(sector, row[component]);
--		val2 ^= ecc_source_byte(sector, row[component]);
--		val1 = ecclow[val1];
++	{
 +		// the columns of the first 24 rows (a row's last word also reads 2 bytes of the next row, unused)
 +		for (int row = 0; row < ECC_P_COMP; row++)
 +			for (int l = 0; l < 11; l++)
@@ -1000,7 +1022,10 @@
 +	memcpy(av, a, sizeof(a));
 +	memcpy(bv, b, sizeof(b));
 +	for (int i = 0; i < count; i++)
-+	{
+ 	{
+-		val1 ^= ecc_source_byte(sector, row[component]);
+-		val2 ^= ecc_source_byte(sector, row[component]);
+-		val1 = ecclow[val1];
 +		uint8_t const p0 = ecchigh[ecclow[av[i]] ^ bv[i]];
 +		parity[i] = p0;
 +		parity[count + i] = p0 ^ bv[i];
@@ -1043,19 +1068,22 @@
  }
  
  /**
-@@ -1400,13 +1319,13 @@
+@@ -1400,13 +1319,15 @@
  
  void cdrom_file::ecc_generate(uint8_t *sector)
  {
 -	// first verify P bytes
 -	for (int byte = 0; byte < ECC_P_NUM_BYTES; byte++)
 -		ecc_compute_bytes(sector, poffsets[byte], ECC_P_COMP, sector[ECC_P_OFFSET + byte], sector[ECC_P_OFFSET + ECC_P_NUM_BYTES + byte]);
-+	uint8_t region[ECC_REGION_BYTES];
-+	ecc_region(sector, region);
- 
+-
 -	// then verify Q bytes
 -	for (int byte = 0; byte < ECC_Q_NUM_BYTES; byte++)
 -		ecc_compute_bytes(sector, qoffsets[byte], ECC_Q_COMP, sector[ECC_Q_OFFSET + byte], sector[ECC_Q_OFFSET + ECC_Q_NUM_BYTES + byte]);
++	uint8_t region[ECC_REGION_BYTES];
++	ecc_region(sector, region);
++	// Discpress: ecc_parity's P loop loads 8 bytes from the end of row 23 (2 bytes into P, unused); zero them
++	memset(&region[ECC_P_COMP * ECC_P_NUM_BYTES], 0, 2);
++
 +	// first P, then Q, which covers the new P
 +	ecc_parity(region, false, &sector[ECC_P_OFFSET]);
 +	memcpy(&region[ECC_REGION_BYTES - 2 * ECC_P_NUM_BYTES], &sector[ECC_P_OFFSET], 2 * ECC_P_NUM_BYTES);
@@ -1063,7 +1091,7 @@
  }
  
  /**
-@@ -1578,22 +1497,25 @@
+@@ -1578,22 +1499,25 @@
  
  int cdrom_file::msf_to_frames(const char *token)
  {
@@ -1103,7 +1131,7 @@
  }
  
  /*-------------------------------------------------
-@@ -1604,17 +1526,18 @@
+@@ -1604,25 +1528,26 @@
  -------------------------------------------------*/
  
  /**
@@ -1122,101 +1150,217 @@
 -uint32_t cdrom_file::parse_wav_sample(std::string_view filename, uint32_t *dataoffs)
 +uint32_t cdrom_file::parse_wav_sample(std::string_view filename, uint32_t *dataoffs, uint64_t start)
  {
- 	unsigned long offset = 0;
- 	uint32_t length, rate, filesize;
-@@ -1633,7 +1556,7 @@
+-	unsigned long offset = 0;
+-	uint32_t length, rate, filesize;
+-	uint16_t bits, temp16;
+-	char buf[32];
++	uint64_t offset = 0;
++	uint32_t length = 0, rate = 0, filesize = 0;
++	uint16_t bits = 0, temp16 = 0;
++	char buf[32] = { };
+ 	osd_file::ptr file;
+ 	uint64_t fsize = 0;
+-	std::uint32_t actual;
++	std::uint32_t actual = 0;
+ 
+ 	std::string fname = std::string(filename);
+ 	std::error_condition const filerr = osd_file::open(fname, OPEN_FLAG_READ, file, fsize);
+@@ -1632,12 +1557,22 @@
+ 		return 0;
  	}
  
++	// Discpress: checked 64-bit reads so truncated or crafted .WAV headers cannot wrap or loop forever
++	auto const read_exact = [&] (void *dst, uint32_t n) -> bool
++	{
++		if (start > fsize || offset > fsize - start || n > fsize - start - offset)
++			return false;
++		std::error_condition const err = file->read(dst, start + offset, n, actual);
++		if (err || actual != n)
++			return false;
++		offset += n;
++		return true;
++	};
++
  	/* read the core header and make sure it's a WAVE file */
 -	file->read(buf, 0, 4, actual);
-+	file->read(buf, start, 4, actual); // Discpress: from where the WAVE file starts (0.289: 0)
- 	offset += actual;
- 	if (offset < 4)
+-	offset += actual;
+-	if (offset < 4)
++	if (!read_exact(buf, 4))
  	{
-@@ -1647,7 +1570,7 @@
+-		osd_printf_error("ERROR: unexpected RIFF offset %lu (%s)\n", offset, fname);
++		osd_printf_error("ERROR: unexpected RIFF offset %llu (%s)\n", (unsigned long long)offset, fname);
+ 		return 0;
+ 	}
+ 	if (memcmp(&buf[0], "RIFF", 4) != 0)
+@@ -1647,21 +1582,18 @@
  	}
  
  	/* get the total size */
 -	file->read(&filesize, offset, 4, actual);
-+	file->read(&filesize, start + offset, 4, actual);
- 	offset += actual;
- 	if (offset < 8)
+-	offset += actual;
+-	if (offset < 8)
++	if (!read_exact(&filesize, 4))
  	{
-@@ -1657,7 +1580,7 @@
+-		osd_printf_error("ERROR: unexpected size offset %lu (%s)\n", offset, fname);
++		osd_printf_error("ERROR: unexpected size offset %llu (%s)\n", (unsigned long long)offset, fname);
+ 		return 0;
+ 	}
  	filesize = little_endianize_int32(filesize);
++	uint64_t const maxoff = std::min<uint64_t>(fsize - start, uint64_t(filesize) + 8);
  
  	/* read the RIFF file type and make sure it's a WAVE file */
 -	file->read(buf, offset, 4, actual);
-+	file->read(buf, start + offset, 4, actual);
- 	offset += actual;
- 	if (offset < 12)
+-	offset += actual;
+-	if (offset < 12)
++	if (!read_exact(buf, 4))
  	{
-@@ -1673,9 +1596,9 @@
+-		osd_printf_error("ERROR: unexpected WAVE offset %lu (%s)\n", offset, fname);
++		osd_printf_error("ERROR: unexpected WAVE offset %llu (%s)\n", (unsigned long long)offset, fname);
+ 		return 0;
+ 	}
+ 	if (memcmp(&buf[0], "WAVE", 4) != 0)
+@@ -1673,26 +1605,41 @@
  	/* seek until we find a format tag */
  	while (true)
  	{
 -		file->read(buf, offset, 4, actual);
-+		file->read(buf, start + offset, 4, actual);
- 		offset += actual;
+-		offset += actual;
 -		file->read(&length, offset, 4, actual);
-+		file->read(&length, start + offset, 4, actual);
- 		offset += actual;
+-		offset += actual;
++		if (!read_exact(buf, 4) || !read_exact(&length, 4))
++		{
++			osd_printf_error("ERROR: could not find fmt tag (%s)\n", fname);
++			return 0;
++		}
  		length = little_endianize_int32(length);
  		if (memcmp(&buf[0], "fmt ", 4) == 0)
-@@ -1691,7 +1614,7 @@
+ 			break;
+ 
+ 		/* seek to the next block */
++		if (length > maxoff - offset)
++		{
++			osd_printf_error("ERROR: could not find fmt tag (%s)\n", fname);
++			return 0;
++		}
+ 		offset += length;
+-		if (offset >= filesize)
++		if (offset >= maxoff)
+ 		{
+ 			osd_printf_error("ERROR: could not find fmt tag (%s)\n", fname);
+ 			return 0;
+ 		}
  	}
  
++	if (length < 16)
++	{
++		osd_printf_error("ERROR: truncated fmt chunk (%u bytes) (%s)\n", length, fname);
++		return 0;
++	}
++
  	/* read the format -- make sure it is PCM */
 -	file->read(&temp16, offset, 2, actual);
-+	file->read(&temp16, start + offset, 2, actual);
- 	offset += actual;
+-	offset += actual;
++	if (!read_exact(&temp16, 2))
++	{
++		osd_printf_error("ERROR: truncated fmt chunk (%s)\n", fname);
++		return 0;
++	}
  	temp16 = little_endianize_int16(temp16);
  	if (temp16 != 1)
-@@ -1701,7 +1624,7 @@
+ 	{
+@@ -1701,8 +1648,11 @@
  	}
  
  	/* number of channels -- only stereo is supported */
 -	file->read(&temp16, offset, 2, actual);
-+	file->read(&temp16, start + offset, 2, actual);
- 	offset += actual;
+-	offset += actual;
++	if (!read_exact(&temp16, 2))
++	{
++		osd_printf_error("ERROR: truncated fmt chunk (%s)\n", fname);
++		return 0;
++	}
  	temp16 = little_endianize_int16(temp16);
  	if (temp16 != 2)
-@@ -1711,7 +1634,7 @@
+ 	{
+@@ -1711,8 +1661,11 @@
  	}
  
  	/* sample rate */
 -	file->read(&rate, offset, 4, actual);
-+	file->read(&rate, start + offset, 4, actual);
- 	offset += actual;
+-	offset += actual;
++	if (!read_exact(&rate, 4))
++	{
++		osd_printf_error("ERROR: truncated fmt chunk (%s)\n", fname);
++		return 0;
++	}
  	rate = little_endianize_int32(rate);
  	if (rate != 44100)
-@@ -1721,11 +1644,11 @@
+ 	{
+@@ -1721,12 +1674,18 @@
  	}
  
  	/* bytes/second and block alignment are ignored */
 -	file->read(buf, offset, 6, actual);
-+	file->read(buf, start + offset, 6, actual);
- 	offset += actual;
+-	offset += actual;
++	if (!read_exact(buf, 6))
++	{
++		osd_printf_error("ERROR: truncated fmt chunk (%s)\n", fname);
++		return 0;
++	}
  
  	/* bits/sample */
 -	file->read(&bits, offset, 2, actual);
-+	file->read(&bits, start + offset, 2, actual);
- 	offset += actual;
+-	offset += actual;
++	if (!read_exact(&bits, 2))
++	{
++		osd_printf_error("ERROR: truncated fmt chunk (%s)\n", fname);
++		return 0;
++	}
  	bits = little_endianize_int16(bits);
  	if (bits != 16)
-@@ -1740,9 +1663,9 @@
+ 	{
+@@ -1735,22 +1694,34 @@
+ 	}
+ 
+ 	/* seek past any extra data */
+-	offset += length - 16;
++	uint64_t const extra = uint64_t(length) - 16;
++	if (extra > maxoff - offset)
++	{
++		osd_printf_error("ERROR: could not find data tag (%s)\n", fname);
++		return 0;
++	}
++	offset += extra;
+ 
  	/* seek until we find a data tag */
  	while (true)
  	{
 -		file->read(buf, offset, 4, actual);
-+		file->read(buf, start + offset, 4, actual);
- 		offset += actual;
+-		offset += actual;
 -		file->read(&length, offset, 4, actual);
-+		file->read(&length, start + offset, 4, actual);
- 		offset += actual;
+-		offset += actual;
++		if (!read_exact(buf, 4) || !read_exact(&length, 4))
++		{
++			osd_printf_error("ERROR: could not find data tag (%s)\n", fname);
++			return 0;
++		}
  		length = little_endianize_int32(length);
  		if (memcmp(&buf[0], "data", 4) == 0)
-@@ -1764,7 +1687,12 @@
+ 			break;
+ 
+ 		/* seek to the next block */
++		if (length > maxoff - offset)
++		{
++			osd_printf_error("ERROR: could not find data tag (%s)\n", fname);
++			return 0;
++		}
+ 		offset += length;
+-		if (offset >= filesize)
++		if (offset >= maxoff)
+ 		{
+ 			osd_printf_error("ERROR: could not find data tag (%s)\n", fname);
+ 			return 0;
+@@ -1764,7 +1735,12 @@
  		return 0;
  	}
  
@@ -1230,79 +1374,166 @@
  
  	return length;
  }
-@@ -1864,11 +1792,11 @@
+@@ -1855,6 +1831,7 @@
+ 	{
+ 		return std::error_condition(errno, std::generic_category());
+ 	}
++	std::unique_ptr<FILE, int(*)(FILE *)> infile_guard(infile, &fclose);
+ 
+ 	path = get_file_path(path);
+ 
+@@ -1864,14 +1841,14 @@
  
  	outtoc.numsessions = 1;
  
 -	// seek to 12 bytes before the end
-+	// seek to 12 bytes before the end (Discpress: a file shorter than that isn't one either)
-+	fseek(infile, 0, SEEK_END);
-+	uint64_t const filesize = ftell(infile);
- 	fseek(infile, -12, SEEK_END);
+-	fseek(infile, -12, SEEK_END);
 -	fread(buffer, 12, 1, infile);
 -
 -	if (memcmp(buffer, "NER5", 4))
-+	if (filesize < 12 || fread(buffer, 12, 1, infile) != 1 || memcmp(buffer, "NER5", 4))
++	// seek to 12 bytes before the end (Discpress: 64-bit fseeko/ftello for >2 GiB images on wasm32)
++	if (fseeko(infile, 0, SEEK_END) != 0)
++		return chd_file::error::UNSUPPORTED_FORMAT;
++	off_t const sz = ftello(infile);
++	uint64_t const filesize = (sz >= 0) ? uint64_t(sz) : 0;
++	if (filesize < 12 || fseeko(infile, -12, SEEK_END) != 0 || fread(buffer, 12, 1, infile) != 1 || memcmp(buffer, "NER5", 4))
  	{
  		osd_printf_error("ERROR: Not a Nero 5.5 or later image!\n");
- 		fclose(infile);
-@@ -1888,8 +1816,13 @@
+-		fclose(infile);
+ 		return chd_file::error::UNSUPPORTED_FORMAT;
+ 	}
+ 
+@@ -1880,7 +1857,6 @@
+ 	if ((buffer[7] != 0) || (buffer[6] != 0) || (buffer[5] != 0) || (buffer[4] != 0))
+ 	{
+ 		osd_printf_error("ERROR: File size is > 4GB, this version of CHDMAN cannot handle it.");
+-		fclose(infile);
+ 		return chd_file::error::UNSUPPORTED_FORMAT;
+ 	}
+ 
+@@ -1888,8 +1864,12 @@
  
  	while (!done)
  	{
 -		fseek(infile, chain_offs, SEEK_SET);
 -		fread(buffer, 8, 1, infile);
 +		// Discpress: a chain of chunks without END!, or one that leaves the file, made 0.289 loop forever
-+		if (uint64_t(chain_offs) + 8 > filesize || fseek(infile, chain_offs, SEEK_SET) || fread(buffer, 8, 1, infile) != 1)
++		if (uint64_t(chain_offs) + 8 > filesize || fseeko(infile, off_t(chain_offs), SEEK_SET) != 0 || fread(buffer, 8, 1, infile) != 1)
 +		{
 +			osd_printf_error("ERROR: NRG image's chunks end without an END! chunk\n");
-+			fclose(infile);
 +			return chd_file::error::INVALID_DATA;
 +		}
  
  		chunk_size = get_u32be(&buffer[4]);
  
-@@ -1901,15 +1834,20 @@
- 			// skip second chunk size and UPC code
- 			fseek(infile, 20, SEEK_CUR);
+@@ -1898,34 +1878,57 @@
+ 		// we want the DAOX chunk, which has the TOC information
+ 		if (!memcmp(buffer, "DAOX", 4))
+ 		{
+-			// skip second chunk size and UPC code
+-			fseek(infile, 20, SEEK_CUR);
++			if (chunk_size < 22 || uint64_t(chain_offs) + 8 + chunk_size > filesize || fseeko(infile, 20, SEEK_CUR) != 0)
++			{
++				osd_printf_error("ERROR: NRG image has a truncated DAOX chunk\n");
++				return chd_file::error::INVALID_DATA;
++			}
  
 -			uint8_t start, end;
+-			fread(&start, 1, 1, infile);
+-			fread(&end, 1, 1, infile);
 +			uint8_t start = 0, end = 0; // Discpress: 0 (refused below) if the file ends here
- 			fread(&start, 1, 1, infile);
- 			fread(&end, 1, 1, infile);
++			if (fread(&start, 1, 1, infile) != 1 || fread(&end, 1, 1, infile) != 1)
++			{
++				osd_printf_error("ERROR: NRG image has a truncated DAOX chunk\n");
++				return chd_file::error::INVALID_DATA;
++			}
  
  //          printf("Start track %d  End track: %d\n", start, end);
  
  			outtoc.numtrks = (end-start) + 1;
-+			if (start < 1 || end < start || outtoc.numtrks > MAX_TRACKS || end > MAX_TRACKS) // Discpress: 0.289 wrote outside its track table
++			if (start != 1 || end < start || outtoc.numtrks > MAX_TRACKS || end > MAX_TRACKS) // Discpress: start must be 1 and fit in track table
 +			{
-+				fclose(infile);
 +				osd_printf_error("ERROR: NRG image has tracks %d to %d, only 1 to %d are possible\n", start, end, MAX_TRACKS);
++				return chd_file::error::INVALID_DATA;
++			}
++			if (uint64_t(chunk_size) < 22u + uint64_t(outtoc.numtrks) * 42u)
++			{
++				osd_printf_error("ERROR: NRG image's DAOX chunk is too small for %d tracks\n", outtoc.numtrks);
 +				return chd_file::error::INVALID_DATA;
 +			}
  
 -			uint32_t offset = 0;
  			for (int track = start; track <= end; track++)
  			{
- 				uint32_t size, mode;
-@@ -1925,7 +1863,15 @@
+-				uint32_t size, mode;
+-				uint64_t index0, index1, track_end;
+-
+-				fseek(infile, 12, SEEK_CUR);    // skip ISRC code
+-				size = read_uint16(infile);
+-				mode = read_uint16(infile);
+-				fseek(infile, 2, SEEK_CUR);
+-				index0 = read_uint64(infile);
+-				index1 = read_uint64(infile);
+-				track_end = read_uint64(infile);
++				unsigned char rec[42];
++				if (fread(rec, sizeof(rec), 1, infile) != 1)
++				{
++					osd_printf_error("ERROR: NRG image's DAOX track %d is truncated\n", track);
++					return chd_file::error::INVALID_DATA;
++				}
++				uint32_t const size = get_u16be(&rec[12]);
++				uint32_t const mode = get_u16be(&rec[14]);
++				uint64_t const index0 = get_u64be(&rec[18]);
++				uint64_t const index1 = get_u64be(&rec[26]);
++				uint64_t const track_end = get_u64be(&rec[34]);
  
  //              printf("Track %d: sector size %d mode %x index0 %llx index1 %llx track_end %llx (pregap %d sectors, length %d sectors)\n", track, size, mode, index0, index1, track_end, (uint32_t)(index1-index0)/size, (uint32_t)(track_end-index1)/size);
  				outinfo.track[track-1].fname.assign(tocfname);
 -				outinfo.track[track-1].offset = offset + (uint32_t)(index1-index0);
 +				// Discpress: the track starts at its INDEX 00, where the image holds it (0.289 added up the
 +				// lengths of the tracks before it without their pregaps, wrong after a track with one)
-+				if (index0 > index1 || index1 > track_end || track_end > filesize)
++				if (index0 > index1 || index1 > track_end || track_end > filesize || index0 > UINT32_MAX)
 +				{
 +					osd_printf_error("ERROR: NRG image's track %d isn't in the file\n", track);
-+					fclose(infile);
 +					return chd_file::error::INVALID_DATA;
 +				}
 +				outinfo.track[track-1].offset = (uint32_t)index0;
  				outinfo.track[track-1].idx[0] = outinfo.track[track-1].idx[1] = 0;
  
  				switch (mode)
-@@ -1976,21 +1922,29 @@
+@@ -1937,12 +1940,10 @@
+ 
+ 					case 0x0300:    // Mode 2 Form 1
+ 						osd_printf_error("ERROR: Mode 2 Form 1 tracks not supported\n");
+-						fclose(infile);
+ 						return chd_file::error::UNSUPPORTED_FORMAT;
+ 
+ 					case 0x0500:    // raw data
+ 						osd_printf_error("ERROR: Raw data tracks not supported\n");
+-						fclose(infile);
+ 						return chd_file::error::UNSUPPORTED_FORMAT;
+ 
+ 					case 0x0600:    // 2352 byte mode 2 raw
+@@ -1957,40 +1958,48 @@
+ 
+ 					case 0x0f00:    // raw data with sub-channel
+ 						osd_printf_error("ERROR: Raw data tracks with sub-channel not supported\n");
+-						fclose(infile);
+ 						return chd_file::error::UNSUPPORTED_FORMAT;
+ 
+ 					case 0x1000:    // audio with sub-channel
+ 						osd_printf_error("ERROR: Audio tracks with sub-channel not supported\n");
+-						fclose(infile);
+ 						return chd_file::error::UNSUPPORTED_FORMAT;
+ 
+ 					case 0x1100:    // raw Mode 2 Form 1 with sub-channel
+ 						osd_printf_error("ERROR: Raw Mode 2 Form 1 tracks with sub-channel not supported\n");
+-						fclose(infile);
+ 						return chd_file::error::UNSUPPORTED_FORMAT;
+ 
+ 					default:
+ 						osd_printf_error("ERROR: Unknown track type %x, contact MAMEDEV!\n", mode);
+-						fclose(infile);
  						return chd_file::error::UNSUPPORTED_FORMAT;
  				}
  
@@ -1311,7 +1542,6 @@
 +				if (size != ((mode == 0x0000) ? 2048 : 2352))
 +				{
 +					osd_printf_error("ERROR: NRG image's track %d has sectors of %d bytes, which its mode (%x) doesn't have\n", track, size, mode);
-+					fclose(infile);
 +					return chd_file::error::INVALID_DATA;
 +				}
  				outtoc.tracks[track-1].datasize = size;
@@ -1319,11 +1549,17 @@
  				outtoc.tracks[track-1].subtype = CD_SUB_NONE;
  				outtoc.tracks[track-1].subsize = 0;
  
- 				outtoc.tracks[track-1].pregap = (uint32_t)(index1-index0)/size;
+-				outtoc.tracks[track-1].pregap = (uint32_t)(index1-index0)/size;
 -				outtoc.tracks[track-1].frames = (uint32_t)(track_end-index1)/size;
++				outtoc.tracks[track-1].pregap = (uint32_t)((index1 - index0) / size);
 +				// Discpress: the pregap's frames (INDEX 00 to 01) are the image's, stored with the track as a cue
 +				// sheet's INDEX 00 in the same file is (0.289 dropped them and made the pregap virtual)
-+				outtoc.tracks[track-1].frames = (uint32_t)(track_end-index0)/size;
++				outtoc.tracks[track-1].frames = (uint32_t)((track_end - index0) / size);
++				if (outtoc.tracks[track-1].frames <= outtoc.tracks[track-1].pregap)
++				{
++					osd_printf_error("ERROR: NRG image's track %d has no data after its pregap\n", track);
++					return chd_file::error::INVALID_DATA;
++				}
  				outtoc.tracks[track-1].postgap = 0;
 -				outtoc.tracks[track-1].pgtype = 0;
 +				outtoc.tracks[track-1].pgtype = outtoc.tracks[track-1].pregap ? outtoc.tracks[track-1].trktype : 0;
@@ -1337,7 +1573,7 @@
  			}
  		}
  
-@@ -2000,7 +1954,15 @@
+@@ -2000,12 +2009,17 @@
  		}
  		else
  		{
@@ -1347,14 +1583,18 @@
 +			if (next + 8 > filesize || next > UINT32_MAX)
 +			{
 +				osd_printf_error("ERROR: NRG image's chunks end without an END! chunk\n");
-+				fclose(infile);
 +				return chd_file::error::INVALID_DATA;
 +			}
 +			chain_offs = uint32_t(next);
  		}
  	}
  
-@@ -2042,6 +2004,20 @@
+-	fclose(infile);
+-
+ 	return std::error_condition();
+ }
+ 
+@@ -2042,6 +2056,20 @@
  	outinfo.reset();
  
  	uint64_t size = get_file_size(tocfname);
@@ -1375,7 +1615,7 @@
  	fclose(infile);
  
  
-@@ -2052,7 +2028,15 @@
+@@ -2052,7 +2080,15 @@
  	outinfo.track[0].offset = 0;
  	outinfo.track[0].idx[0] = outinfo.track[0].idx[1] = 0;
  
@@ -1392,7 +1632,15 @@
  	{
  		outtoc.tracks[0].trktype = CD_TRACK_MODE1;
  		outtoc.tracks[0].frames = size / 2048;
-@@ -2149,7 +2133,7 @@
+@@ -2126,6 +2162,7 @@
+ 	{
+ 		return std::error_condition(errno, std::generic_category());
+ 	}
++	std::unique_ptr<FILE, int(*)(FILE *)> infile_guard(infile, &fclose);
+ 
+ 	path = get_file_path(path);
+ 
+@@ -2149,13 +2186,13 @@
  
  	const int numtracks = atoi(token);
  
@@ -1401,7 +1649,14 @@
  	{
  		osd_printf_error("GDI expects too many tracks. Expected %d tracks but only up to %zu tracks allowed\n", numtracks, std::size(outinfo.track) + 1);
  		return chd_file::error::INVALID_DATA;
-@@ -2178,7 +2162,7 @@
+ 	}
+ 
+-	if (numtracks == 0)
++	if (numtracks <= 0)
+ 	{
+ 		osd_printf_error("GDI header specifies no tracks\n");
+ 		return chd_file::error::INVALID_DATA;
+@@ -2178,7 +2215,7 @@
  		paramcnt++;
  		const int trknum = atoi(token) - 1;
  
@@ -1410,29 +1665,87 @@
  		{
  			osd_printf_error("Track %d is out of expected range of 1 to %d\n", trknum + 1, numtracks);
  			return chd_file::error::INVALID_DATA;
-@@ -2222,7 +2206,7 @@
+@@ -2200,7 +2237,13 @@
+ 		TOKENIZE
+ 		if (token[0])
+ 			paramcnt++;
+-		outtoc.tracks[trknum].physframeofs = atoi(token);
++		int const phys = atoi(token);
++		if (phys < 0)
++		{
++			osd_printf_error("Track %d has a negative start LBA %d\n", trknum + 1, phys);
++			return chd_file::error::INVALID_DATA;
++		}
++		outtoc.tracks[trknum].physframeofs = uint32_t(phys);
+ 
+ 		TOKENIZE
+ 		if (token[0])
+@@ -2222,7 +2265,7 @@
  			outtoc.tracks[trknum].trktype = CD_TRACK_MODE1;
  			outtoc.tracks[trknum].datasize = 2048;
  		}
 -		else if (trktype == 0)
-+		else if (trktype == 0 && trksize > 0) // Discpress: 0.289 divided by a size of 0
++		else if (trktype == 0 && trksize == 2352) // Discpress: audio tracks are always 2352-byte sectors
  		{
  			outtoc.tracks[trknum].trktype = CD_TRACK_AUDIO;
  			outtoc.tracks[trknum].datasize = 2352;
-@@ -2252,6 +2236,12 @@
+@@ -2252,15 +2295,19 @@
  		outinfo.track[trknum].fname.assign(path).append(token);
  
  		const uint64_t sz = get_file_size(outinfo.track[trknum].fname);
+-		outtoc.tracks[trknum].frames = sz / trksize;
+-		outtoc.tracks[trknum].padframes = 0;
+-
+-		if (trknum != 0)
 +		if (sz == 0) // Discpress: as a cue sheet does (0.289 made the track empty and went on)
-+		{
-+			fclose(infile);
+ 		{
+-			const int dif = outtoc.tracks[trknum].physframeofs - (outtoc.tracks[trknum-1].frames + outtoc.tracks[trknum-1].physframeofs);
+-			outtoc.tracks[trknum-1].frames += dif;
+-			outtoc.tracks[trknum-1].padframes = dif;
 +			osd_printf_error("ERROR: couldn't find bin file [%s]\n", outinfo.track[trknum].fname);
 +			return std::errc::no_such_file_or_directory;
+ 		}
++		uint64_t const frames = sz / trksize;
++		if (frames == 0 || frames > INT32_MAX)
++		{
++			osd_printf_error("ERROR: track %d file [%s] has an invalid length\n", trknum + 1, outinfo.track[trknum].fname);
++			return chd_file::error::INVALID_DATA;
 +		}
- 		outtoc.tracks[trknum].frames = sz / trksize;
- 		outtoc.tracks[trknum].padframes = 0;
++		outtoc.tracks[trknum].frames = uint32_t(frames);
++		outtoc.tracks[trknum].padframes = 0;
  
-@@ -2345,6 +2335,19 @@
+ 		TOKENIZE
+ 		// offset parameter, not used
+@@ -2298,6 +2345,19 @@
+ 		return chd_file::error::INVALID_DATA;
+ 	}
+ 
++	// Discpress: compute inter-track padding after all tracks are read (handles out-of-order lines and rejects overlaps)
++	for (int t = 1; t < numtracks; t++)
++	{
++		int64_t const dif = int64_t(outtoc.tracks[t].physframeofs) - (int64_t(outtoc.tracks[t - 1].frames) + int64_t(outtoc.tracks[t - 1].physframeofs));
++		if (dif < 0 || dif > INT32_MAX)
++		{
++			osd_printf_error("ERROR: GDI track %d overlaps track %d\n", t + 1, t);
++			return chd_file::error::INVALID_DATA;
++		}
++		outtoc.tracks[t - 1].frames += uint32_t(dif);
++		outtoc.tracks[t - 1].padframes = uint32_t(dif);
++	}
++
+ 	if (EXTRA_VERBOSE)
+ 		for (int i = 0; i < numtracks; i++)
+ 		{
+@@ -2305,7 +2365,7 @@
+ 		}
+ 
+ 	/* close the input TOC */
+-	fclose(infile);
++	infile_guard.reset();
+ 
+ 	/* store the number of tracks found */
+ 	outtoc.numtrks = numtracks;
+@@ -2345,12 +2405,26 @@
  	enum gdi_area current_area = SINGLE_DENSITY;
  	bool is_multibin = false;
  	int leadin = -1;
@@ -1452,14 +1765,20 @@
  
  	FILE *infile = fopen(path.c_str(), "rt");
  	if (!infile)
-@@ -2371,6 +2374,14 @@
+ 	{
+ 		return std::error_condition(errno, std::generic_category());
+ 	}
++	std::unique_ptr<FILE, int(*)(FILE *)> infile_guard(infile, &fclose);
+ 
+ 	path = get_file_path(path);
+ 
+@@ -2371,6 +2445,13 @@
  	char linebuffer[512];
  	memset(linebuffer, 0, sizeof(linebuffer));
  
 +	// Discpress: a line that belongs to a track, before the first TRACK, wrote before the track table
-+	auto const before_track = [&infile] (const char *what)
++	auto const before_track = [] (const char *what)
 +	{
-+		fclose(infile);
 +		osd_printf_error("ERROR: %s before the first TRACK\n", what);
 +		return std::error_condition(chd_file::error::INVALID_DATA);
 +	};
@@ -1467,7 +1786,19 @@
  	while (!feof(infile))
  	{
  		/* get the next line */
-@@ -2427,6 +2438,8 @@
+@@ -2413,6 +2494,11 @@
+ 				/* get pregap time */
+ 				TOKENIZE
+ 				session_pregap = msf_to_frames(token);
++				if (session_pregap < 0)
++				{
++					osd_printf_error("ERROR: invalid REM PREGAP %s\n", token);
++					return chd_file::error::INVALID_DATA;
++				}
+ 			}
+ 			else if (!strncmp(linebuffer+i, "LEAD-OUT", 8))
+ 			{
+@@ -2427,6 +2513,8 @@
  				/* get lead-out time */
  				TOKENIZE
  				int leadout_offset = msf_to_frames(token);
@@ -1476,7 +1807,7 @@
  				outinfo.track[trknum].leadout = leadout_offset;
  			}
  			else if (!strncmp(linebuffer+i, "LEAD-IN", 7))
-@@ -2472,13 +2485,18 @@
+@@ -2472,27 +2560,32 @@
  			/* get the file type */
  			TOKENIZE
  
@@ -1497,7 +1828,10 @@
  			}
  			else if (!strcmp(token, "WAVE"))
  			{
-@@ -2489,6 +2507,8 @@
+ 				wavlen = parse_wav_sample(lastfname, &wavoffs);
+ 				if (!wavlen)
+ 				{
+-					fclose(infile);
  					osd_printf_error("ERROR: couldn't read [%s] or not a valid .WAV\n", lastfname);
  					return chd_file::error::INVALID_DATA;
  				}
@@ -1506,20 +1840,31 @@
  			}
  			else
  			{
-@@ -2502,6 +2522,12 @@
+-				fclose(infile);
+ 				osd_printf_error("ERROR: Unhandled track type %s\n", token);
+ 				return chd_file::error::UNSUPPORTED_FORMAT;
+ 			}
+@@ -2501,7 +2594,18 @@
+ 		{
  			/* get the track number */
  			TOKENIZE
- 			trknum = strtoul(token, nullptr, 10) - 1;
-+			if (trknum < 0 || trknum >= int(MAX_TRACKS)) // Discpress: TRACK 00 or 100 wrote outside the track table
+-			trknum = strtoul(token, nullptr, 10) - 1;
++			int const newtrk = int(strtoul(token, nullptr, 10)) - 1;
++			if (newtrk < 0 || newtrk >= int(MAX_TRACKS)) // Discpress: TRACK 00 or 100 wrote outside the track table
 +			{
-+				fclose(infile);
 +				osd_printf_error("ERROR: track number %s is not between 1 and %d\n", token, MAX_TRACKS);
 +				return chd_file::error::INVALID_DATA;
 +			}
++			if (newtrk != trknum + 1) // Discpress: tracks must be sequential from 1
++			{
++				osd_printf_error("ERROR: track %d is out of order\n", newtrk + 1);
++				return chd_file::error::INVALID_DATA;
++			}
++			trknum = newtrk;
  
  			/* next token on the line is the track type */
  			TOKENIZE
-@@ -2541,6 +2567,10 @@
+@@ -2541,6 +2645,10 @@
  				outinfo.track[trknum].offset = wavoffs;
  				wavoffs = wavlen = 0;
  			}
@@ -1530,7 +1875,15 @@
  
  			outinfo.track[trknum].fname.assign(lastfname); /* default filename to the last one */
  
-@@ -2586,6 +2616,54 @@
+@@ -2559,7 +2667,6 @@
+ 			convert_type_string_to_track_info(token, &outtoc.tracks[trknum]);
+ 			if (outtoc.tracks[trknum].datasize == 0)
+ 			{
+-				fclose(infile);
+ 				osd_printf_error("ERROR: Unknown track type [%s].  Contact MAMEDEV.\n", token);
+ 				return chd_file::error::UNSUPPORTED_FORMAT;
+ 			}
+@@ -2586,6 +2693,52 @@
  				osd_printf_error("ERROR: encountered invalid index %d\n", idx);
  				return chd_file::error::INVALID_DATA;
  			}
@@ -1542,7 +1895,6 @@
 +			index_seen &seen = lastindex[trknum];
 +			if (idx <= seen.number || (frames < seen.frames && lastfname == seen.fname) || frames < 0)
 +			{
-+				fclose(infile);
 +				osd_printf_error("ERROR: track %d's INDEX %02d is out of order\n", trknum + 1, idx);
 +				return chd_file::error::INVALID_DATA;
 +			}
@@ -1563,7 +1915,6 @@
 +				{
 +					if (is_gdrom || outtoc.tracks[trknum].pregap != 0)
 +					{
-+						fclose(infile);
 +						osd_printf_error("ERROR: track %d's INDEX 00 and INDEX 01 are in different FILEs, which isn't supported %s\n", trknum + 1, is_gdrom ? "for a GD-ROM" : "with PREGAP");
 +						return chd_file::error::UNSUPPORTED_FORMAT;
 +					}
@@ -1585,21 +1936,36 @@
  
  			outinfo.track[trknum].idx[idx] = frames;
  
-@@ -2610,6 +2688,8 @@
+@@ -2610,6 +2763,18 @@
  			/* get index */
  			TOKENIZE
  			frames = msf_to_frames(token);
 +			if (trknum < 0)
 +				return before_track("PREGAP");
++			if (frames < 0)
++			{
++				osd_printf_error("ERROR: track %d has an invalid PREGAP %s\n", trknum + 1, token);
++				return chd_file::error::INVALID_DATA;
++			}
++			if (pgfile[trknum].idx0 != -1)
++			{
++				osd_printf_error("ERROR: track %d's INDEX 00 and INDEX 01 are in different FILEs, which isn't supported with PREGAP\n", trknum + 1);
++				return chd_file::error::UNSUPPORTED_FORMAT;
++			}
  
  			outtoc.tracks[trknum].pregap = frames;
  		}
-@@ -2620,11 +2700,15 @@
+@@ -2620,11 +2785,20 @@
  			/* get index */
  			TOKENIZE
  			frames = msf_to_frames(token);
 +			if (trknum < 0)
 +				return before_track("POSTGAP");
++			if (frames < 0)
++			{
++				osd_printf_error("ERROR: track %d has an invalid POSTGAP %s\n", trknum + 1, token);
++				return chd_file::error::INVALID_DATA;
++			}
  
  			outtoc.tracks[trknum].postgap = frames;
  		}
@@ -1610,7 +1976,25 @@
  			outtoc.tracks[trknum].control_flags = 0;
  
  			/* keep looping over remaining tokens in FLAGS line until there's no more to read */
-@@ -2667,18 +2751,51 @@
+@@ -2648,11 +2822,16 @@
+ 	}
+ 
+ 	/* close the input CUE */
+-	fclose(infile);
++	infile_guard.reset();
+ 
+ 	/* store the number of tracks found */
+ 	outtoc.numtrks = trknum + 1;
+ 	outtoc.numsessions = sessionnum + 1;
++	if (outtoc.numtrks <= 0)
++	{
++		osd_printf_error("ERROR: cue sheet has no tracks\n");
++		return chd_file::error::INVALID_DATA;
++	}
+ 
+ 	/* now go over the files again and set the lengths */
+ 	for (trknum = 0; trknum < outtoc.numtrks; trknum++)
+@@ -2667,18 +2846,59 @@
  		}
  
  		/* this is true for cue/bin and cue/iso, and we need it for cue/wav since .WAV is little-endian */
@@ -1641,14 +2025,22 @@
 +		if (wavdata[trknum].second != 0 && (sameasprev || sameasnext))
 +		{
 +			const uint32_t framesize = outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize;
++			uint64_t off;
 +			if (sameasprev)
-+				outinfo.track[trknum].offset = outinfo.track[trknum-1].offset + outtoc.tracks[trknum-1].frames * (outtoc.tracks[trknum-1].datasize + outtoc.tracks[trknum-1].subsize);
++				off = uint64_t(outinfo.track[trknum-1].offset) + uint64_t(outtoc.tracks[trknum-1].frames) * (outtoc.tracks[trknum-1].datasize + outtoc.tracks[trknum-1].subsize);
 +			else
-+				outinfo.track[trknum].offset = wavdata[trknum].first + outinfo.track[trknum].idx[0] * framesize;
++				off = uint64_t(wavdata[trknum].first) + uint64_t(outinfo.track[trknum].idx[0]) * framesize;
++			uint64_t const wavend = uint64_t(wavdata[trknum].first) + wavdata[trknum].second;
++			if (off > UINT32_MAX || off > wavend)
++			{
++				osd_printf_error("ERROR: track %d starts past the end of its file\n", trknum + 1);
++				return chd_file::error::INVALID_DATA;
++			}
++			outinfo.track[trknum].offset = uint32_t(off);
 +			if (sameasnext)
 +				outtoc.tracks[trknum].frames = outinfo.track[trknum+1].idx[0] - outinfo.track[trknum].idx[0];
 +			else
-+				outtoc.tracks[trknum].frames = (wavdata[trknum].first + wavdata[trknum].second - outinfo.track[trknum].offset) / framesize;
++				outtoc.tracks[trknum].frames = uint32_t((wavend - off) / framesize);
 +			continue;
  		}
  
@@ -1664,26 +2056,55 @@
  			tlen = get_file_size(outinfo.track[trknum].fname);
  			if (tlen == 0)
  			{
-@@ -2700,11 +2817,17 @@
+@@ -2686,8 +2906,14 @@
+ 				return std::errc::no_such_file_or_directory;
+ 			}
+ 
+-			outinfo.track[trknum].offset = outinfo.track[trknum-1].offset + outtoc.tracks[trknum-1].frames * (outtoc.tracks[trknum-1].datasize + outtoc.tracks[trknum-1].subsize);
+-			outtoc.tracks[trknum].frames = (tlen - outinfo.track[trknum].offset) / (outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize);
++			uint64_t const off = uint64_t(outinfo.track[trknum-1].offset) + uint64_t(outtoc.tracks[trknum-1].frames) * (outtoc.tracks[trknum-1].datasize + outtoc.tracks[trknum-1].subsize);
++			if (off > UINT32_MAX || off > tlen)
++			{
++				osd_printf_error("ERROR: track %d starts past the end of [%s]\n", trknum + 1, outinfo.track[trknum].fname);
++				return chd_file::error::INVALID_DATA;
++			}
++			outinfo.track[trknum].offset = uint32_t(off);
++			outtoc.tracks[trknum].frames = uint32_t((tlen - off) / (outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize));
+ 		}
+ 		else if (trknum+1 < outtoc.numtrks && outinfo.track[trknum].fname.compare(outinfo.track[trknum+1].fname) == 0)
+ 		{
+@@ -2700,10 +2926,27 @@
  				return chd_file::error::INVALID_DATA;
  			}
  
 -			if (trknum > 0)
 +			if (sameasprev)
- 			{
- 				const uint32_t previous_track_raw_size = outtoc.tracks[trknum-1].frames * (outtoc.tracks[trknum-1].datasize + outtoc.tracks[trknum-1].subsize);
- 				outinfo.track[trknum].offset = outinfo.track[trknum-1].offset + previous_track_raw_size;
- 			}
-+			else if (trknum > 0)
 +			{
++				uint64_t const off = uint64_t(outinfo.track[trknum-1].offset) + uint64_t(outtoc.tracks[trknum-1].frames) * (outtoc.tracks[trknum-1].datasize + outtoc.tracks[trknum-1].subsize);
++				if (off > UINT32_MAX)
++				{
++					osd_printf_error("ERROR: track %d offset is too large\n", trknum + 1);
++					return chd_file::error::INVALID_DATA;
++				}
++				outinfo.track[trknum].offset = uint32_t(off);
++			}
++			else if (trknum > 0)
+ 			{
+-				const uint32_t previous_track_raw_size = outtoc.tracks[trknum-1].frames * (outtoc.tracks[trknum-1].datasize + outtoc.tracks[trknum-1].subsize);
+-				outinfo.track[trknum].offset = outinfo.track[trknum-1].offset + previous_track_raw_size;
 +				/* Discpress: the first of several tracks in a file that follows another file starts at its own
 +				   INDEX point in it (0.289 went on from the previous file's offsets) */
-+				outinfo.track[trknum].offset = outinfo.track[trknum].idx[0] * (outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize);
-+			}
++				uint64_t const off = uint64_t(outinfo.track[trknum].idx[0]) * (outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize);
++				if (off > UINT32_MAX)
++				{
++					osd_printf_error("ERROR: track %d offset is too large\n", trknum + 1);
++					return chd_file::error::INVALID_DATA;
++				}
++				outinfo.track[trknum].offset = uint32_t(off);
+ 			}
  		}
  		else if (outtoc.tracks[trknum].frames == 0)
- 		{
-@@ -2777,6 +2900,77 @@
+@@ -2777,6 +3020,87 @@
  		}
  	}
  
@@ -1696,15 +2117,14 @@
 +		if (pg.idx0 == -1)
 +			continue;
 +		const uint32_t framesize = outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize;
++		const bool shares_prev = trknum > 0 && outinfo.track[trknum-1].fname == pg.fname;
 +		uint64_t end;
 +		if (pg.wavdata.second != 0)
 +		{
-+			pg.start = pg.wavdata.first + uint64_t(pg.idx0) * framesize;
 +			end = uint64_t(pg.wavdata.first) + pg.wavdata.second;
 +		}
 +		else
 +		{
-+			pg.start = uint64_t(pg.idx0) * framesize;
 +			end = get_file_size(pg.fname);
 +			if (end == 0)
 +			{
@@ -1712,18 +2132,29 @@
 +				return std::errc::no_such_file_or_directory;
 +			}
 +		}
-+		pg.frames = end > pg.start ? (end - pg.start) / framesize : 0;
-+		if (trknum > 0 && outinfo.track[trknum-1].fname == pg.fname)
++		if (shares_prev)
 +		{
++			// Discpress: compute pg.start using the previous track's sector size (handles MODE1/2048 -> AUDIO/2352 EAC splits)
 +			track_info &prev = outtoc.tracks[trknum-1];
 +			const uint32_t prevsize = prev.datasize + prev.subsize;
-+			if (pg.start < outinfo.track[trknum-1].offset)
++			if (pg.idx0 < outinfo.track[trknum-1].idx[0])
 +			{
 +				osd_printf_error("ERROR: track %d's INDEX 00 is before track %d\n", trknum+1, trknum);
 +				return chd_file::error::INVALID_DATA;
 +			}
-+			prev.frames = (pg.start - outinfo.track[trknum-1].offset) / prevsize;
++			pg.start = uint64_t(outinfo.track[trknum-1].offset) + uint64_t(pg.idx0 - outinfo.track[trknum-1].idx[0]) * prevsize;
++			if (pg.start > end)
++			{
++				osd_printf_error("ERROR: track %d's INDEX 00 is past the end of [%s]\n", trknum+1, pg.fname);
++				return chd_file::error::INVALID_DATA;
++			}
++			prev.frames = uint32_t(pg.idx0 - outinfo.track[trknum-1].idx[0]);
 +		}
++		else
++		{
++			pg.start = (pg.wavdata.second != 0 ? uint64_t(pg.wavdata.first) : 0) + uint64_t(pg.idx0) * framesize;
++		}
++		pg.frames = end > pg.start ? uint32_t((end - pg.start) / framesize) : 0;
 +	}
 +	for (trknum = 0; trknum < outtoc.numtrks; trknum++)
 +	{
@@ -1761,7 +2192,7 @@
  	if (is_gdrom)
  	{
  		/*
-@@ -2787,6 +2981,18 @@
+@@ -2787,6 +3111,18 @@
  			uint32_t this_pregap = outtoc.tracks[trknum].pregap;
  			uint32_t this_offset = this_pregap * (outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize);
  
@@ -1780,16 +2211,25 @@
  			outtoc.tracks[trknum-1].frames += this_pregap;
  			outtoc.tracks[trknum-1].splitframes += this_pregap;
  
-@@ -2808,7 +3014,7 @@
+@@ -2806,9 +3142,14 @@
+ 			if (outtoc.tracks[trknum].multicuearea == HIGH_DENSITY && outtoc.tracks[trknum-1].multicuearea == SINGLE_DENSITY)
+ 			{
  				outtoc.tracks[trknum].physframeofs = 45000;
- 				int dif=outtoc.tracks[trknum].physframeofs-(outtoc.tracks[trknum-1].frames+outtoc.tracks[trknum-1].physframeofs);
- 				outtoc.tracks[trknum-1].frames += dif;
+-				int dif=outtoc.tracks[trknum].physframeofs-(outtoc.tracks[trknum-1].frames+outtoc.tracks[trknum-1].physframeofs);
+-				outtoc.tracks[trknum-1].frames += dif;
 -				outtoc.tracks[trknum-1].padframes = dif;
-+				outtoc.tracks[trknum-1].padframes += dif; // Discpress: after a PREGAP's padding (0.289: =, and had none)
++				int64_t const dif = int64_t(outtoc.tracks[trknum].physframeofs) - (int64_t(outtoc.tracks[trknum-1].frames) + int64_t(outtoc.tracks[trknum-1].physframeofs));
++				if (dif < 0)
++				{
++					osd_printf_error("ERROR: GD-ROM single-density area extends past LBA 45000\n");
++					return chd_file::error::INVALID_DATA;
++				}
++				outtoc.tracks[trknum-1].frames += uint32_t(dif);
++				outtoc.tracks[trknum-1].padframes += uint32_t(dif); // Discpress: after a PREGAP's padding (0.289: =, and had none)
  			}
  			else
  			{
-@@ -2965,6 +3171,67 @@
+@@ -2965,6 +3306,67 @@
  	char linebuffer[512];
  	memset(linebuffer, 0, sizeof(linebuffer));
  
@@ -1857,7 +2297,7 @@
  	while (!feof(infile))
  	{
  		/* get the next line */
-@@ -2989,6 +3256,8 @@
+@@ -2989,6 +3391,8 @@
  		*/
  		if (!strcmp(token, "NO"))
  		{
@@ -1866,7 +2306,7 @@
  			TOKENIZE
  			if (!strcmp(token, "COPY"))
  				outtoc.tracks[trknum].control_flags &= ~CD_FLAG_CONTROL_DIGITAL_COPY_PERMITTED;
-@@ -2997,100 +3266,210 @@
+@@ -2997,100 +3401,211 @@
  		}
  		else if (!strcmp(token, "COPY"))
  		{
@@ -1942,9 +2382,10 @@
  
  			if (token[0] == '#')
  			{
- 				/* it's a decimal offset, use it */
+-				/* it's a decimal offset, use it */
 -				f = strtoul(&token[1], nullptr, 10);
-+				if (!toc_bytes(&token[1], 0, 1, run.offset)) // Discpress: within bounds
++				/* it's a decimal byte offset, not an MSF time */
++				if (!isdigit((uint8_t)token[1]) || strchr(&token[1], ':') || !toc_bytes(&token[1], 0, 1, run.offset)) // Discpress: within bounds
 +					return too_large(&token[1]);
 +				TOKENIZE
  			}
@@ -2022,12 +2463,13 @@
 +			}
 +			// Discpress: as cdrdao, a last sector that the data only partly fills is padded with zeros (0.289 dropped it)
 +			run.tail = uint32_t(length % framesize);
-+			run.frames = uint32_t(length / framesize) + (run.tail ? 1 : 0);
-+			if (track_length(trknum) + run.frames > max_frames) // (length is at most 2^40 bytes, so this doesn't wrap)
++			uint64_t const run_frames = length / framesize + (run.tail ? 1 : 0);
++			if (run_frames > max_frames || track_length(trknum) + run_frames > max_frames)
 +			{
 +				osd_printf_error("ERROR: track %d is too long\n", trknum + 1);
 +				return fail(chd_file::error::INVALID_DATA);
 +			}
++			run.frames = uint32_t(run_frames);
 +			runs[trknum].push_back(std::move(run));
 +		}
 +		else if (!strcmp(token, "ZERO") || !strcmp(token, "SILENCE") || !strcmp(token, "PREGAP"))
@@ -2120,7 +2562,7 @@
  
  			/* next token on the line is the track type */
  			TOKENIZE
-@@ -3117,22 +3496,128 @@
+@@ -3117,22 +3632,128 @@
  		}
  		else if (!strcmp(token, "START"))
  		{
@@ -2412,12 +2854,20 @@
  std::error_condition chd_file::codec_process_hunk(uint32_t hunknum)
  {
  	// punt if no file
-@@ -919,6 +986,9 @@
+@@ -912,13 +979,16 @@
+ 		case 3:
+ 		case 4:
+ 			{
+-				uint8_t const *const rawmap = &m_rawmap[16 * hunknum];
++				uint8_t const *const rawmap = &m_rawmap[size_t(16) * hunknum];
+ 				uint64_t const blockoffs = get_u64be(&rawmap[0]);
+ 				switch (rawmap[15] & V34_MAP_ENTRY_FLAG_TYPE_MASK)
+ 				{
  				case V34_MAP_ENTRY_TYPE_COMPRESSED:
  					{
  						uint32_t const blocklen = get_u16be(&rawmap[12]) | (uint32_t(rawmap[14]) << 16);
-+						// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
-+						if (UNEXPECTED(blocklen > m_compressed.size()))
++						// Discpress: more than the buffer holds, or no codec in slot 0 (a damaged or crafted map)
++						if (UNEXPECTED(blocklen > m_compressed.size() || !m_decompressor[0]))
 +							return std::error_condition(error::INVALID_DATA);
  						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  						if (UNEXPECTED(err))
@@ -2438,12 +2888,21 @@
  
  				case V34_MAP_ENTRY_TYPE_PARENT_HUNK:
  					if (UNEXPECTED(m_parent_missing))
+@@ -948,7 +1025,7 @@
+ 					return std::error_condition(error::UNSUPPORTED_FORMAT);
+ 
+ 				// compressed case
+-				uint8_t const *const rawmap = &m_rawmap[m_mapentrybytes * hunknum];
++				uint8_t const *const rawmap = &m_rawmap[size_t(m_mapentrybytes) * hunknum];
+ 				uint32_t const blocklen = get_u24be(&rawmap[1]);
+ 				uint64_t const blockoffs = get_u48be(&rawmap[4]);
+ 				switch (rawmap[0])
 @@ -958,6 +1035,9 @@
  				case COMPRESSION_TYPE_2:
  				case COMPRESSION_TYPE_3:
  					{
-+						// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
-+						if (UNEXPECTED(blocklen > m_compressed.size()))
++						// Discpress: more than the buffer holds, or unused codec slot (a damaged or crafted map)
++						if (UNEXPECTED(blocklen > m_compressed.size() || !m_decompressor[rawmap[0]]))
 +							return std::error_condition(error::INVALID_DATA);
  						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  						if (UNEXPECTED(err))
@@ -2464,12 +2923,21 @@
  
  				case COMPRESSION_PARENT:
  					if (UNEXPECTED(m_parent_missing))
+@@ -1036,7 +1123,7 @@
+ 		case 3:
+ 		case 4:
+ 			{
+-				uint8_t const *const rawmap = &m_rawmap[16 * hunknum];
++				uint8_t const *const rawmap = &m_rawmap[size_t(16) * hunknum];
+ 				uint64_t const blockoffs = get_u64be(&rawmap[0]);
+ 				util::crc32_t const blockcrc = get_u32be(&rawmap[8]);
+ 				bool const nocrc = rawmap[15] & V34_MAP_ENTRY_FLAG_NO_CRC;
 @@ -1045,6 +1132,9 @@
  				case V34_MAP_ENTRY_TYPE_COMPRESSED:
  					{
  						uint32_t const blocklen = get_u16be(&rawmap[12]) | (uint32_t(rawmap[14]) << 16);
-+						// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
-+						if (UNEXPECTED(blocklen > m_compressed.size()))
++						// Discpress: more than the buffer holds, or no codec in slot 0 (a damaged or crafted map)
++						if (UNEXPECTED(blocklen > m_compressed.size() || !m_decompressor[0]))
 +							return std::error_condition(error::INVALID_DATA);
  						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  						if (UNEXPECTED(err))
@@ -2490,6 +2958,15 @@
  
  				case V34_MAP_ENTRY_TYPE_PARENT_HUNK:
  					if (UNEXPECTED(m_parent_missing))
+@@ -1086,7 +1183,7 @@
+ 		// v5 map entries
+ 		case 5:
+ 			{
+-				uint8_t const *const rawmap = &m_rawmap[m_mapentrybytes * hunknum];
++				uint8_t const *const rawmap = &m_rawmap[size_t(m_mapentrybytes) * hunknum];
+ 
+ 				if (!compressed())
+ 				{
 @@ -1115,6 +1212,14 @@
  					case COMPRESSION_TYPE_2:
  					case COMPRESSION_TYPE_3:
@@ -2499,8 +2976,8 @@
 +							if (wasm_read_cached(hunknum, rawmap[0], dest))
 +								return (util::crc16_creator::simple(dest, m_hunkbytes) != blockcrc) ? std::error_condition(error::DECOMPRESSION_ERROR) : std::error_condition();
 +#endif
-+							// Discpress: more than the buffer holds (a damaged or crafted map); 0.289 read past its end
-+							if (UNEXPECTED(blocklen > m_compressed.size()))
++							// Discpress: more than the buffer holds, or unused codec slot (a damaged or crafted map)
++							if (UNEXPECTED(blocklen > m_compressed.size() || !m_decompressor[rawmap[0]]))
 +								return std::error_condition(error::INVALID_DATA);
  							std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  							if (UNEXPECTED(err))
@@ -2536,18 +3013,117 @@
  
  					case COMPRESSION_PARENT:
  						if (UNEXPECTED(m_parent_missing))
-@@ -2173,6 +2291,10 @@
+@@ -1512,12 +1630,15 @@
+ 	if (err)
+ 		return err;
+ 
+-	// read the metadata
++	// read the metadata (Discpress: avoid &output[0] UB when length is 0)
+ 	try { output.resize(metaentry.length); }
+ 	catch (std::bad_alloc const &) { return std::errc::not_enough_memory; }
+-	err = file_read(metaentry.offset + METADATA_HEADER_SIZE, &output[0], metaentry.length);
+-	if (UNEXPECTED(err))
+-		return err;
++	if (metaentry.length > 0)
++	{
++		err = file_read(metaentry.offset + METADATA_HEADER_SIZE, output.data(), metaentry.length);
++		if (UNEXPECTED(err))
++			return err;
++	}
+ 	resulttag = metaentry.metatag;
+ 	resultflags = metaentry.flags;
+ 	return std::error_condition();
+@@ -1864,7 +1985,7 @@
+ 	// look for hard disk metadata; if found, then the unit size == sector size
+ 	std::string metadata;
+ 	int i0, i1, i2, i3;
+-	if (!read_metadata(HARD_DISK_METADATA_TAG, 0, metadata) && sscanf(metadata.c_str(), HARD_DISK_METADATA_FORMAT, &i0, &i1, &i2, &i3) == 4)
++	if (!read_metadata(HARD_DISK_METADATA_TAG, 0, metadata) && sscanf(metadata.c_str(), HARD_DISK_METADATA_FORMAT, &i0, &i1, &i2, &i3) == 4 && i3 > 0)
+ 		return i3;
+ 
+ 	// look for CD-ROM metadata; if found, then the unit size == CD frame size
+@@ -1907,6 +2028,8 @@
+ 	m_metaoffset = get_u64be(&rawheader[36]);
+ 	m_hunkbytes = get_u32be(&rawheader[76]);
+ 	m_hunkcount = get_u32be(&rawheader[24]);
++	if (UNEXPECTED(m_hunkbytes == 0 || m_hunkcount == 0))
++		throw std::error_condition(error::INVALID_FILE);
+ 
+ 	// extract parent SHA-1
+ 	uint32_t flags = get_u32be(&rawheader[16]);
+@@ -1939,7 +2062,9 @@
+ 
+ 	// guess at the units based on snooping the metadata
+ 	m_unitbytes = guess_unitbytes();
+-	m_unitcount = (m_logicalbytes + m_unitbytes - 1) / m_unitbytes;
++	if (UNEXPECTED(m_unitbytes == 0))
++		throw std::error_condition(error::INVALID_FILE);
++	m_unitcount = (m_logicalbytes / m_unitbytes) + ((m_logicalbytes % m_unitbytes) ? 1 : 0);
+ }
+ 
+ /**
+@@ -1970,6 +2095,8 @@
+ 	m_metaoffset = get_u64be(&rawheader[36]);
+ 	m_hunkbytes = get_u32be(&rawheader[44]);
+ 	m_hunkcount = get_u32be(&rawheader[24]);
++	if (UNEXPECTED(m_hunkbytes == 0 || m_hunkcount == 0))
++		throw std::error_condition(error::INVALID_FILE);
+ 
+ 	// extract parent SHA-1
+ 	uint32_t flags = get_u32be(&rawheader[16]);
+@@ -2002,7 +2129,9 @@
+ 
+ 	// guess at the units based on snooping the metadata
+ 	m_unitbytes = guess_unitbytes();
+-	m_unitcount = (m_logicalbytes + m_unitbytes - 1) / m_unitbytes;
++	if (UNEXPECTED(m_unitbytes == 0))
++		throw std::error_condition(error::INVALID_FILE);
++	m_unitcount = (m_logicalbytes / m_unitbytes) + ((m_logicalbytes % m_unitbytes) ? 1 : 0);
+ }
+ 
+ /**
+@@ -2024,14 +2153,19 @@
+ 	if (UNEXPECTED(get_u32be(&rawheader[8]) != V5_HEADER_SIZE))
+ 		throw std::error_condition(error::INVALID_FILE);
+ 
+-	// extract core info
++	// extract core info (Discpress: validate non-zero hunk/unit sizes, divisibility and 32-bit hunkcount)
+ 	m_logicalbytes = get_u64be(&rawheader[32]);
+ 	m_mapoffset = get_u64be(&rawheader[40]);
+ 	m_metaoffset = get_u64be(&rawheader[48]);
+ 	m_hunkbytes = get_u32be(&rawheader[56]);
+-	m_hunkcount = (m_logicalbytes + m_hunkbytes - 1) / m_hunkbytes;
+ 	m_unitbytes = get_u32be(&rawheader[60]);
+-	m_unitcount = (m_logicalbytes + m_unitbytes - 1) / m_unitbytes;
++	if (UNEXPECTED(m_hunkbytes == 0 || m_unitbytes == 0 || (m_hunkbytes % m_unitbytes) != 0))
++		throw std::error_condition(error::INVALID_FILE);
++	uint64_t const hunkcount = (m_logicalbytes / m_hunkbytes) + ((m_logicalbytes % m_hunkbytes) ? 1 : 0);
++	if (UNEXPECTED(hunkcount == 0 || hunkcount > UINT32_MAX))
++		throw std::error_condition(error::INVALID_FILE);
++	m_hunkcount = uint32_t(hunkcount);
++	m_unitcount = (m_logicalbytes / m_unitbytes) + ((m_logicalbytes % m_unitbytes) ? 1 : 0);
+ 
+ 	// determine compression
+ 	m_compression[0] = get_u32be(&rawheader[16]);
+@@ -2172,8 +2306,15 @@
+ 		// for COMPRESSION_SELF: selfbits
  		// for COMPRESSION_PARENT: parentbits
  		// the overall size is clamped later with bitbuf.flush()
- 		int nbits_needed = (8*16) + (12 + std::max<int>({lengthbits+16, selfbits, parentbits}))*m_hunkcount;
+-		int nbits_needed = (8*16) + (12 + std::max<int>({lengthbits+16, selfbits, parentbits}))*m_hunkcount;
+-		std::vector<uint8_t> compressed(nbits_needed / 8 + 1);
++		uint64_t nbits_needed = (8 * 16) + uint64_t(12 + std::max<int>({ lengthbits + 16, selfbits, parentbits })) * m_hunkcount;
 +		// Discpress: plus the tree, at most 8 bits for each of the 16 codes. 0.289 left it out, which only
 +		// matters for a few hunks: then the map overflowed, was cut short, and the CHD couldn't be read.
 +		// Where 0.289's map fit, it is the same; the size of the buffer doesn't change what goes into it.
 +		nbits_needed += 16 * 8;
- 		std::vector<uint8_t> compressed(nbits_needed / 8 + 1);
++		uint64_t const compbytes = nbits_needed / 8 + 1;
++		if (UNEXPECTED(compbytes > SIZE_MAX))
++			throw std::bad_alloc();
++		std::vector<uint8_t> compressed(static_cast<size_t>(compbytes));
  		bitstream_out bitbuf(&compressed[16], compressed.size() - 16);
  
-@@ -2255,7 +2377,8 @@
+ 		// compute a tree and export it to the buffer
+@@ -2255,7 +2396,8 @@
  
  		// write the map header
  		uint32_t complen = bitbuf.flush();
@@ -2557,32 +3133,513 @@
  		put_u32be(&compressed[0], complen);
  		put_u48be(&compressed[4], firstoffs);
  		put_u16be(&compressed[10], mapcrc);
-@@ -2966,6 +3089,13 @@
+@@ -2315,12 +2457,18 @@
+ 	uint8_t const selfbits = rawbuf[13];
+ 	uint8_t const parentbits = rawbuf[14];
+ 
++	// Discpress: validate map header bounds before allocating or shifting (0.289 had shift UB and unbounded alloc)
++	uint64_t filelen = 0;
++	if (UNEXPECTED(mapbytes == 0 || lengthbits > 24 || selfbits > 31 || parentbits > 48 ||
++			(!m_file->length(filelen) && (m_mapoffset > filelen || filelen - m_mapoffset < 16 || mapbytes > filelen - m_mapoffset - 16))))
++		throw std::error_condition(error::INVALID_FILE);
++
+ 	// now read the map
+ 	std::vector<uint8_t> compressed(mapbytes);
+-	ioerr = file_read(m_mapoffset + 16, &compressed[0], mapbytes);
++	ioerr = file_read(m_mapoffset + 16, compressed.data(), mapbytes);
+ 	if (UNEXPECTED(ioerr))
+ 		throw ioerr;
+-	bitstream_in bitbuf(&compressed[0], compressed.size());
++	bitstream_in bitbuf(compressed.data(), compressed.size());
+ 
+ 	// first decode the compression types
+ 	huffman_decoder<16, 8> decoder;
+@@ -2331,7 +2479,7 @@
+ 	int repcount = 0;
+ 	for (uint32_t hunknum = 0; hunknum < m_hunkcount; hunknum++)
+ 	{
+-		uint8_t *rawmap = &m_rawmap[hunknum * 12];
++		uint8_t *rawmap = &m_rawmap[size_t(hunknum) * 12];
+ 		if (repcount > 0)
+ 			rawmap[0] = lastcomp, repcount--;
+ 		else
+@@ -2352,7 +2500,7 @@
+ 	uint64_t last_parent = 0;
+ 	for (uint32_t hunknum = 0; hunknum < m_hunkcount; hunknum++)
+ 	{
+-		uint8_t *rawmap = &m_rawmap[hunknum * 12];
++		uint8_t *rawmap = &m_rawmap[size_t(hunknum) * 12];
+ 		uint64_t offset = curoffset;
+ 		uint32_t length = 0;
+ 		uint16_t crc = 0;
+@@ -2377,7 +2525,9 @@
+ 				break;
+ 
+ 			case COMPRESSION_PARENT:
+-				offset = bitbuf.read(parentbits);
++				offset = (parentbits > 31)
++						? ((uint64_t(bitbuf.read(parentbits - 24)) << 24) | bitbuf.read(24))
++						: uint64_t(bitbuf.read(parentbits));
+ 				last_parent = offset;
+ 				break;
+ 
+@@ -2443,7 +2593,7 @@
+ 			throw std::error_condition(error::UNSUPPORTED_VERSION);
+ 
+ 		// must be an even number of units per hunk
+-		if (UNEXPECTED(m_hunkbytes % m_unitbytes != 0))
++		if (UNEXPECTED(m_hunkbytes == 0 || m_unitbytes == 0 || m_hunkbytes % m_unitbytes != 0))
+ 			throw std::error_condition(std::errc::invalid_argument);
+ 		if (UNEXPECTED(m_parent && m_unitbytes != m_parent->unit_bytes()))
+ 			throw std::error_condition(std::errc::invalid_argument);
+@@ -2495,12 +2645,12 @@
+ 		// write out the map (if not compressed)
+ 		if (!compressed())
+ 		{
+-			uint32_t mapsize = m_mapentrybytes * m_hunkcount;
++			uint64_t mapsize = uint64_t(m_mapentrybytes) * m_hunkcount;
+ 			uint8_t buffer[4096] = { 0 };
+ 			uint64_t offset = m_mapoffset;
+ 			while (mapsize != 0)
+ 			{
+-				uint32_t const bytes_to_write = std::min<size_t>(mapsize, sizeof(buffer));
++				uint32_t const bytes_to_write = uint32_t(std::min<uint64_t>(mapsize, sizeof(buffer)));
+ 				err = file_write(offset, buffer, bytes_to_write);
+ 				if (UNEXPECTED(err))
+ 					throw err;
+@@ -2518,6 +2668,11 @@
+ 		close();
+ 		return err;
+ 	}
++	catch (std::bad_alloc const &)
++	{
++		close();
++		return std::errc::not_enough_memory;
++	}
+ 	catch (...)
+ 	{
+ 		close();
+@@ -2612,6 +2767,11 @@
+ 		close();
+ 		return err;
+ 	}
++	catch (std::bad_alloc const &)
++	{
++		close();
++		return std::errc::not_enough_memory;
++	}
+ }
+ 
+ /**
+@@ -2636,14 +2796,18 @@
+ 	}
+ 
+ 	// read the map; v5+ compressed drives need to read and decompress their map
+-	m_rawmap.resize(m_hunkcount * m_mapentrybytes);
++	// Discpress: compute map size in 64 bits (0.289 overflowed 32-bit multiply on crafted headers)
++	uint64_t const mapsize = uint64_t(m_hunkcount) * m_mapentrybytes;
++	if (UNEXPECTED(mapsize > (uint64_t(1) << 30)))
++		throw std::error_condition(error::INVALID_FILE);
++	m_rawmap.resize(size_t(mapsize));
+ 	if (m_version >= 5 && compressed())
+ 	{
+ 		decompress_v5_map();
+ 	}
+ 	else
+ 	{
+-		std::error_condition err = file_read(m_mapoffset, &m_rawmap[0], m_rawmap.size());
++		std::error_condition err = file_read(m_mapoffset, m_rawmap.data(), m_rawmap.size());
+ 		if (UNEXPECTED(err))
+ 			throw err;
+ 	}
+@@ -2815,9 +2979,14 @@
+ 		metaentry.offset = metaentry.next;
+ 	}
+ 
+-	// loop until we run out of options
++	// loop until we run out of options (Discpress: Brent cycle detection + cap so cyclic metadata cannot hang)
++	uint64_t tortoise = metaentry.offset;
++	uint32_t steps = 0, power = 1, total = 0;
+ 	while (metaentry.offset != 0)
+ 	{
++		if (UNEXPECTED(++total > 100000))
++			return error::INVALID_METADATA;
++
+ 		// read the raw header
+ 		uint8_t raw_meta_header[METADATA_HEADER_SIZE];
+ 		std::error_condition err = file_read(metaentry.offset, raw_meta_header, sizeof(raw_meta_header));
+@@ -2838,6 +3007,17 @@
+ 		// no match, fetch the next link
+ 		metaentry.prev = metaentry.offset;
+ 		metaentry.offset = metaentry.next;
++		if (metaentry.offset != 0)
++		{
++			if (UNEXPECTED(metaentry.offset == tortoise))
++				return error::INVALID_METADATA;
++			if (++steps == power)
++			{
++				tortoise = metaentry.offset;
++				power *= 2;
++				steps = 0;
++			}
++		}
+ 	}
+ 
+ 	// if we get here, we didn't find it
+@@ -2942,18 +3122,24 @@
+ 	m_walking_parent(false),
+ 	m_total_in(0),
+ 	m_total_out(0),
+-	m_read_queue(nullptr),
+ 	m_read_queue_offset(0),
+ 	m_read_done_offset(0),
+-	m_work_queue(nullptr),
++	m_has_read_error(false),
++#ifndef __EMSCRIPTEN__
++	m_abort(false),
++	m_read_pending(0),
++	m_read_active(false),
++	m_read_stop(false),
++	m_work_head(0),
++	m_work_tail(0),
++	m_work_count(0),
++	m_work_stop(false),
++#endif
+ 	m_write_hunk(0)
+ {
+-	// zap arrays
+-	std::fill(std::begin(m_codecs), std::end(m_codecs), nullptr);
+-
+-	// allocate work queues
+-	m_read_queue = osd_work_queue_alloc(WORK_QUEUE_FLAG_IO);
+-	m_work_queue = osd_work_queue_alloc(WORK_QUEUE_FLAG_MULTI);
++#ifndef __EMSCRIPTEN__
++	std::fill(std::begin(m_work_ring), std::end(m_work_ring), nullptr);
++#endif
+ }
+ 
+ /**
+@@ -2966,15 +3152,127 @@
  
  chd_file_compressor::~chd_file_compressor()
  {
-+	// Discpress: after an error, hunks are still out, and the queue frees only the work items it holds (0.289 leaked
-+	// the others): let the reads finish, then release them
-+	osd_work_queue_wait(m_read_queue, 30 * osd_ticks_per_second());
-+	for (work_item &item : m_work_item)
-+		if (item.m_osd)
-+			osd_work_item_release(std::exchange(item.m_osd, nullptr));
+-	// free the work queues
+-	osd_work_queue_free(m_read_queue);
+-	osd_work_queue_free(m_work_queue);
+-
+-	// delete allocated arrays
+-	for (auto & elem : m_codecs)
+-		delete elem;
++	compress_abort();
+ }
+ 
++void chd_file_compressor::compress_abort() noexcept
++{
++#ifndef __EMSCRIPTEN__
++	m_abort.store(true, std::memory_order_release);
++	{
++		std::lock_guard<std::mutex> lock(m_read_mutex);
++		m_read_stop = true;
++		m_read_pending = 0;
++	}
++	m_read_cv.notify_all();
++	if (m_read_thread.joinable())
++		m_read_thread.join();
 +
- 	// free the work queues
- 	osd_work_queue_free(m_read_queue);
- 	osd_work_queue_free(m_work_queue);
-@@ -3022,6 +3152,10 @@
++	{
++		std::lock_guard<std::mutex> lock(m_work_mutex);
++		m_work_stop = true;
++		m_work_head = m_work_tail = m_work_count = 0;
++	}
++	m_work_cv.notify_all();
++	for (auto &t : m_workers)
++		if (t.joinable())
++			t.join();
++	m_workers.clear();
++
++	m_read_stop = false;
++	m_read_active = false;
++	m_work_stop = false;
++	m_abort.store(false, std::memory_order_relaxed);
++#endif
++}
++
++#ifndef __EMSCRIPTEN__
++void chd_file_compressor::wait_read_idle()
++{
++	if (!m_read_thread.joinable())
++		return;
++	std::unique_lock<std::mutex> lock(m_read_mutex);
++	m_read_cv.wait(lock, [this]() { return m_read_pending == 0 && !m_read_active; });
++}
++
++void chd_file_compressor::reader_loop()
++{
++	while (true)
++	{
++		{
++			std::unique_lock<std::mutex> lock(m_read_mutex);
++			m_read_cv.wait(lock, [this]() { return m_read_stop || m_read_pending > 0; });
++			if (m_read_stop)
++				return;
++			m_read_pending--;
++			m_read_active = true;
++		}
++		async_read();
++		{
++			std::lock_guard<std::mutex> lock(m_read_mutex);
++			m_read_active = false;
++		}
++		m_read_cv.notify_all();
++	}
++}
++
++void chd_file_compressor::worker_loop(uint32_t threadid)
++{
++	while (true)
++	{
++		work_item *item = nullptr;
++		{
++			std::unique_lock<std::mutex> lock(m_work_mutex);
++			m_work_cv.wait(lock, [this]() { return m_work_stop || m_work_count > 0; });
++			if (m_work_stop)
++				return;
++			item = m_work_ring[m_work_head];
++			m_work_head = (m_work_head + 1) % WORK_BUFFER_HUNKS;
++			m_work_count--;
++		}
++		if (!m_abort.load(std::memory_order_acquire) && !m_has_read_error.load(std::memory_order_acquire))
++		{
++			try
++			{
++				if (item->m_walking_parent)
++					async_walk_parent(*item);
++				else
++					async_compress_hunk(*item, threadid);
++			}
++			catch (std::error_condition const &err)
++			{
++				{
++					std::lock_guard<std::mutex> lock(m_done_mutex);
++					if (!m_has_read_error.load(std::memory_order_relaxed))
++					{
++						m_read_error = err;
++						m_has_read_error.store(true, std::memory_order_release);
++					}
++				}
++				m_done_cv.notify_one();
++			}
++			catch (...)
++			{
++				{
++					std::lock_guard<std::mutex> lock(m_done_mutex);
++					if (!m_has_read_error.load(std::memory_order_relaxed))
++					{
++						m_read_error = std::errc::not_enough_memory;
++						m_has_read_error.store(true, std::memory_order_release);
++					}
++				}
++				m_done_cv.notify_one();
++			}
++		}
++		item->m_status.store(WS_COMPLETE, std::memory_order_release);
++		{
++			std::lock_guard<std::mutex> lock(m_done_mutex);
++		}
++		m_done_cv.notify_one();
++	}
++}
++#endif
++
+ /**
+  * @fn  void chd_file_compressor::compress_begin()
+  *
+@@ -2985,9 +3283,11 @@
+ 
+ void chd_file_compressor::compress_begin()
+ {
++	compress_abort();
++
+ 	// reset state
+ 	m_walking_parent = bool(m_parent);
+-	m_total_in = 0;
++	m_total_in.store(0, std::memory_order_relaxed);
+ 	m_total_out = 0;
+ 	m_compsha1.reset();
+ 
+@@ -2997,31 +3297,59 @@
+ 
+ 	// reset read state
+ 	m_read_queue_offset = 0;
+-	m_read_done_offset = 0;
++	m_read_done_offset.store(0, std::memory_order_relaxed);
++	m_has_read_error.store(false, std::memory_order_relaxed);
+ 	m_read_error.clear();
+ 
+ 	// reset work item state
+-	m_work_buffer.resize(hunk_bytes() * (WORK_BUFFER_HUNKS + 1));
+-	memset(&m_work_buffer[0], 0, m_work_buffer.size());
+-	m_compressed_buffer.resize(hunk_bytes() * WORK_BUFFER_HUNKS);
++	m_work_buffer.resize(size_t(hunk_bytes()) * (WORK_BUFFER_HUNKS + 1));
++	memset(m_work_buffer.data(), 0, m_work_buffer.size());
++	m_compressed_buffer.resize(size_t(hunk_bytes()) * WORK_BUFFER_HUNKS);
+ 	for (int itemnum = 0; itemnum < WORK_BUFFER_HUNKS; itemnum++)
+ 	{
+ 		work_item &item = m_work_item[itemnum];
+ 		item.m_compressor = this;
+-		item.m_data = &m_work_buffer[hunk_bytes() * itemnum];
+-		item.m_compressed = &m_compressed_buffer[hunk_bytes() * itemnum];
++		item.m_status.store(WS_READY, std::memory_order_relaxed);
++		item.m_data = &m_work_buffer[size_t(hunk_bytes()) * itemnum];
++		item.m_compressed = &m_compressed_buffer[size_t(hunk_bytes()) * itemnum];
+ 		item.m_hash.resize(hunk_bytes() / unit_bytes());
+ 	}
+ 
+-	// initialize codec instances
+-	for (auto & elem : m_codecs)
+-	{
+-		delete elem;
+-		elem = new chd_compressor_group(*this, m_compression);
+-	}
++	// initialize codec instances (Discpress: 1 in browser; 1 per native worker with no 16-thread cap)
++#ifdef __EMSCRIPTEN__
++	uint32_t const nworkers = 1;
++#else
++	extern int osd_num_processors;
++	uint32_t const hw = std::max<uint32_t>(1, std::thread::hardware_concurrency());
++	uint32_t const req = (osd_num_processors > 0) ? uint32_t(osd_num_processors) : hw;
++	uint32_t const cap = std::min<uint32_t>(WORK_BUFFER_HUNKS, std::max<uint32_t>(4 * hw, 64));
++	uint32_t const nworkers = std::min(req, cap);
++#endif
++	m_codecs.clear();
++	m_codecs.reserve(nworkers);
++	for (uint32_t i = 0; i < nworkers; i++)
++		m_codecs.push_back(std::make_unique<chd_compressor_group>(*this, m_compression));
  
  	// reset write state
  	m_write_hunk = 0;
 +
 +#ifdef __EMSCRIPTEN__
 +	s_wasm_par = compressed() ? wasm_par_enabled(hunk_bytes(), unit_bytes(), m_compression, m_libdeflate ? 1 : 0) : 0; // flags: 1 = libdeflate
++#else
++	if (nworkers > 1)
++	{
++		m_read_pending = 0;
++		m_read_active = false;
++		m_read_stop = false;
++		m_work_head = m_work_tail = m_work_count = 0;
++		m_work_stop = false;
++		m_abort.store(false, std::memory_order_relaxed);
++		m_read_thread = std::thread(&chd_file_compressor::reader_loop, this);
++		m_workers.reserve(nworkers);
++		for (uint32_t i = 0; i < nworkers; i++)
++			m_workers.emplace_back(&chd_file_compressor::worker_loop, this, i);
++	}
 +#endif
  }
  
  /**
-@@ -3123,6 +3257,11 @@
+@@ -3040,17 +3368,30 @@
+ std::error_condition chd_file_compressor::compress_continue(double &progress, double &ratio)
+ {
+ 	// if we got an error, return the error
+-	if (UNEXPECTED(m_read_error))
++	if (UNEXPECTED(m_has_read_error.load(std::memory_order_acquire)))
++	{
++#ifndef __EMSCRIPTEN__
++		std::lock_guard<std::mutex> lock(m_done_mutex);
++#endif
+ 		return m_read_error;
++	}
+ 
+ 	// if done reading, queue some more
+-	while (m_read_queue_offset < m_logicalbytes && osd_work_queue_items(m_read_queue) < 2)
++	while (m_read_queue_offset < m_logicalbytes)
+ 	{
++#ifndef __EMSCRIPTEN__
++		if (!m_workers.empty())
++		{
++			std::lock_guard<std::mutex> lock(m_read_mutex);
++			if (m_read_pending + (m_read_active ? 1 : 0) >= 2)
++				break;
++		}
++#endif
+ 		// see if we have enough free work items to read the next half of a buffer
+-		uint32_t const startitem = m_read_queue_offset / hunk_bytes();
++		uint32_t const startitem = uint32_t(m_read_queue_offset / hunk_bytes());
+ 		uint32_t const enditem = startitem + WORK_BUFFER_HUNKS / 2;
+ 		uint32_t curitem = startitem;
+-		while ((curitem < enditem) && (m_work_item[curitem % WORK_BUFFER_HUNKS].m_status == WS_READY))
++		while ((curitem < enditem) && (m_work_item[curitem % WORK_BUFFER_HUNKS].m_status.load(std::memory_order_acquire) == WS_READY))
+ 			++curitem;
+ 
+ 		// if it's not all clear, defer
+@@ -3059,28 +3400,44 @@
+ 
+ 		// if we're walking the parent, we want one more item to have cleared so we
+ 		// can read an extra hunk there
+-		if (m_walking_parent && m_work_item[curitem % WORK_BUFFER_HUNKS].m_status != WS_READY)
++		if (m_walking_parent && m_work_item[curitem % WORK_BUFFER_HUNKS].m_status.load(std::memory_order_acquire) != WS_READY)
+ 			break;
+ 
+ 		// queue the next read
+ 		for (curitem = startitem; curitem < enditem; curitem++)
+-			m_work_item[curitem % WORK_BUFFER_HUNKS].m_status = WS_READING;
+-		osd_work_item_queue(m_read_queue, async_read_static, this, WORK_ITEM_FLAG_AUTO_RELEASE);
+-		m_read_queue_offset += WORK_BUFFER_HUNKS * hunk_bytes() / 2;
++			m_work_item[curitem % WORK_BUFFER_HUNKS].m_status.store(WS_READING, std::memory_order_release);
++		m_read_queue_offset += uint64_t(WORK_BUFFER_HUNKS / 2) * hunk_bytes();
++#ifndef __EMSCRIPTEN__
++		if (!m_workers.empty())
++		{
++			{
++				std::lock_guard<std::mutex> lock(m_read_mutex);
++				m_read_pending++;
++			}
++			m_read_cv.notify_one();
++		}
++		else
++#endif
++		{
++			async_read();
++			if (UNEXPECTED(m_has_read_error.load(std::memory_order_acquire)))
++				return m_read_error;
++		}
+ 	}
+ 
+ 	// flush out any finished items
+-	while (m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status == WS_COMPLETE)
++	while (m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status.load(std::memory_order_acquire) == WS_COMPLETE)
+ 	{
+-		work_item &item = m_work_item[m_write_hunk % WORK_BUFFER_HUNKS];
+-
+-		// free any OSD work item
+-		if (item.m_osd)
++		if (UNEXPECTED(m_has_read_error.load(std::memory_order_acquire)))
+ 		{
+-			osd_work_item_release(item.m_osd);
+-			item.m_osd = nullptr;
++#ifndef __EMSCRIPTEN__
++			std::lock_guard<std::mutex> lock(m_done_mutex);
++#endif
++			return m_read_error;
+ 		}
+ 
++		work_item &item = m_work_item[m_write_hunk % WORK_BUFFER_HUNKS];
++
+ 		if (m_walking_parent)
+ 		{
+ 			// for parent walking, just add to the hashmap
+@@ -3091,7 +3448,7 @@
+ 			for (uint32_t unit = 0; unit < units; unit++)
+ 			{
+ 				if (m_parent_map.find(item.m_hash[unit].m_crc16, item.m_hash[unit].m_sha1) == hashmap::NOT_FOUND)
+-					m_parent_map.add(item.m_hunknum * uph + unit, item.m_hash[unit].m_crc16, item.m_hash[unit].m_sha1);
++					m_parent_map.add(uint64_t(item.m_hunknum) * uph + unit, item.m_hash[unit].m_crc16, item.m_hash[unit].m_sha1);
+ 			}
+ 		}
+ 		else if (!compressed())
+@@ -3123,6 +3480,11 @@
  			}
  			else
  			{
@@ -2594,25 +3651,188 @@
  				// otherwise, append it compressed and add to the self map
  				hunk_write_compressed(item.m_hunknum, item.m_compression, item.m_compressed, item.m_complen, item.m_hash[0].m_crc16);
  				m_total_out += item.m_complen;
-@@ -3263,12 +3402,44 @@
- 	// TODO: data race
+@@ -3131,25 +3493,34 @@
+ 		}
+ 
+ 		// reset the item and advance
+-		item.m_status = WS_READY;
++		item.m_status.store(WS_READY, std::memory_order_release);
+ 		m_write_hunk++;
+ 
+ 		// if we hit the end, finalize
+ 		if (m_write_hunk == m_hunkcount)
+ 		{
++#ifndef __EMSCRIPTEN__
++			wait_read_idle();
++			if (UNEXPECTED(m_has_read_error.load(std::memory_order_acquire)))
++			{
++				std::lock_guard<std::mutex> lock(m_done_mutex);
++				return m_read_error;
++			}
++#endif
+ 			if (m_walking_parent)
+ 			{
+ 				// if this is just walking the parent, reset and get ready for compression
+ 				m_walking_parent = false;
+-				m_read_queue_offset = m_read_done_offset = 0;
++				m_read_queue_offset = 0;
++				m_read_done_offset.store(0, std::memory_order_relaxed);
+ 				m_write_hunk = 0;
+ 				for (auto &elem : m_work_item)
+-					elem.m_status = WS_READY;
++					elem.m_status.store(WS_READY, std::memory_order_relaxed);
+ 			}
+ 			else
+ 			{
+-				// wait for all reads to finish and if we're compressed, write the final SHA1 and map
+-				osd_work_queue_wait(m_read_queue, 30 * osd_ticks_per_second());
++				// stop threads and if we're compressed, write the final SHA1 and map
++				compress_abort();
+ 				if (!compressed())
+ 					return std::error_condition();
+ 				std::error_condition err = set_raw_sha1(m_compsha1.finish());
+@@ -3162,42 +3533,28 @@
+ 
+ 	// update progress and ratio
+ 	if (m_walking_parent)
+-		progress = double(m_read_done_offset) / double(logical_bytes());
++		progress = double(m_read_done_offset.load(std::memory_order_relaxed)) / double(logical_bytes());
+ 	else
+ 		progress = double(m_write_hunk) / double(m_hunkcount);
+-	ratio = (m_total_in == 0) ? 1.0 : double(m_total_out) / double(m_total_in);
++	uint64_t const total_in = m_total_in.load(std::memory_order_relaxed);
++	ratio = (total_in == 0) ? 1.0 : double(m_total_out) / double(total_in);
+ 
+-	// if we're waiting for work, wait
+-	// sometimes code can get here with .m_status == WS_READY and .m_osd != nullptr, TODO find out why this happens
+-	while ((m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status != WS_READY) &&
+-			(m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status != WS_COMPLETE) &&
+-			m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_osd)
+-		osd_work_item_wait(m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_osd, osd_ticks_per_second());
++	// if we're waiting for work, sleep on the condition variable until the next hunk finishes or errors
++#ifndef __EMSCRIPTEN__
++	if (!m_workers.empty())
++	{
++		std::unique_lock<std::mutex> lock(m_done_mutex);
++		m_done_cv.wait(lock, [this]() {
++			int32_t const st = m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status.load(std::memory_order_acquire);
++			return st == WS_COMPLETE || st == WS_READY || m_has_read_error.load(std::memory_order_acquire);
++		});
++	}
++#endif
+ 
+ 	return m_walking_parent ? error::WALKING_PARENT : error::COMPRESSING;
+ }
+ 
+ /**
+- * @fn  void *chd_file_compressor::async_walk_parent_static(void *param, int threadid)
+- *
+- * @brief   -------------------------------------------------
+- *            async_walk_parent - handle asynchronous parent walking operations
+- *          -------------------------------------------------.
+- *
+- * @param [in,out]  param   If non-null, the parameter.
+- * @param   threadid        The threadid.
+- *
+- * @return  null if it fails, else a void*.
+- */
+-
+-void *chd_file_compressor::async_walk_parent_static(void *param, int threadid)
+-{
+-	auto *const item = reinterpret_cast<work_item *>(param);
+-	item->m_compressor->async_walk_parent(*item);
+-	return nullptr;
+-}
+-
+-/**
+  * @fn  void chd_file_compressor::async_walk_parent(work_item &item)
+  *
+  * @brief   Asynchronous walk parent.
+@@ -3216,31 +3573,10 @@
+ 		item.m_hash[unit].m_crc16 = util::crc16_creator::simple(item.m_data + unit * unit_bytes(), hunk_bytes());
+ 		item.m_hash[unit].m_sha1 = util::sha1_creator::simple(item.m_data + unit * unit_bytes(), hunk_bytes());
+ 	}
+-	item.m_status = WS_COMPLETE;
+ }
+ 
+ /**
+- * @fn  void *chd_file_compressor::async_compress_hunk_static(void *param, int threadid)
+- *
+- * @brief   -------------------------------------------------
+- *            async_compress_hunk - handle asynchronous hunk compression
+- *          -------------------------------------------------.
+- *
+- * @param [in,out]  param   If non-null, the parameter.
+- * @param   threadid        The threadid.
+- *
+- * @return  null if it fails, else a void*.
+- */
+-
+-void *chd_file_compressor::async_compress_hunk_static(void *param, int threadid)
+-{
+-	auto *const item = reinterpret_cast<work_item *>(param);
+-	item->m_compressor->async_compress_hunk(*item, threadid);
+-	return nullptr;
+-}
+-
+-/**
+- * @fn  void chd_file_compressor::async_compress_hunk(work_item &item, int threadid)
++ * @fn  void chd_file_compressor::async_compress_hunk(work_item &item, uint32_t threadid)
+  *
+  * @brief   Asynchronous compress hunk.
+  *
+@@ -3248,11 +3584,11 @@
+  * @param   threadid        The threadid.
+  */
+ 
+-void chd_file_compressor::async_compress_hunk(work_item &item, int threadid)
++void chd_file_compressor::async_compress_hunk(work_item &item, uint32_t threadid)
+ {
+ 	// use our thread's codec
+-	assert(threadid < std::size(m_codecs));
+-	item.m_codecs = m_codecs[threadid];
++	assert(threadid < m_codecs.size());
++	item.m_codecs = m_codecs[threadid].get();
+ 
+ 	// compute CRC-16 and SHA-1 hashes
+ 	item.m_hash[0].m_crc16 = util::crc16_creator::simple(item.m_data, hunk_bytes());
+@@ -3260,32 +3596,41 @@
+ 
+ 	// find the best compression scheme, unless we already have a self or parent match
+ 	// (note we may miss a self match from blocks not yet added, but this just results in extra work)
+-	// TODO: data race
  	if ((m_current_map.find(item.m_hash[0].m_crc16, item.m_hash[0].m_sha1) == hashmap::NOT_FOUND) &&
  			(m_parent_map.find(item.m_hash[0].m_crc16, item.m_hash[0].m_sha1) == hashmap::NOT_FOUND))
 -		item.m_compression = item.m_codecs->find_best_compressor(item.m_data, item.m_compressed, item.m_complen);
+-
+-	// mark us complete
+-	item.m_status = WS_COMPLETE;
 +		item.m_compression = item.m_codecs->find_best_compressor(item.m_data, item.m_compressed, item.m_complen, item.m_try);
- 
- 	// mark us complete
- 	item.m_status = WS_COMPLETE;
  }
  
+-/**
+- * @fn  void *chd_file_compressor::async_read_static(void *param, int threadid)
+- *
+- * @brief   -------------------------------------------------
+- *            async_read - handle asynchronous source file reading
+- *          -------------------------------------------------.
+- *
+- * @param [in,out]  param   If non-null, the parameter.
+- * @param   threadid        The threadid.
+- *
+- * @return  null if it fails, else a void*.
+- */
 +//-------------------------------------------------
 +//  codec_plan_codecs - Discpress: the codec slots
 +//  the codec plan tries for a hunk that holds
 +//  content, a bit per slot
 +//-------------------------------------------------
-+
+ 
+-void *chd_file_compressor::async_read_static(void *param, int threadid)
 +uint32_t chd_file_compressor::codec_plan_codecs(hunk_content content) const noexcept
-+{
+ {
+-	reinterpret_cast<chd_file_compressor *>(param)->async_read();
+-	return nullptr;
 +	// CD audio: cdfl; CD data: cdlz, which wins almost every data hunk (cdzl wins about one in
 +	// ten by a few bytes, cdfl none); other data: every codec but flac, which wins almost none
 +	// and is the slowest. Without those codecs in the list, or for a hunk that holds both
@@ -2635,29 +3855,239 @@
 +	else if (content == hunk_content::DATA)
 +		codecs = cdlz ? cdlz : (all & ~flac);
 +	return codecs ? codecs : all;
-+}
-+
+ }
+ 
  /**
-  * @fn  void *chd_file_compressor::async_read_static(void *param, int threadid)
-  *
-@@ -3345,6 +3516,16 @@
- 			assert(item.m_status == WS_READING);
- 			item.m_status = WS_QUEUED;
- 			item.m_hunknum = hunknum;
-+			item.m_try = (m_codec_plan && !m_walking_parent) ? codec_plan_codecs(read_content(curoffs, hunk_bytes())) : 0x0f;
-+#ifdef __EMSCRIPTEN__
-+			if (s_wasm_par && !m_walking_parent && compressed())
+@@ -3296,31 +3641,38 @@
+ 
+ void chd_file_compressor::async_read()
+ {
+-	// if in the error or complete state, stop
+-	if (UNEXPECTED(m_read_error))
++	// if in the error or abort state, stop
++#ifndef __EMSCRIPTEN__
++	if (UNEXPECTED(m_abort.load(std::memory_order_acquire)))
++		return;
++#endif
++	if (UNEXPECTED(m_has_read_error.load(std::memory_order_acquire)))
++		return;
++
++	uint64_t const read_done = m_read_done_offset.load(std::memory_order_relaxed);
++	if (UNEXPECTED(read_done >= logical_bytes()))
+ 		return;
+ 
+ 	// determine parameters for the read
+-	uint32_t const work_buffer_bytes = WORK_BUFFER_HUNKS * hunk_bytes();
+-	uint32_t numbytes = work_buffer_bytes / 2;
+-	if ((m_read_done_offset + numbytes) > logical_bytes())
+-		numbytes = logical_bytes() - m_read_done_offset;
+-
+-	uint8_t *const dest = &m_work_buffer[0] + (m_read_done_offset % work_buffer_bytes);
+-	assert((&m_work_buffer[0] == dest) || (&m_work_buffer[work_buffer_bytes / 2] == dest));
+-	assert(!(m_read_done_offset % hunk_bytes()));
+-	uint64_t const end_offset = m_read_done_offset + numbytes;
++	uint64_t const work_buffer_bytes = uint64_t(WORK_BUFFER_HUNKS) * hunk_bytes();
++	uint32_t numbytes = uint32_t(std::min<uint64_t>(work_buffer_bytes / 2, logical_bytes() - read_done));
++
++	uint8_t *const dest = m_work_buffer.data() + (read_done % work_buffer_bytes);
++	assert((m_work_buffer.data() == dest) || (&m_work_buffer[work_buffer_bytes / 2] == dest));
++	assert(!(read_done % hunk_bytes()));
++	uint64_t const end_offset = read_done + numbytes;
++	bool const walking_parent = m_walking_parent;
+ 
+ 	// catch any exceptions coming out of here
+ 	try
+ 	{
+ 		// do the read
+-		if (m_walking_parent)
++		if (walking_parent)
+ 		{
+ 			// if walking the parent, read in hunks from the parent CHD
+-			uint64_t curoffs = m_read_done_offset;
++			uint64_t curoffs = read_done;
+ 			uint8_t *curdest = dest;
+-			uint32_t curhunk = m_read_done_offset / hunk_bytes();
++			uint32_t curhunk = uint32_t(read_done / hunk_bytes());
+ 			while (curoffs < end_offset + 1)
+ 			{
+ 				std::error_condition err = m_parent->read_hunk(curhunk, curdest);
+@@ -3334,40 +3686,118 @@
+ 		else
+ 		{
+ 			// otherwise, call the virtual function
+-			read_data(dest, m_read_done_offset, numbytes);
++			read_data(dest, read_done, numbytes);
+ 		}
+ 
+-		// spawn off work for each hunk
+-		for (uint64_t curoffs = m_read_done_offset; curoffs < end_offset; curoffs += hunk_bytes())
+-		{
+-			uint32_t hunknum = curoffs / hunk_bytes();
+-			work_item &item = m_work_item[hunknum % WORK_BUFFER_HUNKS];
+-			assert(item.m_status == WS_READING);
+-			item.m_status = WS_QUEUED;
+-			item.m_hunknum = hunknum;
+-			item.m_osd = osd_work_item_queue(m_work_queue, m_walking_parent ? async_walk_parent_static : async_compress_hunk_static, &item, 0);
+-		}
+-
+-		// continue the running SHA-1
+-		if (!m_walking_parent)
++		// continue the running SHA-1 and advance read pointer before handing off to workers
++		if (!walking_parent)
+ 		{
+ 			if (compressed())
+ 				m_compsha1.append(dest, numbytes);
+-			m_total_in += numbytes;
++			m_total_in.fetch_add(numbytes, std::memory_order_relaxed);
+ 		}
++		m_read_done_offset.store(end_offset, std::memory_order_relaxed);
+ 
+-		// advance the read pointer
+-		m_read_done_offset += numbytes;
++		// spawn off work for each hunk
++#ifndef __EMSCRIPTEN__
++		if (!m_workers.empty())
++		{
++			if (!compressed() && !walking_parent)
 +			{
-+				item.m_osd = nullptr;
-+				item.m_codecs = m_codecs[0];
++				for (uint64_t curoffs = read_done; curoffs < end_offset; curoffs += hunk_bytes())
++				{
++					uint32_t const hunknum = uint32_t(curoffs / hunk_bytes());
++					work_item &item = m_work_item[hunknum % WORK_BUFFER_HUNKS];
++					assert(item.m_status.load(std::memory_order_relaxed) == WS_READING);
++					item.m_hunknum = hunknum;
++					item.m_walking_parent = false;
++					item.m_status.store(WS_COMPLETE, std::memory_order_release);
++				}
++				{
++					std::lock_guard<std::mutex> lock(m_done_mutex);
++				}
++				m_done_cv.notify_one();
++				return;
++			}
++			{
++				std::lock_guard<std::mutex> lock(m_work_mutex);
++				for (uint64_t curoffs = read_done; curoffs < end_offset; curoffs += hunk_bytes())
++				{
++					uint32_t const hunknum = uint32_t(curoffs / hunk_bytes());
++					work_item &item = m_work_item[hunknum % WORK_BUFFER_HUNKS];
++					assert(item.m_status.load(std::memory_order_relaxed) == WS_READING);
++					item.m_hunknum = hunknum;
++					item.m_walking_parent = walking_parent;
++					item.m_try = (m_codec_plan && !walking_parent) ? codec_plan_codecs(read_content(curoffs, hunk_bytes())) : 0x0f;
++					item.m_status.store(WS_QUEUED, std::memory_order_release);
++					m_work_ring[m_work_tail] = &item;
++					m_work_tail = (m_work_tail + 1) % WORK_BUFFER_HUNKS;
++					m_work_count++;
++				}
++			}
++			m_work_cv.notify_all();
++			return;
++		}
++#endif
++		for (uint64_t curoffs = read_done; curoffs < end_offset; curoffs += hunk_bytes())
++		{
++			uint32_t const hunknum = uint32_t(curoffs / hunk_bytes());
++			work_item &item = m_work_item[hunknum % WORK_BUFFER_HUNKS];
++			assert(item.m_status.load(std::memory_order_relaxed) == WS_READING);
++			item.m_hunknum = hunknum;
++			item.m_walking_parent = walking_parent;
++			item.m_try = (m_codec_plan && !walking_parent) ? codec_plan_codecs(read_content(curoffs, hunk_bytes())) : 0x0f;
++#ifdef __EMSCRIPTEN__
++			if (s_wasm_par && !walking_parent && compressed())
++			{
++				item.m_codecs = m_codecs[0].get();
++				item.m_status.store(WS_QUEUED, std::memory_order_release);
 +				wasm_par_submit(&item, item.m_data, hunk_bytes(), item.m_try);
 +				continue;
 +			}
 +#endif
- 			item.m_osd = osd_work_item_queue(m_work_queue, m_walking_parent ? async_walk_parent_static : async_compress_hunk_static, &item, 0);
- 		}
++			if (!compressed() && !walking_parent)
++			{
++				item.m_status.store(WS_COMPLETE, std::memory_order_release);
++				continue;
++			}
++			item.m_status.store(WS_QUEUED, std::memory_order_release);
++			if (walking_parent)
++				async_walk_parent(item);
++			else
++				async_compress_hunk(item, 0);
++			item.m_status.store(WS_COMPLETE, std::memory_order_release);
++		}
+ 	}
+ 	catch (std::error_condition const &err)
+ 	{
+ 		fprintf(stderr, "CHD error occurred: %s\n", err.message().c_str());
++#ifndef __EMSCRIPTEN__
++		{
++			std::lock_guard<std::mutex> lock(m_done_mutex);
++			m_read_error = err;
++			m_has_read_error.store(true, std::memory_order_release);
++		}
++		m_done_cv.notify_one();
++#else
+ 		m_read_error = err;
++		m_has_read_error.store(true, std::memory_order_release);
++#endif
+ 	}
+ 	catch (std::exception const &ex)
+ 	{
+ 		fprintf(stderr, "exception occurred: %s\n", ex.what());
++#ifndef __EMSCRIPTEN__
++		{
++			std::lock_guard<std::mutex> lock(m_done_mutex);
++			m_read_error = std::errc::io_error; // TODO: revisit this error code
++			m_has_read_error.store(true, std::memory_order_release);
++		}
++		m_done_cv.notify_one();
++#else
+ 		m_read_error = std::errc::io_error; // TODO: revisit this error code
++		m_has_read_error.store(true, std::memory_order_release);
++#endif
+ 	}
+ }
  
-@@ -3512,3 +3693,184 @@
+@@ -3389,7 +3819,8 @@
+ 	m_block_list(new entry_block(nullptr))
+ {
+ 	// initialize the map to empty
+-	memset(m_map, 0, sizeof(m_map));
++	for (auto &slot : m_map)
++		slot.store(nullptr, std::memory_order_relaxed);
+ }
+ 
+ /**
+@@ -3426,7 +3857,8 @@
+ 	m_block_list->m_nextalloc = 0;
+ 
+ 	// reset the hash
+-	memset(m_map, 0, sizeof(m_map));
++	for (auto &slot : m_map)
++		slot.store(nullptr, std::memory_order_relaxed);
+ }
+ 
+ /**
+@@ -3445,7 +3877,7 @@
+ uint64_t chd_file_compressor::hashmap::find(util::crc16_t crc16, util::sha1_t sha1) const noexcept
+ {
+ 	// look up the entry in the map
+-	for (entry_t *entry = m_map[crc16]; entry; entry = entry->m_next)
++	for (entry_t *entry = m_map[crc16].load(std::memory_order_acquire); entry; entry = entry->m_next)
+ 		if (entry->m_sha1 == sha1)
+ 			return entry->m_itemnum;
+ 	return NOT_FOUND;
+@@ -3471,8 +3903,8 @@
+ 	entry_t *entry = &m_block_list->m_array[m_block_list->m_nextalloc++];
+ 	entry->m_itemnum = itemnum;
+ 	entry->m_sha1 = sha1;
+-	entry->m_next = m_map[crc16];
+-	m_map[crc16] = entry;
++	entry->m_next = m_map[crc16].load(std::memory_order_relaxed);
++	m_map[crc16].store(entry, std::memory_order_release);
+ }
+ 
+ std::error_condition chd_file::check_is_hd() const noexcept
+@@ -3512,3 +3944,189 @@
  	metadata_entry metaentry;
  	return metadata_find(AV_METADATA_TAG, 0, metaentry);
  }
@@ -2754,14 +4184,14 @@
 +			if ((type > COMPRESSION_TYPE_3) || !m_decompressor[type] || m_decompressor[type]->lossy())
 +				continue;
 +			uint32_t const blocklen = get_u24be(&rawmap[1]);
-+			if (blocklen > m_compressed.size())
-+				continue; // more than a hunk holds (a damaged map): read_hunk will report it
++			if (blocklen == 0 || blocklen > m_compressed.size())
++				continue; // empty or larger than a hunk (a damaged map): read_hunk will report it
 +			uint8_t const *data = span ? (span + (blockoffs - lo)) : nullptr;
 +			if (!data)
 +			{
-+				if (file_read(blockoffs, &m_compressed[0], blocklen))
++				if (file_read(blockoffs, m_compressed.data(), blocklen))
 +					continue; // read_hunk will report it
-+				data = &m_compressed[0];
++				data = m_compressed.data();
 +			}
 +			if (m_wasm_rd > 0)
 +			{
@@ -2773,6 +4203,7 @@
 +				m_wasm_ahead[hunknum] = wasm_ahead_hunk{ std::vector<uint8_t>(data, data + blocklen), 3 };
 +			}
 +		}
++		std::vector<uint8_t>().swap(m_wasm_span); // release the up-to-16 MiB span immediately after slicing
 +		m_wasm_queued = end;
 +	}
 +
@@ -2822,10 +4253,14 @@
 +	{
 +	case 1: // decompressed by a helper
 +	case 4: // stored uncompressed
-+		memcpy(dest, &ahead.data[0], m_hunkbytes);
++		if (ahead.data.size() < m_hunkbytes)
++			return false;
++		memcpy(dest, ahead.data.data(), m_hunkbytes);
 +		return true;
 +	case 3: // compressed bytes
-+		m_decompressor[type]->decompress(&ahead.data[0], ahead.data.size(), reinterpret_cast<uint8_t *>(dest), m_hunkbytes);
++		if (ahead.data.empty() || !m_decompressor[type])
++			return false;
++		m_decompressor[type]->decompress(ahead.data.data(), ahead.data.size(), reinterpret_cast<uint8_t *>(dest), m_hunkbytes);
 +		return true;
 +	default:
 +		return false;
@@ -2844,18 +4279,22 @@
 +#endif
 --- a/src/lib/util/chd.h
 +++ b/src/lib/util/chd.h
-@@ -22,6 +22,10 @@
+@@ -22,6 +22,14 @@
  #include <string>
  #include <string_view>
  #include <system_error>
++#include <vector>
 +#ifdef __EMSCRIPTEN__
 +#include <unordered_map>
-+#include <vector>
++#else
++#include <condition_variable>
++#include <mutex>
++#include <thread>
 +#endif
  
  
  /***************************************************************************
-@@ -309,6 +313,12 @@
+@@ -309,6 +317,12 @@
  	uint64_t unit_count() const noexcept { return m_unitcount; }
  	bool compressed() const noexcept { return (m_compression[0] != CHD_CODEC_NONE); }
  	chd_codec_type compression(int index) const noexcept { return m_compression[index]; }
@@ -2868,7 +4307,7 @@
  	chd_file *parent() const noexcept { return m_parent.get(); }
  	bool parent_missing() const noexcept;
  	util::sha1_t sha1() const noexcept;
-@@ -366,6 +376,16 @@
+@@ -366,6 +380,16 @@
  	std::error_condition check_is_dvd() const noexcept;
  	std::error_condition check_is_av() const noexcept;
  
@@ -2885,7 +4324,7 @@
  private:
  	struct metadata_entry;
  	struct metadata_hash;
-@@ -391,6 +411,7 @@
+@@ -391,6 +415,7 @@
  	std::error_condition verify_proper_compression_append(uint32_t hunknum) const noexcept;
  	void hunk_write_compressed(uint32_t hunknum, int8_t compression, const uint8_t *compressed, uint32_t complength, util::crc16_t crc16);
  	void hunk_copy_from_self(uint32_t hunknum, uint32_t otherhunk);
@@ -2893,7 +4332,7 @@
  	void hunk_copy_from_parent(uint32_t hunknum, uint64_t parentunit);
  	std::error_condition metadata_find(chd_metadata_tag metatag, int32_t metaindex, metadata_entry &metaentry, bool resume = false) const noexcept;
  	std::error_condition metadata_set_previous_next(uint64_t prevoffset, uint64_t nextoffset) noexcept;
-@@ -433,6 +454,21 @@
+@@ -433,6 +458,21 @@
  	// caching
  	std::vector<uint8_t>    m_cache;            // single-hunk cache for partial reads/writes
  	uint32_t                m_cachehunk;        // which hunk is in the cache?
@@ -2915,10 +4354,12 @@
  };
  
  
-@@ -450,11 +486,28 @@
+@@ -449,12 +489,30 @@
+ 	// compression management
  	void compress_begin();
  	std::error_condition compress_continue(double &progress, double &ratio);
- 
++	void compress_abort() noexcept; // Discpress: stop worker/reader threads before derived destructors run
++
 +	// Discpress: the codec plan (chdman's --codecplan). Each hunk is tried only with the codecs
 +	// meant for what it holds, instead of all of them: CD audio with cdfl, CD data with cdlz, and
 +	// other data with every codec but flac (codec_plan_codecs). The data and both SHA-1s are the
@@ -2929,7 +4370,7 @@
 +	// browser build: completion callback for hunks compressed by helper workers
 +	static void wasm_par_complete_item(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen, const uint8_t *data);
 +#endif
-+
+ 
  protected:
  	// required override: read more data
  	virtual uint32_t read_data(void *dest, uint64_t offset, uint32_t length) = 0;
@@ -2944,30 +4385,120 @@
  	// hash map for looking up values
  	class hashmap
  	{
-@@ -524,6 +577,7 @@
+@@ -490,8 +548,8 @@
+ 			entry_t             m_array[16384];     // array of entries
+ 		};
+ 
+-		// internal state
+-		entry_t *           m_map[65536];           // map, hashed by CRC-16
++		// internal state (Discpress: atomic bucket heads for lock-free release/acquire reads from workers)
++		std::atomic<entry_t *> m_map[65536];        // map, hashed by CRC-16
+ 		entry_block *       m_block_list;           // list of allocated blocks
+ 	};
+ 
+@@ -515,8 +573,7 @@
+ 	struct work_item
+ 	{
+ 		work_item()
+-			: m_osd(nullptr)
+-			, m_compressor(nullptr)
++			: m_compressor(nullptr)
+ 			, m_status(WS_READY)
+ 			, m_hunknum(0)
+ 			, m_data(nullptr)
+@@ -524,12 +581,11 @@
  			, m_complen(0)
  			, m_compression(0)
  			, m_codecs(nullptr)
 +			, m_try(0x0f)
++			, m_walking_parent(false)
  		{ }
  
- 		osd_work_item *     m_osd;              // OSD work item running on this block
-@@ -537,6 +591,7 @@
+-		osd_work_item *     m_osd;              // OSD work item running on this block
+ 		chd_file_compressor *m_compressor;      // pointer back to the compressor
+-		// TODO: had to change this to be able to use atomic_* functions on this
+-		//volatile work_status m_status;          // current status of this item
+ 		std::atomic<int32_t>  m_status;           // current status of this item
+ 		uint32_t              m_hunknum;          // number of the hunk we're working on
+ 		uint8_t *             m_data;             // pointer to the data we are working on
+@@ -537,20 +593,25 @@
  		uint32_t              m_complen;          // compressed data length
  		int8_t                m_compression;      // type of compression used
  		chd_compressor_group *m_codecs;         // codec instance
 +		uint32_t              m_try;              // Discpress: codec slots to try (the codec plan)
++		bool                  m_walking_parent;   // Discpress: snapshot of mode for this item
  		std::vector<hash_pair> m_hash;        // array of hashes
  	};
  
-@@ -549,6 +604,7 @@
+ 	// internal helpers
+-	static void *async_walk_parent_static(void *param, int threadid);
+ 	void async_walk_parent(work_item &item);
+-	static void *async_compress_hunk_static(void *param, int threadid);
+-	void async_compress_hunk(work_item &item, int threadid);
+-	static void *async_read_static(void *param, int threadid);
++	void async_compress_hunk(work_item &item, uint32_t threadid);
  	void async_read();
++#ifndef __EMSCRIPTEN__
++	void reader_loop();
++	void worker_loop(uint32_t threadid);
++	void wait_read_idle();
++#endif
  
  	// current compression status
 +	bool                    m_codec_plan = false; // Discpress: try each hunk only with the codecs for its content
  	bool                    m_walking_parent;   // are we building the parent map?
- 	uint64_t                m_total_in;         // total bytes in
+-	uint64_t                m_total_in;         // total bytes in
++	std::atomic<uint64_t>   m_total_in;         // total bytes in
  	uint64_t                m_total_out;        // total bytes out
+ 	util::sha1_creator      m_compsha1;         // running SHA-1 on raw data
+ 
+@@ -558,19 +619,40 @@
+ 	hashmap                 m_parent_map;       // hash map for parent
+ 	hashmap                 m_current_map;      // hash map for current
+ 
+-	// read I/O thread
+-	osd_work_queue *        m_read_queue;       // work queue for reading
++	// read state
+ 	uint64_t                m_read_queue_offset;// next offset to enqueue
+-	uint64_t                m_read_done_offset; // next offset that will complete
++	std::atomic<uint64_t>   m_read_done_offset; // next offset that will complete
++	std::atomic<bool>       m_has_read_error;   // whether m_read_error is set
+ 	std::error_condition    m_read_error;       // error during reading, if any
+ 
+-	// work item thread
++	// work item buffers and codecs (Discpress: C++20 native thread pool, single codec group in browser)
+ 	static constexpr int WORK_BUFFER_HUNKS = 256;
+-	osd_work_queue *        m_work_queue;       // queue for doing work on other threads
+ 	std::vector<uint8_t>    m_work_buffer;      // buffer containing hunk data to work on
+ 	std::vector<uint8_t>    m_compressed_buffer;// buffer containing compressed data
+ 	work_item               m_work_item[WORK_BUFFER_HUNKS]; // status of each hunk
+-	chd_compressor_group *  m_codecs[WORK_MAX_THREADS]; // codecs to use
++	std::vector<std::unique_ptr<chd_compressor_group>> m_codecs; // codecs to use (1 per worker)
++
++#ifndef __EMSCRIPTEN__
++	std::atomic<bool>       m_abort;            // stop requested
++	std::mutex              m_read_mutex;
++	std::condition_variable m_read_cv;
++	std::thread             m_read_thread;
++	int                     m_read_pending;
++	bool                    m_read_active;
++	bool                    m_read_stop;
++
++	std::mutex              m_work_mutex;
++	std::condition_variable m_work_cv;
++	std::vector<std::thread> m_workers;
++	work_item *             m_work_ring[WORK_BUFFER_HUNKS];
++	uint32_t                m_work_head;
++	uint32_t                m_work_tail;
++	uint32_t                m_work_count;
++	bool                    m_work_stop;
++
++	std::mutex              m_done_mutex;
++	std::condition_variable m_done_cv;
++#endif
+ 
+ 	// output state
+ 	uint32_t                m_write_hunk;       // next hunk to write
 --- a/src/lib/util/chdcodec.cpp
 +++ b/src/lib/util/chdcodec.cpp
 @@ -20,9 +20,12 @@
@@ -2995,11 +4526,29 @@
  // ======================> chd_zlib_allocator
  
  // allocation helper class for zlib
+@@ -59,7 +67,7 @@
+ 
+ 	static constexpr int MAX_ZLIB_ALLOCS = 64;
+ 
+-	uint32_t *                m_allocptr[MAX_ZLIB_ALLOCS];
++	uint8_t *                 m_allocptr[MAX_ZLIB_ALLOCS]; // Discpress: matches new uint8_t[] / delete[]
+ };
+ 
+ 
 @@ -80,6 +88,7 @@
  	// internal state
  	z_stream                m_deflater;
  	chd_zlib_allocator      m_allocator;
 +	libdeflate_compressor * m_libdeflate = nullptr; // Discpress: libdeflate instead (chd_file::libdeflate)
+ };
+ 
+ 
+@@ -157,7 +166,7 @@
+ 	static void fast_free(ISzAllocPtr p, void *address);
+ 
+ 	static constexpr int MAX_LZMA_ALLOCS = 64;
+-	uint32_t *m_allocptr[MAX_LZMA_ALLOCS];
++	uint8_t *m_allocptr[MAX_LZMA_ALLOCS]; // Discpress: matches new uint8_t[] / delete[]
  };
  
  
@@ -3035,7 +4584,27 @@
  		return header_bytes + complen + m_subcode_compressor.compress(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA], frames * cdrom_file::MAX_SUBCODE_DATA, &dest[header_bytes + complen]);
  	}
  
-@@ -735,17 +751,33 @@
+@@ -421,13 +437,19 @@
+ 	virtual void decompress(const uint8_t *src, uint32_t complen, uint8_t *dest, uint32_t destlen) override
+ 	{
+ 		// determine header bytes
++		if (destlen != hunkbytes())
++			throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
+ 		uint32_t frames = destlen / cdrom_file::FRAME_SIZE;
+ 		uint32_t complen_bytes = (destlen < 65536) ? 2 : 3;
+ 		uint32_t ecc_bytes = (frames + 7) / 8;
+ 		uint32_t header_bytes = ecc_bytes + complen_bytes;
++		if (complen < header_bytes) // Discpress: don't over-read or underflow on damaged hunks
++			throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
+ 
+ 		// extract compressed length of base
+ 		uint32_t complen_base = (complen_bytes > 2) ? get_u24be(&src[ecc_bytes]) : get_u16be(&src[ecc_bytes]);
++		if (complen_base > complen - header_bytes)
++			throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
+ 
+ 		// reset and decode
+ 		m_base_decompressor.decompress(&src[header_bytes], complen_base, &m_buffer[0], frames * cdrom_file::MAX_SECTOR_DATA);
+@@ -735,17 +757,33 @@
  //  compression for this hunk
  //-------------------------------------------------
  
@@ -3071,7 +4640,7 @@
  				// if this is the best one, copy the data into the permanent buffer
  				uint32_t compbytes = m_compressor[codecnum]->compress(src, m_hunkbytes, &m_compress_test[0]);
  #if CHDCODEC_VERIFY_COMPRESSION
-@@ -772,7 +804,7 @@
+@@ -772,7 +810,7 @@
  				}
  printf("   codec%d=%d bytes            \n", codecnum, compbytes);
  #endif
@@ -3080,7 +4649,7 @@
  				{
  					compression = codecnum;
  					complen = compbytes;
-@@ -787,6 +819,7 @@
+@@ -787,6 +825,7 @@
  	// if the best is none, copy it over
  	if (compression == -1)
  		memcpy(compressed, src, m_hunkbytes);
@@ -3088,63 +4657,92 @@
  	return compression;
  }
  
-@@ -852,12 +885,12 @@
+@@ -847,27 +886,32 @@
+ 	// reuse a hunk if we can
+ 	for (int scan = 0; scan < MAX_ZLIB_ALLOCS; scan++)
+ 	{
+-		uint32_t *ptr = codec->m_allocptr[scan];
+-		if (ptr != nullptr && size == *ptr)
++		uint8_t *raw = codec->m_allocptr[scan];
++		if (raw != nullptr)
  		{
- 			// set the low bit of the size so we don't match next time
- 			*ptr |= 1;
+-			// set the low bit of the size so we don't match next time
+-			*ptr |= 1;
 -			return ptr + 1;
-+			return reinterpret_cast<uint8_t *>(ptr) + ALLOC_HEADER; // Discpress: aligned (0.289: ptr + 1)
++			auto *ptr = reinterpret_cast<uint32_t *>(raw);
++			if (size == *ptr)
++			{
++				// set the low bit of the size so we don't match next time
++				*ptr |= 1;
++				return raw + ALLOC_HEADER; // Discpress: aligned (0.289: ptr + 1)
++			}
  		}
  	}
  
  	// alloc a new one and put it into the list
 -	auto *ptr = reinterpret_cast<uint32_t *>(new uint8_t[size + sizeof(uint32_t)]);
-+	auto *ptr = reinterpret_cast<uint32_t *>(new uint8_t[size + ALLOC_HEADER]);
++	auto *raw = new uint8_t[size + ALLOC_HEADER];
++	auto *ptr = reinterpret_cast<uint32_t *>(raw);
  	for (int scan = 0; scan < MAX_ZLIB_ALLOCS; scan++)
  		if (codec->m_allocptr[scan] == nullptr)
  		{
-@@ -867,7 +900,7 @@
+-			codec->m_allocptr[scan] = ptr;
++			codec->m_allocptr[scan] = raw;
+ 			break;
+ 		}
  
  	// set the low bit of the size so we don't match next time
  	*ptr = size | 1;
 -	return ptr + 1;
-+	return reinterpret_cast<uint8_t *>(ptr) + ALLOC_HEADER;
++	return raw + ALLOC_HEADER;
  }
  
  
-@@ -881,7 +914,7 @@
+@@ -881,12 +925,12 @@
  	auto *codec = reinterpret_cast<chd_zlib_allocator *>(opaque);
  
  	// find the hunk
 -	uint32_t *ptr = reinterpret_cast<uint32_t *>(address) - 1;
-+	uint32_t *ptr = reinterpret_cast<uint32_t *>(reinterpret_cast<uint8_t *>(address) - ALLOC_HEADER);
++	uint8_t *raw = reinterpret_cast<uint8_t *>(address) - ALLOC_HEADER;
  	for (int scan = 0; scan < MAX_ZLIB_ALLOCS; scan++)
- 		if (ptr == codec->m_allocptr[scan])
+-		if (ptr == codec->m_allocptr[scan])
++		if (raw == codec->m_allocptr[scan])
  		{
-@@ -915,6 +948,13 @@
- 		throw std::bad_alloc();
- 	else if (zerr != Z_OK)
- 		throw std::error_condition(chd_file::error::CODEC_ERROR);
-+
-+	// Discpress: libdeflate at its level 9, if asked for (zlib's level 9 is its best)
-+	if (chd.libdeflate() && !(m_libdeflate = libdeflate_alloc_compressor(9)))
-+	{
-+		deflateEnd(&m_deflater);
-+		throw std::bad_alloc();
-+	}
+ 			// clear the low bit of the size to allow matches
+-			*ptr &= ~1;
++			*reinterpret_cast<uint32_t *>(raw) &= ~1;
+ 			return;
+ 		}
  }
+@@ -904,6 +948,15 @@
+ chd_zlib_compressor::chd_zlib_compressor(chd_file &chd, uint32_t hunkbytes, bool lossy)
+ 	: chd_compressor(chd, hunkbytes, lossy)
+ {
++	// Discpress: libdeflate at its level 9, if asked for (zlib's level 9 is its best); skip allocating an unused zlib stream
++	if (chd.libdeflate())
++	{
++		m_libdeflate = libdeflate_alloc_compressor(9);
++		if (!m_libdeflate)
++			throw std::bad_alloc();
++		return;
++	}
++
+ 	// initialize the deflater
+ 	m_deflater.next_in = (Bytef *)this; // bogus, but that's ok
+ 	m_deflater.avail_in = 0;
+@@ -924,7 +977,10 @@
  
- 
-@@ -925,6 +965,8 @@
  chd_zlib_compressor::~chd_zlib_compressor()
  {
- 	deflateEnd(&m_deflater);
+-	deflateEnd(&m_deflater);
 +	if (m_libdeflate)
 +		libdeflate_free_compressor(m_libdeflate);
++	else
++		deflateEnd(&m_deflater);
  }
  
  
-@@ -934,12 +976,24 @@
+@@ -934,12 +990,24 @@
  
  uint32_t chd_zlib_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
@@ -3170,7 +4768,7 @@
  	m_deflater.total_out = 0;
  	int zerr = deflateReset(&m_deflater);
  	if (zerr != Z_OK)
-@@ -949,7 +1003,7 @@
+@@ -949,7 +1017,7 @@
  	zerr = deflate(&m_deflater, Z_FINISH);
  
  	// if we ended up with more data than we started with, return an error
@@ -3179,7 +4777,7 @@
  		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  
  	// otherwise, return the length
-@@ -1066,7 +1120,7 @@
+@@ -1066,7 +1134,7 @@
  
  	// do it
  	ZSTD_inBuffer input{ src, srclen, 0 };
@@ -3188,40 +4786,64 @@
  	while (output.pos < output.size)
  	{
  		result = ZSTD_compressStream2(m_stream, &output, &input, ZSTD_e_end);
-@@ -1197,12 +1251,12 @@
+@@ -1192,27 +1260,32 @@
+ 	// reuse a hunk if we can
+ 	for (int scan = 0; scan < MAX_LZMA_ALLOCS; scan++)
+ 	{
+-		uint32_t *ptr = codec->m_allocptr[scan];
+-		if (ptr != nullptr && size == *ptr)
++		uint8_t *raw = codec->m_allocptr[scan];
++		if (raw != nullptr)
  		{
- 			// set the low bit of the size so we don't match next time
- 			*ptr |= 1;
+-			// set the low bit of the size so we don't match next time
+-			*ptr |= 1;
 -			return ptr + 1;
-+			return reinterpret_cast<uint8_t *>(ptr) + ALLOC_HEADER; // Discpress: aligned (0.289: ptr + 1)
++			auto *ptr = reinterpret_cast<uint32_t *>(raw);
++			if (size == *ptr)
++			{
++				// set the low bit of the size so we don't match next time
++				*ptr |= 1;
++				return raw + ALLOC_HEADER; // Discpress: aligned (0.289: ptr + 1)
++			}
  		}
  	}
  
  	// alloc a new one and put it into the list
 -	auto *ptr = reinterpret_cast<uint32_t *>(new uint8_t[size + sizeof(uint32_t)]);
-+	auto *ptr = reinterpret_cast<uint32_t *>(new uint8_t[size + ALLOC_HEADER]);
++	auto *raw = new uint8_t[size + ALLOC_HEADER];
++	auto *ptr = reinterpret_cast<uint32_t *>(raw);
  	for (int scan = 0; scan < MAX_LZMA_ALLOCS; scan++)
  		if (codec->m_allocptr[scan] == nullptr)
  		{
-@@ -1212,7 +1266,7 @@
+-			codec->m_allocptr[scan] = ptr;
++			codec->m_allocptr[scan] = raw;
+ 			break;
+ 		}
  
  	// set the low bit of the size so we don't match next time
  	*ptr = size | 1;
 -	return ptr + 1;
-+	return reinterpret_cast<uint8_t *>(ptr) + ALLOC_HEADER;
++	return raw + ALLOC_HEADER;
  }
  
  
-@@ -1229,7 +1283,7 @@
+@@ -1229,12 +1302,12 @@
  	auto *const codec = static_cast<chd_lzma_allocator *>(const_cast<ISzAlloc *>(p));
  
  	// find the hunk
 -	uint32_t *ptr = reinterpret_cast<uint32_t *>(address) - 1;
-+	uint32_t *ptr = reinterpret_cast<uint32_t *>(reinterpret_cast<uint8_t *>(address) - ALLOC_HEADER);
++	uint8_t *raw = reinterpret_cast<uint8_t *>(address) - ALLOC_HEADER;
  	for (int scan = 0; scan < MAX_LZMA_ALLOCS; scan++)
- 		if (ptr == codec->m_allocptr[scan])
+-		if (ptr == codec->m_allocptr[scan])
++		if (raw == codec->m_allocptr[scan])
  		{
-@@ -1284,8 +1338,8 @@
+ 			// clear the low bit of the size to allow matches
+-			*ptr &= ~1;
++			*reinterpret_cast<uint32_t *>(raw) &= ~1;
+ 			return;
+ 		}
+ }
+@@ -1284,8 +1357,8 @@
  		if (res != SZ_OK)
  			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  
@@ -3232,7 +4854,7 @@
  		res = LzmaEnc_MemEncode(encoder, dest, &complen, src, srclen, 0, nullptr, &m_allocator, &m_allocator);
  		if (res != SZ_OK)
  			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
-@@ -1419,7 +1473,7 @@
+@@ -1419,7 +1492,7 @@
  uint32_t chd_huffman_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
  	uint32_t complen;
@@ -3241,7 +4863,7 @@
  		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  	return complen;
  }
-@@ -1474,6 +1528,7 @@
+@@ -1474,6 +1547,7 @@
  	m_encoder.set_num_channels(2);
  	m_encoder.set_block_size(blocksize(hunkbytes));
  	m_encoder.set_strip_metadata(true);
@@ -3249,7 +4871,7 @@
  }
  
  
-@@ -1483,32 +1538,47 @@
+@@ -1483,32 +1557,47 @@
  
  uint32_t chd_flac_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
@@ -3310,7 +4932,17 @@
  	}
  	return complen + 1;
  }
-@@ -1642,14 +1712,16 @@
+@@ -1555,6 +1644,9 @@
+ 
+ void chd_flac_decompressor::decompress(const uint8_t *src, uint32_t complen, uint8_t *dest, uint32_t destlen)
+ {
++	if (complen < 2) // Discpress: need endian marker plus FLAC payload
++		throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
++
+ 	// determine the endianness
+ 	bool swap_endian;
+ 	if (src[0] == 'L')
+@@ -1642,14 +1734,16 @@
  		memcpy(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA + framenum * cdrom_file::MAX_SUBCODE_DATA], &src[framenum * cdrom_file::FRAME_SIZE + cdrom_file::MAX_SECTOR_DATA], cdrom_file::MAX_SUBCODE_DATA);
  	}
  
@@ -3325,11 +4957,29 @@
  
  	// finish up
  	uint32_t complen = m_encoder.finish();
-+	if (!encoded || complen >= m_limit)
++	if (!encoded || complen >= std::min(m_limit, hunkbytes()))
 +		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  
  	// deflate the subcode data
  	m_deflater.next_in = const_cast<Bytef *>(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA]);
+@@ -1771,6 +1865,8 @@
+ void chd_cd_flac_decompressor::decompress(const uint8_t *src, uint32_t complen, uint8_t *dest, uint32_t destlen)
+ {
+ 	// reset and decode
++	if (destlen != hunkbytes())
++		throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
+ 	uint32_t frames = destlen / cdrom_file::FRAME_SIZE;
+ 	if (!m_decoder.reset(44100, 2, chd_cd_flac_compressor::blocksize(frames * cdrom_file::MAX_SECTOR_DATA), src, complen))
+ 		throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
+@@ -1780,6 +1876,8 @@
+ 
+ 	// inflate the subcode data
+ 	uint32_t offset = m_decoder.finish();
++	if (offset > complen) // Discpress: don't underflow on damaged FLAC
++		throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
+ 	m_inflater.next_in = const_cast<Bytef *>(src + offset);
+ 	m_inflater.avail_in = complen - offset;
+ 	m_inflater.total_in = 0;
 --- a/src/lib/util/chdcodec.h
 +++ b/src/lib/util/chdcodec.h
 @@ -71,6 +71,13 @@
@@ -3454,6 +5104,17 @@
  			return false;
  	return true;
  }
+@@ -550,8 +573,8 @@
+ 	if (position == 0)
+ 		return 0;
+ 	if (m_compressed_start == reinterpret_cast<const FLAC__byte *>(m_custom_header))
+-		position -= m_compressed_length;
+-	return position;
++		position = (position >= m_compressed_length) ? (position - m_compressed_length) : 0; // Discpress: don't underflow on damaged FLAC
++	return (position > UINT32_MAX) ? UINT32_MAX : uint32_t(position);
+ }
+ 
+ 
 --- a/src/lib/util/flac.h
 +++ b/src/lib/util/flac.h
 @@ -40,6 +40,10 @@
@@ -3861,6 +5522,31 @@
  // misc UTF-8 helpers
  const char *utf8_previous_char(const char *utf8string);
  bool utf8_is_valid_string(const char *utf8string);
+--- a/src/osd/osdsync.h
++++ b/src/osd/osdsync.h
+@@ -87,19 +87,9 @@
+ 			{
+ 				uint64_t msec = timeout * 1000 / osd_ticks_per_second();
+ 
+-				do {
+-					if (m_cond.wait_for(lock, std::chrono::milliseconds(msec)) == std::cv_status::timeout)
+-					{
+-						if (!m_signalled)
+-						{
+-							return false;
+-						}
+-						else
+-							break;
+-					} else
+-						break;
+-
+-				} while (true);
++				auto const deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(msec);
++				if (!m_cond.wait_until(lock, deadline, [this]() { return m_signalled != 0; }))
++					return false;
+ 			}
+ 		}
+ 
 --- a/src/tools/chdman.cpp
 +++ b/src/tools/chdman.cpp
 @@ -22,13 +22,17 @@
@@ -4285,16 +5971,24 @@
  	if (params.find(OPTION_OUTPUT_FORCE) == params.end())
  	{
  		util::core_file::ptr file;
-@@ -1498,7 +1723,7 @@
+@@ -1498,8 +1723,15 @@
  //  compress_common - standard compression loop
  //-------------------------------------------------
  
 -static void compress_common(chd_file_compressor &chd)
 +static chdman_task compress_common(chd_file_compressor &chd)
  {
++	// Discpress: stop reader/worker threads before derived compressor destructors run on any exit path
++	struct compressor_guard
++	{
++		chd_file_compressor &chd;
++		~compressor_guard() { chd.compress_abort(); }
++	} guard{ chd };
++
  	// begin compressing
  	chd.compress_begin();
-@@ -1507,10 +1732,13 @@
+ 
+@@ -1507,10 +1739,13 @@
  	double complete, ratio;
  	std::error_condition err;
  	while ((err = chd.compress_continue(complete, ratio)) == chd_file::error::WALKING_PARENT || err == chd_file::error::COMPRESSING)
@@ -4308,7 +6002,7 @@
  
  	// handle errors
  	if (err)
-@@ -1522,11 +1750,61 @@
+@@ -1522,11 +1757,61 @@
  
  
  //-------------------------------------------------
@@ -4371,7 +6065,7 @@
  {
  	if (mode == MODE_GDI)
  	{
-@@ -1542,26 +1820,7 @@
+@@ -1542,26 +1827,7 @@
  			file.printf("FILE \"%s\" BINARY\n", filename);
  
  		// determine submode
@@ -4399,7 +6093,7 @@
  
  		// output TRACK entry
  		file.printf("  TRACK %02d %s\n", tracknum + 1, tempstr);
-@@ -1610,7 +1869,9 @@
+@@ -1610,7 +1876,9 @@
  		}
  
  		// output pregap
@@ -4410,7 +6104,19 @@
  			file.printf("ZERO %s %s\n", modesubmode, msf_string_from_frames(info.pregap));
  
  		if (outputoffs == 0)
-@@ -1781,7 +2042,7 @@
+@@ -1681,8 +1949,10 @@
+ 		chd_metadata_tag metatag;
+ 		uint8_t metaflags;
+ 		std::error_condition err = input_chd.read_metadata(CHDMETATAG_WILDCARD, index, buffer, metatag, metaflags);
+-		if (err)
++		if (err == chd_file::error::METADATA_NOT_FOUND)
+ 			break;
++		if (err)
++			report_error(1, "Error reading metadata from CHD file (%s): %s", *params.find(OPTION_INPUT)->second, err.message());
+ 
+ 		// determine our index
+ 		uint32_t metaindex = ~0;
+@@ -1781,7 +2051,7 @@
  //  do_verify - validate the SHA-1 on a CHD
  //-------------------------------------------------
  
@@ -4419,7 +6125,18 @@
  {
  	bool fix_sha1 = params.find(OPTION_FIX) != params.end();
  	// parse out input files
-@@ -1820,6 +2081,7 @@
+@@ -1809,8 +2079,8 @@
+ 	if (raw_sha1 == util::sha1_t::null)
+ 		report_error(0, "No verification to be done; CHD has no checksum");
+ 
+-	// create an array to read into
+-	std::vector<uint8_t> buffer((TEMP_BUFFER_SIZE / input_chd.hunk_bytes()) * input_chd.hunk_bytes());
++	// create an array to read into (Discpress: at least one hunk when hunk_bytes > TEMP_BUFFER_SIZE)
++	std::vector<uint8_t> buffer(size_t(std::max<uint32_t>(1, TEMP_BUFFER_SIZE / input_chd.hunk_bytes())) * input_chd.hunk_bytes());
+ 
+ 	// read all the data and build up an SHA-1
+ 	util::sha1_creator rawsha1;
+@@ -1820,6 +2090,7 @@
  
  		// determine how much to read
  		uint32_t bytes_to_read = (std::min<uint64_t>)(buffer.size(), input_chd.logical_bytes() - offset);
@@ -4427,7 +6144,7 @@
  		std::error_condition err = input_chd.read_bytes(offset, &buffer[0], bytes_to_read);
  		if (err)
  			report_error(1, "Error reading CHD file (%s): %s", *input_chd_str->second, err.message());
-@@ -1830,7 +2092,8 @@
+@@ -1830,7 +2101,8 @@
  	}
  	util::sha1_t computed_sha1 = rawsha1.finish();
  
@@ -4437,7 +6154,7 @@
  	if (raw_sha1 != computed_sha1)
  	{
  		util::stream_format(std::cerr, "Error: Raw SHA1 in header = %s\n", raw_sha1.as_string());
-@@ -1844,6 +2107,8 @@
+@@ -1844,6 +2116,8 @@
  				report_error(1, "Error updating SHA1: %s", err.message());
  			util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
  		}
@@ -4446,7 +6163,7 @@
  	}
  	else
  	{
-@@ -1868,9 +2133,13 @@
+@@ -1868,9 +2142,13 @@
  						report_error(1, "Error updating SHA1: %s", err.message());
  					util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
  				}
@@ -4460,7 +6177,7 @@
  }
  
  
-@@ -1879,7 +2148,7 @@
+@@ -1879,7 +2157,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -4469,7 +6186,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -1894,6 +2163,8 @@
+@@ -1894,6 +2172,8 @@
  	if (unit_size_str != params.end())
  	{
  		unit_size = parse_number(unit_size_str->second->c_str());
@@ -4478,7 +6195,7 @@
  		if (output_parent.opened() && (output_parent.unit_bytes() != unit_size))
  			report_error(1, "Specified unit size %u bytes does not match output parent CHD unit size %u bytes", unit_size, output_parent.unit_bytes());
  	}
-@@ -1937,13 +2208,15 @@
+@@ -1937,13 +2217,15 @@
  		// create the new CHD
  		auto chd = std::make_unique<chd_rawfile_compressor>(*input_file, input_start, input_end);
  		create_output_chd(*chd, *output_chd_str, input_end - input_start, hunk_size, unit_size, compression, output_parent);
@@ -4495,7 +6212,7 @@
  	}
  	catch (...)
  	{
-@@ -1959,7 +2232,7 @@
+@@ -1959,7 +2241,7 @@
  //  disk image from a raw file
  //-------------------------------------------------
  
@@ -4504,7 +6221,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2008,6 +2281,8 @@
+@@ -2008,6 +2290,8 @@
  		if (template_str != params.end())
  			report_error(1, "Sector size cannot be specified separately when a template is specified");
  		sector_size = parse_number(sectorsize_str->second->c_str());
@@ -4513,7 +6230,7 @@
  	}
  	if (output_parent.opened() && (output_parent.unit_bytes() != sector_size))
  		report_error(1, "Sector size %u bytes does not match output parent CHD sector size %u bytes", sector_size, output_parent.unit_bytes());
-@@ -2129,6 +2404,8 @@
+@@ -2129,6 +2413,8 @@
  		else
  			chd.reset(new chd_zero_compressor(input_start, input_end));
  		create_output_chd(*chd, *output_chd_str, uint64_t(totalsectors) * sector_size, hunk_size, sector_size, compression, output_parent);
@@ -4522,7 +6239,7 @@
  
  		// add the standard hard disk metadata
  		std::string metadata = string_format(HARD_DISK_METADATA_FORMAT, cylinders, heads, sectors, sector_size);
-@@ -2147,7 +2424,7 @@
+@@ -2147,7 +2433,7 @@
  
  		// compress it generically
  		if (input_file)
@@ -4531,7 +6248,7 @@
  	}
  	catch (...)
  	{
-@@ -2163,7 +2440,7 @@
+@@ -2163,7 +2449,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -4540,7 +6257,7 @@
  {
  	// process input file
  	cdrom_file::track_input_info track_info;
-@@ -2174,12 +2451,39 @@
+@@ -2174,12 +2460,39 @@
  		std::error_condition err = cdrom_file::parse_toc(*input_file_str->second, toc, track_info);
  		if (err)
  			report_error(1, "Error parsing input file (%s: %s)\n", *input_file_str->second, err.message());
@@ -4580,7 +6297,7 @@
  	// process hunk size
  	const uint32_t hunk_size = parse_hunk_size(params, output_parent, cdrom_file::FRAME_SIZE, cdrom_file::FRAMES_PER_HUNK * cdrom_file::FRAME_SIZE);
  	if (output_parent.opened() && (output_parent.unit_bytes() != cdrom_file::FRAME_SIZE))
-@@ -2203,6 +2507,9 @@
+@@ -2203,6 +2516,9 @@
  		origtotalsectors += trackinfo.frames;
  		totalsectors += trackinfo.frames + trackinfo.extraframes;
  	}
@@ -4590,7 +6307,7 @@
  
  	// print some info
  	util::stream_format(std::cout, "Output CHD:   %s\n", *output_chd_str);
-@@ -2220,14 +2527,24 @@
+@@ -2220,14 +2536,24 @@
  		// create the new CD
  		auto chd = std::make_unique<chd_cd_compressor>(toc, track_info);
  		create_output_chd(*chd, *output_chd_str, uint64_t(totalsectors) * cdrom_file::FRAME_SIZE, hunk_size, cdrom_file::FRAME_SIZE, compression, output_parent);
@@ -4616,7 +6333,7 @@
  	}
  	catch (...)
  	{
-@@ -2243,7 +2560,7 @@
+@@ -2243,7 +2569,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -4625,7 +6342,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2288,6 +2605,8 @@
+@@ -2288,6 +2614,8 @@
  		// create the new DVD
  		auto chd = std::make_unique<chd_rawfile_compressor>(*input_file, input_start, input_end);
  		create_output_chd(*chd, *output_chd_str, input_end - input_start, hunk_size, 2048, compression, output_parent);
@@ -4634,7 +6351,7 @@
  
  		// add the standard DVD type tag
  		const std::error_condition err = chd->write_metadata(DVD_METADATA_TAG, 0, "");
-@@ -2295,7 +2614,7 @@
+@@ -2295,7 +2623,7 @@
  			report_error(1, "Error adding DVD metadata: %s", err.message());
  
  		// compress it generically
@@ -4643,7 +6360,7 @@
  	}
  	catch (...)
  	{
-@@ -2311,7 +2630,7 @@
+@@ -2311,7 +2639,7 @@
  //  input AVI file and metadata
  //-------------------------------------------------
  
@@ -4652,7 +6369,7 @@
  {
  	// process input file
  	avi_file::ptr input_file;
-@@ -2399,7 +2718,7 @@
+@@ -2399,7 +2727,7 @@
  			report_error(1, "Error adding AV metadata: %s\n", err.message());
  
  		// create the compressor and then run it generically
@@ -4661,7 +6378,7 @@
  
  		// write the final LD metadata
  		if (info.height == 524/2 || info.height == 624/2)
-@@ -2456,7 +2775,7 @@
+@@ -2456,7 +2784,7 @@
  //  another CHD
  //-------------------------------------------------
  
@@ -4670,7 +6387,7 @@
  {
  	// parse out input files
  	chd_file input_parent_chd;
-@@ -2547,7 +2866,7 @@
+@@ -2547,7 +2875,7 @@
  		}
  
  		// compress it generically
@@ -4679,7 +6396,7 @@
  	}
  	catch (...)
  	{
-@@ -2563,7 +2882,7 @@
+@@ -2563,7 +2891,7 @@
  //  CHD image
  //-------------------------------------------------
  
@@ -4688,7 +6405,17 @@
  {
  	// parse out input files
  	chd_file input_parent_chd;
-@@ -2604,6 +2923,7 @@
+@@ -2596,14 +2924,15 @@
+ 		if (filerr)
+ 			report_error(1, "Unable to open file (%s): %s", *output_file_str->second, filerr.message());
+ 
+-		// copy all data
+-		std::vector<uint8_t> buffer((TEMP_BUFFER_SIZE / input_chd.hunk_bytes()) * input_chd.hunk_bytes());
++		// copy all data (Discpress: at least one hunk when hunk_bytes > TEMP_BUFFER_SIZE)
++		std::vector<uint8_t> buffer(size_t(std::max<uint32_t>(1, TEMP_BUFFER_SIZE / input_chd.hunk_bytes())) * input_chd.hunk_bytes());
+ 		for (uint64_t offset = input_start; offset < input_end; )
+ 		{
+ 			progress(false, "Extracting, %.1f%% complete... \r", 100.0 * double(offset - input_start) / double(input_end - input_start));
  
  			// determine how much to read
  			uint32_t bytes_to_read = (std::min<uint64_t>)(buffer.size(), input_end - offset);
@@ -4696,7 +6423,7 @@
  			std::error_condition err = input_chd.read_bytes(offset, &buffer[0], bytes_to_read);
  			if (err)
  				report_error(1, "Error reading CHD file (%s): %s", *params.find(OPTION_INPUT)->second, err.message());
-@@ -2639,15 +2959,151 @@
+@@ -2639,15 +2968,230 @@
  //  CHD image
  //-------------------------------------------------
  
@@ -4714,7 +6441,7 @@
 +//  track's (track_types: cue_track_type of each).
 +//-------------------------------------------------
 +
-+static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::vector<std::string> &track_filenames, const std::vector<std::string> &track_types)
++static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::vector<std::string> &track_filenames, const std::vector<std::string> &track_types, const cdrom_file::toc *gd_toc = nullptr)
 +{
 +	std::vector<std::string> files;
 +	for (size_t i = 0; i < track_filenames.size(); i++)
@@ -4735,10 +6462,53 @@
 +			at++;
 +		return true;
 +	};
++	auto const parse_msf = [] (std::string_view line, size_t at) -> int
++	{
++		size_t end = at;
++		while (end < line.size() && !isspace(uint8_t(line[end])))
++			end++;
++		std::string_view const tok = line.substr(at, end - at);
++		unsigned m = 0, s = 0, f = 0;
++		size_t p1 = tok.find(':');
++		if (p1 == std::string_view::npos)
++			return -1;
++		size_t p2 = tok.find(':', p1 + 1);
++		if (p2 == std::string_view::npos || tok.find(':', p2 + 1) != std::string_view::npos)
++			return -1;
++		auto const num = [] (std::string_view v, unsigned &out) -> bool
++		{
++			if (v.empty() || v.size() > 3)
++				return false;
++			unsigned n = 0;
++			for (char c : v)
++			{
++				if (c < '0' || c > '9')
++					return false;
++				n = n * 10 + unsigned(c - '0');
++			}
++			out = n;
++			return true;
++		};
++		if (!num(tok.substr(0, p1), m) || !num(tok.substr(p1 + 1, p2 - p1 - 1), s) || !num(tok.substr(p2 + 1), f) || s >= 60 || f >= 75)
++			return -1;
++		return int((m * 60 + s) * 75 + f);
++	};
 +
 +	std::string const text(sheet.begin(), sheet.end());
 +	std::string out;
 +	size_t file = 0, tracks = 0, file_tracks = 0;
++	int cur_pregap = 0, cur_idx0 = -1, cur_idx1 = -1;
++	auto const check_gd_track = [&] (size_t t) -> bool
++	{
++		if (!gd_toc)
++			return true;
++		const cdrom_file::track_info &ti = gd_toc->tracks[t];
++		if (ti.splitframes > 0)
++			return cur_pregap == 0 && cur_idx0 == 0 && cur_idx1 == int(ti.splitframes);
++		if (ti.pregap > 0 && ti.pgdatasize == 0)
++			return cur_pregap == int(ti.pregap) && cur_idx0 == -1 && cur_idx1 == 0;
++		return cur_pregap == 0 && cur_idx0 == -1 && cur_idx1 == 0;
++	};
 +	for (size_t pos = 0; pos < text.size(); )
 +	{
 +		size_t const nl = text.find('\n', pos);
@@ -4753,6 +6523,8 @@
 +			at++;
 +		if (keyword(line, at, "FILE"))
 +		{
++			if (tracks > 0 && !check_gd_track(tracks - 1))
++				return std::string();
 +			if ((file > 0 && file_tracks != 1) || file >= files.size())
 +				return std::string();
 +			size_t const name_start = at;
@@ -4782,6 +6554,8 @@
 +		}
 +		else if (keyword(line, at, "TRACK"))
 +		{
++			if (tracks > 0 && !check_gd_track(tracks - 1))
++				return std::string();
 +			// its number, then its type: the CHD's track's
 +			while (at < line.size() && !isspace(uint8_t(line[at])))
 +				at++;
@@ -4794,14 +6568,46 @@
 +				type = "MODE2/" + type.substr(4);
 +			if (tracks >= track_types.size() || type != track_types[tracks])
 +				return std::string();
++			cur_pregap = 0;
++			cur_idx0 = -1;
++			cur_idx1 = -1;
 +			file_tracks++;
 +			tracks++;
++		}
++		else if (gd_toc && tracks > 0)
++		{
++			if (keyword(line, at, "PREGAP"))
++			{
++				int const frames = parse_msf(line, at);
++				if (frames < 0)
++					return std::string();
++				cur_pregap = frames;
++			}
++			else if (keyword(line, at, "INDEX"))
++			{
++				size_t num_end = at;
++				while (num_end < line.size() && !isspace(uint8_t(line[num_end])))
++					num_end++;
++				int const idx = atoi(line.substr(at, num_end - at).c_str());
++				at = num_end;
++				while (at < line.size() && isspace(uint8_t(line[at])))
++					at++;
++				int const frames = parse_msf(line, at);
++				if (frames < 0)
++					return std::string();
++				if (idx == 0)
++					cur_idx0 = frames;
++				else if (idx == 1)
++					cur_idx1 = frames;
++			}
 +		}
 +		out += line;
 +		if (nl != std::string::npos)
 +			out += '\n';
 +	}
 +	if (file != files.size() || file_tracks != 1 || tracks != track_filenames.size())
++		return std::string();
++	if (tracks > 0 && !check_gd_track(tracks - 1))
 +		return std::string();
 +	return out;
 +}
@@ -4851,7 +6657,7 @@
  	const cdrom_file::toc &toc = cdrom->get_toc();
  
  	// verify output file doesn't exist
-@@ -2671,8 +3127,19 @@
+@@ -2671,8 +3215,19 @@
  	if (chop != std::string::npos)
  		default_name.erase(chop, default_name.size());
  
@@ -4872,7 +6678,7 @@
  	if (!is_splitbin && cdrom->is_gdrom() && mode == MODE_CUEBIN)
  	{
  		// GD-ROM cue/bin is in Redump format which should always be split by tracks
-@@ -2730,6 +3197,7 @@
+@@ -2730,6 +3285,7 @@
  		std::error_condition filerr = util::core_file::open(*output_file_str->second, OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_NO_BOM, output_toc_file);
  		if (filerr)
  			report_error(1, "Unable to open file (%s): %s", *output_file_str->second, filerr.message());
@@ -4880,53 +6686,56 @@
  
  		uint64_t total_bytes = 0;
  		for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
-@@ -2807,10 +3275,29 @@
+@@ -2807,55 +3363,15 @@
  			track_filenames.push_back(filename_formatted);
  		}
  
-+		// Discpress: with --redump, the cue sheet createcd --keepcue stored, if it fits these files
-+		std::string kept_cue;
-+		if (redump)
-+		{
-+			std::vector<uint8_t> sheet;
-+			if (!input_chd.read_metadata(CUE_SHEET_METADATA_TAG, 0, sheet))
-+			{
-+				std::vector<std::string> track_types;
-+				for (int t = 0; t < toc.numtrks; t++)
-+					track_types.push_back(cue_track_type(toc.tracks[t]));
-+				kept_cue = kept_cue_sheet(sheet, track_filenames, track_types);
-+			}
-+			if (!kept_cue.empty())
-+			{
-+				util::stream_format(std::cout, "Cue sheet:    the one kept when the CHD was made\n");
-+				toc_out.printf("%s", kept_cue);
-+			}
-+		}
-+
- 		// GDI must start with the # of tracks
- 		if (mode == MODE_GDI)
- 		{
+-		// GDI must start with the # of tracks
+-		if (mode == MODE_GDI)
+-		{
 -			output_toc_file->printf("%d\n", toc.numtrks);
-+			toc_out.printf("%d\n", toc.numtrks);
- 		}
- 		else if (mode == MODE_NORMAL)
- 		{
-@@ -2842,11 +3329,11 @@
- 			}
- 
- 			if (mode2)
+-		}
+-		else if (mode == MODE_NORMAL)
+-		{
+-			bool mode1 = false;
+-			bool mode2 = false;
+-			bool cdda = false;
+-
+-			for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
+-			{
+-				switch (toc.tracks[tracknum].trktype)
+-				{
+-					case cdrom_file::CD_TRACK_MODE1:
+-					case cdrom_file::CD_TRACK_MODE1_RAW:
+-						mode1 = true;
+-						break;
+-
+-					case cdrom_file::CD_TRACK_MODE2:
+-					case cdrom_file::CD_TRACK_MODE2_FORM1:
+-					case cdrom_file::CD_TRACK_MODE2_FORM2:
+-					case cdrom_file::CD_TRACK_MODE2_FORM_MIX:
+-					case cdrom_file::CD_TRACK_MODE2_RAW:
+-						mode2 = true;
+-						break;
+-
+-					case cdrom_file::CD_TRACK_AUDIO:
+-						cdda = true;
+-						break;
+-				}
+-			}
+-
+-			if (mode2)
 -				output_toc_file->printf("CD_ROM_XA\n\n\n");
-+				toc_out.printf("CD_ROM_XA\n\n\n");
- 			else if (cdda && !mode1)
+-			else if (cdda && !mode1)
 -				output_toc_file->printf("CD_DA\n\n\n");
-+				toc_out.printf("CD_DA\n\n\n");
- 			else
+-			else
 -				output_toc_file->printf("CD_ROM\n\n\n");
-+				toc_out.printf("CD_ROM\n\n\n");
- 		}
- 
+-		}
+-
  		if (cdrom->is_gdrom() && mode == MODE_CUEBIN)
-@@ -2855,7 +3342,9 @@
+ 		{
+-			// modify TOC to match Redump cue/bin format as best as possible
++			// modify TOC to match Redump cue/bin format as best as possible (Discpress: run before kept_cue_sheet so kept GD-ROM cues are validated against splitframes/pregap)
  			cdrom_file::toc *trackinfo = (cdrom_file::toc*)&toc;
  
  			// TOSEC GDI-based CHDs have the padframes field set to non-0 where the pregaps for the next track would be
@@ -4937,7 +6746,24 @@
  
  			for (int tracknum = 1; tracknum < toc.numtrks; tracknum++)
  			{
-@@ -2880,6 +3369,10 @@
+@@ -2867,7 +3383,9 @@
+ 				if (toc.tracks[tracknum].physframeofs == 45000)
+ 					continue;
+ 
+-				if (!has_physical_pregap)
++				// Discpress: never split physical pregap frames across tracks with different sector sizes (e.g. TOSEC MODE1/2048 + AUDIO/2352)
++				const bool same_sector_size = toc.tracks[tracknum-1].datasize == toc.tracks[tracknum].datasize;
++				if (!has_physical_pregap || !same_sector_size)
+ 				{
+ 					// NOTE: This will generate a cue with PREGAP commands instead of INDEX 00 because the pregap data isn't baked into the bins
+ 					trackinfo->tracks[tracknum].pregap += trackinfo->tracks[tracknum-1].padframes;
+@@ -2875,11 +3393,15 @@
+ 					// "type 1" (only one data track in high-density area) and "type 2" (1 data and then the rest of the tracks being audio tracks in high-density area) don't require any adjustments
+ 					if (tracknum + 1 >= toc.numtrks && toc.tracks[tracknum].trktype != cdrom_file::CD_TRACK_AUDIO)
+ 					{
+-						if (toc.tracks[tracknum-1].trktype != cdrom_file::CD_TRACK_AUDIO)
++						if (toc.tracks[tracknum-1].trktype != cdrom_file::CD_TRACK_AUDIO && same_sector_size)
+ 						{
  							// "type 3" where the high-density area is just two data tracks
  							// there shouldn't be any pregap in the padframes from the previous track in this case, and the full 3s pregap is baked into the previous track
  							// Only known to be used by Shenmue II JP's discs 2, 3, 4 and Virtua Fighter History & VF4
@@ -4948,7 +6774,7 @@
  							trackinfo->tracks[tracknum-1].padframes += 225;
  
  							trackinfo->tracks[tracknum].pregap += 225;
-@@ -2894,8 +3387,9 @@
+@@ -2894,8 +3416,9 @@
  							// It's currently not possible to format it as expected without hacky code because the 150 pregap for the last track
  							// is sandwiched between these 75 frames and the actual track data.
  							// The 75 frames seems to normally be 0s so this should be ok for now until a use case is found.
@@ -4960,7 +6786,7 @@
  						}
  					}
  				}
-@@ -2905,6 +3399,14 @@
+@@ -2905,6 +3428,14 @@
  					if (tracknum + 1 >= toc.numtrks && toc.tracks[tracknum].trktype != cdrom_file::CD_TRACK_AUDIO)
  						curextra += 75; // 00:01:00, special case when last track is data
  
@@ -4975,7 +6801,73 @@
  					trackinfo->tracks[tracknum-1].padframes = curextra;
  
  					trackinfo->tracks[tracknum].pregap += curextra;
-@@ -2920,6 +3422,7 @@
+@@ -2915,11 +3446,73 @@
+ 			}
+ 		}
+ 
++		// Discpress: with --redump, the cue sheet createcd --keepcue stored, if it fits these files
++		std::string kept_cue;
++		if (redump)
++		{
++			std::vector<uint8_t> sheet;
++			if (!input_chd.read_metadata(CUE_SHEET_METADATA_TAG, 0, sheet))
++			{
++				std::vector<std::string> track_types;
++				for (int t = 0; t < toc.numtrks; t++)
++					track_types.push_back(cue_track_type(toc.tracks[t]));
++				kept_cue = kept_cue_sheet(sheet, track_filenames, track_types, cdrom->is_gdrom() ? &toc : nullptr);
++			}
++			if (!kept_cue.empty())
++			{
++				util::stream_format(std::cout, "Cue sheet:    the one kept when the CHD was made\n");
++				toc_out.printf("%s", kept_cue);
++			}
++		}
++
++		// GDI must start with the # of tracks
++		if (mode == MODE_GDI)
++		{
++			toc_out.printf("%d\n", toc.numtrks);
++		}
++		else if (mode == MODE_NORMAL)
++		{
++			bool mode1 = false;
++			bool mode2 = false;
++			bool cdda = false;
++
++			for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
++			{
++				switch (toc.tracks[tracknum].trktype)
++				{
++					case cdrom_file::CD_TRACK_MODE1:
++					case cdrom_file::CD_TRACK_MODE1_RAW:
++						mode1 = true;
++						break;
++
++					case cdrom_file::CD_TRACK_MODE2:
++					case cdrom_file::CD_TRACK_MODE2_FORM1:
++					case cdrom_file::CD_TRACK_MODE2_FORM2:
++					case cdrom_file::CD_TRACK_MODE2_FORM_MIX:
++					case cdrom_file::CD_TRACK_MODE2_RAW:
++						mode2 = true;
++						break;
++
++					case cdrom_file::CD_TRACK_AUDIO:
++						cdda = true;
++						break;
++				}
++			}
++
++			if (mode2)
++				toc_out.printf("CD_ROM_XA\n\n\n");
++			else if (cdda && !mode1)
++				toc_out.printf("CD_DA\n\n\n");
++			else
++				toc_out.printf("CD_ROM\n\n\n");
++		}
++
+ 		// iterate over tracks and copy all data
+ 		uint64_t totaloutputoffs = 0;
  		uint64_t outputoffs = 0;
  		uint32_t discoffs = 0;
  		std::vector<uint8_t> buffer;
@@ -4983,7 +6875,7 @@
  
  		for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
  		{
-@@ -2942,17 +3445,18 @@
+@@ -2942,17 +3535,18 @@
  				output_bin_filenames.push_back(trackbin_name);
  			}
  
@@ -5007,12 +6899,41 @@
  
  			// If this is bin/cue output and the CHD contains subdata, warn the user and don't include
  			// the subdata size in the buffer calculation.
-@@ -2987,8 +3491,18 @@
+@@ -2964,12 +3558,21 @@
+ 				output_frame_size = trackinfo.datasize;
+ 			}
+ 
+-			// resize the buffer for the track
+-			buffer.resize((TEMP_BUFFER_SIZE / output_frame_size) * output_frame_size);
++			// resize the buffer for the track (Discpress: ensure at least one full CD frame fits)
++			buffer.resize(std::max<size_t>(size_t(std::max<uint32_t>(1, TEMP_BUFFER_SIZE / output_frame_size)) * output_frame_size, cdrom_file::FRAME_SIZE));
+ 
+ 			// now read and output the actual data
+ 			uint32_t bufferoffs = 0;
+ 			uint32_t actualframes = trackinfo.frames - trackinfo.padframes + trackinfo.splitframes;
++			auto const flush_buffer = [&] (uint32_t frame)
++			{
++				output_bin_file->seek(outputoffs, SEEK_SET);
++				auto const [writerr, byteswritten] = write(*output_bin_file, buffer.data(), bufferoffs);
++				if (writerr)
++					report_error(1, "Error writing frame %d to file (%s): %s\n", frame, *output_file_str->second, "Write error");
++				outputoffs += bufferoffs;
++				bufferoffs = 0;
++			};
+ 			for (uint32_t frame = 0; frame < actualframes; frame++)
+ 			{
+ 				progress(false, "Extracting, %.1f%% complete... \r", 100.0 * double(totaloutputoffs + outputoffs) / double(total_bytes));
+@@ -2987,8 +3590,23 @@
  					frameofs = frame - trackinfo.splitframes;
  				}
  
 -				// read the data
 -				cdrom->read_data(cdrom->get_track_start_phys(trk) + frameofs, &buffer[bufferoffs], toc.tracks[trk].trktype, true);
++				// Discpress: flush before reading if the next frame would not fit (prevents overflow if sector sizes differ)
++				uint32_t const frame_bytes = toc.tracks[trk].datasize + ((toc.tracks[trk].subtype != cdrom_file::CD_SUB_NONE && mode == MODE_NORMAL) ? toc.tracks[trk].subsize : 0);
++				if (bufferoffs > 0 && bufferoffs + frame_bytes > buffer.size())
++					flush_buffer(frame);
++
 +				// Discpress: helper workers decompress a buffer's worth of hunks ahead (browser only)
 +				uint64_t const chdoffs = uint64_t(toc.tracks[trk].chdframeofs + frameofs) * cdrom_file::FRAME_SIZE;
 +				if ((chdoffs < ahead_start) || (chdoffs >= ahead_end))
@@ -5028,7 +6949,7 @@
  
  				// for CDRWin and GDI audio tracks must be reversed
  				// in the case of GDI and CHD version < 5 we assuming source CHD image is GDROM so audio tracks is already reversed
-@@ -3005,7 +3519,8 @@
+@@ -3005,26 +3623,24 @@
  				// read the subcode data
  				if (toc.tracks[trk].subtype != cdrom_file::CD_SUB_NONE && (mode == MODE_NORMAL))
  				{
@@ -5038,7 +6959,21 @@
  					bufferoffs += toc.tracks[trk].subsize;
  				}
  
-@@ -3024,7 +3539,9 @@
+ 				// write it out if we need to
+ 				if (bufferoffs == buffer.size() || frame == actualframes - 1)
+-				{
+-					output_bin_file->seek(outputoffs, SEEK_SET);
+-					auto const [writerr, byteswritten] = write(*output_bin_file, &buffer[0], bufferoffs);
+-					if (writerr)
+-						report_error(1, "Error writing frame %d to file (%s): %s\n", frame, *output_file_str->second, "Write error");
+-					outputoffs += bufferoffs;
+-					bufferoffs = 0;
+-				}
++					flush_buffer(frame);
+ 			}
++			if (bufferoffs > 0)
++				flush_buffer(actualframes);
+ 
  			discoffs += trackinfo.padframes;
  		}
  
@@ -5049,7 +6984,7 @@
  		output_bin_file.reset();
  		output_toc_file.reset();
  		util::stream_format(std::cout, "Extraction complete                                    \n");
-@@ -3387,7 +3904,8 @@
+@@ -3387,7 +4003,8 @@
  	{
  		// delete the output file
  		output_file.reset();
@@ -5059,7 +6994,7 @@
  		throw;
  	}
  }
-@@ -3425,14 +3943,43 @@
+@@ -3425,14 +4042,42 @@
  //  main - entry point
  //-------------------------------------------------
  
@@ -5074,9 +7009,8 @@
 +	parameters_map parameters;
 +	chdman_task task;
 +
-+	// Discpress: the options' values are allocated as the command line is read (0.289 never freed them); the
-+	// command, which refers to them, goes first
-+	~chdman_run() { task.reset(); for (auto &param : parameters) delete param.second; }
++	// Discpress: clear s_paused before destroying the coroutine frames (and destroy the command before its parameters)
++	~chdman_run() { s_paused = nullptr; task.reset(); for (auto &param : parameters) delete param.second; }
 +};
  
 -	// print the header
@@ -5107,7 +7041,7 @@
  
  	// handle help specially
  	if (args.size() < 2)
-@@ -3459,7 +4006,7 @@
+@@ -3459,7 +4104,7 @@
  				return print_help(args[0], desc);
  
  			// otherwise, verify the parameters
@@ -5116,7 +7050,7 @@
  			while (argnum < args.size())
  			{
  				// should be an option name
-@@ -3519,30 +4066,86 @@
+@@ -3519,30 +4164,94 @@
  					return print_help(args[0], desc, "Required parameters missing");
  			}
  
@@ -5154,6 +7088,12 @@
 +
 +static int chdman_start(int argc, char *argv[])
 +{
++	// Discpress: tear down any prior run (and osd_output stack) before creating a new one, and reset per-run globals
++	s_run.reset();
++	s_paused = nullptr;
++	lastprogress = 0;
++	extern int osd_num_processors;
++	osd_num_processors = 0;
 +	s_run = std::make_unique<chdman_run>();
 +	int const result = chdman_parse(argc, argv);
 +	if (result != CHDMAN_PAUSED)
@@ -5165,6 +7105,8 @@
 +// runs the command until it finishes (returns the exit code) or pauses (returns CHDMAN_PAUSED)
 +static int chdman_continue()
 +{
++	if (!s_run)
++		return 1;
 +	std::coroutine_handle<> const next = s_paused ? std::exchange(s_paused, nullptr) : s_run->task.get();
 +	next.resume();
 +	if (!s_run->task.done())

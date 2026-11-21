@@ -34,16 +34,26 @@ mkdir -p "$OUT"
 SOURCES="$(python3 "$ROOT/scripts/engine-sources.py")"
 rm -f "$OUT/engine-sources.sha256"
 
+# Clean object dirs whenever the compiler version or EXTRA flags changed so stale .o files cannot mix into a build
+STAMP="$have | EXTRA=${EXTRA:-}"
+for dir in "$OUT/obj-wasm" "$OUT/obj-wasm-nosimd"; do
+  if [ -d "$dir" ] && [ "$(cat "$dir/.build-stamp" 2>/dev/null || true)" != "$STAMP" ]; then
+    rm -rf "$dir"
+  fi
+  mkdir -p "$dir"
+  printf '%s\n' "$STAMP" > "$dir/.build-stamp"
+done
+
 echo "==> Compiling (SIMD)"
-make -s -C "$ROOT/wasm" -j"$JOBS" T=wasm O="$OUT/obj-wasm" objs
+make -s -C "$ROOT/wasm" -j"$JOBS" T=wasm M=../engine/mame O=../build/obj-wasm objs
 echo "==> Compiling (no SIMD, for older devices)"
-make -s -C "$ROOT/wasm" -j"$JOBS" T=wasm SIMD= O="$OUT/obj-wasm-nosimd" objs
+make -s -C "$ROOT/wasm" -j"$JOBS" T=wasm SIMD= M=../engine/mame O=../build/obj-wasm-nosimd objs
 
 echo "==> Linking"
-W="-sMODULARIZE=1 -sEXPORT_NAME=createChdman -sENVIRONMENT=web,worker -sINVOKE_RUN=0 -sFORCE_FILESYSTEM=1"
+W=(-sMODULARIZE=1 -sEXPORT_NAME=createChdman -sENVIRONMENT=web,worker -sINVOKE_RUN=0 -sFORCE_FILESYSTEM=1)
 cd "$OUT"
-OBJDIR=obj-wasm "$ROOT/wasm/link.sh" chdman.js $W
-OBJDIR=obj-wasm-nosimd "$ROOT/wasm/link.sh" nosimd-tmp.js $W
+OBJDIR=obj-wasm "$ROOT/wasm/link.sh" chdman.js "${W[@]}"
+OBJDIR=obj-wasm-nosimd "$ROOT/wasm/link.sh" nosimd-tmp.js "${W[@]}"
 mv nosimd-tmp.wasm chdman-nosimd.wasm
 # Both variants share one JS glue file, so it must be identical.
 if ! diff <(sed 's/nosimd-tmp/chdman/g' nosimd-tmp.js) chdman.js >/dev/null; then

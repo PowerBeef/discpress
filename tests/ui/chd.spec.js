@@ -156,7 +156,7 @@ function damagedAudioChd() {
   const badPath = path.join(FIXTURES, 'chd', 'damaged-audio.chd');
   if (!fs.existsSync(badPath)) {
     const b = fs.readFileSync(path.join(FIXTURES, good));
-    b[1777198] ^= 0x5a;
+    b[b.length > 1777198 ? 1777198 : Math.floor(b.length * 0.75)] ^= 0x5a;
     fs.writeFileSync(badPath + '.tmp' + process.pid, b);
     fs.renameSync(badPath + '.tmp' + process.pid, badPath);
   }
@@ -177,7 +177,8 @@ for (const threads of [1, 4]) {
     await card.locator('.seg button', { hasText: 'Extract' }).click();
     await app.waitState(card, ['ready']);
     await card.locator('.job-foot button.primary').click();
-    await app.waitState(card, ['done', 'error'], 60_000);
+    await app.waitState(card, 'error', 60_000);
+    await expect(card).toContainText('Decompression error');
   });
 }
 
@@ -282,9 +283,13 @@ for (const threads of [1, 4]) {
 test('verify fails when the data does not match the checksum in the header', async ({ app }) => {
   // chdman 0.289 only prints the mismatch and exits 0, so the page reported "Verified."
   const good = chdInput('agent', 'createdvd', 'agent.iso');
-  const b = fs.readFileSync(path.join(FIXTURES, good));
-  b[64] ^= 0xff; // first byte of the raw SHA-1 in the CHD v5 header
-  fs.writeFileSync(path.join(FIXTURES, 'chd', 'badsum.chd'), b);
+  const bad = path.join(FIXTURES, 'chd', 'badsum.chd');
+  if (!fs.existsSync(bad)) {
+    const b = fs.readFileSync(path.join(FIXTURES, good));
+    b[64] ^= 0xff; // first byte of the raw SHA-1 in the CHD v5 header
+    fs.writeFileSync(bad + '.tmp' + process.pid, b);
+    fs.renameSync(bad + '.tmp' + process.pid, bad);
+  }
   const card = await openChd(app, 'chd/badsum.chd', 'badsum');
   await card.locator('.seg button', { hasText: 'Verify' }).click();
   await app.run(card, { expectState: 'error' });
@@ -322,8 +327,11 @@ test('a child CHD finds its parent and extracts', async ({ app }) => {
   if (!fs.existsSync(child)) {
     const b = fs.readFileSync(path.join(FIXTURES, 'agent.iso'));
     b.write('PATCHED BY TEST', 40 * 2048);
-    fs.writeFileSync(patched, b);
-    chdman(['createdvd', '-i', patched, '-o', child, '-op', path.join(dir, 'parent.chd'), '-f']);
+    const pTmp = `${patched}.${process.pid}.tmp`, cTmp = `${child}.${process.pid}.tmp`;
+    fs.writeFileSync(pTmp, b);
+    fs.renameSync(pTmp, patched);
+    chdman(['createdvd', '-i', patched, '-o', cTmp, '-op', path.join(dir, 'parent.chd'), '-f']);
+    fs.renameSync(cTmp, child);
   }
   await app.open();
   await app.add(['chd/child.chd']);
@@ -343,8 +351,10 @@ test('a CHD is never used as its own parent', async ({ app }) => {
   const dir = path.join(FIXTURES, 'chd');
   const parent = path.join(dir, 'same-parent.chd'), child = path.join(dir, 'same-child.chd');
   if (!fs.existsSync(child)) {
-    fs.copyFileSync(reference('createdvd', 'homebrew.iso'), parent);
-    chdman(['createdvd', '-i', 'homebrew.iso', '-o', child, '-op', parent, '-f']);
+    sharedCopy(reference('createdvd', 'homebrew.iso'), parent);
+    const cTmp = `${child}.${process.pid}.tmp`;
+    chdman(['createdvd', '-i', 'homebrew.iso', '-o', cTmp, '-op', parent, '-f']);
+    fs.renameSync(cTmp, child);
   }
   await app.open();
   await app.add(['chd/same-child.chd']);

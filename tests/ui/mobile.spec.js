@@ -112,18 +112,18 @@ test('inside an iOS app web view the header stays fixed and the content scrolls'
   expect(Math.round(top.y)).toBe(0);
   expect(await page.evaluate(() => document.scrollingElement.scrollTop)).toBe(0);
   expect(app.unexpectedErrors()).toEqual([]);
+  expect(app.foreignRequests()).toEqual([]);
   await ctx.close();
   void browserName;
 });
 
-test('on iPhone, a file the share sheet cannot take is downloaded instead', async ({ page }, testInfo) => {
+test('on iPhone, a file the share sheet cannot take is downloaded instead', async ({ app, page }, testInfo) => {
   test.skip(!/iphone/.test(testInfo.project.name), 'iOS only');
   // the share sheet is there, but fails as it can for a very large file
   await page.addInitScript(() => {
     navigator.canShare = () => true;
     navigator.share = () => Promise.reject(new DOMException('The share could not be completed.', 'DataError'));
   });
-  const app = new App(page, testInfo, false);
   await app.open();
   await app.add(fixture('ps1-single').add);
   const card = app.job('twine');
@@ -138,13 +138,12 @@ test('on iPhone, a file the share sheet cannot take is downloaded instead', asyn
 });
 
 // WebKit reports files the share sheet could not read as an AbortError, like a sheet the user closed
-test('on iPhone, Save all downloads the files when the share sheet cannot read them, and does nothing when it is closed', async ({ page }, testInfo) => {
+test('on iPhone, Save all downloads the files when the share sheet cannot read them, and does nothing when it is closed', async ({ app, page }, testInfo) => {
   test.skip(!/iphone/.test(testInfo.project.name), 'iOS only');
   await page.addInitScript(() => {
     navigator.canShare = () => true;
     navigator.share = () => Promise.reject(new DOMException(window.__closed ? 'Abort due to cancellation of share.' : 'Abort due to error while reading files.', 'AbortError'));
   });
-  const app = new App(page, testInfo, false);
   await app.open();
   await app.add([...fixture('ps1-single').add, ...fixture('saturn').add]);
   for (const t of ['twine', 'albert odyssey']) await app.settled(app.job(t));
@@ -166,7 +165,7 @@ test('on iPhone, Save all downloads the files when the share sheet cannot read t
   await expect(page.locator('.toast.err', { hasText: 'Downloading them instead' })).toBeVisible();
 });
 
-test('on iPhone, a result too large for the share sheet is downloaded without it', async ({ page }, testInfo) => {
+test('on iPhone, a result too large for the share sheet is downloaded without it', async ({ app, page }, testInfo) => {
   test.skip(!/iphone/.test(testInfo.project.name), 'iOS only');
   // WebKit's share sheet reads the whole file into memory, which closes the app for a large one
   await page.addInitScript(() => {
@@ -174,7 +173,6 @@ test('on iPhone, a result too large for the share sheet is downloaded without it
     navigator.canShare = () => true;
     navigator.share = () => { window.__shared++; return Promise.resolve(); };
   });
-  const app = new App(page, testInfo, false);
   await app.open({ debug: { shareMax: 64 << 10 } }); // "large" = over 64 KiB here
   await app.add(fixture('ps1-single').add);
   const card = app.job('twine');
@@ -189,10 +187,9 @@ test('on iPhone, a result too large for the share sheet is downloaded without it
   expect(await page.evaluate(() => window.__shared)).toBe(0);
 });
 
-test('opened from the Home Screen, the fixed header is sharp: no frosted glass', async ({ page }, testInfo) => {
+test('opened from the Home Screen, the fixed header is sharp: no frosted glass', async ({ app, page }, testInfo) => {
   test.skip(!/iphone/.test(testInfo.project.name), 'iOS only');
   await page.addInitScript(() => Object.defineProperty(navigator, 'standalone', { get: () => true }));
-  const app = new App(page, testInfo, false);
   await app.open();
   await expect(page.locator('html')).toHaveClass(/mode-shell/);
   const style = await page.locator('header.top').evaluate(h => { const c = getComputedStyle(h); return [c.backdropFilter, c.backgroundColor]; });
@@ -200,7 +197,7 @@ test('opened from the Home Screen, the fixed header is sharp: no frosted glass',
   expect(style[1]).not.toMatch(/rgba\(.*, 0(\.\d+)?\)$/); // opaque
 });
 
-test('opened from the Home Screen, a large result downloads and says to use Safari if nothing happens', async ({ page }, testInfo) => {
+test('opened from the Home Screen, a large result downloads and says to use Safari if nothing happens', async ({ app, page }, testInfo) => {
   test.skip(!/iphone/.test(testInfo.project.name), 'iOS only');
   // iOS may not start downloads in a home-screen web app (docs/ios/hosting.md)
   await page.addInitScript(() => {
@@ -208,7 +205,6 @@ test('opened from the Home Screen, a large result downloads and says to use Safa
     navigator.canShare = () => true;
     navigator.share = () => Promise.resolve();
   });
-  const app = new App(page, testInfo, false);
   await app.open({ debug: { shareMax: 64 << 10 } });
   await expect(page.locator('#iosTip')).toBeHidden();
   await app.add(fixture('ps1-single').add);
@@ -236,6 +232,7 @@ test('inside an iOS app web view, a notice points big games to Discpress online 
   await expect(page.locator('#chipEngine')).toContainText(/ready/i, { timeout: 60_000 });
   await expect(page.locator('#iosTip')).toBeHidden(); // dismissed once, for good
   expect(app.unexpectedErrors()).toEqual([]);
+  expect(app.foreignRequests()).toEqual([]);
   await ctx.close();
 });
 
