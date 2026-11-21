@@ -9,7 +9,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 JOBS="${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)}"
 SAN="-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
-# (command-line variables override the Makefile's: its native flags are -O2 -g0)
-make -s -C "$ROOT/wasm" -j"$JOBS" T=native OPT="-O1 -g $SAN" CXX="g++ $SAN" CC="gcc" \
-  O="$ROOT/build/obj-san" NATIVE="$ROOT/build/chdman-san" native
+# (command-line variables override the Makefile's: its native flags are -O2 -g0;
+#  relative paths avoid breaking GNU Make if the repo path contains spaces)
+make -s -C "$ROOT/wasm" -j"$JOBS" T=native M=../engine/mame OPT="-O1 -g $SAN" CXX="g++ $SAN" CC="gcc" \
+  O=../build/obj-san NATIVE=../build/chdman-san native
 { ASAN_OPTIONS=detect_leaks=0 "$ROOT/build/chdman-san" || true; } 2>&1 | head -1

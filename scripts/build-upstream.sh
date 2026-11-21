@@ -8,5 +8,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 UP="${MAME_DIR:-$ROOT/third_party/mame}"
 [ -f "$UP/src/tools/chdman.cpp" ] || "$ROOT/scripts/fetch-mame.sh" "$UP"
 JOBS="${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)}"
-make -s -C "$ROOT/wasm" -j"$JOBS" T=native UPSTREAM=1 M="$(cd "$UP" && pwd)" O="$ROOT/build/obj-upstream" NATIVE="$ROOT/build/chdman-0.289" native
+UP_ABS="$(cd "$UP" && pwd)"
+# Relative paths avoid breaking GNU Make if the repo path contains spaces
+case "$UP_ABS" in
+  "$ROOT"/*) UP_MAKE="../${UP_ABS#"$ROOT"/}" ;;
+  *) UP_MAKE="$UP_ABS" ;;
+esac
+make -s -C "$ROOT/wasm" -j"$JOBS" T=native UPSTREAM=1 M="$UP_MAKE" O=../build/obj-upstream NATIVE=../build/chdman-0.289 native
 { "$ROOT/build/chdman-0.289" || true; } 2>&1 | head -1

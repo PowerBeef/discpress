@@ -4,6 +4,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 JOBS="${JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)}"
-make -s -C "$ROOT/wasm" -j"$JOBS" T=native O="$ROOT/build/obj-native" native
+# Relative paths avoid breaking GNU Make if the repo path contains spaces
+make -s -C "$ROOT/wasm" -j"$JOBS" T=native M=../engine/mame O=../build/obj-native NATIVE=../build/chdman-native native
 # chdman without arguments prints its version and usage, and exits non-zero
 { "$ROOT/build/chdman-native" || true; } 2>&1 | head -1

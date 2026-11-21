@@ -1,0 +1,11 @@
+{
+  "discpress-env-check": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "./hooks/session-start.sh",
+        "timeout": 5
+      }
+    ]
+  }
+}

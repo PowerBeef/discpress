@@ -33,4 +33,4 @@ Encoder variants of `chdman-variant`:
 
 A full run takes about an hour on 4 cores. The exhaustive-search FLAC variants alone take about 10 minutes of CPU each.
 
-**The corpus.** It comes from Freedoom (BSD-3) and from music under CC0 and CC BY-NC-SA. It is downloaded for local measurement only and must never be committed (see `CLAUDE.md`: no real game data, and nothing we cannot redistribute).
+**The corpus.** It comes from Freedoom (BSD-3) and from music under CC0 and CC BY-NC-SA. It is downloaded for local measurement only and must never be committed (see `AGENTS.md`: no real game data, and nothing we cannot redistribute).

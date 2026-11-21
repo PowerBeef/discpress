@@ -11,10 +11,18 @@ OUT="$ROOT/engine/mame-0.289.diff"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 
+# Prefer GNU diffutils (gdiff on macOS) so hunk alignment matches CI's Ubuntu diff
+DIFF="${DIFF:-diff}"
+if ! "$DIFF" --version 2>/dev/null | grep -qi 'GNU diffutils'; then
+  if command -v gdiff >/dev/null 2>&1; then
+    DIFF=gdiff
+  fi
+fi
+
 cd "$ROOT/engine/mame"
 while read -r f; do
   [ -f "$f" ] || { echo "engine/FILES lists $f, which is not in engine/mame" >&2; exit 1; }
-  s=0; diff -u --label "a/$f" --label "b/$f" "$UP/$f" "$f" >> "$TMP" || s=$?
+  s=0; "$DIFF" -u --label "a/$f" --label "b/$f" "$UP/$f" "$f" >> "$TMP" || s=$?
   [ "$s" -le 1 ] || exit "$s"
 done < "$ROOT/engine/FILES"
 extra="$(LC_ALL=C comm -13 "$ROOT/engine/FILES" <(find . -type f | sed 's|^\./||' | LC_ALL=C sort))"
@@ -23,6 +31,9 @@ extra="$(LC_ALL=C comm -13 "$ROOT/engine/FILES" <(find . -type f | sed 's|^\./||
 if [ "${1:-}" = "--check" ]; then
   cmp -s "$TMP" "$OUT" && { echo "engine/mame-0.289.diff is up to date"; exit 0; }
   echo "engine/mame-0.289.diff is out of date: run scripts/engine-diff.sh" >&2
+  if ! "$DIFF" --version 2>/dev/null | grep -qi 'GNU diffutils'; then
+    echo "note: $DIFF is not GNU diffutils (CI uses GNU diff); on macOS install it with: brew install diffutils" >&2
+  fi
   exit 1
 fi
 cp "$TMP" "$OUT"

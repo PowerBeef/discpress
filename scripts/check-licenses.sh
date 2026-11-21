@@ -8,13 +8,14 @@
 # it on every push to main and every pull request.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-# files that may carry another permissive license than BSD-3-Clause, with the license they must say
-declare -A EXCEPT=(["engine/mame/src/lib/util/md5.h"]="license:Public Domain")
 
 bad=0
 while IFS= read -r f; do
-  want="license:BSD-3-Clause"
-  [ -n "${EXCEPT[$f]:-}" ] && want="${EXCEPT[$f]}"
+  # files that may carry another permissive license than BSD-3-Clause, with the license they must say
+  case "$f" in
+    engine/mame/src/lib/util/md5.h) want="license:Public Domain" ;;
+    *) want="license:BSD-3-Clause" ;;
+  esac
   if ! head -n 3 "$f" | grep -qF "$want"; then
     echo "$f: its first lines don't say \"$want\"" >&2
     bad=1

@@ -1,7 +1,7 @@
 // Layout sweep: every screen of the app at several sizes, in light and dark.
 // Fails on horizontal overflow; saves screenshots of each screen to
 // .cache/screens/<size>/<theme>-<screen>.png (viewport) and ...-full.png (whole page)
-// for a human (or Claude) to review.
+// for a human (or agent) to review.
 import fs from 'node:fs';
 import path from 'node:path';
 import { devices } from '@playwright/test';

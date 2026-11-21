@@ -14,11 +14,10 @@ pip install numpy                # for the synthetic disc generator
 ```
 
 Chromium must be available to Playwright, in the build its version wants (`npx playwright install chromium`
-on a new machine). Claude Code on the web has one build preinstalled (`/opt/pw-browsers`), so
-`package.json` pins the Playwright that ships it: 1.63.0 for Chromium build 1243. When the image moves to
-another build, move the pin with it (the `browsers.json` of each `playwright-core` release names its build).
-In Claude Code on the web, `.claude/hooks/session-start.sh` does the rest of this when a session starts,
-and warns if Playwright can't launch the image's Chromium.
+on a new machine). `package.json` pins `@playwright/test` 1.63.0 (Chromium build 1243) so CI and local runs
+share the same browser build (`browsers.json` in `playwright-core` names each release's build).
+For local Antigravity sessions, see `.agents/skills/discpress-env-setup/SKILL.md` (and note that interactive
+UI previews can also run directly against `node support/server.js 4173` in Antigravity's embedded browser).
 
 ## Running
 
