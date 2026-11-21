@@ -566,7 +566,7 @@ fixture('dc-mode2-2048', {
     'dc form1 (Track 1).bin': lambda: g.audio(300, 157),
     'dc form1 (Track 2).bin': lambda: dc_cd_data(True, 158),
 }, add=['dc form1.cue', 'dc form1 (Track 1).bin', 'dc form1 (Track 2).bin'], job='create', disc='cd', command='createcd',
-   sys='dc', serial='T0000', ident='none', name='dc form1', warning='Flycast can’t load CHDs with MODE2/2048 or MODE2/2324 tracks',
+   sys='dc', serial='T0000', ident='none', name='dc form1', warning='Flycast can’t load CHDs with MODE2/2048, MODE2/2324 or MODE2_FORM_MIX tracks',
    quirks=['dc-mode2-form'])
 
 # a MIL-CD-like Dreamcast disc: music in session 1, the game in session 2 (a CHD keeps no session gap)

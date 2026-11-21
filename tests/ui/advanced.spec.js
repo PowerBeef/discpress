@@ -319,7 +319,7 @@ test('delmeta edits a copy of the CHD in place, exactly like desktop chdman', as
   expect(sha1File(got.path)).toBe(sha1File(expected));
 });
 
-test('copy rejects writing over its own input file', async ({ app, page }) => {
+test('copy with the same input and output name writes to /out and honors --compression', async ({ app, page }) => {
   test.skip(!nativeChdman(), 'needs native chdman');
   const src = nativeChd('copy self.chd', 'createdvd', 'homebrew.iso', ['-c', 'none']);
   await openCli(app, page);
@@ -327,8 +327,10 @@ test('copy rejects writing over its own input file', async ({ app, page }) => {
   await page.click('#cliEditToggle');
   await page.locator('#cliText').fill('chdman copy -i "copy self.chd" -o "copy self.chd" --compression none');
   const out = await runCli(page);
-  expect(out).toContain('[exit code 1]');
-  await expect(page.locator('#cliOuts')).toBeEmpty();
+  expect(out).toContain('[exit code 0]');
+  expect(out).toContain('Output CHD:   /out/copy self.chd');
+  expect(out).toContain('Compression:  none');
+  await expect(page.locator('#cliOuts')).toContainText('copy self.chd');
 });
 
 test('verify --fix on a sound CHD leaves it as it was', async ({ app, page }) => {

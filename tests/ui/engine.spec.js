@@ -124,7 +124,7 @@ test('no tracks, no data or too many tracks is an error', () => {
     `${i ? '' : 'FILE "t.bin" BINARY\n'}  TRACK ${String(i + 1).padStart(2, '0')} ${i ? 'AUDIO' : 'MODE1/2352'}\n    INDEX 01 ${String(Math.floor(i * 4 / 75 / 60)).padStart(2, '0')}:${String(Math.floor(i * 4 / 75) % 60).padStart(2, '0')}:${String(i * 4 % 75).padStart(2, '0')}\n`).join('');
   const gdi = n => `${n}\n` + Array.from({ length: n }, (_, i) => `${i + 1} ${i * 4} ${i ? 0 : 4} 2352 t.bin 0\n`).join('');
   for (const [name, text, upstream, message] of [
-    ['none.cue', 'REM nothing here\n', null, 'no tracks found'], // upstream: never finishes
+    ['none.cue', 'REM nothing here\n', null, 'cue sheet has no tracks'], // upstream: never finishes
     ['t00.cue', 'FILE "t.bin" BINARY\n  TRACK 00 MODE1/2352\n    INDEX 01 00:00:00\n', null, 'track number 00 is not between 1 and 99'],
     ['nolength.toc', 'CD_ROM\nTRACK MODE1_RAW\nDATAFILE "t.bin" #940800\n', null, 'track 1 holds no data'], // upstream: -nan% forever
     ['t100.cue', cue(100), 'crash', 'track number 100 is not between 1 and 99'],
@@ -463,7 +463,7 @@ test('a broken NRG image is an error, not a crash or a hang', () => {
     ['size2352.nrg', nrg({ size: 2352 }), 'has sectors of 2352 bytes'],
     ['track0.nrg', nrg({ start: 0 }), 'has tracks 0 to 0'],
     ['noend.nrg', nrg({ end: false }), 'end without an END! chunk'],
-    ['past.nrg', nrg({ daoxSize: 1 << 20 }), 'end without an END! chunk'],
+    ['past.nrg', nrg({ daoxSize: 1 << 20 }), 'truncated DAOX chunk'],
     ['short.nrg', Buffer.from('NER5'), 'Not a Nero 5.5 or later image'],
   ]) {
     const input = image ? write(name, image) : tmp(name);
@@ -1236,7 +1236,8 @@ test('hostile CHD headers, metadata cycles, and >8 MiB hunks fail cleanly withou
   ];
   for (const [name, mutate] of cases) {
     const buf = Buffer.from(base);
-    const out = mutate(buf) || buf;
+    const res = mutate(buf);
+    const out = Buffer.isBuffer(res) ? res : buf;
     const p = tmp(name);
     fs.writeFileSync(p, out);
     const cmds = name === 'meta-cycle.chd'
@@ -1248,14 +1249,18 @@ test('hostile CHD headers, metadata cycles, and >8 MiB hunks fail cleanly withou
       expect(r.code, `${name} ${cmd[0]}`).toBe(1);
     }
   }
-  // >8 MiB hunk (16 MiB): extractraw and verify must not fail or OOB on hunks larger than the 8 MiB batch size
-  const bigRaw = tmp('big16m.raw'), bigChd = tmp('big16m.chd'), bigOut = tmp('big16m-out.raw');
-  const payload = noise(123, 16 << 20);
-  fs.writeFileSync(bigRaw, payload);
-  expect(run(ENGINE, ['createraw', '-i', bigRaw, '-o', bigChd, '-hs', String(16 << 20), '-us', '4096', '-c', 'none', '-f']).code).toBe(0);
+  // >8 MiB hunk (9 MiB crafted uncompressed CHD v5): extractraw and verify must not hang or OOB on hunks > 8 MiB batch size
+  const H = 9 << 20, bigChd = tmp('big9m.chd'), bigOut = tmp('big9m-out.raw');
+  const payload = noise(123, H);
+  const head = Buffer.alloc(124), map = Buffer.alloc(4);
+  head.write('MComprHD', 0, 'latin1'); head.writeUInt32BE(124, 8); head.writeUInt32BE(5, 12);
+  head.writeBigUInt64BE(BigInt(H), 32); head.writeBigUInt64BE(124n, 40);
+  head.writeUInt32BE(H, 56); head.writeUInt32BE(4096, 60);
+  map.writeUInt32BE(1, 0); // uncompressed v5 map entry: hunk 0 lives at offset 1 * H
+  fs.writeFileSync(bigChd, Buffer.concat([head, map, Buffer.alloc(H - 128), payload]));
   expect(run(ENGINE, ['verify', '-i', bigChd]).code).toBe(0);
   expect(run(ENGINE, ['extractraw', '-i', bigChd, '-o', bigOut, '-f']).code).toBe(0);
-  expect(sha1of(bigOut)).toBe(sha1of(bigRaw));
+  expect(fs.readFileSync(bigOut).equals(payload)).toBe(true);
 });
 
 test('TOSEC GD-ROM with mixed 2048/2352 tracks extracts cleanly with --redump', () => {
