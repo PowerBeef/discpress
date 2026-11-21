@@ -14,7 +14,7 @@
     "bench:dev": "npm run dev-page && node bench/bench.js --html ../build/discpress-dev.html"
   },
   "devDependencies": {
-    "@axe-core/playwright": "4.13.0",
-    "@playwright/test": "1.63.0"
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.65.1"
   }
 }
