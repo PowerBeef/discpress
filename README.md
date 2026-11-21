@@ -39,7 +39,7 @@
 </p>
 
 > [!TIP]
-> **New in 1.8: the dependable one.** No finished result gets lost, no disc takes another game's tracks or name, and big folders of games are added faster. Since 1.8.1, a compatibility mode makes PS2 DVD games into CHDs that older emulators read. [See what's new](https://github.com/PowerBeef/discpress/releases/latest).
+> **New in 1.9: hardened from the engine up.** Smaller single-file download, ~30 MB less memory per worker, protection against crafted or damaged CHDs and disc descriptors, better emulator warnings (PC Engine CD, jgenesis, Flycast, PCSX ReARMed), and a steadier offline web app. [See what's new](https://github.com/PowerBeef/discpress/releases/latest).
 
 <img src="docs/brand/divider.png" width="100%" alt="">
 
@@ -204,7 +204,7 @@ The right CHD type and hunk size for each console, compression that every emulat
 | A PSP game | Makes a DVD CHD with 2,048-byte hunks, as PPSSPP recommends |
 | A PS2 game | Makes a DVD or a CD CHD, as the disc was; Settings → *Compatibility mode for older emulators* makes CD CHDs of DVD games for AetherSX2, NetherSX2 and PCSX2 builds from before April 2023 |
 | A Dreamcast or NAOMI GD-ROM | Stores it as a GD-ROM, from a `.gdi` or a Redump cue sheet |
-| *Keep the cue sheet* on, for a Saturn or Sega CD game | Leaves it out and says why: Kronos, Yabause and jgenesis can't open such a CHD |
+| *Keep the cue sheet* on, for a Saturn, Sega CD or PC Engine CD game | Leaves it out and says why: Kronos, Yabause and jgenesis can't open such a CHD |
 | A NAOMI GD-ROM | Keeps its file's name, which MAME and Flycast look for in the game's romset |
 | A PAL PlayStation game with LibCrypt | Saves its `.sbi` (or `.lsd`) under the CHD's name, where DuckStation, Beetle PSX, SwanStation, PCSX ReARMed and MiSTer look for it |
 | Two or more discs of a game | Offers an `.m3u` playlist on the first disc's card, and says how many discs the set has until all are converted |
@@ -223,9 +223,9 @@ The right CHD type and hunk size for each console, compression that every emulat
 | A LibCrypt game without its `.sbi` | That emulators stop it partway, and where to get the file |
 | A 2,048-byte copy of a PlayStation disc | That its videos and sound may be missing and Beetle PSX can't load it: convert the `.bin` and `.cue` dump instead |
 | A disc with several sessions (CD-Extra, MIL-CD) | That emulators read the later sessions from the wrong place (for a Dreamcast or NAOMI disc: except Flycast builds from September 2026 on, which guess it for MIL-CDs); for a Jaguar CD, that its emulators may not load it at all |
-| A CD-based Dreamcast disc with pregaps, or MODE2/2048 or MODE2/2324 tracks | That Flycast 2.7 and earlier, or any Flycast, can't load it |
+| A CD-based Dreamcast disc with pregaps, or a Dreamcast or NAOMI disc with MODE2/2048, MODE2/2324 or MODE2_FORM_MIX tracks | That Flycast 2.7 and earlier, or any Flycast, can't load it |
 | A PS2 game on CD with music tracks | That PCSX2 plays only the first track of a CD CHD |
-| PREGAP or POSTGAP lines in a cue sheet | Which emulators read the tracks after them from the wrong place: Beetle Saturn, Kronos and Yabause; Beetle PCE, Geargrafx, Beetle PC-FX and Beetle PSX; ares; NeoCD |
+| PREGAP or POSTGAP lines in a cue sheet | Which emulators read the tracks after them from the wrong place: Beetle Saturn, Kronos and Yabause; Beetle PCE, Geargrafx, Beetle PC-FX, Beetle PSX and jgenesis; ares and PCSX ReARMed; NeoCD |
 | Sega CD layouts | When Genesis Plus GX reads the tracks only up to the first data track after track 1, PicoDrive won't take a disc of 80 minutes or more, or BlastEm starts music late |
 | A Neo Geo CD with a Mode 2 track | That NeoCD can't load it |
 | A UMD Video | That it's a film, which PPSSPP doesn't play |
@@ -322,7 +322,7 @@ No. Hacks, translations, homebrew and modified dumps aren't in the Redump databa
 <summary><b>Can I turn a CHD back into a .cue/.bin or .iso?</b></summary>
 <br>
 
-Yes. Add the <code>.chd</code> and choose Extract. A CD comes back as its Redump dump: the same cue sheet and <code>.bin</code> files. For discs whose cue sheet holds more than a CHD stores (CATALOG, FLAGS, ISRC, extra indexes: common on PC Engine CD, 3DO and CD-i), turn on Settings → <i>Keep the cue sheet in CD CHDs</i> before converting, and that sheet comes back too. Saturn, Sega CD and PC Engine CD games leave it out, since Kronos, Yabause and jgenesis can't open a CHD that keeps one. You can also verify a CHD's checksums, which compares it with Redump too, or view its details.
+Yes. Add the <code>.chd</code> and choose Extract. A CD comes back as its Redump dump: the same cue sheet and <code>.bin</code> files. For discs whose cue sheet holds more than a CHD stores (CATALOG, FLAGS, ISRC, extra indexes, CD-i track types: common on 3DO and CD-i), turn on Settings → <i>Keep the cue sheet in CD CHDs</i> before converting, and that sheet comes back too. Saturn, Sega CD and PC Engine CD games leave it out, since Kronos, Yabause and jgenesis can't open a CHD that keeps one. You can also verify a CHD's checksums, which compares it with Redump too, or view its details.
 </details>
 
 <details>
@@ -369,7 +369,7 @@ source ~/emsdk/emsdk_env.sh
 | `app/` | The web app: page, styles, UI, game identification, and the Web Worker that runs chdman |
 | `engine/` | Discpress's chdman: MAME 0.289's chdman and the sources it links, with every change listed in `mame-0.289.diff`, plus libdeflate and the math FLAC needs |
 | `wasm/` | WebAssembly build: Makefile, link flags, the parallel-compression helper, ECM decoding, and a small SDL stub |
-| `db/` | Game database (`db.json.gz`) and the script that builds it from libretro-database |
+| `db/` | Game database (`db.json.gz`), the script that builds it from libretro-database, and hand-curated per-game facts (`facts/`) |
 | `web/` | What the online version adds to `discpress.html`: offline service worker, web app manifest and icons |
 | `scripts/` | Fetch MAME, build native chdman, update the database, assemble the single HTML file, check releases, and render the README graphics |
 | `dist/` | The ready-to-use `discpress.html` |

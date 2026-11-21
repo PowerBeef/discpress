@@ -39,7 +39,7 @@ Research dossier for the Discpress chdman fork. Lane C covers the disc-level sem
    - `extractcd` on a DVD CHD aborts;
    - `extractdvd` on a CD CHD silently writes 2448-byte frames as an ".iso".
 6. **MAME's own DVD reader cannot open default `createdvd` output.** `dvdrom_file` requires 2048-byte hunks (`dvdrom.cpp:55`), but chdman has defaulted to 4096 since 0.263 **[exp]**. libchdr readers are unaffected.
-7. **There is a compatible way to add fidelity metadata.** New tags written *without* `CHD_MDFLAGS_CHECKSUM` and appended after the CD tags do not change the CHD's SHA-1 **[exp]**, and readers that look tracks up by tag ignore them. Kronos, libretro Yabause/YabaSanshiro and jgenesis do not: they fail on any tag that is not a track's (D2 §0 finding 4). A fork can therefore carry CATALOG, ISRC, FLAGS, index points, session gaps, CD-TEXT and the original cue text while staying SHA-1-identical to plain chdman. *(Done for the cue text: `createcd --keepcue`, opt-in since 1.3.0. The page leaves it out for Saturn and Sega CD, the consoles those three readers emulate.)*
+7. **There is a compatible way to add fidelity metadata.** New tags written *without* `CHD_MDFLAGS_CHECKSUM` and appended after the CD tags do not change the CHD's SHA-1 **[exp]**, and readers that look tracks up by tag ignore them. Kronos, libretro Yabause/YabaSanshiro and jgenesis do not: they fail on any tag that is not a track's (D2 §0 finding 4). A fork can therefore carry CATALOG, ISRC, FLAGS, index points, session gaps, CD-TEXT and the original cue text while staying SHA-1-identical to plain chdman. *(Done for the cue text: `createcd --keepcue`, opt-in since 1.3.0. The page leaves it out for Saturn, Sega CD and PC Engine CD, the consoles those three readers emulate.)*
 
 ---
 

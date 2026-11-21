@@ -21,8 +21,9 @@ Run the bundled read-only diagnostic script from the repository root:
 
 It checks:
 - Extracted WebAssembly outputs (`build/chdman.js`, `build/chdman.wasm`, `build/chdman-nosimd.wasm`, `build/engine-sources.sha256`)
-- Native engine binary (`build/chdman-native`) and freshness against `engine/` & `wasm/`
+- Native engine binary (`build/chdman-native`)
 - Upstream MAME 0.289 reference (`third_party/mame`, `build/chdman-0.289`)
+- GNU `diffutils` (`diff` / `gdiff`, required by `scripts/engine-diff.sh`)
 - Python `numpy` (`.venv/bin/python3` or system `python3`) and synthetic fixtures (`tests/.cache/fixtures/manifest.json`)
 - Emscripten `6.0.10` (`em++` or `~/emsdk`)
 - Optional Playwright Test installation (`tests/node_modules`)

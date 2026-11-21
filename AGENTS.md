@@ -50,11 +50,11 @@ python3 scripts/assemble.py                                      # update commit
 ./scripts/build-upstream.sh                                      # -> build/chdman-0.289 (fetches MAME 0.289)
 ./scripts/engine-diff.sh --check                                 # verify engine/mame-0.289.diff (omit --check to refresh)
 ./scripts/check-licenses.sh                                      # verify permissive licenses in engine/
-./scripts/build-sanitized.sh                                     # -> build/chdman-san (ASan + UBSan)
+./scripts/build-sanitized.sh                                     # -> build/chdman-san + build/cdprobe-san (ASan + UBSan)
 
 # 3. Full WebAssembly rebuild (after changing engine/, wasm/, or build.sh)
 source ~/emsdk/emsdk_env.sh
-./build.sh                                                       # requires Emscripten 6.0.10; see macOS path note below
+./build.sh                                                       # requires Emscripten 6.0.10
 
 # 4. Synthetic test fixtures (uses repo-local .venv if numpy is not global)
 .venv/bin/python3 tests/fixtures/make_fixtures.py                # or python3 if numpy is installed globally
@@ -76,7 +76,7 @@ python3 scripts/brand/screenshots.py && python3 scripts/brand/render.py
 
 ## Local macOS & Antigravity Environment Notes
 
-- **Workspace path with spaces (`build.sh`):** GNU Make splits paths containing spaces. `scripts/build-native.sh`, `scripts/build-upstream.sh`, and `scripts/build-sanitized.sh` already pass relative paths so they work from any directory. Because `build.sh` and `wasm/sources.mk` are hashed by `scripts/engine-sources.py`, if the checkout path contains a space (e.g., `Coding projects/Discpress`), run `./build.sh` through a space-free symlink (for example `ln -sfn "$PWD" /tmp/discpress-build && (cd /tmp/discpress-build && ./build.sh)`) rather than editing `build.sh`/`wasm/` unless you intend a full rebuild.
+- **Workspace path with spaces (`build.sh`):** GNU Make splits paths containing spaces, so `build.sh`, `wasm/sources.mk`, and `scripts/build-{native,upstream,sanitized}.sh` all pass relative paths to GNU Make (`M=../engine/mame`, `O=../build/...`). Do not reintroduce `$(abspath ...)` or absolute paths into Make variables so checkouts with spaces (e.g., `Coding projects/Discpress`) continue to build natively.
 - **Python venv (`.venv/`):** macOS Homebrew Python is externally managed; `numpy` for `tests/fixtures/make_fixtures.py` lives in `.venv/` (gitignored).
 - **Antigravity embedded browser vs. Playwright:** For interactive UI previews, visual inspection, and manual verification of `dist/discpress.html` or `build/discpress-dev.html`, start `node tests/support/server.js 4173` and delegate opening `http://127.0.0.1:4173` to Antigravity's `browser` subagent. The 23 automated `.spec.js` suites in `tests/ui/` and `tests/bench/bench.js` (and GitHub Actions CI) still use `@playwright/test`.
 - **macOS `libm`, GNU `diffutils` & sanitizer nuances:** On macOS, `build/chdman-0.289` links Apple's `libm` (which can differ from Linux glibc / `engine/libm` on `music-cd`), whereas `build/chdman-native` uses `engine/libm` and matches WASM byte for byte. `scripts/engine-diff.sh` (and `check-dist.sh` once `third_party/mame` exists) requires GNU `diffutils` (`gdiff`, via `brew install diffutils`) because Apple's BSD `diff` emits different hunk alignment than CI's Ubuntu `diff`. On Apple Silicon, Apple Clang supports ASan and UBSan (`ASAN_OPTIONS=detect_leaks=0`), while LeakSanitizer runs in CI (`.github/workflows/sanitizers.yml`).

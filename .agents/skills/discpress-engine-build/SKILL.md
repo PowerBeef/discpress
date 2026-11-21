@@ -41,27 +41,23 @@ After editing files in `engine/mame/`:
    ```sh
    (cd tests && REQUIRE_NATIVE=1 npx playwright test ui/engine.spec.js --project=desktop)
    ```
-4. Build and test with sanitizers (`ASan` + `UBSan`):
+4. Build and test with sanitizers (`ASan` + `UBSan`), which produces both `build/chdman-san` and `build/cdprobe-san`:
    ```sh
    ./scripts/build-sanitized.sh
    ```
-   - On Linux: run `ui/engine.spec.js` with `CHDMAN_ENGINE=../build/chdman-san` and `LSAN_OPTIONS=suppressions=$PWD/support/lsan.supp`.
-   - On macOS `arm64`: run with `ASAN_OPTIONS=detect_leaks=0` (Apple Clang lacks LeakSanitizer; full LSan parity runs in `.github/workflows/sanitizers.yml`).
+   - On Linux: run `ui/engine.spec.js --project=desktop` with `CHDMAN_ENGINE=../build/chdman-san CDPROBE_ENGINE=../build/cdprobe-san LSAN_OPTIONS=suppressions=$PWD/support/lsan.supp`.
+   - On macOS `arm64`: run with `CHDMAN_ENGINE=../build/chdman-san CDPROBE_ENGINE=../build/cdprobe-san ASAN_OPTIONS=detect_leaks=0` (Apple Clang lacks LeakSanitizer; full LSan parity runs in `.github/workflows/sanitizers.yml`).
 
 ## Step 4: Reproducible WebAssembly rebuild (`dist/discpress.html`)
 
-Because `scripts/engine-sources.py` hashes `build.sh`, `engine/`, and `wasm/` (excluding `*.md`, `engine/FILES`, `engine/mame-0.289.diff`), you **must** rebuild with pinned Emscripten `6.0.10` (`d6c521a7f05449857c76bd99e396895583cf2083`) and commit `dist/discpress.html`.
+Because `scripts/engine-sources.py` hashes `build.sh`, `engine/`, and `wasm/` (excluding `*.md`, `engine/FILES`, `engine/mame-0.289.diff`), you **must** rebuild with pinned Emscripten `6.0.10` (`d6c521a7f05449857c76bd99e396895583cf2083`) and commit `dist/discpress.html`:
 
-- If the repository path has **no spaces**:
-  ```sh
-  source ~/emsdk/emsdk_env.sh
-  ./build.sh
-  ```
-- If the repository path **contains spaces** (e.g., `Coding projects/Discpress`), run via a space-free symlink so GNU Make in `wasm/Makefile` succeeds without editing hashed files:
-  ```sh
-  ln -sfn "$PWD" /tmp/discpress-build
-  (cd /tmp/discpress-build && source ~/emsdk/emsdk_env.sh && ./build.sh)
-  ```
+```sh
+source ~/emsdk/emsdk_env.sh
+./build.sh
+```
+
+(`build.sh` and `wasm/sources.mk` use relative Make paths, so checkouts with spaces in their path work natively, and `.build-stamp` cleans stale object directories automatically when compiler version or `EXTRA` changes.)
 
 > Never ship a build made with `EMSCRIPTEN_ANY=1`: it omits `engine-sources.sha256` and fails `scripts/check-dist.sh`.
 

@@ -7,10 +7,10 @@ Applies to `app/` (`index.html`, `ui.js`, `ident.js`, `quirks.js`, `worker.js`, 
 `scripts/assemble.py` substitutes exact placeholders in `app/index.html` (each must appear **exactly once**):
 
 - `/*STYLE*/` ← `app/style.css`
-- `<!--HELP-->` ← `app/help.html`, with `/*PATCH*/` replaced by `engine/mame-0.289.diff` + `wasm_helper.cpp`, `ecm.cpp`, `par_lib.js`, and `engine/libm/flac_libm.c`, and `/*DBVER*/` replaced by the database version
+- `<!--HELP-->` ← `app/help.html`, with `/*DBVER*/` replaced by the database version (contains `#patchBox` / `#patchPre`, lazily populated by `loadPatch()`)
 - `/*UI*/` ← `app/ui.js`, with `/*IDENT*/` replaced by `app/ident.js` and `/*QUIRKS*/` by `app/quirks.js`; `/*GAMEFACTS*/{}` inside `ident.js` ← validated JSON built from `db/facts/*.tsv` (`game_facts`, which refuses lines without 5 tab-separated fields or with an unknown system, serial, fact, value ≠ `1`, or missing source; see `db/facts/README.md`)
 - `/*WORKER*/` ← Emscripten glue `build/chdman.js` + `app/worker.js`, embedded as `text/plain` and turned into a Blob URL at runtime
-- `/*WASM_SIMD*/`, `/*WASM_BASE*/` ← gzip (`mtime=0`, OS byte `3`) + base64 wasm; `/*GAMEDB*/` ← base64 `db/db.json.gz` (plus `/*SIMD_SIZE*/`, `/*BASE_SIZE*/`, `/*DB_SIZE*/`)
+- `/*WASM_SIMD*/`, `/*WASM_BASE*/`, `/*PATCH*/` ← gzip (`mtime=0`, OS byte `3`) + base64 payloads (`/*PATCH*/` embeds `engine/mame-0.289.diff` + the 7 new files: `wasm_helper.cpp`, `ecm.cpp`, `par_lib.js`, `version.cpp`, `shim/SDL2/SDL.h`, `engine/libm/flac_libm.h`, `engine/libm/flac_libm.c` in `#patch-src`, lazily inflated by `loadPatch()`); `/*GAMEDB*/` ← base64 `db/db.json.gz` (plus `/*SIMD_SIZE*/`, `/*BASE_SIZE*/`, `/*DB_SIZE*/`, `/*PATCH_SIZE*/`)
 - After `</html>`, `assemble.py` appends `<!-- engine sources sha256 … -->` from `build/engine-sources.sha256` (without it, `assemble.py` warns and `scripts/check-dist.sh` refuses the page).
 
 **Hard syntax rules:**
@@ -36,10 +36,10 @@ Applies to `app/` (`index.html`, `ui.js`, `ident.js`, `quirks.js`, `worker.js`, 
   - `buildJob` builds chdman argument lists; `PROFILES` (applied via `applyIdent`) provides console-specific CHD type and hunk size (e.g., PSP `2048`), Zstd warnings (`noZstd`, for all presets using Zstd), MiSTer warnings (`noMister`), notes for systems whose emulators don't load CHDs (`keep`: does not force CHD type), and DOSBox Pure hints.
   - **Compatibility mode for older emulators** (`settings.compat`, migrating stored `ps2dvd: 'cd'` from ≤ 1.8; `COMPAT_NAME`) turns PS2 DVD games into CD CHDs (for AetherSX2, NetherSX2, and PCSX2 builds before April 2023) and makes Zstd presets warn for every console (`ZSTD_OLD`). Compression **never** changes automatically.
   - Per-console and per-disc rules live in `QUIRKS` (`app/quirks.js`), each with a stable `id` rendered as `data-quirk` on its note:
-    - `act: 'nokeepcue'` omits `--keepcue` (Saturn/Sega CD: Kronos, Yabause, jgenesis reject unknown metadata tags).
+    - `act: 'nokeepcue'` omits `--keepcue` (Saturn, Sega CD, and PC Engine CD: Kronos, Yabause, jgenesis reject unknown metadata tags).
     - `act: 'norename'` preserves the original filename (NAOMI romsets via `renameWanted`).
     - `warn: true` renders in warning colour; more than two non-warning notes are grouped.
-    - Evaluated against `quirkCtx` (identification + `discModel` from `cueModel`/`tocModel` in `ident.js`: tracks, sessions, `INDEX 00`, `PREGAP`, `POSTGAP`).
+    - Evaluated against `quirkCtx` (identification + `discModel` from `cueModel`/`tocModel`/`nrgModel` in `ident.js`: tracks, sessions, `INDEX 00`, `PREGAP`, `POSTGAP`).
   - PAL PS1 `.sbi` or DuckStation `.lsd` sidecars pair by name (`sbiJob`), save alongside the CHD under its name, or generate from a CloneCD `.sub` Q-subchannel (`scanSub`, `sbiFromSub`), and detach if identified as another console (`detachSbi`). LibCrypt games (`GameFacts` from `db/facts/libcrypt.tsv`) without one trigger `libcrypt-missing`.
   - Multi-disc sets show disc count (`GameDB.discCount`; `data-quirk="set-incomplete"` set by `renderResult`, not `QUIRKS`) until all discs convert; two or more `(Disc N)` / `(Disc A)` results generate an `.m3u` on the first disc's card (`discSet`).
 - **Input guard rails (`app/ui.js`):**
@@ -69,7 +69,7 @@ Custom Emscripten filesystem (`makeFS`) backends:
 - `PbpStore`: reads a PS1 PBP disc as its raw image (16-sector blocks, deflated via `wasm_inflate_raw` or stored).
 - `EcmStore`: scans ECM chunk headers placing checkpoints every 1 MiB, rebuilds sync/headers/EDC/ECC windows via `wasm_ecm_decode` (`wasm/ecm.cpp`), verifies final EDC, emits `scan` progress messages to prevent reader timeouts; also serves `reader` and `crc`.
 - `CrcStore` (`outMode: 'crc'`): checksums outputs without storing bytes—used by `redumpCheck` in `ui.js` after Verify via `extractcd --redump`.
-- `StreamStore`: streams outputs directly into a chosen folder via File System Access API (`s-*` messages handled by `makeSink` in `ui.js`; asks via `confirmReplace` before overwriting, never deletes an existing file on cancel/error; `s-ack` flow control pauses chdman via `wasm_out_full` whenever > 64 MB is unwritten).
+- `StreamStore`: streams outputs directly into a chosen folder via File System Access API (`s-*` messages handled by `makeSink` in `ui.js`; asks via `confirmReplace` before overwriting, never deletes an existing file on cancel/error; pins the first 8 MiB and expands dynamically up to 64 MiB via `checkPin` for uncompressed CHD v5 maps; `s-ack` flow control pauses chdman via `wasm_out_full` whenever > 64 MB is unwritten).
 - **iOS web-view staging fallback:** if a worker cannot read picked files, it sends `stage-request` and the page streams chunks (`stage-chunk`/`stage-ack`/`stage-end`).
 
 **Helper failure resilience:** the job worker tracks each batch until answered, validates each item's length ≤ hunk size, and drops any helper that traps or lies; remaining helpers take over. If all helpers fail during compression, the page retries once (`engineFailure`) before blaming the browser engine; extract/verify fall back to in-worker decompression.

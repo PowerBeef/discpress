@@ -9,12 +9,12 @@ with [Playwright](https://playwright.dev). Nothing here is part of the app.
 ```sh
 cd tests
 npm install                      # Playwright Test + axe-core
-pip install numpy                # for the synthetic disc generator
+pip install numpy                # for the synthetic disc generator (a repo-local .venv/ is auto-detected)
 ../scripts/build-upstream.sh     # optional but recommended: unmodified chdman 0.289, the reference
 ```
 
 Chromium must be available to Playwright, in the build its version wants (`npx playwright install chromium`
-on a new machine). `package.json` pins `@playwright/test` 1.63.0 (Chromium build 1243) so CI and local runs
+on a new machine). `package.json` pins `@playwright/test` 1.65.1 so CI and local runs
 share the same browser build (`browsers.json` in `playwright-core` names each release's build).
 For local Antigravity sessions, see `.agents/skills/discpress-env-setup/SKILL.md` (and note that interactive
 UI previews can also run directly against `node support/server.js 4173` in Antigravity's embedded browser).
@@ -34,7 +34,7 @@ UI previews can also run directly against `node support/server.js 4173` in Antig
 | `npm run bench:dev -- --compare latest` | benchmark the current `app/` and compare with the last run |
 
 Environment: `DISCPRESS_HTML` picks the page (relative to the repo root), `WORKERS` the number of
-parallel test workers (default 2), `CHDMAN` a native chdman binary, `DISCPRESS_FIXTURES` the fixtures folder (default `.cache/fixtures/`), `REGEN_FIXTURES=1` makes every fixture again (`make_fixtures.py --force`; the run does it by itself when the generator changed), `REQUIRE_NATIVE=1` fails the run without both native references (see In CI).
+parallel test workers (default 2), `CHDMAN` a native chdman binary, `CHDMAN_ENGINE` and `CDPROBE_ENGINE` the engine binaries used by `ui/engine.spec.js` (e.g. sanitizer builds; see In CI), `DISCPRESS_FIXTURES` the fixtures folder (default `.cache/fixtures/`), `REGEN_FIXTURES=1` makes every fixture again (`make_fixtures.py --force`; the run does it by itself when the generator changed), `REQUIRE_NATIVE=1` fails the run without both native references (see In CI).
 Outside CI a test server already running on `PORT` (default 4173) is reused; its `/healthz` names the page
 it serves, and the run stops if that isn't the page `DISCPRESS_HTML` picks (stop it, or use another `PORT`).
 
@@ -48,13 +48,14 @@ checks skip. Set it locally too to be sure a run compared everything. The same w
 `scripts/check-dist.sh`, `scripts/engine-diff.sh --check` and `scripts/check-licenses.sh`.
 
 `.github/workflows/sanitizers.yml` runs `ui/engine.spec.js` on the engine built with AddressSanitizer,
-LeakSanitizer and UndefinedBehaviorSanitizer (`scripts/build-sanitized.sh`, `build/chdman-san`), named
-by `CHDMAN_ENGINE`: a sanitizer report in chdman's output fails the test, whatever its exit code; a
-`CHDMAN_ENGINE` build that is missing or older than `engine/` or `wasm/` fails the run rather than skip
-every test (so does `REQUIRE_NATIVE` without a current `build/chdman-native`). It runs
-when `engine/`, `wasm/`, the spec, the fixtures or the suppressions change, and weekly. Leaks unmodified chdman 0.289 has too are suppressed
-(`support/lsan.supp`, each with how that was checked). Locally:
-`CHDMAN_ENGINE=../build/chdman-san LSAN_OPTIONS=suppressions=$PWD/support/lsan.supp npx playwright test ui/engine.spec.js`.
+LeakSanitizer and UndefinedBehaviorSanitizer (`scripts/build-sanitized.sh`, producing `build/chdman-san`
+and `build/cdprobe-san`), named by `CHDMAN_ENGINE` and `CDPROBE_ENGINE`: a sanitizer report in chdman's or
+cdprobe's output fails the test, whatever its exit code; a `CHDMAN_ENGINE` build that is missing or older
+than `engine/` or `wasm/` fails the run rather than skip every test (so does `REQUIRE_NATIVE` without a
+current `build/chdman-native`). It runs when `engine/`, `wasm/`, the build/sanitized scripts, `cdprobe.cpp`,
+`native.js`, `paths.js`, the spec, the fixtures or the suppressions change, and weekly. Leaks unmodified
+chdman 0.289 has too are suppressed (`support/lsan.supp`, each with how that was checked). Locally:
+`CHDMAN_ENGINE=../build/chdman-san CDPROBE_ENGINE=../build/cdprobe-san LSAN_OPTIONS=suppressions=$PWD/support/lsan.supp npx playwright test ui/engine.spec.js --project=desktop`.
 
 ## How correctness is checked
 
@@ -82,7 +83,7 @@ Redump database, but contain no game data. `manifest.json` lists each fixture wi
 identification the app should produce, the name a result keeps (`out`), the rule ids its card must show (`quirks`; none when there are none) and the console's own note (`note`; none without one). `--bench` adds large, realistic images for benchmarks.
 `generator.sha256` records which version of `make_fixtures.py` and `discgen.py` made the fixtures: when
 either changes, the next run makes every fixture again (existing files are otherwise kept), and drops
-what was made from the old ones (native chdman's references, which are cached by file name, and the
+what was made from the old ones (native chdman's references, cached in `.cache/native/` keyed by binary content, fixtures dir, input size/mtime, command and flags, and the
 CHDs and files tests derived from them). Each run also removes the folders earlier runs extracted
 native CHDs into.
 The two `codec mix` images change content every hunk (data, noise, and audio in both byte orders),
@@ -102,12 +103,12 @@ game database when it is requested as `/discpress.html?testdb=1` (`app.open({ te
 | `smoke` | loading, tabs, help, settings persistence, one conversion (also from `file://` and on phones) |
 | `convert` | every input type and console, identification, output naming, version choice, presets, thread counts, Start all / Download all |
 | `chd` | CHD inputs: identification from inside the CHD, extract (Redump's layout, which gives back the fixtures' own files; cue, split bins, toc, gdi, iso, img), verify (good and damaged, and compared with Redump), both with and without helper workers, info, rename, parent CHDs |
-| `identify` | checksum-verified identification (via extra database rows, below), also of the ISO inside a compressed ISO, conversions that start before the checksum finishes and are renamed after it, a version picked meanwhile is kept, starting while identification is still running, audio CDs not named after a game, CHDs matched by size or with Mode 2 data tracks, a reader worker that dies |
+| `identify` | checksum-verified identification (via extra database rows, above), also of the ISO inside a compressed ISO, conversions that start before the checksum finishes and are renamed after it, a version picked meanwhile is kept, starting while identification is still running, audio CDs not named after a game, CHDs matched by size or with Mode 2 data tracks, a reader worker that dies |
 | `tuning` | the automatic thread count: one-off speed test on the first conversion, reuse, not capped by the reported core count, manual override, Measure again |
 | `gdrom` | Dreamcast GD-ROM layout from a `.gdi` and a Redump cue: no pregaps, track 3 at LBA 45000 |
 | `engine` | the engine's own command line against unmodified chdman 0.289: the 0.289 defects it fixes, identical CHDs when codec trials stop early, and the checksums and codecs of the codec plan |
 | `profiles` | settings picked from the console (`PROFILES`): type and hunk size (PSP 2,048), Zstd warnings, the compatibility mode for older emulators (PS2 DVD games as CD CHDs, and the setting it replaced), Xbox 360 and PS3 notes, `.sbi` files (also made from a CloneCD `.sub`), `.m3u` playlists (lettered discs too), the PCSX2 and Flycast notes, the MiSTer preset |
-| `quirks` | the rules in `app/quirks.js` (Saturn and Sega CD leave out `--keepcue`, NAOMI keeps its name) and the `PROFILES` warnings next to them: Zstd and MiSTer for PS2, Dreamcast, NAOMI and PC-FX (and Zstd for every console in the compatibility mode), `data-quirk` ids, more than two notes grouped, the LibCrypt warning until an `.sbi` or `.lsd` is added, an `.sbi` of another console left out, a set's "Disc 1 of 3" note |
+| `quirks` | the rules in `app/quirks.js` (Saturn, Sega CD and PC Engine CD leave out `--keepcue`, NAOMI keeps its name) and the `PROFILES` warnings next to them: Zstd and MiSTer for PS2, Dreamcast, NAOMI and PC-FX (and Zstd for every console in the compatibility mode), `data-quirk` ids, more than two notes grouped, the LibCrypt warning until an `.sbi` or `.lsd` is added, an `.sbi` of another console left out, a set's "Disc 1 of 3" note |
 | `facts` | `scripts/assemble.py` refuses a `db/facts` line with an unknown system, serial or fact, or without a source |
 | `zip` | `.zip` input: stored and deflated entries, zip64, entries it refuses, no private storage |
 | `pbp` | PS1 `EBOOT.PBP` files: one card per disc, files it refuses |
@@ -135,7 +136,7 @@ Times real conversions through the UI (from pressing the button to the finished 
 with the page's own clock) and the same work with native chdman. Options:
 `--fixtures`, `--quick`, `--ops create,extract`, `--threads 1,2,4`, `--simd on,off`,
 `--presets default,plan,fast,zstd,none` (`plan` and `fast` use the engine's own options and are checked against `build/chdman-native`), `--repeat N`, `--html PATH`, `--label NAME`,
-`--compare FILE|latest`, `--cd-mb`, `--dvd-mb`, `--no-native`, `--no-verify`.
+`--compare FILE|latest`, `--cd-mb`, `--dvd-mb`, `--no-native`, `--no-native-timing`, `--no-verify`.
 
 Each run writes `.cache/bench/<time>-<label>.json` and `.md`: seconds (median), throughput,
 compression ratio, peak memory of the browser, time relative to native chdman, change against a
