@@ -101,9 +101,10 @@ test('renaming can be turned off in settings', async ({ app }) => {
 
 // [label, codec options, the engine's own options (not chdman 0.289's; its checksums, the native engine's bytes)]
 const PRESETS = [
+  ['Smaller still', { cd: [], dvd: [] }, { cd: ['--ultra', '--libdeflate'], dvd: ['--ultra', '--libdeflate'] }],
   ['Nearly as small, faster', { cd: [], dvd: [] }, { cd: ['--codecplan', '--libdeflate'], dvd: ['--codecplan', '--libdeflate'] }],
   ['Faster to create', { cd: ['-c', 'cdzl,cdfl'], dvd: ['-c', 'zlib'] }, { cd: ['--codecplan', '--libdeflate'], dvd: ['--libdeflate'] }],
-  ['Faster to load (Zstd)', { cd: ['-c', 'cdzs,cdfl'], dvd: ['-c', 'zstd'] }, { cd: ['--codecplan'], dvd: [] }],
+  ['Faster to load (Zstd)', { cd: ['-c', 'cdzs,cdfl'], dvd: ['-c', 'zstd'] }, { cd: ['--codecplan', '--zstd-level', '19'], dvd: ['--zstd-level', '19'] }],
   ['No compression', { cd: ['-c', 'none'], dvd: ['-c', 'none'] }, { cd: [], dvd: [] }],
 ];
 for (const [label, codecs, ownByDisc] of PRESETS) {

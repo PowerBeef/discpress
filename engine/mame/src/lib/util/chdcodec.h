@@ -59,6 +59,18 @@ private:
 
 // ======================> chd_compressor
 
+// Discpress: shared per-hunk CD sector/subcode/ECC preparation cache between cdlz/cdzl/cdzs
+struct cd_prep_cache
+{
+	bool                    prepared = false;
+	bool                    subcode_zlib_tried = false;
+	uint32_t                subcode_zlib_len = 0; // UINT32_MAX when incompressible
+	std::vector<uint8_t>    ecc_mask;
+	std::vector<uint8_t>    base_data;
+	std::vector<uint8_t>    subcode_data;
+	std::vector<uint8_t>    subcode_zlib;
+};
+
 // base class for all compressors
 class chd_compressor : public chd_codec
 {
@@ -71,6 +83,7 @@ public:
 
 	// implementation
 	virtual uint32_t compress(const uint8_t *src, uint32_t srclen, uint8_t *dest) = 0;
+	virtual uint32_t compress_prepared(cd_prep_cache &prep, const uint8_t *src, uint32_t srclen, uint8_t *dest) { return compress(src, srclen, dest); }
 
 	// Discpress: a result of limit bytes or more can't be used, so a codec may give up (throw)
 	// as soon as it knows its output will be that large; results below the limit are unaffected
@@ -125,14 +138,18 @@ public:
 	chd_compressor_group(chd_file &file, chd_codec_type compressor_list[4]);
 	~chd_compressor_group();
 
-	// find the best compressor (Discpress: among the codecs whose slot bits are set in codecs)
+	// find the best compressor (Discpress: among the codecs whose slot bits are set in codecs;
+	// bit 4 = adaptive cdzl fallback when cdlz output exceeds 75% of hunkbytes; bit 5 = 200ns PCM probe for flac)
 	int8_t find_best_compressor(const uint8_t *src, uint8_t *compressed, uint32_t &complen, uint32_t codecs = 0x0f);
+	void reset_batch_state() noexcept { m_last_best = -1; }
 
 private:
 	// internal state
 	uint32_t                m_hunkbytes;        // number of bytes in a hunk
+	chd_codec_type          m_codec_types[4];   // Discpress: codec tags per slot (for adaptive plan)
 	chd_compressor::ptr     m_compressor[4];    // array of active codecs
 	std::vector<uint8_t>    m_compress_test;    // test buffer for compression
+	cd_prep_cache           m_cd_prep;          // Discpress: shared CD ECC/subcode prep cache per hunk
 	int                     m_last_best = -1;   // Discpress: codec that won the previous hunk
 #if CHDCODEC_VERIFY_COMPRESSION
 	chd_decompressor::ptr   m_decompressor[4];  // array of active codecs

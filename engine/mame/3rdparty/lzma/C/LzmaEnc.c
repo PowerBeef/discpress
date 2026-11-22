@@ -136,7 +136,7 @@ LZCNT can be faster than BSR, if supported.
 
 // #define LZMA_LOG_BSR
 
-#if defined(MY_CPU_ARM_OR_ARM64) /* || defined(MY_CPU_X86_OR_AMD64) */
+#if defined(MY_CPU_ARM_OR_ARM64) || defined(__wasm__) /* || defined(MY_CPU_X86_OR_AMD64) */
 
   #if (defined(__clang__) && (__clang_major__ >= 6)) \
       || (defined(__GNUC__) && (__GNUC__ >= 6))

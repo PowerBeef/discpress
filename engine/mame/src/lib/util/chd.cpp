@@ -872,8 +872,10 @@ void chd_file::close()
 	if (m_wasm_rd > 0)
 		wasm_rd_close(this);
 	m_wasm_rd = -1;
-	m_wasm_ahead.clear();
-	m_wasm_span.clear();
+	std::vector<wasm_ahead_slot>().swap(m_wasm_slots);
+	std::vector<uint8_t>().swap(m_wasm_buf);
+	m_wasm_ring_mask = 0;
+	std::vector<uint8_t>().swap(m_wasm_span);
 	m_wasm_first = m_wasm_count = 0;
 	m_wasm_scan = m_wasm_queued = 0;
 #endif
@@ -3137,9 +3139,6 @@ chd_file_compressor::chd_file_compressor() :
 #endif
 	m_write_hunk(0)
 {
-#ifndef __EMSCRIPTEN__
-	std::fill(std::begin(m_work_ring), std::end(m_work_ring), nullptr);
-#endif
 }
 
 /**
@@ -3227,7 +3226,7 @@ void chd_file_compressor::worker_loop(uint32_t threadid)
 			if (m_work_stop)
 				return;
 			item = m_work_ring[m_work_head];
-			m_work_head = (m_work_head + 1) % WORK_BUFFER_HUNKS;
+			m_work_head = (m_work_head + 1) % m_work_buffer_hunks;
 			m_work_count--;
 		}
 		if (!m_abort.load(std::memory_order_acquire) && !m_has_read_error.load(std::memory_order_acquire))
@@ -3301,11 +3300,17 @@ void chd_file_compressor::compress_begin()
 	m_has_read_error.store(false, std::memory_order_relaxed);
 	m_read_error.clear();
 
-	// reset work item state
-	m_work_buffer.resize(size_t(hunk_bytes()) * (WORK_BUFFER_HUNKS + 1));
+	// reset work item state (Discpress: target 8 MiB per buffer -> 4 MiB half-reads for DVD throughput;
+	// keep 256 hunks when walking a parent; always a multiple of 256 for stateless Tier-R tail padding)
+	uint32_t target_hunks = m_parent ? 256u : std::clamp<uint32_t>((8u << 20) / hunk_bytes(), 256u, 4096u);
+	m_work_buffer_hunks = (target_hunks / 256u) * 256u;
+	if (m_work_buffer_hunks < 256u)
+		m_work_buffer_hunks = 256u;
+	m_work_buffer.resize(size_t(hunk_bytes()) * (m_work_buffer_hunks + 1));
 	memset(m_work_buffer.data(), 0, m_work_buffer.size());
-	m_compressed_buffer.resize(size_t(hunk_bytes()) * WORK_BUFFER_HUNKS);
-	for (int itemnum = 0; itemnum < WORK_BUFFER_HUNKS; itemnum++)
+	m_compressed_buffer.resize(size_t(hunk_bytes()) * m_work_buffer_hunks);
+	m_work_item = std::make_unique<work_item[]>(m_work_buffer_hunks);
+	for (uint32_t itemnum = 0; itemnum < m_work_buffer_hunks; itemnum++)
 	{
 		work_item &item = m_work_item[itemnum];
 		item.m_compressor = this;
@@ -3322,8 +3327,9 @@ void chd_file_compressor::compress_begin()
 	extern int osd_num_processors;
 	uint32_t const hw = std::max<uint32_t>(1, std::thread::hardware_concurrency());
 	uint32_t const req = (osd_num_processors > 0) ? uint32_t(osd_num_processors) : hw;
-	uint32_t const cap = std::min<uint32_t>(WORK_BUFFER_HUNKS, std::max<uint32_t>(4 * hw, 64));
+	uint32_t const cap = std::min<uint32_t>(m_work_buffer_hunks, std::max<uint32_t>(4 * hw, 64));
 	uint32_t const nworkers = std::min(req, cap);
+	m_work_ring.assign(m_work_buffer_hunks, nullptr);
 #endif
 	m_codecs.clear();
 	m_codecs.reserve(nworkers);
@@ -3334,7 +3340,8 @@ void chd_file_compressor::compress_begin()
 	m_write_hunk = 0;
 
 #ifdef __EMSCRIPTEN__
-	s_wasm_par = compressed() ? wasm_par_enabled(hunk_bytes(), unit_bytes(), m_compression, m_libdeflate ? 1 : 0) : 0; // flags: 1 = libdeflate
+	uint32_t const par_flags = (m_libdeflate ? 1u : 0u) | (m_ultra ? 2u : 0u) | (uint32_t(m_zstd_level) << 8);
+	s_wasm_par = compressed() ? wasm_par_enabled(hunk_bytes(), unit_bytes(), m_compression, par_flags) : 0;
 #else
 	if (nworkers > 1)
 	{
@@ -3389,9 +3396,9 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 #endif
 		// see if we have enough free work items to read the next half of a buffer
 		uint32_t const startitem = uint32_t(m_read_queue_offset / hunk_bytes());
-		uint32_t const enditem = startitem + WORK_BUFFER_HUNKS / 2;
+		uint32_t const enditem = startitem + m_work_buffer_hunks / 2;
 		uint32_t curitem = startitem;
-		while ((curitem < enditem) && (m_work_item[curitem % WORK_BUFFER_HUNKS].m_status.load(std::memory_order_acquire) == WS_READY))
+		while ((curitem < enditem) && (m_work_item[curitem % m_work_buffer_hunks].m_status.load(std::memory_order_acquire) == WS_READY))
 			++curitem;
 
 		// if it's not all clear, defer
@@ -3400,13 +3407,13 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 
 		// if we're walking the parent, we want one more item to have cleared so we
 		// can read an extra hunk there
-		if (m_walking_parent && m_work_item[curitem % WORK_BUFFER_HUNKS].m_status.load(std::memory_order_acquire) != WS_READY)
+		if (m_walking_parent && m_work_item[curitem % m_work_buffer_hunks].m_status.load(std::memory_order_acquire) != WS_READY)
 			break;
 
 		// queue the next read
 		for (curitem = startitem; curitem < enditem; curitem++)
-			m_work_item[curitem % WORK_BUFFER_HUNKS].m_status.store(WS_READING, std::memory_order_release);
-		m_read_queue_offset += uint64_t(WORK_BUFFER_HUNKS / 2) * hunk_bytes();
+			m_work_item[curitem % m_work_buffer_hunks].m_status.store(WS_READING, std::memory_order_release);
+		m_read_queue_offset += uint64_t(m_work_buffer_hunks / 2) * hunk_bytes();
 #ifndef __EMSCRIPTEN__
 		if (!m_workers.empty())
 		{
@@ -3426,7 +3433,7 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 	}
 
 	// flush out any finished items
-	while (m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status.load(std::memory_order_acquire) == WS_COMPLETE)
+	while (m_work_item[m_write_hunk % m_work_buffer_hunks].m_status.load(std::memory_order_acquire) == WS_COMPLETE)
 	{
 		if (UNEXPECTED(m_has_read_error.load(std::memory_order_acquire)))
 		{
@@ -3436,7 +3443,7 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 			return m_read_error;
 		}
 
-		work_item &item = m_work_item[m_write_hunk % WORK_BUFFER_HUNKS];
+		work_item &item = m_work_item[m_write_hunk % m_work_buffer_hunks];
 
 		if (m_walking_parent)
 		{
@@ -3514,8 +3521,8 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 				m_read_queue_offset = 0;
 				m_read_done_offset.store(0, std::memory_order_relaxed);
 				m_write_hunk = 0;
-				for (auto &elem : m_work_item)
-					elem.m_status.store(WS_READY, std::memory_order_relaxed);
+				for (uint32_t itemnum = 0; itemnum < m_work_buffer_hunks; itemnum++)
+					m_work_item[itemnum].m_status.store(WS_READY, std::memory_order_relaxed);
 			}
 			else
 			{
@@ -3527,6 +3534,7 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 				m_parent_map.reset();
 				std::vector<uint8_t>().swap(m_work_buffer);
 				std::vector<uint8_t>().swap(m_compressed_buffer);
+				m_work_item.reset();
 				m_codecs.clear();
 				m_codecs.shrink_to_fit();
 				if (!compressed())
@@ -3553,7 +3561,7 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 	{
 		std::unique_lock<std::mutex> lock(m_done_mutex);
 		m_done_cv.wait(lock, [this]() {
-			int32_t const st = m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status.load(std::memory_order_acquire);
+			int32_t const st = m_work_item[m_write_hunk % m_work_buffer_hunks].m_status.load(std::memory_order_acquire);
 			return st == WS_COMPLETE || st == WS_READY || m_has_read_error.load(std::memory_order_acquire);
 		});
 	}
@@ -3617,28 +3625,36 @@ void chd_file_compressor::async_compress_hunk(work_item &item, uint32_t threadid
 
 uint32_t chd_file_compressor::codec_plan_codecs(hunk_content content) const noexcept
 {
-	// CD audio: cdfl; CD data: cdlz, which wins almost every data hunk (cdzl wins about one in
-	// ten by a few bytes, cdfl none); other data: every codec but flac, which wins almost none
-	// and is the slowest. Without those codecs in the list, or for a hunk that holds both
-	// kinds, every codec is tried.
-	uint32_t all = 0, flac = 0, cdlz = 0;
+	// CD audio: cdfl; CD data: cdlz (with adaptive bit 4 fallback to cdzl if >75% entropy);
+	// other data: every codec but flac (with bit 5 200ns PCM probe if flac is configured).
+	// Without those codecs in the list, or for a hunk that holds both kinds, every codec is tried.
+	uint32_t all = 0, flac = 0, cdlz = 0, cdzl = 0, raw_flac = 0;
 	for (int slot = 0; slot < 4; slot++)
 	{
 		chd_codec_type const type = m_compression[slot];
 		if (type == CHD_CODEC_NONE)
 			continue;
-		all |= 1 << slot;
+		all |= 1u << slot;
 		if ((type == CHD_CODEC_CD_FLAC) || (type == CHD_CODEC_FLAC))
-			flac |= 1 << slot;
+			flac |= 1u << slot;
+		if (type == CHD_CODEC_FLAC)
+			raw_flac |= 1u << slot;
 		if (type == CHD_CODEC_CD_LZMA)
-			cdlz |= 1 << slot;
+			cdlz |= 1u << slot;
+		if (type == CHD_CODEC_CD_ZLIB)
+			cdzl |= 1u << slot;
 	}
 	uint32_t codecs = all;
 	if (content == hunk_content::AUDIO)
 		codecs = flac;
 	else if (content == hunk_content::DATA)
-		codecs = cdlz ? cdlz : (all & ~flac);
-	return codecs ? codecs : all;
+	{
+		if (cdlz)
+			codecs = cdlz | (cdzl ? 0x10u : 0u);
+		else
+			codecs = (all & ~flac) | (raw_flac ? 0x20u : 0u);
+	}
+	return (codecs & 0x0fu) ? codecs : all;
 }
 
 /**
@@ -3662,7 +3678,7 @@ void chd_file_compressor::async_read()
 		return;
 
 	// determine parameters for the read
-	uint64_t const work_buffer_bytes = uint64_t(WORK_BUFFER_HUNKS) * hunk_bytes();
+	uint64_t const work_buffer_bytes = uint64_t(m_work_buffer_hunks) * hunk_bytes();
 	uint32_t numbytes = uint32_t(std::min<uint64_t>(work_buffer_bytes / 2, logical_bytes() - read_done));
 
 	uint8_t *const dest = m_work_buffer.data() + (read_done % work_buffer_bytes);
@@ -3695,6 +3711,28 @@ void chd_file_compressor::async_read()
 		{
 			// otherwise, call the virtual function
 			read_data(dest, read_done, numbytes);
+
+			// Discpress: stateless Tier-R 256-hunk tail rule when m_work_buffer_hunks > 256.
+			// Upstream MAME 0.289 leaves trailing bytes past logical_bytes in the final hunk
+			// untouched from hunk (last_hunk - 256) (or 0 if last_hunk < 256). Replicate that
+			// exact tail from our >=512-hunk ring so output stays 100% byte-identical.
+			if (m_work_buffer_hunks > 256u && end_offset == logical_bytes())
+			{
+				uint32_t const tail = uint32_t(logical_bytes() % hunk_bytes());
+				if (tail != 0)
+				{
+					uint32_t const last_hunk = m_hunkcount - 1;
+					uint8_t *const last_ptr = &m_work_buffer[size_t(hunk_bytes()) * (last_hunk % m_work_buffer_hunks)];
+					uint32_t const pad = hunk_bytes() - tail;
+					if (last_hunk < 256u)
+						memset(last_ptr + tail, 0, pad);
+					else
+					{
+						uint8_t const *const prev_ptr = &m_work_buffer[size_t(hunk_bytes()) * ((last_hunk - 256u) % m_work_buffer_hunks)];
+						memcpy(last_ptr + tail, prev_ptr + tail, pad);
+					}
+				}
+			}
 		}
 
 		// continue the running SHA-1 and advance read pointer before handing off to workers
@@ -3715,7 +3753,7 @@ void chd_file_compressor::async_read()
 				for (uint64_t curoffs = read_done; curoffs < end_offset; curoffs += hunk_bytes())
 				{
 					uint32_t const hunknum = uint32_t(curoffs / hunk_bytes());
-					work_item &item = m_work_item[hunknum % WORK_BUFFER_HUNKS];
+					work_item &item = m_work_item[hunknum % m_work_buffer_hunks];
 					assert(item.m_status.load(std::memory_order_relaxed) == WS_READING);
 					item.m_hunknum = hunknum;
 					item.m_walking_parent = false;
@@ -3732,14 +3770,14 @@ void chd_file_compressor::async_read()
 				for (uint64_t curoffs = read_done; curoffs < end_offset; curoffs += hunk_bytes())
 				{
 					uint32_t const hunknum = uint32_t(curoffs / hunk_bytes());
-					work_item &item = m_work_item[hunknum % WORK_BUFFER_HUNKS];
+					work_item &item = m_work_item[hunknum % m_work_buffer_hunks];
 					assert(item.m_status.load(std::memory_order_relaxed) == WS_READING);
 					item.m_hunknum = hunknum;
 					item.m_walking_parent = walking_parent;
 					item.m_try = (m_codec_plan && !walking_parent) ? codec_plan_codecs(read_content(curoffs, hunk_bytes())) : 0x0f;
 					item.m_status.store(WS_QUEUED, std::memory_order_release);
 					m_work_ring[m_work_tail] = &item;
-					m_work_tail = (m_work_tail + 1) % WORK_BUFFER_HUNKS;
+					m_work_tail = (m_work_tail + 1) % m_work_buffer_hunks;
 					m_work_count++;
 				}
 			}
@@ -3750,7 +3788,7 @@ void chd_file_compressor::async_read()
 		for (uint64_t curoffs = read_done; curoffs < end_offset; curoffs += hunk_bytes())
 		{
 			uint32_t const hunknum = uint32_t(curoffs / hunk_bytes());
-			work_item &item = m_work_item[hunknum % WORK_BUFFER_HUNKS];
+			work_item &item = m_work_item[hunknum % m_work_buffer_hunks];
 			assert(item.m_status.load(std::memory_order_relaxed) == WS_READING);
 			item.m_hunknum = hunknum;
 			item.m_walking_parent = walking_parent;
@@ -3967,9 +4005,34 @@ void chd_file_compressor::wasm_par_complete_item(void *itemp, uint32_t crc16, co
 	item.m_status = WS_COMPLETE;
 }
 
+uint8_t *chd_file_compressor::wasm_par_item_compbuf(void *itemp) noexcept
+{
+	return reinterpret_cast<work_item *>(itemp)->m_compressed;
+}
+
+void chd_file_compressor::wasm_par_complete_item_inplace(void *itemp, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen) noexcept
+{
+	work_item &item = *reinterpret_cast<work_item *>(itemp);
+	item.m_hash[0].m_crc16 = util::crc16_t(uint16_t(crc16));
+	memcpy(item.m_hash[0].m_sha1.m_raw, sha1, sizeof(item.m_hash[0].m_sha1.m_raw));
+	item.m_compression = int8_t(compression);
+	item.m_complen = complen;
+	item.m_status = WS_COMPLETE;
+}
+
 extern "C" EMSCRIPTEN_KEEPALIVE void wasm_par_complete(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen, const uint8_t *data)
 {
 	chd_file_compressor::wasm_par_complete_item(item, crc16, sha1, compression, complen, data);
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE uint8_t *wasm_par_item_compbuf(void *item)
+{
+	return chd_file_compressor::wasm_par_item_compbuf(item);
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE void wasm_par_complete_inplace(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen)
+{
+	chd_file_compressor::wasm_par_complete_item_inplace(item, crc16, sha1, compression, complen);
 }
 
 bool chd_file::wasm_read_ahead(uint32_t first, uint32_t count)
@@ -3980,8 +4043,31 @@ bool chd_file::wasm_read_ahead(uint32_t first, uint32_t count)
 	if (m_wasm_rd == -2)
 		return true;
 
-	// a new window: drop the hunks before it (one read again is read the usual way); a window that
-	// goes back (a GD-ROM's split frames) queues its hunks again, those still kept aside
+	// ensure flat power-of-2 ring covers [first, first + 2*count) with zero per-hunk allocations
+	uint32_t need = 16u;
+	uint64_t const want_slots = std::max<uint64_t>(2 * uint64_t(count), 16u);
+	while (need < want_slots && need < 16384u)
+		need <<= 1;
+	if (m_wasm_slots.size() < need)
+	{
+		try
+		{
+			m_wasm_slots.assign(need, wasm_ahead_slot{});
+			m_wasm_buf.resize(size_t(need) * m_hunkbytes);
+			m_wasm_ring_mask = need - 1;
+			m_wasm_queued = first;
+		}
+		catch (...)
+		{
+			std::vector<wasm_ahead_slot>().swap(m_wasm_slots);
+			std::vector<uint8_t>().swap(m_wasm_buf);
+			m_wasm_ring_mask = 0;
+			m_wasm_rd = -2;
+			return true;
+		}
+	}
+
+	// a new window: drop slots before it; a window that goes back queues its hunks again
 	if ((first != m_wasm_first) || (count != m_wasm_count))
 	{
 		m_wasm_first = first;
@@ -3989,26 +4075,27 @@ bool chd_file::wasm_read_ahead(uint32_t first, uint32_t count)
 		m_wasm_scan = first;
 		if (first < m_wasm_queued)
 			m_wasm_queued = first;
-		for (auto it = m_wasm_ahead.begin(); it != m_wasm_ahead.end(); )
+		for (auto &slot : m_wasm_slots)
 		{
-			if (it->first < first)
-				it = m_wasm_ahead.erase(it);
-			else
-				++it;
+			if (slot.hunk != ~uint32_t(0) && slot.hunk < first)
+			{
+				slot.hunk = ~uint32_t(0);
+				slot.len = 0;
+				slot.state = 0;
+			}
 		}
 	}
 
 	// the stored data of this window and the next, read in one go when it lies together in the file
-	// (every read costs far more in the browser than the bytes do): codec-compressed hunks go to the
-	// helpers, or are kept to be decompressed when read; uncompressed hunks are kept as they are
 	uint64_t const begin = std::max<uint64_t>(first, m_wasm_queued);
-	uint64_t const end = std::min<uint64_t>(uint64_t(first) + 2 * uint64_t(count), m_hunkcount);
+	uint64_t const max_end = std::min<uint64_t>(uint64_t(first) + m_wasm_slots.size(), m_hunkcount);
+	uint64_t const end = std::min<uint64_t>(uint64_t(first) + 2 * uint64_t(count), max_end);
 	if (begin < end)
 	{
 		uint64_t lo = ~uint64_t(0), hi = 0;
 		for (uint64_t hunknum = begin; hunknum < end; hunknum++)
 		{
-			uint8_t const *const rawmap = &m_rawmap[m_mapentrybytes * hunknum];
+			uint8_t const *const rawmap = &m_rawmap[size_t(m_mapentrybytes) * hunknum];
 			if (rawmap[0] > COMPRESSION_NONE)
 				continue;
 			uint64_t const blockoffs = get_u48be(&rawmap[4]);
@@ -4032,40 +4119,49 @@ bool chd_file::wasm_read_ahead(uint32_t first, uint32_t count)
 
 		for (uint64_t hunknum = begin; hunknum < end; hunknum++)
 		{
-			if (m_wasm_ahead.count(hunknum))
+			uint32_t const idx = uint32_t(hunknum) & m_wasm_ring_mask;
+			wasm_ahead_slot &slot = m_wasm_slots[idx];
+			if (slot.hunk == uint32_t(hunknum))
 				continue;
-			uint8_t const *const rawmap = &m_rawmap[m_mapentrybytes * hunknum];
+			if (slot.hunk != ~uint32_t(0) && slot.hunk >= first)
+				break; // ring slot still holds an active in-window hunk
+			uint8_t const *const rawmap = &m_rawmap[size_t(m_mapentrybytes) * hunknum];
 			uint8_t const type = rawmap[0];
 			uint64_t const blockoffs = get_u48be(&rawmap[4]);
+			uint8_t *const dst = &m_wasm_buf[size_t(idx) * m_hunkbytes];
 			if (type == COMPRESSION_NONE)
 			{
 				if (span)
-					m_wasm_ahead[hunknum] = wasm_ahead_hunk{ std::vector<uint8_t>(span + (blockoffs - lo), span + (blockoffs - lo) + m_hunkbytes), 4 };
+				{
+					memcpy(dst, span + (blockoffs - lo), m_hunkbytes);
+					slot = wasm_ahead_slot{ uint32_t(hunknum), m_hunkbytes, 4 };
+				}
 				continue;
 			}
 			if ((type > COMPRESSION_TYPE_3) || !m_decompressor[type] || m_decompressor[type]->lossy())
 				continue;
 			uint32_t const blocklen = get_u24be(&rawmap[1]);
 			if (blocklen == 0 || blocklen > m_compressed.size())
-				continue; // empty or larger than a hunk (a damaged map): read_hunk will report it
+				continue;
 			uint8_t const *data = span ? (span + (blockoffs - lo)) : nullptr;
 			if (!data)
 			{
 				if (file_read(blockoffs, m_compressed.data(), blocklen))
-					continue; // read_hunk will report it
+					continue;
 				data = m_compressed.data();
 			}
 			if (m_wasm_rd > 0)
 			{
-				m_wasm_ahead[hunknum];
-				wasm_rd_submit(this, hunknum, type, data, blocklen);
+				slot = wasm_ahead_slot{ uint32_t(hunknum), 0, 0 };
+				wasm_rd_submit(this, uint32_t(hunknum), type, data, blocklen);
 			}
 			else
 			{
-				m_wasm_ahead[hunknum] = wasm_ahead_hunk{ std::vector<uint8_t>(data, data + blocklen), 3 };
+				memcpy(dst, data, blocklen);
+				slot = wasm_ahead_slot{ uint32_t(hunknum), blocklen, 3 };
 			}
 		}
-		std::vector<uint8_t>().swap(m_wasm_span); // release the up-to-16 MiB span immediately after slicing
+		std::vector<uint8_t>().swap(m_wasm_span);
 		m_wasm_queued = end;
 	}
 
@@ -4073,8 +4169,8 @@ bool chd_file::wasm_read_ahead(uint32_t first, uint32_t count)
 	uint64_t const ready = std::min<uint64_t>(uint64_t(first) + count, m_hunkcount);
 	for ( ; m_wasm_scan < ready; m_wasm_scan++)
 	{
-		auto const found = m_wasm_ahead.find(m_wasm_scan);
-		if ((found != m_wasm_ahead.end()) && (found->second.state == 0))
+		wasm_ahead_slot const &slot = m_wasm_slots[uint32_t(m_wasm_scan) & m_wasm_ring_mask];
+		if (slot.hunk == uint32_t(m_wasm_scan) && slot.state == 0)
 			return false;
 	}
 	return true;
@@ -4082,47 +4178,50 @@ bool chd_file::wasm_read_ahead(uint32_t first, uint32_t count)
 
 uint8_t *chd_file::wasm_read_slot(uint32_t hunknum) noexcept
 {
-	auto const found = m_wasm_ahead.find(hunknum);
-	if ((found == m_wasm_ahead.end()) || (found->second.state != 0))
-		return nullptr; // no longer wanted
-	try
-	{
-		found->second.data.resize(m_hunkbytes);
-	}
-	catch (...)
-	{
+	if (m_wasm_slots.empty())
 		return nullptr;
-	}
-	return &found->second.data[0];
+	uint32_t const idx = hunknum & m_wasm_ring_mask;
+	wasm_ahead_slot const &slot = m_wasm_slots[idx];
+	if (slot.hunk != hunknum || slot.state != 0)
+		return nullptr;
+	return &m_wasm_buf[size_t(idx) * m_hunkbytes];
 }
 
 void chd_file::wasm_read_done(uint32_t hunknum, bool ok) noexcept
 {
-	auto const found = m_wasm_ahead.find(hunknum);
-	if ((found != m_wasm_ahead.end()) && (found->second.state == 0))
-		found->second.state = (ok && (found->second.data.size() == m_hunkbytes)) ? 1 : 2;
+	if (m_wasm_slots.empty())
+		return;
+	wasm_ahead_slot &slot = m_wasm_slots[hunknum & m_wasm_ring_mask];
+	if (slot.hunk == hunknum && slot.state == 0)
+	{
+		slot.len = ok ? m_hunkbytes : 0;
+		slot.state = ok ? 1 : 2;
+	}
 }
 
 // fills dest from the read-ahead if it has this hunk (decompressing kept bytes, which throws
 // like any decompression); the caller checks the CRC as usual
 bool chd_file::wasm_read_cached(uint32_t hunknum, uint8_t type, void *dest)
 {
-	auto const found = m_wasm_ahead.find(hunknum);
-	if (found == m_wasm_ahead.end())
+	if (m_wasm_slots.empty())
 		return false;
-	wasm_ahead_hunk const &ahead = found->second;
-	switch (ahead.state)
+	uint32_t const idx = hunknum & m_wasm_ring_mask;
+	wasm_ahead_slot const &slot = m_wasm_slots[idx];
+	if (slot.hunk != hunknum)
+		return false;
+	uint8_t const *const src = &m_wasm_buf[size_t(idx) * m_hunkbytes];
+	switch (slot.state)
 	{
 	case 1: // decompressed by a helper
 	case 4: // stored uncompressed
-		if (ahead.data.size() < m_hunkbytes)
+		if (slot.len < m_hunkbytes)
 			return false;
-		memcpy(dest, ahead.data.data(), m_hunkbytes);
+		memcpy(dest, src, m_hunkbytes);
 		return true;
 	case 3: // compressed bytes
-		if (ahead.data.empty() || !m_decompressor[type])
+		if (slot.len == 0 || !m_decompressor[type])
 			return false;
-		m_decompressor[type]->decompress(ahead.data.data(), ahead.data.size(), reinterpret_cast<uint8_t *>(dest), m_hunkbytes);
+		m_decompressor[type]->decompress(src, slot.len, reinterpret_cast<uint8_t *>(dest), m_hunkbytes);
 		return true;
 	default:
 		return false;

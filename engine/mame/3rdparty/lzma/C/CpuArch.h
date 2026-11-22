@@ -329,7 +329,8 @@ MY_CPU_64BIT means that processor can work with 64-bit registers.
 
 #ifdef MY_CPU_LE
   #if defined(MY_CPU_X86_OR_AMD64) \
-      || defined(MY_CPU_ARM64)
+      || defined(MY_CPU_ARM64) \
+      || defined(__wasm__)
     #define MY_CPU_LE_UNALIGN
     #define MY_CPU_LE_UNALIGN_64
   #elif defined(__ARM_FEATURE_UNALIGNED)
@@ -337,6 +338,10 @@ MY_CPU_64BIT means that processor can work with 64-bit registers.
        So we can't use unaligned 64-bit operations. */
     #define MY_CPU_LE_UNALIGN
   #endif
+#endif
+
+#if defined(__wasm__) && !defined(MY_CPU_64BIT)
+  #define MY_CPU_64BIT
 #endif
 
 

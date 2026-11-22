@@ -90,6 +90,40 @@ typedef s16 mf_pos_t;
 #    include "riscv/matchfinder_impl.h"
 #  elif defined(ARCH_X86_32) || defined(ARCH_X86_64)
 #    include "x86/matchfinder_impl.h"
+#  elif defined(__wasm_simd128__)
+#    include <wasm_simd128.h>
+static forceinline void
+matchfinder_init_wasm(mf_pos_t *data, size_t size)
+{
+	v128_t v = wasm_i16x8_splat((s16)MATCHFINDER_INITVAL);
+	u8 *p = (u8 *)data;
+	u8 *end = p + size;
+	for (; p + 64 <= end; p += 64) {
+		wasm_v128_store(p + 0, v);
+		wasm_v128_store(p + 16, v);
+		wasm_v128_store(p + 32, v);
+		wasm_v128_store(p + 48, v);
+	}
+	for (; p + 16 <= end; p += 16)
+		wasm_v128_store(p, v);
+}
+#    define matchfinder_init matchfinder_init_wasm
+static forceinline void
+matchfinder_rebase_wasm(mf_pos_t *data, size_t size)
+{
+	v128_t v = wasm_i16x8_splat((s16)-MATCHFINDER_WINDOW_SIZE);
+	u8 *p = (u8 *)data;
+	u8 *end = p + size;
+	for (; p + 64 <= end; p += 64) {
+		wasm_v128_store(p + 0,  wasm_i16x8_add_sat(wasm_v128_load(p + 0), v));
+		wasm_v128_store(p + 16, wasm_i16x8_add_sat(wasm_v128_load(p + 16), v));
+		wasm_v128_store(p + 32, wasm_i16x8_add_sat(wasm_v128_load(p + 32), v));
+		wasm_v128_store(p + 48, wasm_i16x8_add_sat(wasm_v128_load(p + 48), v));
+	}
+	for (; p + 16 <= end; p += 16)
+		wasm_v128_store(p, wasm_i16x8_add_sat(wasm_v128_load(p), v));
+}
+#    define matchfinder_rebase matchfinder_rebase_wasm
 #  endif
 #else
 #  define MATCHFINDER_ALIGNED

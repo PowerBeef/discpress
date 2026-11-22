@@ -84,6 +84,13 @@ bool flac_encoder::reset()
 	// only when writing to a file; in memory it costs time and changes nothing
 	FLAC__stream_encoder_set_do_md5(m_encoder, m_file != nullptr);
 	FLAC__stream_encoder_set_compression_level(m_encoder, 8);
+	if (m_ultra)
+	{
+		FLAC__stream_encoder_set_do_exhaustive_model_search(m_encoder, true);
+		FLAC__stream_encoder_set_do_qlp_coeff_prec_search(m_encoder, true);
+		FLAC__stream_encoder_set_max_lpc_order(m_encoder, 12);
+		FLAC__stream_encoder_set_apodization(m_encoder, "tukey(0.5);partial_tukey(2);punchout_tukey(3)");
+	}
 	FLAC__stream_encoder_set_channels(m_encoder, m_channels);
 	FLAC__stream_encoder_set_bits_per_sample(m_encoder, 16);
 	FLAC__stream_encoder_set_sample_rate(m_encoder, m_sample_rate);
@@ -242,6 +249,7 @@ void flac_encoder::init_common()
 	m_found_audio = false;
 	m_give_up = UINT32_MAX;
 	m_gave_up = false;
+	m_ultra = false;
 }
 
 

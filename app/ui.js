@@ -336,6 +336,14 @@ if (typeof DEBUG !== 'object') DEBUG = {}; // a stored null, number or string: n
 
 var Engine = {
   module: null, bytes: null, url: null, loading: null, error: null, simd: false,
+  coordPool: [], helperPool: [], unzipSeq: 0,
+  workerUrl: function () {
+    if (!this.url) {
+      var src = document.getElementById('worker-src').textContent;
+      this.url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    }
+    return this.url;
+  },
   ready: function () {
     if (!this.loading) this.loading = this._load();
     return this.loading;
@@ -352,13 +360,119 @@ var Engine = {
     node.setAttribute('data-used', '');
     this.bytes = bytes;
     this.module = await WebAssembly.compile(bytes);
-    var src = document.getElementById('worker-src').textContent;
-    this.url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    this.workerUrl();
     return this;
   },
   post: function (w, msg, transfer) {
     try { msg.wasmModule = this.module; w.postMessage(msg, transfer || []); }
     catch (e) { delete msg.wasmModule; msg.wasmBytes = this.bytes; w.postMessage(msg, transfer || []); }
+  },
+  borrowCoord: function () {
+    return this.coordPool.length ? this.coordPool.pop() : new Worker(this.workerUrl());
+  },
+  returnCoord: function (w, memBytes, aborted) {
+    if (!w) return;
+    w.onmessage = null;
+    w.onerror = null;
+    if (aborted || (memBytes && memBytes > (96 << 20)) || this.coordPool.length >= 2) {
+      w.terminate();
+      return;
+    }
+    this.coordPool.push(w);
+  },
+  borrowHelpers: function (n, debugFail, onFatal) {
+    var list = [], ports = [], self = this;
+    for (var i = 0; i < n; i++) {
+      try {
+        var pooled = !debugFail && self.helperPool.length ? self.helperPool.pop() : null;
+        var hw = pooled || new Worker(self.workerUrl());
+        var ch = new MessageChannel();
+        var rec = { w: hw, pooled: !debugFail, dead: false };
+        (function (r) {
+          hw.onmessage = function (e) {
+            if (e.data && e.data.type === 'fatal') { r.dead = true; onFatal(e.data.message); }
+          };
+          hw.onerror = function (e) { r.dead = true; onFatal(e.message || 'failed to start'); };
+        })(rec);
+        var fail = debugFail === 'all' || (debugFail === 'one' && i === 0);
+        var lie = debugFail === 'lie' && i === 0;
+        if (pooled) hw.postMessage({ type: 'attach', port: ch.port2, fail: fail, lie: lie }, [ch.port2]);
+        else self.post(hw, { type: 'helper', port: ch.port2, fail: fail, lie: lie }, [ch.port2]);
+        list.push(rec);
+        ports.push(ch.port1);
+      } catch (e) { break; }
+    }
+    return { helpers: list, ports: ports };
+  },
+  releaseHelpers: function (list, terminateAll) {
+    var self = this;
+    list.forEach(function (rec) {
+      var hw = rec.w;
+      if (!hw) return;
+      if (terminateAll || !rec.pooled || rec.dead) {
+        hw.onmessage = null; hw.onerror = null;
+        hw.terminate();
+        return;
+      }
+      var settled = false;
+      var timer = setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        hw.onmessage = null; hw.onerror = null;
+        hw.terminate();
+      }, 500);
+      hw.onmessage = function (e) {
+        if (!e.data || e.data.type !== 'detached' || settled) return;
+        settled = true;
+        clearTimeout(timer);
+        hw.onmessage = null; hw.onerror = null;
+        if ((e.data.memBytes && e.data.memBytes > (64 << 20)) || self.helperPool.length >= Tuning.cap) {
+          hw.terminate();
+        } else {
+          self.helperPool.push(hw);
+        }
+      };
+      hw.onerror = function () {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        hw.onmessage = null; hw.onerror = null;
+        hw.terminate();
+      };
+      try { hw.postMessage({ type: 'detach' }); }
+      catch (e) { clearTimeout(timer); settled = true; hw.terminate(); }
+    });
+  },
+  adoptHelpers: function (workers) {
+    var self = this;
+    workers.forEach(function (hw) {
+      if (!hw) return;
+      self.releaseHelpers([{ w: hw, pooled: true, dead: false }], false);
+    });
+  },
+  unzip: function (opts, onProgress) {
+    var self = this;
+    return new Promise(function (resolve, reject) {
+      var w;
+      try { w = self.borrowCoord(); }
+      catch (e) { reject(new Error('Could not start a background worker (' + e.message + ').')); return; }
+      var reqId = ++self.unzipSeq;
+      w.onmessage = function (e) {
+        var m = e.data;
+        if (!m || m.reqId !== reqId) return;
+        if (m.type === 'unzip-progress') { onProgress && onProgress(m.done); return; }
+        if (m.type === 'unzip-done') {
+          self.returnCoord(w, 0, false);
+          if (m.error) reject(new Error(m.error));
+          else resolve(m);
+        }
+      };
+      w.onerror = function (e) {
+        w.terminate();
+        reject(new Error(e.message || 'Unpacking failed.'));
+      };
+      w.postMessage(Object.assign({ type: 'unzip', reqId: reqId }, opts));
+    });
   },
   // runs one chdman command; returns {promise, cancel}
   run: function (o) {
@@ -370,7 +484,7 @@ var Engine = {
         if (finished && !saving) return;
         if (e.kept) { e.canceled = true; toast(e.message); } // the user said no: canceled, as for the main file
         saving = false;
-        cleanup();
+        cleanup(true);
         sink.abort();
         rejectFn(e);
       }
@@ -391,38 +505,35 @@ var Engine = {
         if (!finished) worker.postMessage({ type: 'stage-fail', message: (e && e.message) || String(e) });
       }
     }
-    function cleanup() {
+    function cleanup(hard, memBytes, aborted) {
       finished = true;
       // a chunk still waiting for the worker's answer: its staging ends (and lets go of the file)
       if (ackWait) { var a = ackWait; ackWait = null; a(); }
-      if (worker) worker.terminate();
-      helpers.forEach(function (h) { h.terminate(); });
-      helpers = [];
+      var w = worker; worker = null;
+      if (w) {
+        if (hard) { w.onmessage = null; w.onerror = null; w.terminate(); }
+        else self.returnCoord(w, memBytes, aborted);
+      }
+      var hs = helpers; helpers = [];
+      if (hs.length) self.releaseHelpers(hs, !!hard);
     }
     var promise = new Promise(function (resolve, reject) {
       rejectFn = reject;
-      try { worker = new Worker(self.url); }
+      try { worker = self.borrowCoord(); }
       catch (e) { reject(new Error('Could not start a background worker (' + e.message + '). If you opened this file directly, try another browser.')); return; }
       var ports = [];
       // a helper that can't start (WebAssembly out of memory, on iPhones especially) would leave the job
       // worker waiting for its results forever: stop the job instead
       function helperFailed(message) {
         if (finished) return;
-        cleanup();
+        cleanup(true);
         if (sink) sink.abort();
         reject(new Error('A helper thread stopped (' + message + '). Try again with fewer threads (Settings).'));
       }
-      for (var i = 0; i < (o.helpers || 0); i++) {
-        try {
-          var hw = new Worker(self.url), ch = new MessageChannel();
-          hw.onmessage = function (e) { if (e.data && e.data.type === 'fatal') helperFailed(e.data.message); };
-          hw.onerror = function (e) { helperFailed(e.message || 'failed to start'); };
-          // (tests: DEBUG.failHelpers makes helpers fail as a miscompiling WebAssembly engine does; 'lie': the
-          // first one answers for other hunks than it was given)
-          self.post(hw, { type: 'helper', port: ch.port2, fail: o.debugFail === 'all' || (o.debugFail === 'one' && i === 0), lie: o.debugFail === 'lie' && i === 0 }, [ch.port2]);
-          helpers.push(hw);
-          ports.push(ch.port1);
-        } catch (e) { break; }
+      if (o.helpers > 0) {
+        var borrowed = self.borrowHelpers(o.helpers, o.debugFail, helperFailed);
+        helpers = borrowed.helpers;
+        ports = borrowed.ports;
       }
       worker.onmessage = function (e) {
         var m = e.data;
@@ -432,12 +543,13 @@ var Engine = {
         else if (m.type === 'stage-ack') { var a = ackWait; ackWait = null; if (a) a(); }
         else if (m.type === 'line') o.onLine && o.onLine(m.stream, m.text);
         else if (m.type === 'progress') o.onProgress && o.onProgress(m.text);
+        else if (m.type === 'prog-bin') o.onBinProgress && o.onBinProgress(m);
         else if (m.type === 'scan') o.onScan && o.onScan(m.done / m.total);
         else if (m.type === 'notice') o.onNotice && o.onNotice(m);
         else if (m.type === 'storage') o.onStorage && o.onStorage(m.mode, m.reason);
-        else if (m.type === 'fatal') { cleanup(); if (sink) sink.abort(); reject(new Error(m.message)); }
+        else if (m.type === 'fatal') { cleanup(true); if (sink) sink.abort(); reject(new Error(m.message)); }
         else if (m.type === 'done') {
-          cleanup();
+          cleanup(!!m.aborted, m.memBytes, !!m.aborted);
           if (!sink) { resolve(m); return; }
           o.onProgress && o.onProgress('Saving to folder, 100% complete');
           // chdman is done, the last writes are still going: Cancel can still stop them (saving)
@@ -452,7 +564,7 @@ var Engine = {
       };
       worker.onerror = function (e) {
         if (finished) return;
-        cleanup();
+        cleanup(true);
         if (sink) sink.abort(); // a crashed worker's files in the folder: thrown away, like a cancel's
         reject(new Error(e.message || 'The background worker failed to start.'));
       };
@@ -462,7 +574,7 @@ var Engine = {
           writable: o.writable || [], slots: o.slots || 0, outMode: o.outMode || 'mem', ports: ports, debugStage: DEBUG.stage, debugSinkMax: DEBUG.sinkMax, debugStorage: DEBUG.failStorage
         }, ports);
       } catch (e) {
-        cleanup();
+        cleanup(true);
         if (sink) sink.abort();
         reject(new Error('Could not send data to the background worker (' + (e && e.message || e) + ').'));
       }
@@ -472,7 +584,7 @@ var Engine = {
       cancel: function () {
         if (finished && !saving) return Promise.resolve();
         saving = false;
-        cleanup();
+        cleanup(true);
         var doneAbort = sink ? sink.abort() : Promise.resolve();
         var err = new Error('Canceled');
         err.canceled = true;
@@ -542,22 +654,23 @@ var Tuning = {
       }
       return d;
     }
-    var pool = [], steps = [], best = 0, bestN = 1, misses = 0, hidden = document.hidden;
+    var pool = [], steps = [], best = 0, bestN = 1, misses = 0, hidden = document.hidden, failed = false;
     function onVisibility() { if (document.hidden) hidden = true; }
     document.addEventListener('visibilitychange', onVisibility);
     function spawn() {
-      var w = new Worker(Engine.url), ch = new MessageChannel();
+      var w = new Worker(Engine.workerUrl()), ch = new MessageChannel();
       Engine.post(w, { type: 'helper', port: ch.port2 }, [ch.port2]);
       ch.port1.postMessage({ type: 'init', hunkbytes: HB, unitbytes: 2048, comps: comps });
-      var h = { w: w, port: ch.port1, done: 0, counting: false, live: false };
+      var h = { w: w, port: ch.port1, done: 0, counting: false, live: false, stopped: false };
       ch.port1.onmessage = function (e) {
-        if (e.data.type !== 'result') return;
+        if (h.stopped || e.data.type !== 'result') return;
         if (h.counting) h.done += BATCH;
         send(h);
       };
       return h;
     }
     function send(h) {
+      if (h.stopped) return;
       var d = batch();
       h.port.postMessage({ type: 'batch', id: 0, items: new Uint32Array(BATCH), data: d.buffer }, [d.buffer]);
     }
@@ -580,8 +693,18 @@ var Tuning = {
         // past the reported core count one miss ends it; below it, allow one noisy step
         else if (++misses >= (n > cores ? 1 : 2)) break;
       }
+    } catch (e) {
+      failed = true;
+      throw e;
     } finally {
-      pool.forEach(function (h) { h.w.terminate(); });
+      pool.forEach(function (h) { h.stopped = true; h.port.onmessage = null; try { h.port.close(); } catch (e) { /* ignore */ } });
+      // Retain bestN warm helpers directly into Engine.helperPool so the first job starts with zero cold-start!
+      if (!failed && !hidden && best > 0) {
+        Engine.adoptHelpers(pool.slice(0, bestN).map(function (h) { return h.w; }));
+        pool.slice(bestN).forEach(function (h) { h.w.terminate(); });
+      } else {
+        pool.forEach(function (h) { h.w.terminate(); });
+      }
       document.removeEventListener('visibilitychange', onVisibility);
     }
     var t = { key: this.key(), threads: bestN, rate: +best.toFixed(2), steps: steps, cores: cores, cap: Tuning.cap, date: Date.now() };
@@ -1415,8 +1538,8 @@ var KIND = {
 };
 // [value, label, codecs (-c), hint, other options]
 var PRESETS = {
-  cd: [['default', 'Smallest (default)', null, 'The smallest files. Works in every emulator. (chdman\u2019s own settings: LZMA, Deflate and FLAC.)'], ['plan', 'Nearly as small, faster', null, 'About 1.7 times as fast to create, at most 0.3% bigger, same checksums. Works in every emulator. (The same codecs, but each track tries only the one that suits it: LZMA for data, FLAC for audio.)', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'cdzl,cdfl', 'Several times faster to create, a little bigger, same checksums. (Deflate by libdeflate, and FLAC.)', ['--codecplan', '--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'cdzs,cdfl', 'Quicker to load on weak devices. Needs a recent emulator. (Zstandard and FLAC.)', ['--codecplan']], ['mister', 'For MiSTer FPGA', 'cdzs,cdfl', 'Zstandard and FLAC in 4-sector hunks, which MiSTer\u2019s CD cores decompress fast enough for 8\u00d7 CD speed. Other emulators read it too, if they read Zstd.', ['--codecplan', '-hs', '9792']], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']],
-  other: [['default', 'Smallest (default)', null, 'The smallest files. Works in every emulator. (chdman\u2019s own settings: LZMA, Deflate, Huffman and FLAC.)'], ['plan', 'Nearly as small, faster', null, 'About 1.5 times as fast to create, just as small, same checksums. Works in every emulator. (The same codecs but FLAC, which almost never wins on data.)', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'zlib', 'Several times faster to create, a little bigger, same checksums. Also loads in NetherSX2 and AetherSX2. (Deflate by libdeflate.)', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'zstd', 'Quicker to load on weak devices. Needs a recent emulator. (Zstandard.)'], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']],
+  cd: [['default', 'Smallest (default)', null, 'The smallest files. Works in every emulator. (chdman\u2019s own settings: LZMA, Deflate and FLAC.)'], ['ultra', 'Smaller still', null, 'Maximum compression (LZMA level 9, libdeflate 12, exhaustive FLAC). Slower to create, same checksums, works in every emulator.', ['--ultra', '--libdeflate']], ['plan', 'Nearly as small, faster', null, 'About 1.7 times as fast to create, at most 0.3% bigger, same checksums. Works in every emulator. (The same codecs, but each track tries only the one that suits it: LZMA for data, FLAC for audio.)', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'cdzl,cdfl', 'Several times faster to create, a little bigger, same checksums. (Deflate by libdeflate, and FLAC.)', ['--codecplan', '--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'cdzs,cdfl', 'Quicker to load on weak devices. Needs a recent emulator. (Zstandard level 19 and FLAC.)', ['--codecplan', '--zstd-level', '19']], ['mister', 'For MiSTer FPGA', 'cdzs,cdfl', 'Zstandard level 19 and FLAC in 4-sector hunks, which MiSTer\u2019s CD cores decompress fast enough for 8\u00d7 CD speed. Other emulators read it too, if they read Zstd.', ['--codecplan', '-hs', '9792', '--zstd-level', '19']], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']],
+  other: [['default', 'Smallest (default)', null, 'The smallest files. Works in every emulator. (chdman\u2019s own settings: LZMA, Deflate, Huffman and FLAC.)'], ['ultra', 'Smaller still', null, 'Maximum compression (LZMA level 9, libdeflate 12, exhaustive FLAC). Slower to create, same checksums, works in every emulator.', ['--ultra', '--libdeflate']], ['plan', 'Nearly as small, faster', null, 'About 1.5 times as fast to create, just as small, same checksums. Works in every emulator. (The same codecs but FLAC, which almost never wins on data.)', ['--codecplan', '--libdeflate']], ['fast', 'Faster to create', 'zlib', 'Several times faster to create, a little bigger, same checksums. Also loads in NetherSX2 and AetherSX2. (Deflate by libdeflate.)', ['--libdeflate']], ['zstd', 'Faster to load (Zstd)', 'zstd', 'Quicker to load on weak devices. Needs a recent emulator. (Zstandard level 19.)', ['--zstd-level', '19']], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']],
   ld: [['default', 'Default (A/V Huffman)', null, 'chdman\u2019s own setting for LaserDisc video.'], ['none', 'No compression', 'none', 'Full size: the data is stored as it is.']]
 };
 var HUNKS = {
@@ -1664,53 +1787,30 @@ var Unzip = {
       for (var i = 0; i < names.length; i++) if (!used.has(names[i])) { try { await dir.removeEntry(names[i], { recursive: true }); } catch (e) { /* in use */ } }
     } catch (e) { /* nothing unpacked */ }
   },
-  // a deflated file unpacked: a File, its CRC-32 checked against the zip's
+  // a deflated file unpacked in a Worker via OPFS createSyncAccessHandle() (unblocks iOS 16.4-25.x,
+  // avoids main-thread stalls, and pre-seeds crcCache with the verified CRC-32)
   unpack: async function (zip, ent, at, onProgress) {
-    var stream = zip.slice(at, at + ent.csize).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-    var reader = stream.getReader(), crc = -1, done = 0, parts = [], writer = null, fh = null, sess = null, id = 'u' + (++this.seq);
-    var base_ = ent.name.replace(/^.*\//, '');
-    if (Store.available) {
-      try {
-        sess = await (await this.root()).getDirectoryHandle(Store.session, { create: true });
-        var dir = await sess.getDirectoryHandle(id, { create: true });
-        fh = await dir.getFileHandle(base_, { create: true });
-        if (typeof fh.createWritable !== 'function') throw new Error('no writable streams');
-        writer = await fh.createWritable();
-      } catch (e) {
-        if (sess) try { await sess.removeEntry(id, { recursive: true }); } catch (x) { /* ignore */ }
-        writer = null;
-      }
+    var base_ = ent.name.replace(/^.*\//, ''), id = 'u' + (++this.seq);
+    var res = await Engine.unzip({
+      zip: zip, at: at, csize: ent.csize, usize: ent.usize, crc: ent.crc,
+      baseName: base_, session: Store.session, id: id, useOpfs: Store.available,
+      memMax: UNZIP_MEM_MAX, sizeLabel: fmtBytes(ent.usize), debugUnzipFull: !!DEBUG.unzipFull
+    }, onProgress);
+    var f;
+    if (res.usedOpfs) {
+      var sess = await (await this.root()).getDirectoryHandle(Store.session);
+      var dir = await sess.getDirectoryHandle(id);
+      var fh = await dir.getFileHandle(base_);
+      f = await fh.getFile();
+      f.unzipDir = id;
+    } else {
+      f = new File([res.blob], base_, { lastModified: ent.time });
     }
-    if (!writer && ent.usize > UNZIP_MEM_MAX) throw new Error(base_ + ' is too large (' + fmtBytes(ent.usize) + ') to unpack in this browser. Unzip it first, or use a browser with private storage (Discpress online).');
-    try {
-      for (;;) {
-        var r = await reader.read();
-        if (r.done) break;
-        done += r.value.length;
-        // more than the zip says the file holds (a damaged or hostile zip): stopped, not unpacked to the end
-        if (done > ent.usize) { reader.cancel().catch(function () {}); throw new Error('it holds more than the zip says'); }
-        crc = crc32Update(crc, r.value);
-        // DEBUG.unzipFull (testing): the browser's storage is full once the first piece is written
-        if (writer && DEBUG.unzipFull && done > r.value.length) throw new DOMException('test', 'QuotaExceededError');
-        if (writer) await writer.write(r.value); else parts.push(r.value);
-        onProgress(done);
-      }
-      if (writer) await writer.close();
-    } catch (e) {
-      // (and the file it was unpacked into goes: nothing is left of it in storage)
-      if (writer) {
-        try { await writer.abort(); } catch (x) { /* ignore */ }
-        try { await sess.removeEntry(id, { recursive: true }); } catch (x) { /* ignore */ }
-      }
-      if (done > ent.usize) throw new Error(base_ + ' is damaged in the zip: ' + e.message);
-      throw new Error(base_ + ' could not be unpacked (' + (e && e.name === 'QuotaExceededError' ? 'the browser\u2019s storage is full' : e && e.message || e) + ')');
+    if (res.crc && typeof crcCache !== 'undefined') {
+      var cm = new Map();
+      cm.set('0:' + f.size + ':', Promise.resolve(res.crc));
+      crcCache.set(f, cm);
     }
-    if (((crc ^ -1) >>> 0) !== ent.crc || done !== ent.usize) {
-      if (writer) try { await sess.removeEntry(id, { recursive: true }); } catch (x) { /* ignore */ }
-      throw new Error(base_ + ' is damaged in the zip: its checksum doesn\u2019t match');
-    }
-    var f = writer ? await fh.getFile() : new File(parts, base_, { lastModified: ent.time });
-    if (writer) f.unzipDir = id;
     return f;
   }
 };

@@ -50,6 +50,9 @@
 /* @(#) $Id$ */
 
 #include "deflate.h"
+#ifdef __wasm_simd128__
+#include <wasm_simd128.h>
+#endif
 
 const char deflate_copyright[] =
    " deflate 1.3.2 Copyright 1995-2026 Jean-loup Gailly and Mark Adler ";
@@ -188,6 +191,32 @@ local void slide_hash(deflate_state *s) {
     unsigned n, m;
     Posf *p;
     uInt wsize = s->w_size;
+
+#ifdef __wasm_simd128__
+    if (wsize <= 65535) {
+        v128_t vw = wasm_u16x8_splat((uint16_t)wsize);
+        n = s->hash_size;
+        p = s->head;
+        for (; n >= 8; n -= 8, p += 8)
+            wasm_v128_store(p, wasm_u16x8_sub_sat(wasm_v128_load(p), vw));
+        for (; n > 0; n--, p++) {
+            m = *p;
+            *p = (Pos)(m >= wsize ? m - wsize : NIL);
+        }
+#ifndef FASTEST
+        n = wsize;
+        p = s->prev;
+        for (; n >= 8; n -= 8, p += 8)
+            wasm_v128_store(p, wasm_u16x8_sub_sat(wasm_v128_load(p), vw));
+        for (; n > 0; n--, p++) {
+            m = *p;
+            *p = (Pos)(m >= wsize ? m - wsize : NIL);
+        }
+#endif
+        s->slid = 1;
+        return;
+    }
+#endif
 
     n = s->hash_size;
     p = &s->head[n];
@@ -1493,6 +1522,20 @@ local uInt longest_match(deflate_state *s, IPos cur_match) {
         scan += 2, match++;
         Assert(*scan == *match, "match[2]?");
 
+#ifdef __wasm_simd128__
+        /* Discpress: 16-byte SIMD128 match extension; MAX_MATCH-2 == 256 (16*16), bit-exact */
+        while (scan < strend) {
+            v128_t va = wasm_v128_load(scan);
+            v128_t vb = wasm_v128_load(match);
+            unsigned mask = (unsigned)wasm_i8x16_bitmask(wasm_i8x16_eq(va, vb)) ^ 0xffffu;
+            if (mask) {
+                scan += __builtin_ctz(mask);
+                break;
+            }
+            scan += 16;
+            match += 16;
+        }
+#else
         /* We check for insufficient lookahead only every 8th comparison;
          * the 256th check will be made at strstart + 258.
          */
@@ -1502,6 +1545,7 @@ local uInt longest_match(deflate_state *s, IPos cur_match) {
                  *++scan == *++match && *++scan == *++match &&
                  *++scan == *++match && *++scan == *++match &&
                  scan < strend);
+#endif
 
         Assert(scan <= s->window + (unsigned)(s->window_size - 1),
                "wild scan");

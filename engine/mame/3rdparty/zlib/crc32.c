@@ -86,7 +86,7 @@
 #  ifdef MAKECRCH
 #    define W 8         /* required for MAKECRCH */
 #  else
-#    if defined(__x86_64__) || defined(__aarch64__)
+#    if defined(__x86_64__) || defined(__aarch64__) || defined(__wasm__)
 #      define W 8
 #    else
 #      define W 4

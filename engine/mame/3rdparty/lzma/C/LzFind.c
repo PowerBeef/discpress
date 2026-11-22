@@ -236,6 +236,8 @@ void MatchFinder_Construct(CMatchFinder *p)
   p->directInput = 0;
   p->stream = NULL;
   p->hash = NULL;
+  p->pos = 0;
+  p->streamPos = 0;
   p->expectedDataSize = (UInt64)(Int64)-1;
   MatchFinder_SetDefaultSettings(p);
 
@@ -472,11 +474,16 @@ int MatchFinder_Create(CMatchFinder *p, UInt32 historySize,
 
       // 22.02: we don't reallocate buffer, if old size is enough
       if (p->hash && p->numRefs >= newSize)
+      {
+        p->son = p->hash + hashSizeSum;
         return 1;
+      }
       
       MatchFinder_FreeThisClassMemory(p, alloc);
       p->numRefs = newSize;
       p->hash = AllocRefs(newSize, alloc);
+      p->pos = 0;
+      p->streamPos = 0;
       
       if (p->hash)
       {
@@ -573,6 +580,25 @@ void MatchFinder_Init_4(CMatchFinder *p)
 
 void MatchFinder_Init(CMatchFinder *p)
 {
+  /* Discpress: when reusing an initialized directInput match finder across independent hunks,
+     advance pos by cyclicBufferSize so every prior hash entry fails (pos - curMatch < cyclicBufferSize)
+     without zeroing 516 KiB of hash tables on every hunk (100% bit-exact). */
+  if (p->directInput && p->hash)
+  {
+    const UInt32 prevMax = p->streamPos > p->pos ? p->streamPos : p->pos;
+    if (prevMax > 0 && p->directInputRem < (UInt32)0x40000000 &&
+        prevMax <= (UInt32)0x7f000000 - p->cyclicBufferSize - (UInt32)p->directInputRem)
+    {
+      const UInt32 base = prevMax + p->cyclicBufferSize;
+      p->pos = p->streamPos = base;
+      p->result = SZ_OK;
+      p->streamEndWasReached = 0;
+      MatchFinder_ReadBlock(p);
+      p->cyclicBufferPos = 0;
+      MatchFinder_SetLimits(p);
+      return;
+    }
+  }
   MatchFinder_Init_HighHash(p);
   MatchFinder_Init_LowHash(p);
   MatchFinder_Init_4(p);
@@ -631,6 +657,12 @@ void MatchFinder_Init(CMatchFinder *p)
     #include <arm_neon.h>
   #endif
 
+#elif defined(__wasm_simd128__)
+
+  #define USE_LZFIND_SATUR_SUB_128
+  #define FORCE_LZFIND_SATUR_SUB_128
+  #include <wasm_simd128.h>
+
 #endif
 
 
@@ -655,6 +687,12 @@ PRF(;)
 typedef uint32x4_t LzFind_v128;
 #define SASUB_128_V(v, s) \
   vsubq_u32(vmaxq_u32(v, s), s)
+
+#elif defined(__wasm_simd128__)
+
+typedef v128_t LzFind_v128;
+#define SASUB_128_V(v, s) \
+  wasm_i32x4_sub(wasm_u32x4_max(v, s), s)
 
 #else // MY_CPU_ARM_OR_ARM64
 
@@ -685,6 +723,8 @@ LzFind_SaturSub_128(UInt32 subValue, CLzRef *items, const CLzRef *lim)
   const LzFind_v128 sub2 =
     #ifdef MY_CPU_ARM_OR_ARM64
       vdupq_n_u32(subValue);
+    #elif defined(__wasm_simd128__)
+      wasm_i32x4_splat((int32_t)subValue);
     #else
       _mm_set_epi32((Int32)subValue, (Int32)subValue, (Int32)subValue, (Int32)subValue);
     #endif
@@ -980,9 +1020,24 @@ UInt32 * GetMatchesSpec1(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const Byt
       if (pb[len] == cur[len])
       {
         if (++len != lenLimit && pb[len] == cur[len])
-          while (++len != lenLimit)
-            if (pb[len] != cur[len])
-              break;
+        {
+          ++len;
+#ifdef __wasm_simd128__
+          while (len + 16 <= lenLimit)
+          {
+            const v128_t va = wasm_v128_load(pb + len);
+            const v128_t vb = wasm_v128_load(cur + len);
+            const int32_t diff = (~wasm_i8x16_bitmask(wasm_i8x16_eq(va, vb))) & 0xFFFF;
+            if (diff) { len += (unsigned)__builtin_ctz((unsigned)diff); goto gm_done; }
+            len += 16;
+          }
+#endif
+          while (len != lenLimit && pb[len] == cur[len])
+            ++len;
+#ifdef __wasm_simd128__
+          gm_done: ;
+#endif
+        }
         if (maxLen < len)
         {
           maxLen = (UInt32)len;
@@ -1046,9 +1101,22 @@ static void SkipMatchesSpec(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const 
       unsigned len = (len0 < len1 ? len0 : len1);
       if (pb[len] == cur[len])
       {
-        while (++len != lenLimit)
-          if (pb[len] != cur[len])
-            break;
+        ++len;
+#ifdef __wasm_simd128__
+        while (len + 16 <= lenLimit)
+        {
+          const v128_t va = wasm_v128_load(pb + len);
+          const v128_t vb = wasm_v128_load(cur + len);
+          const int32_t diff = (~wasm_i8x16_bitmask(wasm_i8x16_eq(va, vb))) & 0xFFFF;
+          if (diff) { len += (unsigned)__builtin_ctz((unsigned)diff); goto sk_done; }
+          len += 16;
+        }
+#endif
+        while (len != lenLimit && pb[len] == cur[len])
+          ++len;
+#ifdef __wasm_simd128__
+        sk_done: ;
+#endif
         {
           if (len == lenLimit)
           {

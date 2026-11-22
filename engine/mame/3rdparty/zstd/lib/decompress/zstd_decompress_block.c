@@ -1237,7 +1237,7 @@ ZSTD_decodeSequence(seqState_t* seqState, const ZSTD_longOffset_e longOffsets)
                 ZSTD_STATIC_ASSERT(LONG_OFFSETS_MAX_EXTRA_BITS_32 == 5);
                 ZSTD_STATIC_ASSERT(STREAM_ACCUMULATOR_MIN_32 > LONG_OFFSETS_MAX_EXTRA_BITS_32);
                 ZSTD_STATIC_ASSERT(STREAM_ACCUMULATOR_MIN_32 - LONG_OFFSETS_MAX_EXTRA_BITS_32 >= MaxMLBits);
-                if (MEM_32bits() && longOffsets && (ofBits >= STREAM_ACCUMULATOR_MIN_32)) {
+                if (!ZSTD_BIT_64 && longOffsets && (ofBits >= STREAM_ACCUMULATOR_MIN_32)) {
                     /* Always read extra bits, this keeps the logic simple,
                      * avoids branches, and avoids accidentally reading 0 bits.
                      */
@@ -1247,7 +1247,7 @@ ZSTD_decodeSequence(seqState_t* seqState, const ZSTD_longOffset_e longOffsets)
                     offset += BIT_readBitsFast(&seqState->DStream, extraBits);
                 } else {
                     offset = ofBase + BIT_readBitsFast(&seqState->DStream, ofBits/*>0*/);   /* <=  (ZSTD_WINDOWLOG_MAX-1) bits */
-                    if (MEM_32bits()) BIT_reloadDStream(&seqState->DStream);
+                    if (!ZSTD_BIT_64) BIT_reloadDStream(&seqState->DStream);
                 }
                 seqState->prevOffset[2] = seqState->prevOffset[1];
                 seqState->prevOffset[1] = seqState->prevOffset[0];
@@ -1272,9 +1272,9 @@ ZSTD_decodeSequence(seqState_t* seqState, const ZSTD_longOffset_e longOffsets)
         if (mlBits > 0)
             seq.matchLength += BIT_readBitsFast(&seqState->DStream, mlBits/*>0*/);
 
-        if (MEM_32bits() && (mlBits+llBits >= STREAM_ACCUMULATOR_MIN_32-LONG_OFFSETS_MAX_EXTRA_BITS_32))
+        if (!ZSTD_BIT_64 && (mlBits+llBits >= STREAM_ACCUMULATOR_MIN_32-LONG_OFFSETS_MAX_EXTRA_BITS_32))
             BIT_reloadDStream(&seqState->DStream);
-        if (MEM_64bits() && UNLIKELY(totalBits >= STREAM_ACCUMULATOR_MIN_64-(LLFSELog+MLFSELog+OffFSELog)))
+        if (ZSTD_BIT_64 && UNLIKELY(totalBits >= STREAM_ACCUMULATOR_MIN_64-(LLFSELog+MLFSELog+OffFSELog)))
             BIT_reloadDStream(&seqState->DStream);
         /* Ensure there are enough bits to read the rest of data in 64-bit mode. */
         ZSTD_STATIC_ASSERT(16+LLFSELog+MLFSELog+OffFSELog < STREAM_ACCUMULATOR_MIN_64);
@@ -1282,7 +1282,7 @@ ZSTD_decodeSequence(seqState_t* seqState, const ZSTD_longOffset_e longOffsets)
         if (llBits > 0)
             seq.litLength += BIT_readBitsFast(&seqState->DStream, llBits/*>0*/);
 
-        if (MEM_32bits())
+        if (!ZSTD_BIT_64)
             BIT_reloadDStream(&seqState->DStream);
 
         DEBUGLOG(6, "seq: litL=%u, matchL=%u, offset=%u",
@@ -1290,7 +1290,7 @@ ZSTD_decodeSequence(seqState_t* seqState, const ZSTD_longOffset_e longOffsets)
 
         ZSTD_updateFseStateWithDInfo(&seqState->stateLL, &seqState->DStream, llNext, llnbBits);    /* <=  9 bits */
         ZSTD_updateFseStateWithDInfo(&seqState->stateML, &seqState->DStream, mlNext, mlnbBits);    /* <=  9 bits */
-        if (MEM_32bits()) BIT_reloadDStream(&seqState->DStream);    /* <= 18 bits */
+        if (!ZSTD_BIT_64) BIT_reloadDStream(&seqState->DStream);    /* <= 18 bits */
         ZSTD_updateFseStateWithDInfo(&seqState->stateOffb, &seqState->DStream, ofNext, ofnbBits);  /* <=  8 bits */
     }
 
@@ -2030,7 +2030,7 @@ ZSTD_getOffsetInfo(const ZSTD_seqSymbol* offTable, int nbSeq)
  */
 static size_t ZSTD_maxShortOffset(void)
 {
-    if (MEM_64bits()) {
+    if (ZSTD_BIT_64) {
         /* We can decode any offset without reloading bits.
          * This might change if the max window size grows.
          */
@@ -2092,7 +2092,7 @@ ZSTD_decompressBlock_internal(ZSTD_DCtx* dctx,
          * If isLongOffsets is true, then we will later check our decoding table to see
          * if it is even possible to generate long offsets.
          */
-        ZSTD_longOffset_e isLongOffset = (ZSTD_longOffset_e)(MEM_32bits() && (totalHistorySize > ZSTD_maxShortOffset()));
+        ZSTD_longOffset_e isLongOffset = (ZSTD_longOffset_e)(!ZSTD_BIT_64 && (totalHistorySize > ZSTD_maxShortOffset()));
         /* These macros control at build-time which decompressor implementation
          * we use. If neither is defined, we do some inspection and dispatch at
          * runtime.

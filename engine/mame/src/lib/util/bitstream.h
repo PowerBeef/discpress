@@ -226,6 +226,8 @@ inline bitstream_out::bitstream_out(void *dest, uint32_t destlength)
 
 inline void bitstream_out::write(uint32_t newbits, int numbits)
 {
+	if (numbits <= 0)
+		return;
 	newbits <<= 32 - numbits;
 
 	// flush the buffer if we're going to overflow it

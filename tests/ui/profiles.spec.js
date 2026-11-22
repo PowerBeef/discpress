@@ -213,13 +213,13 @@ test('the MiSTer preset makes Zstd + FLAC CD CHDs with 4-sector hunks, as chdman
   const field = card.locator('label.field', { hasText: 'Compression' });
   await field.locator('select').selectOption('mister');
   await expect(field).toContainText('MiSTer');
-  await expect(card.locator('code.cmd')).toContainText('-c cdzs,cdfl --codecplan -hs 9792');
+  await expect(card.locator('code.cmd')).toContainText('-c cdzs,cdfl --codecplan -hs 9792 --zstd-level 19');
   await app.run(card);
   const [out] = await app.downloads(card);
   if (nativeChdman()) {
     const ref = info(reference('createcd', fx.add[0], ['-c', 'cdzs,cdfl', '-hs', '9792'])), mine = info(out.path);
     expect([mine.sha1, mine.dataSha1]).toEqual([ref.sha1, ref.dataSha1]);
-    const eng = engineReference('createcd', fx.add[0], ['-c', 'cdzs,cdfl', '--codecplan', '-hs', '9792']);
+    const eng = engineReference('createcd', fx.add[0], ['-c', 'cdzs,cdfl', '--codecplan', '-hs', '9792', '--zstd-level', '19']);
     if (eng) expect(sha1File(out.path)).toBe(sha1File(eng));
   }
 });

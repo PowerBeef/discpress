@@ -119,7 +119,11 @@ typedef int64_t s64;
  * 'unsigned long' to account for platforms such as Windows that use 32-bit
  * 'unsigned long' on 64-bit architectures.
  */
+#ifdef __wasm__
+typedef u64 machine_word_t;
+#else
 typedef size_t machine_word_t;
+#endif
 
 /* Number of bytes in a word */
 #define WORDBYTES	((int)sizeof(machine_word_t))

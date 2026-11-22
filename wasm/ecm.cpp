@@ -175,3 +175,47 @@ extern "C" EMSCRIPTEN_KEEPALIVE uint32_t wasm_ecm_edc(uint32_t edc, uint8_t cons
 		make_tables();
 	return edc_update(edc, p, n);
 }
+
+// GF(2) matrix-squaring combiner for ECM EDC (poly 0xd8018001, uninverted): combines EDC of chunk1 and chunk2 of length len2
+namespace {
+uint32_t edc_gf2_mul(const uint32_t *mat, uint32_t vec)
+{
+	uint32_t sum = 0;
+	for (int i = 0; vec != 0; i++, vec >>= 1)
+		if (vec & 1u)
+			sum ^= mat[i];
+	return sum;
+}
+void edc_gf2_square(uint32_t *sq, const uint32_t *mat)
+{
+	for (int i = 0; i < 32; i++)
+		sq[i] = edc_gf2_mul(mat, mat[i]);
+}
+} // anonymous namespace
+
+extern "C" EMSCRIPTEN_KEEPALIVE uint32_t wasm_ecm_edc_combine(uint32_t edc1, uint32_t edc2, uint32_t len2_lo, uint32_t len2_hi)
+{
+	uint64_t len2 = uint64_t(len2_lo) | (uint64_t(len2_hi) << 32);
+	if (len2 == 0)
+		return edc1 ^ edc2;
+	uint32_t odd[32], even[32];
+	odd[0] = 0xd8018001u; // reflected ECM EDC polynomial
+	for (int i = 1; i < 32; i++)
+		odd[i] = 1u << (i - 1);
+	edc_gf2_square(even, odd); // 2 bits
+	edc_gf2_square(odd, even); // 4 bits
+	do
+	{
+		edc_gf2_square(even, odd); // 8, 32, ... bits
+		if (len2 & 1u)
+			edc1 = edc_gf2_mul(even, edc1);
+		len2 >>= 1;
+		if (len2 == 0)
+			break;
+		edc_gf2_square(odd, even);
+		if (len2 & 1u)
+			edc1 = edc_gf2_mul(odd, edc1);
+		len2 >>= 1;
+	} while (len2 != 0);
+	return edc1 ^ edc2;
+}

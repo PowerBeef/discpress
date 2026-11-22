@@ -146,6 +146,28 @@ struct read_pause
 	void await_resume() const noexcept { }
 };
 
+#ifdef __EMSCRIPTEN__
+// Discpress: 48-byte binary progress snapshot read directly via DataView (zero regex/formatting)
+struct discpress_progress_t
+{
+	double done;
+	double ratio;
+	uint64_t bytes_in;
+	uint64_t bytes_out;
+	uint32_t hunks_done;
+	uint32_t hunks_total;
+	uint32_t phase; // 0=idle, 1=compress, 2=parent, 3=extract, 4=verify, 5=finalize
+	uint32_t seq;
+};
+static_assert(sizeof(discpress_progress_t) == 48, "discpress_progress_t must be 48 bytes");
+static discpress_progress_t s_wasm_progress{};
+
+extern "C" EMSCRIPTEN_KEEPALIVE const discpress_progress_t *wasm_progress_ptr()
+{
+	return &s_wasm_progress;
+}
+#endif
+
 static chdman_task read_ahead(chd_file &chd, uint64_t offset, uint64_t length)
 {
 #ifdef __EMSCRIPTEN__
@@ -230,6 +252,8 @@ constexpr bool OSD_PRINTF_VERBOSE = false;
 #define OPTION_KEEPCUE "keepcue"
 #define OPTION_CODEC_PLAN "codecplan"
 #define OPTION_LIBDEFLATE "libdeflate"
+#define OPTION_ULTRA "ultra"
+#define OPTION_ZSTD_LEVEL "zstd-level"
 #define OPTION_OUTPUT_FORCE "force"
 #define OPTION_INPUT_START_BYTE "inputstartbyte"
 #define OPTION_INPUT_START_HUNK "inputstarthunk"
@@ -356,7 +380,7 @@ struct command_description
 	const char *name;
 	command_handler handler;
 	const char *description;
-	const char *valid_options[20]; // Discpress: 16 in 0.289, and createhd now has 17
+	const char *valid_options[24]; // Discpress: 16 in 0.289; room for codecplan/libdeflate/ultra/zstd-level
 };
 
 
@@ -501,7 +525,7 @@ public:
 	}
 
 	// read interface
-	virtual uint32_t read_data(void *dest, uint64_t offset, uint32_t length)
+	virtual uint32_t read_data(void *dest, uint64_t offset, uint32_t length) override
 	{
 		offset += m_offset;
 		if (offset >= m_maxoffset)
@@ -548,6 +572,14 @@ public:
 
 		return length;
 	}
+
+#ifdef __EMSCRIPTEN__
+	virtual chd_file *wasm_input_chd(uint64_t &base_offset) noexcept override
+	{
+		base_offset = m_offset;
+		return &m_file;
+	}
+#endif
 
 const cdrom_file::toc *   m_toc;
 
@@ -893,6 +925,8 @@ static const option_description s_options[] =
 	{ OPTION_COMPRESSION,           "c",    true, " <none|type1[,type2[,...]]>: which compression codecs to use (up to 4)" },
 	{ OPTION_CODEC_PLAN,            "cp",   false, ": try each hunk only with the codecs meant for its content (CD audio: cdfl, CD data: cdlz, other data: all but flac): up to twice as fast, the same checksums, slightly larger" },
 	{ OPTION_LIBDEFLATE,            "ld",   false, ": deflate (zlib, cdzl) with libdeflate: 2 to 3 times faster and a little smaller; the same checksums, and any reader decodes it" },
+	{ OPTION_ULTRA,                 "ul",   false, ": maximum-density encoder settings (LZMA fb=273/mc=1000, libdeflate 12, FLAC QLP precision search within subset)" },
+	{ OPTION_ZSTD_LEVEL,            "zl",   true,  " <1-22>: Zstandard compression level (default 22)" },
 	{ OPTION_IDENT,                 "id",   true, " <filename>: name of ident file to provide CHS information" },
 	{ OPTION_CHS,                   "chs",  true, " <cylinders,heads,sectors>: specifies CHS geometry directly" },
 	{ OPTION_SECTOR_SIZE,           "ss",   true, " <bytes>: size of each hard disk sector" },
@@ -943,7 +977,9 @@ static const command_description s_commands[] =
 			OPTION_COMPRESSION,
 			OPTION_NUMPROCESSORS,
 			OPTION_CODEC_PLAN,
-			OPTION_LIBDEFLATE
+			OPTION_LIBDEFLATE,
+			OPTION_ULTRA,
+			OPTION_ZSTD_LEVEL
 		}
 	},
 
@@ -966,7 +1002,9 @@ static const command_description s_commands[] =
 			OPTION_SECTOR_SIZE,
 			OPTION_NUMPROCESSORS,
 			OPTION_CODEC_PLAN,
-			OPTION_LIBDEFLATE
+			OPTION_LIBDEFLATE,
+			OPTION_ULTRA,
+			OPTION_ZSTD_LEVEL
 		}
 	},
 
@@ -981,7 +1019,9 @@ static const command_description s_commands[] =
 			OPTION_NUMPROCESSORS,
 			OPTION_KEEPCUE,
 			OPTION_CODEC_PLAN,
-			OPTION_LIBDEFLATE
+			OPTION_LIBDEFLATE,
+			OPTION_ULTRA,
+			OPTION_ZSTD_LEVEL
 		}
 	},
 	{ COMMAND_CREATE_DVD, do_create_dvd, ": create a DVD CHD from the input file",
@@ -998,7 +1038,9 @@ static const command_description s_commands[] =
 			OPTION_COMPRESSION,
 			OPTION_NUMPROCESSORS,
 			OPTION_CODEC_PLAN,
-			OPTION_LIBDEFLATE
+			OPTION_LIBDEFLATE,
+			OPTION_ULTRA,
+			OPTION_ZSTD_LEVEL
 		}
 	},
 
@@ -1091,7 +1133,11 @@ static const command_description s_commands[] =
 			OPTION_INPUT_LENGTH_HUNKS,
 			OPTION_HUNK_SIZE,
 			OPTION_COMPRESSION,
-			OPTION_NUMPROCESSORS
+			OPTION_NUMPROCESSORS,
+			OPTION_CODEC_PLAN,
+			OPTION_LIBDEFLATE,
+			OPTION_ULTRA,
+			OPTION_ZSTD_LEVEL
 		}
 	},
 
@@ -1724,6 +1770,21 @@ static void create_output_chd(
 //  compress_common - standard compression loop
 //-------------------------------------------------
 
+static void apply_discpress_options(chd_file_compressor &chd, const parameters_map &params)
+{
+	chd.set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
+	chd.set_libdeflate(params.find(OPTION_LIBDEFLATE) != params.end());
+	chd.set_ultra(params.find(OPTION_ULTRA) != params.end());
+	auto const zlvl = params.find(OPTION_ZSTD_LEVEL);
+	if (zlvl != params.end())
+	{
+		uint64_t const v = parse_number(zlvl->second->c_str());
+		if (v < 1 || v > 22)
+			report_error(1, "Invalid zstd-level '%s' (expected 1-22)", *zlvl->second);
+		chd.set_zstd_level(int(v));
+	}
+}
+
 static chdman_task compress_common(chd_file_compressor &chd)
 {
 	// Discpress: stop reader/worker threads before derived compressor destructors run on any exit path
@@ -1737,10 +1798,49 @@ static chdman_task compress_common(chd_file_compressor &chd)
 	chd.compress_begin();
 
 	// loop until done
-	double complete, ratio;
+	double complete = 0.0, ratio = 1.0;
 	std::error_condition err;
-	while ((err = chd.compress_continue(complete, ratio)) == chd_file::error::WALKING_PARENT || err == chd_file::error::COMPRESSING)
+	for (;;)
 	{
+#ifdef __EMSCRIPTEN__
+		// Discpress: read ahead parent CHD (for -op) or input CHD (for chdman copy) on helper workers
+		uint64_t const window_bytes = uint64_t(chd.work_buffer_hunks() / 2) * chd.hunk_bytes();
+		if (chd.walking_parent() && chd.parent())
+		{
+			uint64_t const off = chd.read_done_offset();
+			if (off < chd.parent()->logical_bytes())
+			{
+				uint64_t const len = std::min<uint64_t>(window_bytes + chd.hunk_bytes(), chd.parent()->logical_bytes() - off);
+				co_await read_ahead(*chd.parent(), off, len);
+			}
+		}
+		else
+		{
+			uint64_t in_base = 0;
+			if (chd_file *in_chd = chd.wasm_input_chd(in_base))
+			{
+				uint64_t const off = chd.read_done_offset();
+				if (off < chd.logical_bytes())
+				{
+					uint64_t const len = std::min<uint64_t>(window_bytes, chd.logical_bytes() - off);
+					co_await read_ahead(*in_chd, in_base + off, len);
+				}
+			}
+		}
+#endif
+		err = chd.compress_continue(complete, ratio);
+		if (err != chd_file::error::WALKING_PARENT && err != chd_file::error::COMPRESSING)
+			break;
+#ifdef __EMSCRIPTEN__
+		s_wasm_progress.done = complete;
+		s_wasm_progress.ratio = ratio;
+		s_wasm_progress.bytes_in = chd.total_in_bytes();
+		s_wasm_progress.bytes_out = chd.total_out_bytes();
+		s_wasm_progress.hunks_done = chd.hunks_written();
+		s_wasm_progress.hunks_total = chd.hunk_count();
+		s_wasm_progress.phase = (err == chd_file::error::WALKING_PARENT) ? 2u : 1u;
+		s_wasm_progress.seq++;
+#endif
 		if (err == chd_file::error::WALKING_PARENT)
 			progress(false, "Examining parent, %.1f%% complete...  \r", 100.0 * complete);
 		else
@@ -1751,6 +1851,17 @@ static chdman_task compress_common(chd_file_compressor &chd)
 	// handle errors
 	if (err)
 		report_error(1, "Error during compression: %-40s", err.message());
+
+#ifdef __EMSCRIPTEN__
+	s_wasm_progress.done = 1.0;
+	s_wasm_progress.ratio = ratio;
+	s_wasm_progress.bytes_in = chd.total_in_bytes();
+	s_wasm_progress.bytes_out = chd.total_out_bytes();
+	s_wasm_progress.hunks_done = chd.hunk_count();
+	s_wasm_progress.hunks_total = chd.hunk_count();
+	s_wasm_progress.phase = 5u;
+	s_wasm_progress.seq++;
+#endif
 
 	// final progress update
 	progress(true, "Compression complete ... final ratio = %.1f%%            \n", 100.0 * ratio);
@@ -2441,8 +2552,7 @@ static chdman_task do_create_raw(parameters_map &params)
 		// create the new CHD
 		auto chd = std::make_unique<chd_rawfile_compressor>(*input_file, input_start, input_end);
 		create_output_chd(*chd, *output_chd_str, input_end - input_start, hunk_size, unit_size, compression, output_parent);
-		chd->set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
-		chd->set_libdeflate(params.find(OPTION_LIBDEFLATE) != params.end());
+		apply_discpress_options(*chd, params);
 
 		// if we have a parent, copy forward all the metadata
 		if (output_parent.opened())
@@ -2637,8 +2747,7 @@ static chdman_task do_create_hd(parameters_map &params)
 		else
 			chd.reset(new chd_zero_compressor(input_start, input_end));
 		create_output_chd(*chd, *output_chd_str, uint64_t(totalsectors) * sector_size, hunk_size, sector_size, compression, output_parent);
-		chd->set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
-		chd->set_libdeflate(params.find(OPTION_LIBDEFLATE) != params.end());
+		apply_discpress_options(*chd, params);
 
 		// add the standard hard disk metadata
 		std::string metadata = string_format(HARD_DISK_METADATA_FORMAT, cylinders, heads, sectors, sector_size);
@@ -2760,8 +2869,7 @@ static chdman_task do_create_cd(parameters_map &params)
 		// create the new CD
 		auto chd = std::make_unique<chd_cd_compressor>(toc, track_info);
 		create_output_chd(*chd, *output_chd_str, uint64_t(totalsectors) * cdrom_file::FRAME_SIZE, hunk_size, cdrom_file::FRAME_SIZE, compression, output_parent);
-		chd->set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
-		chd->set_libdeflate(params.find(OPTION_LIBDEFLATE) != params.end());
+		apply_discpress_options(*chd, params);
 
 		// add the standard CD metadata; we do this even if we have a parent because it might be different
 		const std::error_condition err = cdrom_file::write_metadata(chd.get(), toc);
@@ -2838,8 +2946,7 @@ static chdman_task do_create_dvd(parameters_map &params)
 		// create the new DVD
 		auto chd = std::make_unique<chd_rawfile_compressor>(*input_file, input_start, input_end);
 		create_output_chd(*chd, *output_chd_str, input_end - input_start, hunk_size, 2048, compression, output_parent);
-		chd->set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
-		chd->set_libdeflate(params.find(OPTION_LIBDEFLATE) != params.end());
+		apply_discpress_options(*chd, params);
 
 		// add the standard DVD type tag
 		const std::error_condition err = chd->write_metadata(DVD_METADATA_TAG, 0, "");
@@ -3056,6 +3163,7 @@ static chdman_task do_copy(parameters_map &params)
 		std::unique_ptr<cdrom_file> cdrom; // want this to be unwound after chd
 		auto chd = std::make_unique<chd_chdfile_compressor>(input_chd, input_start, input_end);
 		create_output_chd(*chd, *output_chd_str, input_end - input_start, hunk_size, input_chd.unit_bytes(), compression, output_parent);
+		apply_discpress_options(*chd, params);
 
 		// clone all the metadata, upgrading where appropriate
 		std::error_condition err;
@@ -4393,6 +4501,7 @@ int CLIB_DECL main(int argc, char *argv[])
 // return -1 (paused while helper workers compress); anything else is the exit code
 extern "C" EMSCRIPTEN_KEEPALIVE int chdman_begin(int argc, char *argv[])
 {
+	s_wasm_progress = discpress_progress_t{};
 	int const result = chdman_start(argc, argv);
 	return (result == CHDMAN_PAUSED) ? chdman_continue() : result;
 }
@@ -4400,5 +4509,12 @@ extern "C" EMSCRIPTEN_KEEPALIVE int chdman_begin(int argc, char *argv[])
 extern "C" EMSCRIPTEN_KEEPALIVE int chdman_resume()
 {
 	return chdman_continue();
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE void chdman_abort()
+{
+	s_paused = nullptr;
+	s_run.reset();
+	s_wasm_progress = discpress_progress_t{};
 }
 #endif

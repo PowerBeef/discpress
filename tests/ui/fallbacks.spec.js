@@ -34,7 +34,7 @@ test('without SIMD the faster presets give the native engine\'s CHDs', async ({ 
   await app.open({ noSimd: true, settings: { threads: 2 } });
   for (const [key, input, command, label, own] of [
     ['ps1-multitrack', 'mgs disc1.cue', 'createcd', 'Nearly as small, faster', ['--codecplan', '--libdeflate']],
-    ['ps2-dvd', 'agent.iso', 'createdvd', 'Faster to create', ['-c', 'zlib,huff', '--libdeflate']],
+    ['ps2-dvd', 'agent.iso', 'createdvd', 'Faster to create', ['-c', 'zlib', '--libdeflate']],
   ]) {
     await app.add(fixture(key).add);
     const card = app.jobs().last();

@@ -184,11 +184,17 @@ static void ZSTD_copy8(void* dst, const void* src) {
    the dst buffer. In circumstances where the op "catches up" to where the
    literal buffer is, there can be partial overlaps in this call on the final
    copy if the literal is being shifted by less than 16 bytes. */
+#if defined(__wasm_simd128__)
+#include <wasm_simd128.h>
+#endif
+
 static void ZSTD_copy16(void* dst, const void* src) {
 #if defined(ZSTD_ARCH_ARM_NEON)
     vst1q_u8((uint8_t*)dst, vld1q_u8((const uint8_t*)src));
 #elif defined(ZSTD_ARCH_X86_SSE2)
     _mm_storeu_si128((__m128i*)dst, _mm_loadu_si128((const __m128i*)src));
+#elif defined(__wasm_simd128__)
+    wasm_v128_store(dst, wasm_v128_load(src));
 #elif defined(__clang__)
     ZSTD_memmove(dst, src, 16);
 #else

@@ -1,14 +1,61 @@
 --- a/3rdparty/flac/src/libFLAC/fixed.c
 +++ b/3rdparty/flac/src/libFLAC/fixed.c
-@@ -41,6 +41,7 @@
+@@ -41,6 +41,10 @@
  #include "private/fixed.h"
  #include "private/macros.h"
  #include "FLAC/assert.h"
 +#include "flac_libm.h" /* Discpress: the same log in every build (engine/libm) */
++#ifdef __wasm_simd128__
++#include <wasm_simd128.h>
++#endif
  
  #ifdef local_abs
  #undef local_abs
-@@ -281,11 +282,11 @@
+@@ -249,8 +253,41 @@
+ 		error -= last_error_3; total_error_4 += local_abs(error); last_error_3 = save;
+ 	}
+ #else
+-	int i;
+-	for(i = 0; i < (int)data_len; i++) {
++	int i = 0;
++#ifdef __wasm_simd128__
++	{
++		v128_t a0 = wasm_i32x4_splat(0), a1 = wasm_i32x4_splat(0), a2 = wasm_i32x4_splat(0);
++		v128_t a3 = wasm_i32x4_splat(0), a4 = wasm_i32x4_splat(0);
++		for (; i + 4 <= (int)data_len; i += 4) {
++			v128_t d0 = wasm_v128_load(&data[i]);
++			v128_t d1 = wasm_v128_load(&data[i - 1]);
++			v128_t d2 = wasm_v128_load(&data[i - 2]);
++			v128_t d3 = wasm_v128_load(&data[i - 3]);
++			v128_t d4 = wasm_v128_load(&data[i - 4]);
++			v128_t e1_0 = wasm_i32x4_sub(d0, d1);
++			v128_t e1_1 = wasm_i32x4_sub(d1, d2);
++			v128_t e1_2 = wasm_i32x4_sub(d2, d3);
++			v128_t e1_3 = wasm_i32x4_sub(d3, d4);
++			v128_t e2_0 = wasm_i32x4_sub(e1_0, e1_1);
++			v128_t e2_1 = wasm_i32x4_sub(e1_1, e1_2);
++			v128_t e2_2 = wasm_i32x4_sub(e1_2, e1_3);
++			v128_t e3_0 = wasm_i32x4_sub(e2_0, e2_1);
++			v128_t e3_1 = wasm_i32x4_sub(e2_1, e2_2);
++			v128_t e4_0 = wasm_i32x4_sub(e3_0, e3_1);
++			a0 = wasm_i32x4_add(a0, wasm_i32x4_abs(d0));
++			a1 = wasm_i32x4_add(a1, wasm_i32x4_abs(e1_0));
++			a2 = wasm_i32x4_add(a2, wasm_i32x4_abs(e2_0));
++			a3 = wasm_i32x4_add(a3, wasm_i32x4_abs(e3_0));
++			a4 = wasm_i32x4_add(a4, wasm_i32x4_abs(e4_0));
++		}
++		total_error_0 = (FLAC__uint32)wasm_i32x4_extract_lane(a0, 0) + (FLAC__uint32)wasm_i32x4_extract_lane(a0, 1) + (FLAC__uint32)wasm_i32x4_extract_lane(a0, 2) + (FLAC__uint32)wasm_i32x4_extract_lane(a0, 3);
++		total_error_1 = (FLAC__uint32)wasm_i32x4_extract_lane(a1, 0) + (FLAC__uint32)wasm_i32x4_extract_lane(a1, 1) + (FLAC__uint32)wasm_i32x4_extract_lane(a1, 2) + (FLAC__uint32)wasm_i32x4_extract_lane(a1, 3);
++		total_error_2 = (FLAC__uint32)wasm_i32x4_extract_lane(a2, 0) + (FLAC__uint32)wasm_i32x4_extract_lane(a2, 1) + (FLAC__uint32)wasm_i32x4_extract_lane(a2, 2) + (FLAC__uint32)wasm_i32x4_extract_lane(a2, 3);
++		total_error_3 = (FLAC__uint32)wasm_i32x4_extract_lane(a3, 0) + (FLAC__uint32)wasm_i32x4_extract_lane(a3, 1) + (FLAC__uint32)wasm_i32x4_extract_lane(a3, 2) + (FLAC__uint32)wasm_i32x4_extract_lane(a3, 3);
++		total_error_4 = (FLAC__uint32)wasm_i32x4_extract_lane(a4, 0) + (FLAC__uint32)wasm_i32x4_extract_lane(a4, 1) + (FLAC__uint32)wasm_i32x4_extract_lane(a4, 2) + (FLAC__uint32)wasm_i32x4_extract_lane(a4, 3);
++	}
++#endif
++	for(; i < (int)data_len; i++) {
+ 		total_error_0 += local_abs(data[i]);
+ 		total_error_1 += local_abs(data[i] - data[i-1]);
+ 		total_error_2 += local_abs(data[i] - 2 * data[i-1] + data[i-2]);
+@@ -281,11 +318,11 @@
  	FLAC__ASSERT(data_len > 0 || total_error_3 == 0);
  	FLAC__ASSERT(data_len > 0 || total_error_4 == 0);
  #ifndef FLAC__INTEGER_ONLY_LIBRARY
@@ -25,7 +72,7 @@
  #else
  	residual_bits_per_sample[0] = (total_error_0 > 0) ? local__compute_rbps_integerized(total_error_0, data_len) : 0;
  	residual_bits_per_sample[1] = (total_error_1 > 0) ? local__compute_rbps_integerized(total_error_1, data_len) : 0;
-@@ -336,11 +337,11 @@
+@@ -336,11 +373,11 @@
  	FLAC__ASSERT(data_len > 0 || total_error_3 == 0);
  	FLAC__ASSERT(data_len > 0 || total_error_4 == 0);
  #ifndef FLAC__INTEGER_ONLY_LIBRARY
@@ -42,7 +89,7 @@
  #else
  	residual_bits_per_sample[0] = (total_error_0 > 0) ? local__compute_rbps_wide_integerized(total_error_0, data_len) : 0;
  	residual_bits_per_sample[1] = (total_error_1 > 0) ? local__compute_rbps_wide_integerized(total_error_1, data_len) : 0;
-@@ -357,7 +358,7 @@
+@@ -357,7 +394,7 @@
  if(order_##macro_order##_is_valid && total_error_##macro_order < smallest_error) { \
  	order = macro_order;				\
  	smallest_error = total_error_##macro_order ;	\
@@ -51,7 +98,7 @@
  }							\
  else							\
  	residual_bits_per_sample[ macro_order ] = 34.0f;
-@@ -571,6 +572,9 @@
+@@ -571,6 +608,9 @@
  void FLAC__fixed_restore_signal(const FLAC__int32 residual[], uint32_t data_len, uint32_t order, FLAC__int32 data[])
  {
  	int i, idata_len = (int)data_len;
@@ -61,7 +108,7 @@
  
  	switch(order) {
  		case 0:
-@@ -579,23 +583,24 @@
+@@ -579,23 +619,24 @@
  			break;
  		case 1:
  			for(i = 0; i < idata_len; i++)
@@ -92,15 +139,50 @@
  void FLAC__fixed_restore_signal_wide(const FLAC__int32 residual[], uint32_t data_len, uint32_t order, FLAC__int32 data[])
 --- a/3rdparty/flac/src/libFLAC/lpc.c
 +++ b/3rdparty/flac/src/libFLAC/lpc.c
-@@ -43,6 +43,7 @@
+@@ -43,6 +43,10 @@
  #include "private/bitmath.h"
  #include "private/lpc.h"
  #include "private/macros.h"
 +#include "flac_libm.h" /* Discpress: the same log in every build (engine/libm) */
++#ifdef __wasm_simd128__
++#include <wasm_simd128.h>
++#endif
  
  #if !defined(NDEBUG) || defined FLAC__OVERFLOW_DETECT || defined FLAC__OVERFLOW_DETECT_VERBOSE
  #include <stdio.h>
-@@ -977,7 +978,7 @@
+@@ -364,6 +368,31 @@
+ 	FLAC__ASSERT(order > 0);
+ 	FLAC__ASSERT(order <= 32);
+ 
++#ifdef __wasm_simd128__
++	/* Discpress: integer-only SIMD128 QLP residual (strictly associative, bit-exact) */
++	if (lp_quantization >= 0 && lp_quantization < 32) {
++		i = 0;
++		for (; i + 4 <= (int)data_len; i += 4) {
++			v128_t vsum = wasm_i32x4_splat(0);
++			int j = (int)order - 1;
++			for (; j >= 0; j--) {
++				v128_t c = wasm_i32x4_splat(qlp_coeff[j]);
++				v128_t d = wasm_v128_load(&data[i - j - 1]);
++				vsum = wasm_i32x4_add(vsum, wasm_i32x4_mul(c, d));
++			}
++			v128_t cur = wasm_v128_load(&data[i]);
++			wasm_v128_store(&residual[i], wasm_i32x4_sub(cur, wasm_i32x4_shr(vsum, (uint32_t)lp_quantization)));
++		}
++		for (; i < (int)data_len; i++) {
++			sum = 0;
++			for (int j = (int)order - 1; j >= 0; j--)
++				sum += qlp_coeff[j] * data[i - j - 1];
++			residual[i] = data[i] - (sum >> lp_quantization);
++		}
++		return;
++	}
++#endif
++
+ 	/*
+ 	 * We do unique versions up to 12th order since that's the subset limit.
+ 	 * Also they are roughly ordered to match frequency of occurrence to
+@@ -977,7 +1006,7 @@
  {
  	FLAC__int64 sumo;
  	uint32_t i, j;
@@ -109,7 +191,7 @@
  	const FLAC__int32 *r = residual, *history;
  
  #ifdef FLAC__OVERFLOW_DETECT_VERBOSE
-@@ -993,14 +994,14 @@
+@@ -993,14 +1022,14 @@
  		sum = 0;
  		history = data;
  		for(j = 0; j < order; j++) {
@@ -126,7 +208,7 @@
  	}
  
  	/* Here's a slower but clearer version:
-@@ -1015,7 +1016,7 @@
+@@ -1015,7 +1044,7 @@
  #else /* fully unrolled version for normal use */
  {
  	int i;
@@ -135,7 +217,7 @@
  
  	FLAC__ASSERT(order > 0);
  	FLAC__ASSERT(order <= 32);
-@@ -1031,36 +1032,36 @@
+@@ -1031,36 +1060,36 @@
  				if(order == 12) {
  					for(i = 0; i < (int)data_len; i++) {
  						sum = 0;
@@ -197,7 +279,7 @@
  					}
  				}
  			}
-@@ -1068,32 +1069,32 @@
+@@ -1068,32 +1097,32 @@
  				if(order == 10) {
  					for(i = 0; i < (int)data_len; i++) {
  						sum = 0;
@@ -251,7 +333,7 @@
  					}
  				}
  			}
-@@ -1103,28 +1104,28 @@
+@@ -1103,28 +1132,28 @@
  				if(order == 8) {
  					for(i = 0; i < (int)data_len; i++) {
  						sum = 0;
@@ -297,7 +379,7 @@
  					}
  				}
  			}
-@@ -1132,24 +1133,24 @@
+@@ -1132,24 +1161,24 @@
  				if(order == 6) {
  					for(i = 0; i < (int)data_len; i++) {
  						sum = 0;
@@ -335,7 +417,7 @@
  					}
  				}
  			}
-@@ -1159,20 +1160,20 @@
+@@ -1159,20 +1188,20 @@
  				if(order == 4) {
  					for(i = 0; i < (int)data_len; i++) {
  						sum = 0;
@@ -365,7 +447,7 @@
  					}
  				}
  			}
-@@ -1180,14 +1181,14 @@
+@@ -1180,14 +1209,14 @@
  				if(order == 2) {
  					for(i = 0; i < (int)data_len; i++) {
  						sum = 0;
@@ -384,7 +466,7 @@
  				}
  			}
  		}
-@@ -1196,40 +1197,40 @@
+@@ -1196,40 +1225,40 @@
  		for(i = 0; i < (int)data_len; i++) {
  			sum = 0;
  			switch(order) {
@@ -458,7 +540,7 @@
  		}
  	}
  }
-@@ -1588,7 +1589,7 @@
+@@ -1588,7 +1617,7 @@
  double FLAC__lpc_compute_expected_bits_per_residual_sample_with_error_scale(double lpc_error, double error_scale)
  {
  	if(lpc_error > 0.0) {
@@ -609,8 +691,183 @@
  	}
  }
  
+--- a/3rdparty/lzma/C/CpuArch.h
++++ b/3rdparty/lzma/C/CpuArch.h
+@@ -329,7 +329,8 @@
+ 
+ #ifdef MY_CPU_LE
+   #if defined(MY_CPU_X86_OR_AMD64) \
+-      || defined(MY_CPU_ARM64)
++      || defined(MY_CPU_ARM64) \
++      || defined(__wasm__)
+     #define MY_CPU_LE_UNALIGN
+     #define MY_CPU_LE_UNALIGN_64
+   #elif defined(__ARM_FEATURE_UNALIGNED)
+@@ -339,6 +340,10 @@
+   #endif
+ #endif
+ 
++#if defined(__wasm__) && !defined(MY_CPU_64BIT)
++  #define MY_CPU_64BIT
++#endif
++
+ 
+ #ifdef MY_CPU_LE_UNALIGN
+ 
+--- a/3rdparty/lzma/C/LzFind.c
++++ b/3rdparty/lzma/C/LzFind.c
+@@ -236,6 +236,8 @@
+   p->directInput = 0;
+   p->stream = NULL;
+   p->hash = NULL;
++  p->pos = 0;
++  p->streamPos = 0;
+   p->expectedDataSize = (UInt64)(Int64)-1;
+   MatchFinder_SetDefaultSettings(p);
+ 
+@@ -472,11 +474,16 @@
+ 
+       // 22.02: we don't reallocate buffer, if old size is enough
+       if (p->hash && p->numRefs >= newSize)
++      {
++        p->son = p->hash + hashSizeSum;
+         return 1;
++      }
+       
+       MatchFinder_FreeThisClassMemory(p, alloc);
+       p->numRefs = newSize;
+       p->hash = AllocRefs(newSize, alloc);
++      p->pos = 0;
++      p->streamPos = 0;
+       
+       if (p->hash)
+       {
+@@ -573,6 +580,25 @@
+ 
+ void MatchFinder_Init(CMatchFinder *p)
+ {
++  /* Discpress: when reusing an initialized directInput match finder across independent hunks,
++     advance pos by cyclicBufferSize so every prior hash entry fails (pos - curMatch < cyclicBufferSize)
++     without zeroing 516 KiB of hash tables on every hunk (100% bit-exact). */
++  if (p->directInput && p->hash)
++  {
++    const UInt32 prevMax = p->streamPos > p->pos ? p->streamPos : p->pos;
++    if (prevMax > 0 && p->directInputRem < (UInt32)0x40000000 &&
++        prevMax <= (UInt32)0x7f000000 - p->cyclicBufferSize - (UInt32)p->directInputRem)
++    {
++      const UInt32 base = prevMax + p->cyclicBufferSize;
++      p->pos = p->streamPos = base;
++      p->result = SZ_OK;
++      p->streamEndWasReached = 0;
++      MatchFinder_ReadBlock(p);
++      p->cyclicBufferPos = 0;
++      MatchFinder_SetLimits(p);
++      return;
++    }
++  }
+   MatchFinder_Init_HighHash(p);
+   MatchFinder_Init_LowHash(p);
+   MatchFinder_Init_4(p);
+@@ -631,6 +657,12 @@
+     #include <arm_neon.h>
+   #endif
+ 
++#elif defined(__wasm_simd128__)
++
++  #define USE_LZFIND_SATUR_SUB_128
++  #define FORCE_LZFIND_SATUR_SUB_128
++  #include <wasm_simd128.h>
++
+ #endif
+ 
+ 
+@@ -656,6 +688,12 @@
+ #define SASUB_128_V(v, s) \
+   vsubq_u32(vmaxq_u32(v, s), s)
+ 
++#elif defined(__wasm_simd128__)
++
++typedef v128_t LzFind_v128;
++#define SASUB_128_V(v, s) \
++  wasm_i32x4_sub(wasm_u32x4_max(v, s), s)
++
+ #else // MY_CPU_ARM_OR_ARM64
+ 
+ #include <smmintrin.h> // sse4.1
+@@ -685,6 +723,8 @@
+   const LzFind_v128 sub2 =
+     #ifdef MY_CPU_ARM_OR_ARM64
+       vdupq_n_u32(subValue);
++    #elif defined(__wasm_simd128__)
++      wasm_i32x4_splat((int32_t)subValue);
+     #else
+       _mm_set_epi32((Int32)subValue, (Int32)subValue, (Int32)subValue, (Int32)subValue);
+     #endif
+@@ -980,9 +1020,24 @@
+       if (pb[len] == cur[len])
+       {
+         if (++len != lenLimit && pb[len] == cur[len])
+-          while (++len != lenLimit)
+-            if (pb[len] != cur[len])
+-              break;
++        {
++          ++len;
++#ifdef __wasm_simd128__
++          while (len + 16 <= lenLimit)
++          {
++            const v128_t va = wasm_v128_load(pb + len);
++            const v128_t vb = wasm_v128_load(cur + len);
++            const int32_t diff = (~wasm_i8x16_bitmask(wasm_i8x16_eq(va, vb))) & 0xFFFF;
++            if (diff) { len += (unsigned)__builtin_ctz((unsigned)diff); goto gm_done; }
++            len += 16;
++          }
++#endif
++          while (len != lenLimit && pb[len] == cur[len])
++            ++len;
++#ifdef __wasm_simd128__
++          gm_done: ;
++#endif
++        }
+         if (maxLen < len)
+         {
+           maxLen = (UInt32)len;
+@@ -1046,9 +1101,22 @@
+       unsigned len = (len0 < len1 ? len0 : len1);
+       if (pb[len] == cur[len])
+       {
+-        while (++len != lenLimit)
+-          if (pb[len] != cur[len])
+-            break;
++        ++len;
++#ifdef __wasm_simd128__
++        while (len + 16 <= lenLimit)
++        {
++          const v128_t va = wasm_v128_load(pb + len);
++          const v128_t vb = wasm_v128_load(cur + len);
++          const int32_t diff = (~wasm_i8x16_bitmask(wasm_i8x16_eq(va, vb))) & 0xFFFF;
++          if (diff) { len += (unsigned)__builtin_ctz((unsigned)diff); goto sk_done; }
++          len += 16;
++        }
++#endif
++        while (len != lenLimit && pb[len] == cur[len])
++          ++len;
++#ifdef __wasm_simd128__
++        sk_done: ;
++#endif
+         {
+           if (len == lenLimit)
+           {
 --- a/3rdparty/lzma/C/LzmaEnc.c
 +++ b/3rdparty/lzma/C/LzmaEnc.c
+@@ -136,7 +136,7 @@
+ 
+ // #define LZMA_LOG_BSR
+ 
+-#if defined(MY_CPU_ARM_OR_ARM64) /* || defined(MY_CPU_X86_OR_AMD64) */
++#if defined(MY_CPU_ARM_OR_ARM64) || defined(__wasm__) /* || defined(MY_CPU_X86_OR_AMD64) */
+ 
+   #if (defined(__clang__) && (__clang_major__ >= 6)) \
+       || (defined(__GNUC__) && (__GNUC__ >= 6))
 @@ -411,6 +411,7 @@
  
    BoolInt fastMode;
@@ -682,6 +939,554 @@
  
    *destLen -= (SizeT)outStream.rem;
    if (outStream.overflow)
+--- a/3rdparty/zlib/crc32.c
++++ b/3rdparty/zlib/crc32.c
+@@ -86,7 +86,7 @@
+ #  ifdef MAKECRCH
+ #    define W 8         /* required for MAKECRCH */
+ #  else
+-#    if defined(__x86_64__) || defined(__aarch64__)
++#    if defined(__x86_64__) || defined(__aarch64__) || defined(__wasm__)
+ #      define W 8
+ #    else
+ #      define W 4
+--- a/3rdparty/zlib/deflate.c
++++ b/3rdparty/zlib/deflate.c
+@@ -50,6 +50,9 @@
+ /* @(#) $Id$ */
+ 
+ #include "deflate.h"
++#ifdef __wasm_simd128__
++#include <wasm_simd128.h>
++#endif
+ 
+ const char deflate_copyright[] =
+    " deflate 1.3.2 Copyright 1995-2026 Jean-loup Gailly and Mark Adler ";
+@@ -189,6 +192,32 @@
+     Posf *p;
+     uInt wsize = s->w_size;
+ 
++#ifdef __wasm_simd128__
++    if (wsize <= 65535) {
++        v128_t vw = wasm_u16x8_splat((uint16_t)wsize);
++        n = s->hash_size;
++        p = s->head;
++        for (; n >= 8; n -= 8, p += 8)
++            wasm_v128_store(p, wasm_u16x8_sub_sat(wasm_v128_load(p), vw));
++        for (; n > 0; n--, p++) {
++            m = *p;
++            *p = (Pos)(m >= wsize ? m - wsize : NIL);
++        }
++#ifndef FASTEST
++        n = wsize;
++        p = s->prev;
++        for (; n >= 8; n -= 8, p += 8)
++            wasm_v128_store(p, wasm_u16x8_sub_sat(wasm_v128_load(p), vw));
++        for (; n > 0; n--, p++) {
++            m = *p;
++            *p = (Pos)(m >= wsize ? m - wsize : NIL);
++        }
++#endif
++        s->slid = 1;
++        return;
++    }
++#endif
++
+     n = s->hash_size;
+     p = &s->head[n];
+     do {
+@@ -1493,6 +1522,20 @@
+         scan += 2, match++;
+         Assert(*scan == *match, "match[2]?");
+ 
++#ifdef __wasm_simd128__
++        /* Discpress: 16-byte SIMD128 match extension; MAX_MATCH-2 == 256 (16*16), bit-exact */
++        while (scan < strend) {
++            v128_t va = wasm_v128_load(scan);
++            v128_t vb = wasm_v128_load(match);
++            unsigned mask = (unsigned)wasm_i8x16_bitmask(wasm_i8x16_eq(va, vb)) ^ 0xffffu;
++            if (mask) {
++                scan += __builtin_ctz(mask);
++                break;
++            }
++            scan += 16;
++            match += 16;
++        }
++#else
+         /* We check for insufficient lookahead only every 8th comparison;
+          * the 256th check will be made at strstart + 258.
+          */
+@@ -1502,6 +1545,7 @@
+                  *++scan == *++match && *++scan == *++match &&
+                  *++scan == *++match && *++scan == *++match &&
+                  scan < strend);
++#endif
+ 
+         Assert(scan <= s->window + (unsigned)(s->window_size - 1),
+                "wild scan");
+--- a/3rdparty/zstd/lib/common/bitstream.h
++++ b/3rdparty/zstd/lib/common/bitstream.h
+@@ -44,9 +44,21 @@
+ #  endif
+ #endif
+ 
++#if defined(__wasm__)
++typedef U64 ZSTD_bit_t;
++#define ZSTD_BIT_READ_LE(p)      MEM_readLE64(p)
++#define ZSTD_BIT_WRITE_LE(p, v)  MEM_writeLE64(p, v)
++#define ZSTD_BIT_64              1
++#else
++typedef size_t ZSTD_bit_t;
++#define ZSTD_BIT_READ_LE(p)      MEM_readLEST(p)
++#define ZSTD_BIT_WRITE_LE(p, v)  MEM_writeLEST(p, v)
++#define ZSTD_BIT_64              MEM_64bits()
++#endif
++
+ #define STREAM_ACCUMULATOR_MIN_32  25
+ #define STREAM_ACCUMULATOR_MIN_64  57
+-#define STREAM_ACCUMULATOR_MIN    ((U32)(MEM_32bits() ? STREAM_ACCUMULATOR_MIN_32 : STREAM_ACCUMULATOR_MIN_64))
++#define STREAM_ACCUMULATOR_MIN    ((U32)(ZSTD_BIT_64 ? STREAM_ACCUMULATOR_MIN_64 : STREAM_ACCUMULATOR_MIN_32))
+ 
+ 
+ /*-******************************************
+@@ -57,7 +69,7 @@
+  * So the first bit sequence you add will be the last to be read, like a LIFO stack.
+  */
+ typedef struct {
+-    size_t bitContainer;
++    ZSTD_bit_t bitContainer;
+     unsigned bitPos;
+     char*  startPtr;
+     char*  ptr;
+@@ -91,7 +103,7 @@
+ *  bitStream decoding API (read backward)
+ **********************************************/
+ typedef struct {
+-    size_t   bitContainer;
++    ZSTD_bit_t bitContainer;
+     unsigned bitsConsumed;
+     const char* ptr;
+     const char* start;
+@@ -181,7 +193,7 @@
+     DEBUG_STATIC_ASSERT(BIT_MASK_SIZE == 32);
+     assert(nbBits < BIT_MASK_SIZE);
+     assert(nbBits + bitC->bitPos < sizeof(bitC->bitContainer) * 8);
+-    bitC->bitContainer |= BIT_getLowerBits(value, nbBits) << bitC->bitPos;
++    bitC->bitContainer |= (ZSTD_bit_t)BIT_getLowerBits(value, nbBits) << bitC->bitPos;
+     bitC->bitPos += nbBits;
+ }
+ 
+@@ -193,7 +205,7 @@
+ {
+     assert((value>>nbBits) == 0);
+     assert(nbBits + bitC->bitPos < sizeof(bitC->bitContainer) * 8);
+-    bitC->bitContainer |= value << bitC->bitPos;
++    bitC->bitContainer |= (ZSTD_bit_t)value << bitC->bitPos;
+     bitC->bitPos += nbBits;
+ }
+ 
+@@ -205,7 +217,7 @@
+     size_t const nbBytes = bitC->bitPos >> 3;
+     assert(bitC->bitPos < sizeof(bitC->bitContainer) * 8);
+     assert(bitC->ptr <= bitC->endPtr);
+-    MEM_writeLEST(bitC->ptr, bitC->bitContainer);
++    ZSTD_BIT_WRITE_LE(bitC->ptr, bitC->bitContainer);
+     bitC->ptr += nbBytes;
+     bitC->bitPos &= 7;
+     bitC->bitContainer >>= nbBytes*8;
+@@ -221,7 +233,7 @@
+     size_t const nbBytes = bitC->bitPos >> 3;
+     assert(bitC->bitPos < sizeof(bitC->bitContainer) * 8);
+     assert(bitC->ptr <= bitC->endPtr);
+-    MEM_writeLEST(bitC->ptr, bitC->bitContainer);
++    ZSTD_BIT_WRITE_LE(bitC->ptr, bitC->bitContainer);
+     bitC->ptr += nbBytes;
+     if (bitC->ptr > bitC->endPtr) bitC->ptr = bitC->endPtr;
+     bitC->bitPos &= 7;
+@@ -258,7 +270,7 @@
+ 
+     if (srcSize >=  sizeof(bitD->bitContainer)) {  /* normal case */
+         bitD->ptr   = (const char*)srcBuffer + srcSize - sizeof(bitD->bitContainer);
+-        bitD->bitContainer = MEM_readLEST(bitD->ptr);
++        bitD->bitContainer = ZSTD_BIT_READ_LE(bitD->ptr);
+         { BYTE const lastByte = ((const BYTE*)srcBuffer)[srcSize-1];
+           bitD->bitsConsumed = lastByte ? 8 - ZSTD_highbit32(lastByte) : 0;  /* ensures bitsConsumed is always set */
+           if (lastByte == 0) return ERROR(GENERIC); /* endMark not present */ }
+@@ -267,22 +279,22 @@
+         bitD->bitContainer = *(const BYTE*)(bitD->start);
+         switch(srcSize)
+         {
+-        case 7: bitD->bitContainer += (size_t)(((const BYTE*)(srcBuffer))[6]) << (sizeof(bitD->bitContainer)*8 - 16);
++        case 7: bitD->bitContainer += (ZSTD_bit_t)(((const BYTE*)(srcBuffer))[6]) << (sizeof(bitD->bitContainer)*8 - 16);
+                 ZSTD_FALLTHROUGH;
+ 
+-        case 6: bitD->bitContainer += (size_t)(((const BYTE*)(srcBuffer))[5]) << (sizeof(bitD->bitContainer)*8 - 24);
++        case 6: bitD->bitContainer += (ZSTD_bit_t)(((const BYTE*)(srcBuffer))[5]) << (sizeof(bitD->bitContainer)*8 - 24);
+                 ZSTD_FALLTHROUGH;
+ 
+-        case 5: bitD->bitContainer += (size_t)(((const BYTE*)(srcBuffer))[4]) << (sizeof(bitD->bitContainer)*8 - 32);
++        case 5: bitD->bitContainer += (ZSTD_bit_t)(((const BYTE*)(srcBuffer))[4]) << (sizeof(bitD->bitContainer)*8 - 32);
+                 ZSTD_FALLTHROUGH;
+ 
+-        case 4: bitD->bitContainer += (size_t)(((const BYTE*)(srcBuffer))[3]) << 24;
++        case 4: bitD->bitContainer += (ZSTD_bit_t)(((const BYTE*)(srcBuffer))[3]) << 24;
+                 ZSTD_FALLTHROUGH;
+ 
+-        case 3: bitD->bitContainer += (size_t)(((const BYTE*)(srcBuffer))[2]) << 16;
++        case 3: bitD->bitContainer += (ZSTD_bit_t)(((const BYTE*)(srcBuffer))[2]) << 16;
+                 ZSTD_FALLTHROUGH;
+ 
+-        case 2: bitD->bitContainer += (size_t)(((const BYTE*)(srcBuffer))[1]) <<  8;
++        case 2: bitD->bitContainer += (ZSTD_bit_t)(((const BYTE*)(srcBuffer))[1]) <<  8;
+                 ZSTD_FALLTHROUGH;
+ 
+         default: break;
+@@ -297,12 +309,12 @@
+     return srcSize;
+ }
+ 
+-MEM_STATIC FORCE_INLINE_ATTR size_t BIT_getUpperBits(size_t bitContainer, U32 const start)
++MEM_STATIC FORCE_INLINE_ATTR size_t BIT_getUpperBits(ZSTD_bit_t bitContainer, U32 const start)
+ {
+-    return bitContainer >> start;
++    return (size_t)(bitContainer >> start);
+ }
+ 
+-MEM_STATIC FORCE_INLINE_ATTR size_t BIT_getMiddleBits(size_t bitContainer, U32 const start, U32 const nbBits)
++MEM_STATIC FORCE_INLINE_ATTR size_t BIT_getMiddleBits(ZSTD_bit_t bitContainer, U32 const start, U32 const nbBits)
+ {
+     U32 const regMask = sizeof(bitContainer)*8 - 1;
+     /* if start > regMask, bitstream is corrupted, and result is undefined */
+@@ -315,7 +327,7 @@
+ #if defined(__x86_64__) || defined(_M_X86)
+     return (bitContainer >> (start & regMask)) & ((((U64)1) << nbBits) - 1);
+ #else
+-    return (bitContainer >> (start & regMask)) & BIT_mask[nbBits];
++    return (size_t)((bitContainer >> (start & regMask)) & BIT_mask[nbBits]);
+ #endif
+ }
+ 
+@@ -387,7 +399,7 @@
+     assert(bitD->bitsConsumed <= sizeof(bitD->bitContainer)*8);
+     bitD->ptr -= bitD->bitsConsumed >> 3;
+     bitD->bitsConsumed &= 7;
+-    bitD->bitContainer = MEM_readLEST(bitD->ptr);
++    bitD->bitContainer = ZSTD_BIT_READ_LE(bitD->ptr);
+     return BIT_DStream_unfinished;
+ }
+ 
+@@ -417,7 +429,7 @@
+         }
+         bitD->ptr -= nbBytes;
+         bitD->bitsConsumed -= nbBytes*8;
+-        bitD->bitContainer = MEM_readLEST(bitD->ptr);   /* reminder : srcSize > sizeof(bitD->bitContainer), otherwise bitD->ptr == bitD->start */
++        bitD->bitContainer = ZSTD_BIT_READ_LE(bitD->ptr);   /* reminder : srcSize > sizeof(bitD->bitContainer), otherwise bitD->ptr == bitD->start */
+         return result;
+     }
+ }
+--- a/3rdparty/zstd/lib/common/fse.h
++++ b/3rdparty/zstd/lib/common/fse.h
+@@ -241,7 +241,11 @@
+ *******************************************/
+ /* FSE buffer bounds */
+ #define FSE_NCOUNTBOUND 512
++#ifdef __wasm__
++#define FSE_BLOCKBOUND(size) ((size) + ((size)>>7) + 4 /* fse states */ + sizeof(unsigned long long) /* 64-bit bitContainer */)
++#else
+ #define FSE_BLOCKBOUND(size) ((size) + ((size)>>7) + 4 /* fse states */ + sizeof(size_t) /* bitContainer */)
++#endif
+ #define FSE_COMPRESSBOUND(size) (FSE_NCOUNTBOUND + FSE_BLOCKBOUND(size))   /* Macro version, useful for static allocation */
+ 
+ /* It is possible to statically allocate FSE CTable/DTable as a table of FSE_CTable/FSE_DTable using below macros */
+--- a/3rdparty/zstd/lib/common/zstd_internal.h
++++ b/3rdparty/zstd/lib/common/zstd_internal.h
+@@ -184,11 +184,17 @@
+    the dst buffer. In circumstances where the op "catches up" to where the
+    literal buffer is, there can be partial overlaps in this call on the final
+    copy if the literal is being shifted by less than 16 bytes. */
++#if defined(__wasm_simd128__)
++#include <wasm_simd128.h>
++#endif
++
+ static void ZSTD_copy16(void* dst, const void* src) {
+ #if defined(ZSTD_ARCH_ARM_NEON)
+     vst1q_u8((uint8_t*)dst, vld1q_u8((const uint8_t*)src));
+ #elif defined(ZSTD_ARCH_X86_SSE2)
+     _mm_storeu_si128((__m128i*)dst, _mm_loadu_si128((const __m128i*)src));
++#elif defined(__wasm_simd128__)
++    wasm_v128_store(dst, wasm_v128_load(src));
+ #elif defined(__clang__)
+     ZSTD_memmove(dst, src, 16);
+ #else
+--- a/3rdparty/zstd/lib/compress/zstd_compress_sequences.c
++++ b/3rdparty/zstd/lib/compress/zstd_compress_sequences.c
+@@ -312,9 +312,9 @@
+     FSE_initCState2(&stateOffsetBits,  CTable_OffsetBits,  ofCodeTable[nbSeq-1]);
+     FSE_initCState2(&stateLitLength,   CTable_LitLength,   llCodeTable[nbSeq-1]);
+     BIT_addBits(&blockStream, sequences[nbSeq-1].litLength, LL_bits[llCodeTable[nbSeq-1]]);
+-    if (MEM_32bits()) BIT_flushBits(&blockStream);
++    if (!ZSTD_BIT_64) BIT_flushBits(&blockStream);
+     BIT_addBits(&blockStream, sequences[nbSeq-1].mlBase, ML_bits[mlCodeTable[nbSeq-1]]);
+-    if (MEM_32bits()) BIT_flushBits(&blockStream);
++    if (!ZSTD_BIT_64) BIT_flushBits(&blockStream);
+     if (longOffsets) {
+         U32 const ofBits = ofCodeTable[nbSeq-1];
+         unsigned const extraBits = ofBits - MIN(ofBits, STREAM_ACCUMULATOR_MIN-1);
+@@ -345,14 +345,14 @@
+                                                                             /* (7)*/  /* (7)*/
+             FSE_encodeSymbol(&blockStream, &stateOffsetBits, ofCode);       /* 15 */  /* 15 */
+             FSE_encodeSymbol(&blockStream, &stateMatchLength, mlCode);      /* 24 */  /* 24 */
+-            if (MEM_32bits()) BIT_flushBits(&blockStream);                  /* (7)*/
++            if (!ZSTD_BIT_64) BIT_flushBits(&blockStream);                  /* (7)*/
+             FSE_encodeSymbol(&blockStream, &stateLitLength, llCode);        /* 16 */  /* 33 */
+-            if (MEM_32bits() || (ofBits+mlBits+llBits >= 64-7-(LLFSELog+MLFSELog+OffFSELog)))
++            if (!ZSTD_BIT_64 || (ofBits+mlBits+llBits >= 64-7-(LLFSELog+MLFSELog+OffFSELog)))
+                 BIT_flushBits(&blockStream);                                /* (7)*/
+             BIT_addBits(&blockStream, sequences[n].litLength, llBits);
+-            if (MEM_32bits() && ((llBits+mlBits)>24)) BIT_flushBits(&blockStream);
++            if (!ZSTD_BIT_64 && ((llBits+mlBits)>24)) BIT_flushBits(&blockStream);
+             BIT_addBits(&blockStream, sequences[n].mlBase, mlBits);
+-            if (MEM_32bits() || (ofBits+mlBits+llBits > 56)) BIT_flushBits(&blockStream);
++            if (!ZSTD_BIT_64 || (ofBits+mlBits+llBits > 56)) BIT_flushBits(&blockStream);
+             if (longOffsets) {
+                 unsigned const extraBits = ofBits - MIN(ofBits, STREAM_ACCUMULATOR_MIN-1);
+                 if (extraBits) {
+--- a/3rdparty/zstd/lib/compress/zstd_lazy.c
++++ b/3rdparty/zstd/lib/compress/zstd_lazy.c
+@@ -1036,6 +1036,25 @@
+  * Each row is a circular buffer beginning at the value of "headGrouped". So we
+  * must rotate the "matches" bitfield to match up with the actual layout of the
+  * entries within the hashTable */
++#if defined(__wasm_simd128__)
++FORCE_INLINE_TEMPLATE ZSTD_VecMask
++ZSTD_row_getWasmMask(int nbChunks, const BYTE* const src, const BYTE tag, const U32 head)
++{
++    const v128_t comparisonMask = wasm_i8x16_splat((int8_t)tag);
++    int matches[4] = {0};
++    int i;
++    assert(nbChunks == 1 || nbChunks == 2 || nbChunks == 4);
++    for (i=0; i<nbChunks; i++) {
++        const v128_t chunk = wasm_v128_load(src + 16*i);
++        matches[i] = wasm_i8x16_bitmask(wasm_i8x16_eq(chunk, comparisonMask));
++    }
++    if (nbChunks == 1) return ZSTD_rotateRight_U16((U16)matches[0], head);
++    if (nbChunks == 2) return ZSTD_rotateRight_U32((U32)matches[1] << 16 | (U32)matches[0], head);
++    assert(nbChunks == 4);
++    return ZSTD_rotateRight_U64((U64)matches[3] << 48 | (U64)matches[2] << 32 | (U64)matches[1] << 16 | (U64)matches[0], head);
++}
++#endif
++
+ FORCE_INLINE_TEMPLATE ZSTD_VecMask
+ ZSTD_row_getMatchMask(const BYTE* const tagRow, const BYTE tag, const U32 headGrouped, const U32 rowEntries)
+ {
+@@ -1048,6 +1067,10 @@
+ 
+     return ZSTD_row_getSSEMask(rowEntries / 16, src, tag, headGrouped);
+ 
++#elif defined(__wasm_simd128__)
++
++    return ZSTD_row_getWasmMask(rowEntries / 16, src, tag, headGrouped);
++
+ #else /* SW or NEON-LE */
+ 
+ # if defined(ZSTD_ARCH_ARM_NEON)
+--- a/3rdparty/zstd/lib/decompress/huf_decompress.c
++++ b/3rdparty/zstd/lib/decompress/huf_decompress.c
+@@ -141,12 +141,12 @@
+     return dtd;
+ }
+ 
+-static size_t HUF_initFastDStream(BYTE const* ip) {
++static U64 HUF_initFastDStream(BYTE const* ip) {
+     BYTE const lastByte = ip[7];
+     size_t const bitsConsumed = lastByte ? 8 - ZSTD_highbit32(lastByte) : 0;
+-    size_t const value = MEM_readLEST(ip) | 1;
++    U64 const value = MEM_readLE64(ip) | 1;
+     assert(bitsConsumed <= 8);
+-    assert(sizeof(size_t) == 8);
++    assert(sizeof(ZSTD_bit_t) == 8);
+     return value << bitsConsumed;
+ }
+ 
+@@ -190,10 +190,10 @@
+ 
+     BYTE* const oend = (BYTE*)dst + dstSize;
+ 
+-    /* The fast decoding loop assumes 64-bit little-endian.
+-     * This condition is false on x32.
++    /* The fast decoding loop assumes 64-bit little-endian bitstream container.
++     * Discpress: wasm32 has native 64-bit U64 registers (ZSTD_BIT_64).
+      */
+-    if (!MEM_isLittleEndian() || MEM_32bits())
++    if (!MEM_isLittleEndian() || !ZSTD_BIT_64)
+         return 0;
+ 
+     /* strict minimum : jump table + 1 byte per stream */
+@@ -282,11 +282,11 @@
+         return ERROR(corruption_detected);
+ 
+     /* Construct the BIT_DStream_t. */
+-    assert(sizeof(size_t) == 8);
+-    bit->bitContainer = MEM_readLEST(args->ip[stream]);
++    assert(sizeof(bit->bitContainer) == 8);
++    bit->bitContainer = ZSTD_BIT_READ_LE(args->ip[stream]);
+     bit->bitsConsumed = ZSTD_countTrailingZeros64(args->bits[stream]);
+     bit->start = (const char*)args->iend[0];
+-    bit->limitPtr = bit->start + sizeof(size_t);
++    bit->limitPtr = bit->start + sizeof(bit->bitContainer);
+     bit->ptr = (const char*)args->ip[stream];
+ 
+     return 0;
+@@ -503,11 +503,11 @@
+     *ptr++ = HUF_decodeSymbolX1(DStreamPtr, dt, dtLog)
+ 
+ #define HUF_DECODE_SYMBOLX1_1(ptr, DStreamPtr)  \
+-    if (MEM_64bits() || (HUF_TABLELOG_MAX<=12)) \
++    if (ZSTD_BIT_64 || (HUF_TABLELOG_MAX<=12)) \
+         HUF_DECODE_SYMBOLX1_0(ptr, DStreamPtr)
+ 
+ #define HUF_DECODE_SYMBOLX1_2(ptr, DStreamPtr) \
+-    if (MEM_64bits()) \
++    if (ZSTD_BIT_64) \
+         HUF_DECODE_SYMBOLX1_0(ptr, DStreamPtr)
+ 
+ HINT_INLINE size_t
+@@ -528,7 +528,7 @@
+     }
+ 
+     /* [0-3] symbols remaining */
+-    if (MEM_32bits())
++    if (!ZSTD_BIT_64)
+         while ((BIT_reloadDStream(bitDPtr) == BIT_DStream_unfinished) & (p < pEnd))
+             HUF_DECODE_SYMBOLX1_0(p, bitDPtr);
+ 
+@@ -700,7 +700,7 @@
+     ZSTD_memcpy(&op, &args->op, sizeof(op));
+ 
+     assert(MEM_isLittleEndian());
+-    assert(!MEM_32bits());
++    assert(ZSTD_BIT_64);
+ 
+     for (;;) {
+         BYTE* olimit;
+@@ -1242,11 +1242,11 @@
+     ptr += HUF_decodeSymbolX2(ptr, DStreamPtr, dt, dtLog)
+ 
+ #define HUF_DECODE_SYMBOLX2_1(ptr, DStreamPtr) \
+-    if (MEM_64bits() || (HUF_TABLELOG_MAX<=12)) \
++    if (ZSTD_BIT_64 || (HUF_TABLELOG_MAX<=12)) \
+         ptr += HUF_decodeSymbolX2(ptr, DStreamPtr, dt, dtLog)
+ 
+ #define HUF_DECODE_SYMBOLX2_2(ptr, DStreamPtr) \
+-    if (MEM_64bits()) \
++    if (ZSTD_BIT_64) \
+         ptr += HUF_decodeSymbolX2(ptr, DStreamPtr, dt, dtLog)
+ 
+ HINT_INLINE size_t
+@@ -1257,7 +1257,7 @@
+ 
+     /* up to 8 symbols at a time */
+     if ((size_t)(pEnd - p) >= sizeof(bitDPtr->bitContainer)) {
+-        if (dtLog <= 11 && MEM_64bits()) {
++        if (dtLog <= 11 && ZSTD_BIT_64) {
+             /* up to 10 symbols at a time */
+             while ((BIT_reloadDStream(bitDPtr) == BIT_DStream_unfinished) & (p < pEnd-9)) {
+                 HUF_DECODE_SYMBOLX2_0(p, bitDPtr);
+@@ -1336,7 +1336,7 @@
+     {   const BYTE* const istart = (const BYTE*) cSrc;
+         BYTE* const ostart = (BYTE*) dst;
+         BYTE* const oend = ostart + dstSize;
+-        BYTE* const olimit = oend - (sizeof(size_t)-1);
++        BYTE* const olimit = oend - (sizeof(ZSTD_bit_t)-1);
+         const void* const dtPtr = DTable+1;
+         const HUF_DEltX2* const dt = (const HUF_DEltX2*)dtPtr;
+ 
+@@ -1374,7 +1374,7 @@
+         CHECK_F( BIT_initDStream(&bitD4, istart4, length4) );
+ 
+         /* 16-32 symbols per loop (4-8 symbols per stream) */
+-        if ((size_t)(oend - op4) >= sizeof(size_t)) {
++        if ((size_t)(oend - op4) >= sizeof(ZSTD_bit_t)) {
+             for ( ; (endSignal) & (op4 < olimit); ) {
+ #if defined(__clang__) && (defined(__x86_64__) || defined(__i386__))
+                 HUF_DECODE_SYMBOLX2_2(op1, &bitD1);
+@@ -1485,7 +1485,7 @@
+     oend[3] = args->oend;
+ 
+     assert(MEM_isLittleEndian());
+-    assert(!MEM_32bits());
++    assert(ZSTD_BIT_64);
+ 
+     for (;;) {
+         BYTE* olimit;
+--- a/3rdparty/zstd/lib/decompress/zstd_decompress_block.c
++++ b/3rdparty/zstd/lib/decompress/zstd_decompress_block.c
+@@ -1237,7 +1237,7 @@
+                 ZSTD_STATIC_ASSERT(LONG_OFFSETS_MAX_EXTRA_BITS_32 == 5);
+                 ZSTD_STATIC_ASSERT(STREAM_ACCUMULATOR_MIN_32 > LONG_OFFSETS_MAX_EXTRA_BITS_32);
+                 ZSTD_STATIC_ASSERT(STREAM_ACCUMULATOR_MIN_32 - LONG_OFFSETS_MAX_EXTRA_BITS_32 >= MaxMLBits);
+-                if (MEM_32bits() && longOffsets && (ofBits >= STREAM_ACCUMULATOR_MIN_32)) {
++                if (!ZSTD_BIT_64 && longOffsets && (ofBits >= STREAM_ACCUMULATOR_MIN_32)) {
+                     /* Always read extra bits, this keeps the logic simple,
+                      * avoids branches, and avoids accidentally reading 0 bits.
+                      */
+@@ -1247,7 +1247,7 @@
+                     offset += BIT_readBitsFast(&seqState->DStream, extraBits);
+                 } else {
+                     offset = ofBase + BIT_readBitsFast(&seqState->DStream, ofBits/*>0*/);   /* <=  (ZSTD_WINDOWLOG_MAX-1) bits */
+-                    if (MEM_32bits()) BIT_reloadDStream(&seqState->DStream);
++                    if (!ZSTD_BIT_64) BIT_reloadDStream(&seqState->DStream);
+                 }
+                 seqState->prevOffset[2] = seqState->prevOffset[1];
+                 seqState->prevOffset[1] = seqState->prevOffset[0];
+@@ -1272,9 +1272,9 @@
+         if (mlBits > 0)
+             seq.matchLength += BIT_readBitsFast(&seqState->DStream, mlBits/*>0*/);
+ 
+-        if (MEM_32bits() && (mlBits+llBits >= STREAM_ACCUMULATOR_MIN_32-LONG_OFFSETS_MAX_EXTRA_BITS_32))
++        if (!ZSTD_BIT_64 && (mlBits+llBits >= STREAM_ACCUMULATOR_MIN_32-LONG_OFFSETS_MAX_EXTRA_BITS_32))
+             BIT_reloadDStream(&seqState->DStream);
+-        if (MEM_64bits() && UNLIKELY(totalBits >= STREAM_ACCUMULATOR_MIN_64-(LLFSELog+MLFSELog+OffFSELog)))
++        if (ZSTD_BIT_64 && UNLIKELY(totalBits >= STREAM_ACCUMULATOR_MIN_64-(LLFSELog+MLFSELog+OffFSELog)))
+             BIT_reloadDStream(&seqState->DStream);
+         /* Ensure there are enough bits to read the rest of data in 64-bit mode. */
+         ZSTD_STATIC_ASSERT(16+LLFSELog+MLFSELog+OffFSELog < STREAM_ACCUMULATOR_MIN_64);
+@@ -1282,7 +1282,7 @@
+         if (llBits > 0)
+             seq.litLength += BIT_readBitsFast(&seqState->DStream, llBits/*>0*/);
+ 
+-        if (MEM_32bits())
++        if (!ZSTD_BIT_64)
+             BIT_reloadDStream(&seqState->DStream);
+ 
+         DEBUGLOG(6, "seq: litL=%u, matchL=%u, offset=%u",
+@@ -1290,7 +1290,7 @@
+ 
+         ZSTD_updateFseStateWithDInfo(&seqState->stateLL, &seqState->DStream, llNext, llnbBits);    /* <=  9 bits */
+         ZSTD_updateFseStateWithDInfo(&seqState->stateML, &seqState->DStream, mlNext, mlnbBits);    /* <=  9 bits */
+-        if (MEM_32bits()) BIT_reloadDStream(&seqState->DStream);    /* <= 18 bits */
++        if (!ZSTD_BIT_64) BIT_reloadDStream(&seqState->DStream);    /* <= 18 bits */
+         ZSTD_updateFseStateWithDInfo(&seqState->stateOffb, &seqState->DStream, ofNext, ofnbBits);  /* <=  8 bits */
+     }
+ 
+@@ -2030,7 +2030,7 @@
+  */
+ static size_t ZSTD_maxShortOffset(void)
+ {
+-    if (MEM_64bits()) {
++    if (ZSTD_BIT_64) {
+         /* We can decode any offset without reloading bits.
+          * This might change if the max window size grows.
+          */
+@@ -2092,7 +2092,7 @@
+          * If isLongOffsets is true, then we will later check our decoding table to see
+          * if it is even possible to generate long offsets.
+          */
+-        ZSTD_longOffset_e isLongOffset = (ZSTD_longOffset_e)(MEM_32bits() && (totalHistorySize > ZSTD_maxShortOffset()));
++        ZSTD_longOffset_e isLongOffset = (ZSTD_longOffset_e)(!ZSTD_BIT_64 && (totalHistorySize > ZSTD_maxShortOffset()));
+         /* These macros control at build-time which decompressor implementation
+          * we use. If neither is defined, we do some inspection and dispatch at
+          * runtime.
 --- a/src/lib/util/avhuff.cpp
 +++ b/src/lib/util/avhuff.cpp
 @@ -712,7 +712,7 @@
@@ -752,18 +1557,32 @@
  
  private:
  	// delta-RLE Huffman decoder
+--- a/src/lib/util/bitstream.h
++++ b/src/lib/util/bitstream.h
+@@ -226,6 +226,8 @@
+ 
+ inline void bitstream_out::write(uint32_t newbits, int numbits)
+ {
++	if (numbits <= 0)
++		return;
+ 	newbits <<= 32 - numbits;
+ 
+ 	// flush the buffer if we're going to overflow it
 --- a/src/lib/util/cdrom.cpp
 +++ b/src/lib/util/cdrom.cpp
-@@ -28,6 +28,8 @@
+@@ -28,6 +28,11 @@
  #include <cstdlib>
  #include <cstring>
  #include <tuple>
 +#include <utility>
 +#include <vector>
++#ifdef __wasm_simd128__
++#include <wasm_simd128.h>
++#endif
  
  
  /***************************************************************************
-@@ -103,9 +105,12 @@
+@@ -103,9 +108,12 @@
  uint32_t cdrom_file::logical_to_chd_lba(uint32_t loglba, uint32_t &tracknum) const
  {
  	// loop until our current LBA is less than the start LBA of the next track
@@ -777,7 +1596,7 @@
  		{
  			// convert to physical and proceed
  			uint32_t physlba = cdtoc.tracks[track].physframeofs + (loglba - cdtoc.tracks[track].logframeofs);
-@@ -148,6 +153,13 @@
+@@ -148,6 +156,13 @@
  
  	for (int i = 0; i < cdtoc.numtrks; i++)
  	{
@@ -791,7 +1610,7 @@
  		osd_file::ptr file;
  		std::uint64_t length;
  		std::error_condition const filerr = osd_file::open(cdtrack_info.track[i].fname, OPEN_FLAG_READ, file, length);
-@@ -385,6 +397,14 @@
+@@ -385,6 +400,14 @@
  			memset(dest, 0, length);
  			return result;
  		}
@@ -806,7 +1625,7 @@
  	}
  
  	// if a CHD, just read
-@@ -603,6 +623,10 @@
+@@ -603,6 +626,10 @@
  {
  	const uint32_t track = get_track(frame);
  	const uint32_t track_start = get_track_start(track);
@@ -817,7 +1636,7 @@
  	const uint32_t index_offset = frame - track_start;
  	int index = 0;
  
-@@ -921,15 +945,15 @@
+@@ -921,15 +948,15 @@
  		std::fill(std::begin(pgtype), std::end(pgtype), 0);
  		std::fill(std::begin(pgsub), std::end(pgsub), 0);
  
@@ -836,7 +1655,7 @@
  				return chd_file::error::INVALID_DATA;
  		}
  		else
-@@ -944,13 +968,15 @@
+@@ -944,13 +971,15 @@
  			if (err)
  				break;
  
@@ -854,7 +1673,7 @@
  			return chd_file::error::INVALID_DATA;
  
  		track = &toc.tracks[tracknum - 1];
-@@ -967,11 +993,13 @@
+@@ -967,11 +996,13 @@
  		track->subsize = 0;
  		convert_subtype_string_to_track_info(subtype, track);
  
@@ -871,7 +1690,7 @@
  
  		// set the pregap info
  		track->pregap = pregap;
-@@ -1005,21 +1033,26 @@
+@@ -1005,21 +1036,26 @@
  	if (err)
  		return err;
  
@@ -906,7 +1725,7 @@
  		toc.tracks[i].pregap = 0;
  		toc.tracks[i].postgap = 0;
  		toc.tracks[i].pgtype = 0;
-@@ -1032,6 +1065,8 @@
+@@ -1032,6 +1068,8 @@
  	if (toc.numtrks > MAX_TRACKS)
  	{
  		toc.numtrks = swapendian_int32(toc.numtrks);
@@ -915,7 +1734,7 @@
  		for (int i = 0; i < MAX_TRACKS; i++)
  		{
  			toc.tracks[i].trktype = swapendian_int32(toc.tracks[i].trktype);
-@@ -1153,204 +1188,106 @@
+@@ -1153,204 +1191,158 @@
  	0x50, 0xa4, 0xa5, 0x51, 0xa7, 0x53, 0x52, 0xa6, 0xa3, 0x57, 0x56, 0xa2, 0x54, 0xa0, 0xa1, 0x55
  };
  
@@ -937,9 +1756,14 @@
 +//  over GF(2^8), the parity pair is p0 = (a * 2 + b) / 3 and p1 = p0 + b (ecclow multiplies
 +//  by 2, ecchigh divides by 3).
 +//-------------------------------------------------
++
++namespace {
  
 -const uint16_t cdrom_file::poffsets[cdrom_file::ECC_P_NUM_BYTES][cdrom_file::ECC_P_COMP] =
--{
++constexpr int ECC_REGION_BYTES = 2236; // the header, the 2,060 bytes after it, and P
++
++inline uint64_t ecc_load64(const uint8_t *p)
+ {
 -	{ 0x000,0x056,0x0ac,0x102,0x158,0x1ae,0x204,0x25a,0x2b0,0x306,0x35c,0x3b2,0x408,0x45e,0x4b4,0x50a,0x560,0x5b6,0x60c,0x662,0x6b8,0x70e,0x764,0x7ba },
 -	{ 0x001,0x057,0x0ad,0x103,0x159,0x1af,0x205,0x25b,0x2b1,0x307,0x35d,0x3b3,0x409,0x45f,0x4b5,0x50b,0x561,0x5b7,0x60d,0x663,0x6b9,0x70f,0x765,0x7bb },
 -	{ 0x002,0x058,0x0ae,0x104,0x15a,0x1b0,0x206,0x25c,0x2b2,0x308,0x35e,0x3b4,0x40a,0x460,0x4b6,0x50c,0x562,0x5b8,0x60e,0x664,0x6ba,0x710,0x766,0x7bc },
@@ -1027,7 +1851,10 @@
 -	{ 0x054,0x0aa,0x100,0x156,0x1ac,0x202,0x258,0x2ae,0x304,0x35a,0x3b0,0x406,0x45c,0x4b2,0x508,0x55e,0x5b4,0x60a,0x660,0x6b6,0x70c,0x762,0x7b8,0x80e },
 -	{ 0x055,0x0ab,0x101,0x157,0x1ad,0x203,0x259,0x2af,0x305,0x35b,0x3b1,0x407,0x45d,0x4b3,0x509,0x55f,0x5b5,0x60b,0x661,0x6b7,0x70d,0x763,0x7b9,0x80f }
 -};
-+namespace {
++	uint64_t v;
++	memcpy(&v, p, 8);
++	return v;
++}
  
 -/**
 - * @brief   -------------------------------------------------
@@ -1035,10 +1862,18 @@
 - *            data 52 (*2) ECC Q bytes, 43 values represented by each
 - *          -------------------------------------------------.
 - */
-+constexpr int ECC_REGION_BYTES = 2236; // the header, the 2,060 bytes after it, and P
++#ifdef __wasm_simd128__
++// sixteen bytes, each multiplied by 2 in GF(2^8) (poly 0x11d)
++inline v128_t ecc_mul2x16(v128_t a)
++{
++	v128_t const hi = wasm_i8x16_shr(a, 7);
++	return wasm_v128_xor(wasm_i8x16_shl(a, 1), wasm_v128_and(hi, wasm_i8x16_splat(0x1d)));
++}
++#endif
  
 -const uint16_t cdrom_file::qoffsets[ECC_Q_NUM_BYTES][ECC_Q_COMP] =
-+inline uint64_t ecc_load64(const uint8_t *p)
++// eight bytes, each multiplied by 2 in GF(2^8)
++inline uint64_t ecc_mul2x8(uint64_t a)
  {
 -	{ 0x000,0x058,0x0b0,0x108,0x160,0x1b8,0x210,0x268,0x2c0,0x318,0x370,0x3c8,0x420,0x478,0x4d0,0x528,0x580,0x5d8,0x630,0x688,0x6e0,0x738,0x790,0x7e8,0x840,0x898,0x034,0x08c,0x0e4,0x13c,0x194,0x1ec,0x244,0x29c,0x2f4,0x34c,0x3a4,0x3fc,0x454,0x4ac,0x504,0x55c,0x5b4 },
 -	{ 0x001,0x059,0x0b1,0x109,0x161,0x1b9,0x211,0x269,0x2c1,0x319,0x371,0x3c9,0x421,0x479,0x4d1,0x529,0x581,0x5d9,0x631,0x689,0x6e1,0x739,0x791,0x7e9,0x841,0x899,0x035,0x08d,0x0e5,0x13d,0x195,0x1ed,0x245,0x29d,0x2f5,0x34d,0x3a5,0x3fd,0x455,0x4ad,0x505,0x55d,0x5b5 },
@@ -1093,14 +1928,6 @@
 -	{ 0x866,0x002,0x05a,0x0b2,0x10a,0x162,0x1ba,0x212,0x26a,0x2c2,0x31a,0x372,0x3ca,0x422,0x47a,0x4d2,0x52a,0x582,0x5da,0x632,0x68a,0x6e2,0x73a,0x792,0x7ea,0x842,0x89a,0x036,0x08e,0x0e6,0x13e,0x196,0x1ee,0x246,0x29e,0x2f6,0x34e,0x3a6,0x3fe,0x456,0x4ae,0x506,0x55e },
 -	{ 0x867,0x003,0x05b,0x0b3,0x10b,0x163,0x1bb,0x213,0x26b,0x2c3,0x31b,0x373,0x3cb,0x423,0x47b,0x4d3,0x52b,0x583,0x5db,0x633,0x68b,0x6e3,0x73b,0x793,0x7eb,0x843,0x89b,0x037,0x08f,0x0e7,0x13f,0x197,0x1ef,0x247,0x29f,0x2f7,0x34f,0x3a7,0x3ff,0x457,0x4af,0x507,0x55f }
 -};
-+	uint64_t v;
-+	memcpy(&v, p, 8);
-+	return v;
-+}
-+
-+// eight bytes, each multiplied by 2 in GF(2^8)
-+inline uint64_t ecc_mul2x8(uint64_t a)
-+{
 +	uint64_t const high = a & 0x8080808080808080ull;
 +	return ((a & 0x7f7f7f7f7f7f7f7full) << 1) ^ ((high >> 7) * 0x1d);
 +}
@@ -1152,8 +1979,53 @@
  {
 -	val1 = val2 = 0;
 -	for (int component = 0; component < rowlen; component++)
-+	uint64_t a[11] = { }, b[11] = { };
 +	int const count = q ? ECC_Q_NUM_BYTES : ECC_P_NUM_BYTES;
++#ifdef __wasm_simd128__
++	v128_t a[6], b[6];
++	for (int l = 0; l < 6; l++)
++		a[l] = b[l] = wasm_i8x16_splat(0);
++	if (!q)
++	{
++		// 6 * 16 = 96 >= 86 bytes; row 23 + 80 + 16 = 2074 <= ECC_REGION_BYTES (2236)
++		for (int row = 0; row < ECC_P_COMP; row++)
++			for (int l = 0; l < 6; l++)
++			{
++				v128_t const x = wasm_v128_load(&region[ECC_P_NUM_BYTES * row + 16 * l]);
++				a[l] = ecc_mul2x16(wasm_v128_xor(a[l], x));
++				b[l] = wasm_v128_xor(b[l], x);
++			}
++	}
++	else
++	{
++		uint8_t v[64] = { };
++		for (int col = 0; col < ECC_Q_COMP; col++)
++		{
++			int row = col % 26;
++			for (int d = 0; d < 26; d++)
++			{
++				memcpy(&v[2 * d], &region[ECC_P_NUM_BYTES * row + 2 * col], 2);
++				if (++row == 26)
++					row = 0;
++			}
++			for (int l = 0; l < 4; l++)
++			{
++				v128_t const x = wasm_v128_load(&v[16 * l]);
++				a[l] = ecc_mul2x16(wasm_v128_xor(a[l], x));
++				b[l] = wasm_v128_xor(b[l], x);
++			}
++		}
++	}
++	uint8_t av[96], bv[96];
++	for (int l = 0; l < 6; l++)
+ 	{
+-		val1 ^= ecc_source_byte(sector, row[component]);
+-		val2 ^= ecc_source_byte(sector, row[component]);
+-		val1 = ecclow[val1];
++		wasm_v128_store(&av[16 * l], a[l]);
++		wasm_v128_store(&bv[16 * l], b[l]);
++	}
++#else
++	uint64_t a[11] = { }, b[11] = { };
 +	if (!q)
 +	{
 +		// the columns of the first 24 rows (a row's last word also reads 2 bytes of the next row, unused)
@@ -1189,11 +2061,9 @@
 +	uint8_t av[sizeof(a)], bv[sizeof(b)];
 +	memcpy(av, a, sizeof(a));
 +	memcpy(bv, b, sizeof(b));
++#endif
 +	for (int i = 0; i < count; i++)
- 	{
--		val1 ^= ecc_source_byte(sector, row[component]);
--		val2 ^= ecc_source_byte(sector, row[component]);
--		val1 = ecclow[val1];
++	{
 +		uint8_t const p0 = ecchigh[ecclow[av[i]] ^ bv[i]];
 +		parity[i] = p0;
 +		parity[count + i] = p0 ^ bv[i];
@@ -1203,7 +2073,7 @@
  }
  
  /**
-@@ -1367,24 +1304,17 @@
+@@ -1367,24 +1359,17 @@
  
  bool cdrom_file::ecc_verify(const uint8_t *sector)
  {
@@ -1236,7 +2106,7 @@
  }
  
  /**
-@@ -1400,13 +1330,15 @@
+@@ -1400,13 +1385,15 @@
  
  void cdrom_file::ecc_generate(uint8_t *sector)
  {
@@ -1259,7 +2129,7 @@
  }
  
  /**
-@@ -1578,22 +1510,25 @@
+@@ -1578,22 +1565,25 @@
  
  int cdrom_file::msf_to_frames(const char *token)
  {
@@ -1299,7 +2169,7 @@
  }
  
  /*-------------------------------------------------
-@@ -1604,25 +1539,26 @@
+@@ -1604,25 +1594,26 @@
  -------------------------------------------------*/
  
  /**
@@ -1333,7 +2203,7 @@
  
  	std::string fname = std::string(filename);
  	std::error_condition const filerr = osd_file::open(fname, OPEN_FLAG_READ, file, fsize);
-@@ -1632,12 +1568,22 @@
+@@ -1632,12 +1623,22 @@
  		return 0;
  	}
  
@@ -1360,7 +2230,7 @@
  		return 0;
  	}
  	if (memcmp(&buf[0], "RIFF", 4) != 0)
-@@ -1647,21 +1593,18 @@
+@@ -1647,21 +1648,18 @@
  	}
  
  	/* get the total size */
@@ -1387,7 +2257,7 @@
  		return 0;
  	}
  	if (memcmp(&buf[0], "WAVE", 4) != 0)
-@@ -1673,26 +1616,41 @@
+@@ -1673,26 +1671,41 @@
  	/* seek until we find a format tag */
  	while (true)
  	{
@@ -1436,7 +2306,7 @@
  	temp16 = little_endianize_int16(temp16);
  	if (temp16 != 1)
  	{
-@@ -1701,8 +1659,11 @@
+@@ -1701,8 +1714,11 @@
  	}
  
  	/* number of channels -- only stereo is supported */
@@ -1450,7 +2320,7 @@
  	temp16 = little_endianize_int16(temp16);
  	if (temp16 != 2)
  	{
-@@ -1711,8 +1672,11 @@
+@@ -1711,8 +1727,11 @@
  	}
  
  	/* sample rate */
@@ -1464,7 +2334,7 @@
  	rate = little_endianize_int32(rate);
  	if (rate != 44100)
  	{
-@@ -1721,12 +1685,18 @@
+@@ -1721,12 +1740,18 @@
  	}
  
  	/* bytes/second and block alignment are ignored */
@@ -1487,7 +2357,7 @@
  	bits = little_endianize_int16(bits);
  	if (bits != 16)
  	{
-@@ -1735,22 +1705,34 @@
+@@ -1735,22 +1760,34 @@
  	}
  
  	/* seek past any extra data */
@@ -1528,7 +2398,7 @@
  		{
  			osd_printf_error("ERROR: could not find data tag (%s)\n", fname);
  			return 0;
-@@ -1764,7 +1746,12 @@
+@@ -1764,7 +1801,12 @@
  		return 0;
  	}
  
@@ -1542,7 +2412,7 @@
  
  	return length;
  }
-@@ -1855,6 +1842,7 @@
+@@ -1855,6 +1897,7 @@
  	{
  		return std::error_condition(errno, std::generic_category());
  	}
@@ -1550,7 +2420,7 @@
  
  	path = get_file_path(path);
  
-@@ -1864,14 +1852,14 @@
+@@ -1864,14 +1907,14 @@
  
  	outtoc.numsessions = 1;
  
@@ -1571,7 +2441,7 @@
  		return chd_file::error::UNSUPPORTED_FORMAT;
  	}
  
-@@ -1880,7 +1868,6 @@
+@@ -1880,7 +1923,6 @@
  	if ((buffer[7] != 0) || (buffer[6] != 0) || (buffer[5] != 0) || (buffer[4] != 0))
  	{
  		osd_printf_error("ERROR: File size is > 4GB, this version of CHDMAN cannot handle it.");
@@ -1579,7 +2449,7 @@
  		return chd_file::error::UNSUPPORTED_FORMAT;
  	}
  
-@@ -1888,8 +1875,12 @@
+@@ -1888,8 +1930,12 @@
  
  	while (!done)
  	{
@@ -1594,7 +2464,7 @@
  
  		chunk_size = get_u32be(&buffer[4]);
  
-@@ -1898,34 +1889,57 @@
+@@ -1898,34 +1944,57 @@
  		// we want the DAOX chunk, which has the TOC information
  		if (!memcmp(buffer, "DAOX", 4))
  		{
@@ -1669,7 +2539,7 @@
  				outinfo.track[track-1].idx[0] = outinfo.track[track-1].idx[1] = 0;
  
  				switch (mode)
-@@ -1937,12 +1951,10 @@
+@@ -1937,12 +2006,10 @@
  
  					case 0x0300:    // Mode 2 Form 1
  						osd_printf_error("ERROR: Mode 2 Form 1 tracks not supported\n");
@@ -1682,7 +2552,7 @@
  						return chd_file::error::UNSUPPORTED_FORMAT;
  
  					case 0x0600:    // 2352 byte mode 2 raw
-@@ -1957,40 +1969,48 @@
+@@ -1957,40 +2024,48 @@
  
  					case 0x0f00:    // raw data with sub-channel
  						osd_printf_error("ERROR: Raw data tracks with sub-channel not supported\n");
@@ -1741,7 +2611,7 @@
  			}
  		}
  
-@@ -2000,12 +2020,17 @@
+@@ -2000,12 +2075,17 @@
  		}
  		else
  		{
@@ -1762,7 +2632,7 @@
  	return std::error_condition();
  }
  
-@@ -2042,6 +2067,20 @@
+@@ -2042,6 +2122,20 @@
  	outinfo.reset();
  
  	uint64_t size = get_file_size(tocfname);
@@ -1783,7 +2653,7 @@
  	fclose(infile);
  
  
-@@ -2052,7 +2091,15 @@
+@@ -2052,7 +2146,15 @@
  	outinfo.track[0].offset = 0;
  	outinfo.track[0].idx[0] = outinfo.track[0].idx[1] = 0;
  
@@ -1800,7 +2670,7 @@
  	{
  		outtoc.tracks[0].trktype = CD_TRACK_MODE1;
  		outtoc.tracks[0].frames = size / 2048;
-@@ -2126,6 +2173,7 @@
+@@ -2126,6 +2228,7 @@
  	{
  		return std::error_condition(errno, std::generic_category());
  	}
@@ -1808,7 +2678,7 @@
  
  	path = get_file_path(path);
  
-@@ -2149,13 +2197,13 @@
+@@ -2149,13 +2252,13 @@
  
  	const int numtracks = atoi(token);
  
@@ -1824,7 +2694,7 @@
  	{
  		osd_printf_error("GDI header specifies no tracks\n");
  		return chd_file::error::INVALID_DATA;
-@@ -2178,7 +2226,7 @@
+@@ -2178,7 +2281,7 @@
  		paramcnt++;
  		const int trknum = atoi(token) - 1;
  
@@ -1833,7 +2703,7 @@
  		{
  			osd_printf_error("Track %d is out of expected range of 1 to %d\n", trknum + 1, numtracks);
  			return chd_file::error::INVALID_DATA;
-@@ -2200,7 +2248,13 @@
+@@ -2200,7 +2303,13 @@
  		TOKENIZE
  		if (token[0])
  			paramcnt++;
@@ -1848,7 +2718,7 @@
  
  		TOKENIZE
  		if (token[0])
-@@ -2222,7 +2276,7 @@
+@@ -2222,7 +2331,7 @@
  			outtoc.tracks[trknum].trktype = CD_TRACK_MODE1;
  			outtoc.tracks[trknum].datasize = 2048;
  		}
@@ -1857,7 +2727,7 @@
  		{
  			outtoc.tracks[trknum].trktype = CD_TRACK_AUDIO;
  			outtoc.tracks[trknum].datasize = 2352;
-@@ -2252,15 +2306,19 @@
+@@ -2252,15 +2361,19 @@
  		outinfo.track[trknum].fname.assign(path).append(token);
  
  		const uint64_t sz = get_file_size(outinfo.track[trknum].fname);
@@ -1872,19 +2742,19 @@
 -			outtoc.tracks[trknum-1].padframes = dif;
 +			osd_printf_error("ERROR: couldn't find bin file [%s]\n", outinfo.track[trknum].fname);
 +			return std::errc::no_such_file_or_directory;
- 		}
++		}
 +		uint64_t const frames = sz / trksize;
 +		if (frames == 0 || frames > INT32_MAX)
 +		{
 +			osd_printf_error("ERROR: track %d file [%s] has an invalid length\n", trknum + 1, outinfo.track[trknum].fname);
 +			return chd_file::error::INVALID_DATA;
-+		}
+ 		}
 +		outtoc.tracks[trknum].frames = uint32_t(frames);
 +		outtoc.tracks[trknum].padframes = 0;
  
  		TOKENIZE
  		// offset parameter, not used
-@@ -2298,6 +2356,19 @@
+@@ -2298,6 +2411,19 @@
  		return chd_file::error::INVALID_DATA;
  	}
  
@@ -1904,7 +2774,7 @@
  	if (EXTRA_VERBOSE)
  		for (int i = 0; i < numtracks; i++)
  		{
-@@ -2305,7 +2376,7 @@
+@@ -2305,7 +2431,7 @@
  		}
  
  	/* close the input TOC */
@@ -1913,7 +2783,7 @@
  
  	/* store the number of tracks found */
  	outtoc.numtrks = numtracks;
-@@ -2345,12 +2416,26 @@
+@@ -2345,12 +2471,26 @@
  	enum gdi_area current_area = SINGLE_DENSITY;
  	bool is_multibin = false;
  	int leadin = -1;
@@ -1940,7 +2810,7 @@
  
  	path = get_file_path(path);
  
-@@ -2371,6 +2456,13 @@
+@@ -2371,6 +2511,13 @@
  	char linebuffer[512];
  	memset(linebuffer, 0, sizeof(linebuffer));
  
@@ -1954,7 +2824,7 @@
  	while (!feof(infile))
  	{
  		/* get the next line */
-@@ -2413,6 +2505,11 @@
+@@ -2413,6 +2560,11 @@
  				/* get pregap time */
  				TOKENIZE
  				session_pregap = msf_to_frames(token);
@@ -1966,7 +2836,7 @@
  			}
  			else if (!strncmp(linebuffer+i, "LEAD-OUT", 8))
  			{
-@@ -2427,6 +2524,8 @@
+@@ -2427,6 +2579,8 @@
  				/* get lead-out time */
  				TOKENIZE
  				int leadout_offset = msf_to_frames(token);
@@ -1975,7 +2845,7 @@
  				outinfo.track[trknum].leadout = leadout_offset;
  			}
  			else if (!strncmp(linebuffer+i, "LEAD-IN", 7))
-@@ -2472,27 +2571,32 @@
+@@ -2472,27 +2626,32 @@
  			/* get the file type */
  			TOKENIZE
  
@@ -2012,7 +2882,7 @@
  				osd_printf_error("ERROR: Unhandled track type %s\n", token);
  				return chd_file::error::UNSUPPORTED_FORMAT;
  			}
-@@ -2501,7 +2605,18 @@
+@@ -2501,7 +2660,18 @@
  		{
  			/* get the track number */
  			TOKENIZE
@@ -2032,7 +2902,7 @@
  
  			/* next token on the line is the track type */
  			TOKENIZE
-@@ -2541,6 +2656,10 @@
+@@ -2541,6 +2711,10 @@
  				outinfo.track[trknum].offset = wavoffs;
  				wavoffs = wavlen = 0;
  			}
@@ -2043,7 +2913,7 @@
  
  			outinfo.track[trknum].fname.assign(lastfname); /* default filename to the last one */
  
-@@ -2559,7 +2678,6 @@
+@@ -2559,7 +2733,6 @@
  			convert_type_string_to_track_info(token, &outtoc.tracks[trknum]);
  			if (outtoc.tracks[trknum].datasize == 0)
  			{
@@ -2051,7 +2921,7 @@
  				osd_printf_error("ERROR: Unknown track type [%s].  Contact MAMEDEV.\n", token);
  				return chd_file::error::UNSUPPORTED_FORMAT;
  			}
-@@ -2586,6 +2704,52 @@
+@@ -2586,6 +2759,52 @@
  				osd_printf_error("ERROR: encountered invalid index %d\n", idx);
  				return chd_file::error::INVALID_DATA;
  			}
@@ -2104,7 +2974,7 @@
  
  			outinfo.track[trknum].idx[idx] = frames;
  
-@@ -2610,6 +2774,18 @@
+@@ -2610,6 +2829,18 @@
  			/* get index */
  			TOKENIZE
  			frames = msf_to_frames(token);
@@ -2123,7 +2993,7 @@
  
  			outtoc.tracks[trknum].pregap = frames;
  		}
-@@ -2620,11 +2796,20 @@
+@@ -2620,11 +2851,20 @@
  			/* get index */
  			TOKENIZE
  			frames = msf_to_frames(token);
@@ -2144,7 +3014,7 @@
  			outtoc.tracks[trknum].control_flags = 0;
  
  			/* keep looping over remaining tokens in FLAGS line until there's no more to read */
-@@ -2648,11 +2833,16 @@
+@@ -2648,11 +2888,16 @@
  	}
  
  	/* close the input CUE */
@@ -2162,7 +3032,7 @@
  
  	/* now go over the files again and set the lengths */
  	for (trknum = 0; trknum < outtoc.numtrks; trknum++)
-@@ -2667,18 +2857,59 @@
+@@ -2667,18 +2912,59 @@
  		}
  
  		/* this is true for cue/bin and cue/iso, and we need it for cue/wav since .WAV is little-endian */
@@ -2224,7 +3094,7 @@
  			tlen = get_file_size(outinfo.track[trknum].fname);
  			if (tlen == 0)
  			{
-@@ -2686,8 +2917,14 @@
+@@ -2686,8 +2972,14 @@
  				return std::errc::no_such_file_or_directory;
  			}
  
@@ -2241,13 +3111,15 @@
  		}
  		else if (trknum+1 < outtoc.numtrks && outinfo.track[trknum].fname.compare(outinfo.track[trknum+1].fname) == 0)
  		{
-@@ -2700,10 +2937,27 @@
+@@ -2700,10 +2992,27 @@
  				return chd_file::error::INVALID_DATA;
  			}
  
 -			if (trknum > 0)
 +			if (sameasprev)
-+			{
+ 			{
+-				const uint32_t previous_track_raw_size = outtoc.tracks[trknum-1].frames * (outtoc.tracks[trknum-1].datasize + outtoc.tracks[trknum-1].subsize);
+-				outinfo.track[trknum].offset = outinfo.track[trknum-1].offset + previous_track_raw_size;
 +				uint64_t const off = uint64_t(outinfo.track[trknum-1].offset) + uint64_t(outtoc.tracks[trknum-1].frames) * (outtoc.tracks[trknum-1].datasize + outtoc.tracks[trknum-1].subsize);
 +				if (off > UINT32_MAX)
 +				{
@@ -2257,9 +3129,7 @@
 +				outinfo.track[trknum].offset = uint32_t(off);
 +			}
 +			else if (trknum > 0)
- 			{
--				const uint32_t previous_track_raw_size = outtoc.tracks[trknum-1].frames * (outtoc.tracks[trknum-1].datasize + outtoc.tracks[trknum-1].subsize);
--				outinfo.track[trknum].offset = outinfo.track[trknum-1].offset + previous_track_raw_size;
++			{
 +				/* Discpress: the first of several tracks in a file that follows another file starts at its own
 +				   INDEX point in it (0.289 went on from the previous file's offsets) */
 +				uint64_t const off = uint64_t(outinfo.track[trknum].idx[0]) * (outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize);
@@ -2272,7 +3142,7 @@
  			}
  		}
  		else if (outtoc.tracks[trknum].frames == 0)
-@@ -2777,6 +3031,87 @@
+@@ -2777,6 +3086,87 @@
  		}
  	}
  
@@ -2360,7 +3230,7 @@
  	if (is_gdrom)
  	{
  		/*
-@@ -2787,6 +3122,18 @@
+@@ -2787,6 +3177,18 @@
  			uint32_t this_pregap = outtoc.tracks[trknum].pregap;
  			uint32_t this_offset = this_pregap * (outtoc.tracks[trknum].datasize + outtoc.tracks[trknum].subsize);
  
@@ -2379,7 +3249,7 @@
  			outtoc.tracks[trknum-1].frames += this_pregap;
  			outtoc.tracks[trknum-1].splitframes += this_pregap;
  
-@@ -2806,9 +3153,14 @@
+@@ -2806,9 +3208,14 @@
  			if (outtoc.tracks[trknum].multicuearea == HIGH_DENSITY && outtoc.tracks[trknum-1].multicuearea == SINGLE_DENSITY)
  			{
  				outtoc.tracks[trknum].physframeofs = 45000;
@@ -2397,7 +3267,7 @@
  			}
  			else
  			{
-@@ -2965,6 +3317,67 @@
+@@ -2965,6 +3372,67 @@
  	char linebuffer[512];
  	memset(linebuffer, 0, sizeof(linebuffer));
  
@@ -2465,7 +3335,7 @@
  	while (!feof(infile))
  	{
  		/* get the next line */
-@@ -2989,6 +3402,8 @@
+@@ -2989,6 +3457,8 @@
  		*/
  		if (!strcmp(token, "NO"))
  		{
@@ -2474,7 +3344,7 @@
  			TOKENIZE
  			if (!strcmp(token, "COPY"))
  				outtoc.tracks[trknum].control_flags &= ~CD_FLAG_CONTROL_DIGITAL_COPY_PERMITTED;
-@@ -2997,100 +3412,211 @@
+@@ -2997,100 +3467,211 @@
  		}
  		else if (!strcmp(token, "COPY"))
  		{
@@ -2730,7 +3600,7 @@
  
  			/* next token on the line is the track type */
  			TOKENIZE
-@@ -3117,22 +3643,128 @@
+@@ -3117,22 +3698,128 @@
  		}
  		else if (!strcmp(token, "START"))
  		{
@@ -2955,7 +3825,7 @@
  
  //**************************************************************************
  //  CONSTANTS
-@@ -853,6 +867,17 @@
+@@ -853,6 +867,19 @@
  
  void chd_file::close()
  {
@@ -2964,8 +3834,10 @@
 +	if (m_wasm_rd > 0)
 +		wasm_rd_close(this);
 +	m_wasm_rd = -1;
-+	m_wasm_ahead.clear();
-+	m_wasm_span.clear();
++	std::vector<wasm_ahead_slot>().swap(m_wasm_slots);
++	std::vector<uint8_t>().swap(m_wasm_buf);
++	m_wasm_ring_mask = 0;
++	std::vector<uint8_t>().swap(m_wasm_span);
 +	m_wasm_first = m_wasm_count = 0;
 +	m_wasm_scan = m_wasm_queued = 0;
 +#endif
@@ -2973,7 +3845,7 @@
  	// reset file characteristics
  	m_file.reset();
  	m_allow_reads = false;
-@@ -892,6 +917,48 @@
+@@ -892,6 +919,48 @@
  	m_cachehunk = ~0;
  }
  
@@ -3022,7 +3894,7 @@
  std::error_condition chd_file::codec_process_hunk(uint32_t hunknum)
  {
  	// punt if no file
-@@ -912,13 +979,16 @@
+@@ -912,13 +981,16 @@
  		case 3:
  		case 4:
  			{
@@ -3040,7 +3912,7 @@
  						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  						if (UNEXPECTED(err))
  							return err;
-@@ -931,7 +1001,14 @@
+@@ -931,7 +1003,14 @@
  					return std::error_condition(error::UNSUPPORTED_FORMAT);
  
  				case V34_MAP_ENTRY_TYPE_SELF_HUNK:
@@ -3056,7 +3928,7 @@
  
  				case V34_MAP_ENTRY_TYPE_PARENT_HUNK:
  					if (UNEXPECTED(m_parent_missing))
-@@ -948,7 +1025,7 @@
+@@ -948,7 +1027,7 @@
  					return std::error_condition(error::UNSUPPORTED_FORMAT);
  
  				// compressed case
@@ -3065,7 +3937,7 @@
  				uint32_t const blocklen = get_u24be(&rawmap[1]);
  				uint64_t const blockoffs = get_u48be(&rawmap[4]);
  				switch (rawmap[0])
-@@ -958,6 +1035,9 @@
+@@ -958,6 +1037,9 @@
  				case COMPRESSION_TYPE_2:
  				case COMPRESSION_TYPE_3:
  					{
@@ -3075,7 +3947,7 @@
  						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  						if (UNEXPECTED(err))
  							return err;
-@@ -970,7 +1050,14 @@
+@@ -970,7 +1052,14 @@
  					return std::error_condition(error::UNSUPPORTED_FORMAT);
  
  				case COMPRESSION_SELF:
@@ -3091,7 +3963,7 @@
  
  				case COMPRESSION_PARENT:
  					if (UNEXPECTED(m_parent_missing))
-@@ -1036,7 +1123,7 @@
+@@ -1036,7 +1125,7 @@
  		case 3:
  		case 4:
  			{
@@ -3100,7 +3972,7 @@
  				uint64_t const blockoffs = get_u64be(&rawmap[0]);
  				util::crc32_t const blockcrc = get_u32be(&rawmap[8]);
  				bool const nocrc = rawmap[15] & V34_MAP_ENTRY_FLAG_NO_CRC;
-@@ -1045,6 +1132,9 @@
+@@ -1045,6 +1134,9 @@
  				case V34_MAP_ENTRY_TYPE_COMPRESSED:
  					{
  						uint32_t const blocklen = get_u16be(&rawmap[12]) | (uint32_t(rawmap[14]) << 16);
@@ -3110,7 +3982,7 @@
  						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  						if (UNEXPECTED(err))
  							return err;
-@@ -1073,7 +1163,14 @@
+@@ -1073,7 +1165,14 @@
  					return std::error_condition();
  
  				case V34_MAP_ENTRY_TYPE_SELF_HUNK:
@@ -3126,7 +3998,7 @@
  
  				case V34_MAP_ENTRY_TYPE_PARENT_HUNK:
  					if (UNEXPECTED(m_parent_missing))
-@@ -1086,7 +1183,7 @@
+@@ -1086,7 +1185,7 @@
  		// v5 map entries
  		case 5:
  			{
@@ -3135,7 +4007,7 @@
  
  				if (!compressed())
  				{
-@@ -1115,6 +1212,14 @@
+@@ -1115,6 +1214,14 @@
  					case COMPRESSION_TYPE_2:
  					case COMPRESSION_TYPE_3:
  						{
@@ -3150,7 +4022,7 @@
  							std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  							if (UNEXPECTED(err))
  								return err;
-@@ -1130,16 +1235,29 @@
+@@ -1130,16 +1237,29 @@
  
  					case COMPRESSION_NONE:
  						{
@@ -3181,7 +4053,7 @@
  
  					case COMPRESSION_PARENT:
  						if (UNEXPECTED(m_parent_missing))
-@@ -1512,12 +1630,15 @@
+@@ -1512,12 +1632,15 @@
  	if (err)
  		return err;
  
@@ -3201,7 +4073,7 @@
  	resulttag = metaentry.metatag;
  	resultflags = metaentry.flags;
  	return std::error_condition();
-@@ -1864,7 +1985,7 @@
+@@ -1864,7 +1987,7 @@
  	// look for hard disk metadata; if found, then the unit size == sector size
  	std::string metadata;
  	int i0, i1, i2, i3;
@@ -3210,7 +4082,7 @@
  		return i3;
  
  	// look for CD-ROM metadata; if found, then the unit size == CD frame size
-@@ -1907,6 +2028,8 @@
+@@ -1907,6 +2030,8 @@
  	m_metaoffset = get_u64be(&rawheader[36]);
  	m_hunkbytes = get_u32be(&rawheader[76]);
  	m_hunkcount = get_u32be(&rawheader[24]);
@@ -3219,7 +4091,7 @@
  
  	// extract parent SHA-1
  	uint32_t flags = get_u32be(&rawheader[16]);
-@@ -1939,7 +2062,9 @@
+@@ -1939,7 +2064,9 @@
  
  	// guess at the units based on snooping the metadata
  	m_unitbytes = guess_unitbytes();
@@ -3230,7 +4102,7 @@
  }
  
  /**
-@@ -1970,6 +2095,8 @@
+@@ -1970,6 +2097,8 @@
  	m_metaoffset = get_u64be(&rawheader[36]);
  	m_hunkbytes = get_u32be(&rawheader[44]);
  	m_hunkcount = get_u32be(&rawheader[24]);
@@ -3239,7 +4111,7 @@
  
  	// extract parent SHA-1
  	uint32_t flags = get_u32be(&rawheader[16]);
-@@ -2002,7 +2129,9 @@
+@@ -2002,7 +2131,9 @@
  
  	// guess at the units based on snooping the metadata
  	m_unitbytes = guess_unitbytes();
@@ -3250,7 +4122,7 @@
  }
  
  /**
-@@ -2024,14 +2153,19 @@
+@@ -2024,14 +2155,19 @@
  	if (UNEXPECTED(get_u32be(&rawheader[8]) != V5_HEADER_SIZE))
  		throw std::error_condition(error::INVALID_FILE);
  
@@ -3273,7 +4145,7 @@
  
  	// determine compression
  	m_compression[0] = get_u32be(&rawheader[16]);
-@@ -2073,7 +2207,7 @@
+@@ -2073,7 +2209,7 @@
  	try
  	{
  		// first get a CRC-16 of the original rawmap
@@ -3282,7 +4154,7 @@
  
  		// create a buffer to hold the RLE data
  		std::vector<uint8_t> compression_rle(m_hunkcount);
-@@ -2093,12 +2227,12 @@
+@@ -2093,12 +2229,12 @@
  		int count = 0;
  		for (uint32_t hunknum = 0; hunknum < m_hunkcount; hunknum++)
  		{
@@ -3297,7 +4169,7 @@
  				if (refhunk == last_self)
  					curcomp = COMPRESSION_SELF_0;
  				else if (refhunk == last_self + 1)
-@@ -2110,7 +2244,7 @@
+@@ -2110,7 +2246,7 @@
  			else if (curcomp == COMPRESSION_PARENT)
  			{
  				// promote parent block references to more compact forms
@@ -3306,7 +4178,7 @@
  				if (refunit == mulu_32x32(hunknum, m_hunkbytes) / m_unitbytes)
  					curcomp = COMPRESSION_PARENT_SELF;
  				else if (refunit == last_parent)
-@@ -2124,7 +2258,7 @@
+@@ -2124,7 +2260,7 @@
  
  			// track maximum compressed length
  			else //if (curcomp >= COMPRESSION_TYPE_0 && curcomp <= COMPRESSION_TYPE_3)
@@ -3315,7 +4187,7 @@
  
  			// track repeats
  			if (curcomp == lastcomp)
-@@ -2172,8 +2306,15 @@
+@@ -2172,8 +2308,15 @@
  		// for COMPRESSION_SELF: selfbits
  		// for COMPRESSION_PARENT: parentbits
  		// the overall size is clamped later with bitbuf.flush()
@@ -3333,7 +4205,7 @@
  		bitstream_out bitbuf(&compressed[16], compressed.size() - 16);
  
  		// compute a tree and export it to the buffer
-@@ -2195,7 +2336,7 @@
+@@ -2195,7 +2338,7 @@
  		uint64_t firstoffs = 0;
  		for (uint32_t hunknum = 0; hunknum < m_hunkcount; hunknum++)
  		{
@@ -3342,7 +4214,7 @@
  			uint32_t length = get_u24be(&rawmap[1]);
  			uint64_t offset = get_u48be(&rawmap[4]);
  			uint16_t crc = get_u16be(&rawmap[10]);
-@@ -2255,7 +2396,8 @@
+@@ -2255,7 +2398,8 @@
  
  		// write the map header
  		uint32_t complen = bitbuf.flush();
@@ -3352,7 +4224,7 @@
  		put_u32be(&compressed[0], complen);
  		put_u48be(&compressed[4], firstoffs);
  		put_u16be(&compressed[10], mapcrc);
-@@ -2315,12 +2457,18 @@
+@@ -2315,12 +2459,18 @@
  	uint8_t const selfbits = rawbuf[13];
  	uint8_t const parentbits = rawbuf[14];
  
@@ -3373,7 +4245,7 @@
  
  	// first decode the compression types
  	huffman_decoder<16, 8> decoder;
-@@ -2331,7 +2479,7 @@
+@@ -2331,7 +2481,7 @@
  	int repcount = 0;
  	for (uint32_t hunknum = 0; hunknum < m_hunkcount; hunknum++)
  	{
@@ -3382,7 +4254,7 @@
  		if (repcount > 0)
  			rawmap[0] = lastcomp, repcount--;
  		else
-@@ -2352,7 +2500,7 @@
+@@ -2352,7 +2502,7 @@
  	uint64_t last_parent = 0;
  	for (uint32_t hunknum = 0; hunknum < m_hunkcount; hunknum++)
  	{
@@ -3391,7 +4263,7 @@
  		uint64_t offset = curoffset;
  		uint32_t length = 0;
  		uint16_t crc = 0;
-@@ -2377,7 +2525,9 @@
+@@ -2377,7 +2527,9 @@
  				break;
  
  			case COMPRESSION_PARENT:
@@ -3402,7 +4274,7 @@
  				last_parent = offset;
  				break;
  
-@@ -2409,7 +2559,7 @@
+@@ -2409,7 +2561,7 @@
  	}
  
  	// verify the final CRC
@@ -3411,7 +4283,7 @@
  		throw std::error_condition(error::DECOMPRESSION_ERROR);
  }
  
-@@ -2443,7 +2593,7 @@
+@@ -2443,7 +2595,7 @@
  			throw std::error_condition(error::UNSUPPORTED_VERSION);
  
  		// must be an even number of units per hunk
@@ -3420,7 +4292,7 @@
  			throw std::error_condition(std::errc::invalid_argument);
  		if (UNEXPECTED(m_parent && m_unitbytes != m_parent->unit_bytes()))
  			throw std::error_condition(std::errc::invalid_argument);
-@@ -2495,12 +2645,12 @@
+@@ -2495,12 +2647,12 @@
  		// write out the map (if not compressed)
  		if (!compressed())
  		{
@@ -3435,7 +4307,7 @@
  				err = file_write(offset, buffer, bytes_to_write);
  				if (UNEXPECTED(err))
  					throw err;
-@@ -2518,6 +2668,11 @@
+@@ -2518,6 +2670,11 @@
  		close();
  		return err;
  	}
@@ -3447,7 +4319,7 @@
  	catch (...)
  	{
  		close();
-@@ -2612,6 +2767,11 @@
+@@ -2612,6 +2769,11 @@
  		close();
  		return err;
  	}
@@ -3459,7 +4331,7 @@
  }
  
  /**
-@@ -2636,14 +2796,18 @@
+@@ -2636,14 +2798,18 @@
  	}
  
  	// read the map; v5+ compressed drives need to read and decompress their map
@@ -3480,7 +4352,7 @@
  		if (UNEXPECTED(err))
  			throw err;
  	}
-@@ -2683,7 +2847,7 @@
+@@ -2683,7 +2849,7 @@
  		return std::error_condition(error::FILE_NOT_WRITEABLE);
  
  	// only permitted to write new blocks
@@ -3489,7 +4361,7 @@
  	if (UNEXPECTED(rawmap[0] != 0xff))
  		return std::error_condition(error::COMPRESSION_ERROR);
  
-@@ -2720,7 +2884,7 @@
+@@ -2720,7 +2886,7 @@
  	uint64_t offset = file_append(compressed, complength);
  
  	// update the map entry
@@ -3498,7 +4370,7 @@
  	rawmap[0] = (compression == -1) ? COMPRESSION_NONE : compression;
  	put_u24be(&rawmap[1], complength);
  	put_u48be(&rawmap[4], offset);
-@@ -2753,7 +2917,7 @@
+@@ -2753,7 +2919,7 @@
  		throw std::error_condition(error::HUNK_OUT_OF_RANGE);
  
  	// update the map entry
@@ -3507,7 +4379,7 @@
  	rawmap[0] = COMPRESSION_SELF;
  	put_u24be(&rawmap[1], 0);
  	put_u48be(&rawmap[4], otherhunk);
-@@ -2779,7 +2943,7 @@
+@@ -2779,7 +2945,7 @@
  		throw err;
  
  	// update the map entry
@@ -3516,7 +4388,7 @@
  	rawmap[0] = COMPRESSION_PARENT;
  	put_u24be(&rawmap[1], 0);
  	put_u48be(&rawmap[4], parentunit);
-@@ -2815,9 +2979,14 @@
+@@ -2815,9 +2981,14 @@
  		metaentry.offset = metaentry.next;
  	}
  
@@ -3532,7 +4404,7 @@
  		// read the raw header
  		uint8_t raw_meta_header[METADATA_HEADER_SIZE];
  		std::error_condition err = file_read(metaentry.offset, raw_meta_header, sizeof(raw_meta_header));
-@@ -2838,6 +3007,17 @@
+@@ -2838,6 +3009,17 @@
  		// no match, fetch the next link
  		metaentry.prev = metaentry.offset;
  		metaentry.offset = metaentry.next;
@@ -3550,7 +4422,7 @@
  	}
  
  	// if we get here, we didn't find it
-@@ -2942,18 +3122,24 @@
+@@ -2942,18 +3124,21 @@
  	m_walking_parent(false),
  	m_total_in(0),
  	m_total_out(0),
@@ -3577,13 +4449,10 @@
 -	// allocate work queues
 -	m_read_queue = osd_work_queue_alloc(WORK_QUEUE_FLAG_IO);
 -	m_work_queue = osd_work_queue_alloc(WORK_QUEUE_FLAG_MULTI);
-+#ifndef __EMSCRIPTEN__
-+	std::fill(std::begin(m_work_ring), std::end(m_work_ring), nullptr);
-+#endif
  }
  
  /**
-@@ -2966,15 +3152,127 @@
+@@ -2966,14 +3151,126 @@
  
  chd_file_compressor::~chd_file_compressor()
  {
@@ -3595,8 +4464,8 @@
 -	for (auto & elem : m_codecs)
 -		delete elem;
 +	compress_abort();
- }
- 
++}
++
 +void chd_file_compressor::compress_abort() noexcept
 +{
 +#ifndef __EMSCRIPTEN__
@@ -3669,7 +4538,7 @@
 +			if (m_work_stop)
 +				return;
 +			item = m_work_ring[m_work_head];
-+			m_work_head = (m_work_head + 1) % WORK_BUFFER_HUNKS;
++			m_work_head = (m_work_head + 1) % m_work_buffer_hunks;
 +			m_work_count--;
 +		}
 +		if (!m_abort.load(std::memory_order_acquire) && !m_has_read_error.load(std::memory_order_acquire))
@@ -3712,13 +4581,12 @@
 +		}
 +		m_done_cv.notify_one();
 +	}
-+}
+ }
 +#endif
-+
+ 
  /**
   * @fn  void chd_file_compressor::compress_begin()
-  *
-@@ -2985,9 +3283,11 @@
+@@ -2985,9 +3282,11 @@
  
  void chd_file_compressor::compress_begin()
  {
@@ -3731,7 +4599,7 @@
  	m_total_out = 0;
  	m_compsha1.reset();
  
-@@ -2997,31 +3297,59 @@
+@@ -2997,31 +3296,67 @@
  
  	// reset read state
  	m_read_queue_offset = 0;
@@ -3740,14 +4608,22 @@
 +	m_has_read_error.store(false, std::memory_order_relaxed);
  	m_read_error.clear();
  
- 	// reset work item state
+-	// reset work item state
 -	m_work_buffer.resize(hunk_bytes() * (WORK_BUFFER_HUNKS + 1));
 -	memset(&m_work_buffer[0], 0, m_work_buffer.size());
 -	m_compressed_buffer.resize(hunk_bytes() * WORK_BUFFER_HUNKS);
-+	m_work_buffer.resize(size_t(hunk_bytes()) * (WORK_BUFFER_HUNKS + 1));
+-	for (int itemnum = 0; itemnum < WORK_BUFFER_HUNKS; itemnum++)
++	// reset work item state (Discpress: target 8 MiB per buffer -> 4 MiB half-reads for DVD throughput;
++	// keep 256 hunks when walking a parent; always a multiple of 256 for stateless Tier-R tail padding)
++	uint32_t target_hunks = m_parent ? 256u : std::clamp<uint32_t>((8u << 20) / hunk_bytes(), 256u, 4096u);
++	m_work_buffer_hunks = (target_hunks / 256u) * 256u;
++	if (m_work_buffer_hunks < 256u)
++		m_work_buffer_hunks = 256u;
++	m_work_buffer.resize(size_t(hunk_bytes()) * (m_work_buffer_hunks + 1));
 +	memset(m_work_buffer.data(), 0, m_work_buffer.size());
-+	m_compressed_buffer.resize(size_t(hunk_bytes()) * WORK_BUFFER_HUNKS);
- 	for (int itemnum = 0; itemnum < WORK_BUFFER_HUNKS; itemnum++)
++	m_compressed_buffer.resize(size_t(hunk_bytes()) * m_work_buffer_hunks);
++	m_work_item = std::make_unique<work_item[]>(m_work_buffer_hunks);
++	for (uint32_t itemnum = 0; itemnum < m_work_buffer_hunks; itemnum++)
  	{
  		work_item &item = m_work_item[itemnum];
  		item.m_compressor = this;
@@ -3772,8 +4648,9 @@
 +	extern int osd_num_processors;
 +	uint32_t const hw = std::max<uint32_t>(1, std::thread::hardware_concurrency());
 +	uint32_t const req = (osd_num_processors > 0) ? uint32_t(osd_num_processors) : hw;
-+	uint32_t const cap = std::min<uint32_t>(WORK_BUFFER_HUNKS, std::max<uint32_t>(4 * hw, 64));
++	uint32_t const cap = std::min<uint32_t>(m_work_buffer_hunks, std::max<uint32_t>(4 * hw, 64));
 +	uint32_t const nworkers = std::min(req, cap);
++	m_work_ring.assign(m_work_buffer_hunks, nullptr);
 +#endif
 +	m_codecs.clear();
 +	m_codecs.reserve(nworkers);
@@ -3784,7 +4661,8 @@
  	m_write_hunk = 0;
 +
 +#ifdef __EMSCRIPTEN__
-+	s_wasm_par = compressed() ? wasm_par_enabled(hunk_bytes(), unit_bytes(), m_compression, m_libdeflate ? 1 : 0) : 0; // flags: 1 = libdeflate
++	uint32_t const par_flags = (m_libdeflate ? 1u : 0u) | (m_ultra ? 2u : 0u) | (uint32_t(m_zstd_level) << 8);
++	s_wasm_par = compressed() ? wasm_par_enabled(hunk_bytes(), unit_bytes(), m_compression, par_flags) : 0;
 +#else
 +	if (nworkers > 1)
 +	{
@@ -3803,7 +4681,7 @@
  }
  
  /**
-@@ -3040,17 +3368,30 @@
+@@ -3040,17 +3375,30 @@
  std::error_condition chd_file_compressor::compress_continue(double &progress, double &ratio)
  {
  	// if we got an error, return the error
@@ -3830,20 +4708,21 @@
 +#endif
  		// see if we have enough free work items to read the next half of a buffer
 -		uint32_t const startitem = m_read_queue_offset / hunk_bytes();
+-		uint32_t const enditem = startitem + WORK_BUFFER_HUNKS / 2;
 +		uint32_t const startitem = uint32_t(m_read_queue_offset / hunk_bytes());
- 		uint32_t const enditem = startitem + WORK_BUFFER_HUNKS / 2;
++		uint32_t const enditem = startitem + m_work_buffer_hunks / 2;
  		uint32_t curitem = startitem;
 -		while ((curitem < enditem) && (m_work_item[curitem % WORK_BUFFER_HUNKS].m_status == WS_READY))
-+		while ((curitem < enditem) && (m_work_item[curitem % WORK_BUFFER_HUNKS].m_status.load(std::memory_order_acquire) == WS_READY))
++		while ((curitem < enditem) && (m_work_item[curitem % m_work_buffer_hunks].m_status.load(std::memory_order_acquire) == WS_READY))
  			++curitem;
  
  		// if it's not all clear, defer
-@@ -3059,28 +3400,44 @@
+@@ -3059,28 +3407,44 @@
  
  		// if we're walking the parent, we want one more item to have cleared so we
  		// can read an extra hunk there
 -		if (m_walking_parent && m_work_item[curitem % WORK_BUFFER_HUNKS].m_status != WS_READY)
-+		if (m_walking_parent && m_work_item[curitem % WORK_BUFFER_HUNKS].m_status.load(std::memory_order_acquire) != WS_READY)
++		if (m_walking_parent && m_work_item[curitem % m_work_buffer_hunks].m_status.load(std::memory_order_acquire) != WS_READY)
  			break;
  
  		// queue the next read
@@ -3851,8 +4730,8 @@
 -			m_work_item[curitem % WORK_BUFFER_HUNKS].m_status = WS_READING;
 -		osd_work_item_queue(m_read_queue, async_read_static, this, WORK_ITEM_FLAG_AUTO_RELEASE);
 -		m_read_queue_offset += WORK_BUFFER_HUNKS * hunk_bytes() / 2;
-+			m_work_item[curitem % WORK_BUFFER_HUNKS].m_status.store(WS_READING, std::memory_order_release);
-+		m_read_queue_offset += uint64_t(WORK_BUFFER_HUNKS / 2) * hunk_bytes();
++			m_work_item[curitem % m_work_buffer_hunks].m_status.store(WS_READING, std::memory_order_release);
++		m_read_queue_offset += uint64_t(m_work_buffer_hunks / 2) * hunk_bytes();
 +#ifndef __EMSCRIPTEN__
 +		if (!m_workers.empty())
 +		{
@@ -3873,7 +4752,7 @@
  
  	// flush out any finished items
 -	while (m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status == WS_COMPLETE)
-+	while (m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status.load(std::memory_order_acquire) == WS_COMPLETE)
++	while (m_work_item[m_write_hunk % m_work_buffer_hunks].m_status.load(std::memory_order_acquire) == WS_COMPLETE)
  	{
 -		work_item &item = m_work_item[m_write_hunk % WORK_BUFFER_HUNKS];
 -
@@ -3889,12 +4768,12 @@
 +			return m_read_error;
  		}
  
-+		work_item &item = m_work_item[m_write_hunk % WORK_BUFFER_HUNKS];
++		work_item &item = m_work_item[m_write_hunk % m_work_buffer_hunks];
 +
  		if (m_walking_parent)
  		{
  			// for parent walking, just add to the hashmap
-@@ -3091,7 +3448,7 @@
+@@ -3091,7 +3455,7 @@
  			for (uint32_t unit = 0; unit < units; unit++)
  			{
  				if (m_parent_map.find(item.m_hash[unit].m_crc16, item.m_hash[unit].m_sha1) == hashmap::NOT_FOUND)
@@ -3903,7 +4782,7 @@
  			}
  		}
  		else if (!compressed())
-@@ -3123,6 +3480,11 @@
+@@ -3123,6 +3487,11 @@
  			}
  			else
  			{
@@ -3915,7 +4794,7 @@
  				// otherwise, append it compressed and add to the self map
  				hunk_write_compressed(item.m_hunknum, item.m_compression, item.m_compressed, item.m_complen, item.m_hash[0].m_crc16);
  				m_total_out += item.m_complen;
-@@ -3131,25 +3493,42 @@
+@@ -3131,25 +3500,43 @@
  		}
  
  		// reset the item and advance
@@ -3942,9 +4821,10 @@
 +				m_read_queue_offset = 0;
 +				m_read_done_offset.store(0, std::memory_order_relaxed);
  				m_write_hunk = 0;
- 				for (auto &elem : m_work_item)
+-				for (auto &elem : m_work_item)
 -					elem.m_status = WS_READY;
-+					elem.m_status.store(WS_READY, std::memory_order_relaxed);
++				for (uint32_t itemnum = 0; itemnum < m_work_buffer_hunks; itemnum++)
++					m_work_item[itemnum].m_status.store(WS_READY, std::memory_order_relaxed);
  			}
  			else
  			{
@@ -3958,12 +4838,13 @@
 +				m_parent_map.reset();
 +				std::vector<uint8_t>().swap(m_work_buffer);
 +				std::vector<uint8_t>().swap(m_compressed_buffer);
++				m_work_item.reset();
 +				m_codecs.clear();
 +				m_codecs.shrink_to_fit();
  				if (!compressed())
  					return std::error_condition();
  				std::error_condition err = set_raw_sha1(m_compsha1.finish());
-@@ -3162,42 +3541,28 @@
+@@ -3162,42 +3549,28 @@
  
  	// update progress and ratio
  	if (m_walking_parent)
@@ -3987,7 +4868,7 @@
 +	{
 +		std::unique_lock<std::mutex> lock(m_done_mutex);
 +		m_done_cv.wait(lock, [this]() {
-+			int32_t const st = m_work_item[m_write_hunk % WORK_BUFFER_HUNKS].m_status.load(std::memory_order_acquire);
++			int32_t const st = m_work_item[m_write_hunk % m_work_buffer_hunks].m_status.load(std::memory_order_acquire);
 +			return st == WS_COMPLETE || st == WS_READY || m_has_read_error.load(std::memory_order_acquire);
 +		});
 +	}
@@ -4020,14 +4901,14 @@
   * @fn  void chd_file_compressor::async_walk_parent(work_item &item)
   *
   * @brief   Asynchronous walk parent.
-@@ -3216,31 +3581,10 @@
+@@ -3216,31 +3589,10 @@
  		item.m_hash[unit].m_crc16 = util::crc16_creator::simple(item.m_data + unit * unit_bytes(), hunk_bytes());
  		item.m_hash[unit].m_sha1 = util::sha1_creator::simple(item.m_data + unit * unit_bytes(), hunk_bytes());
  	}
 -	item.m_status = WS_COMPLETE;
- }
- 
- /**
+-}
+-
+-/**
 - * @fn  void *chd_file_compressor::async_compress_hunk_static(void *param, int threadid)
 - *
 - * @brief   -------------------------------------------------
@@ -4045,15 +4926,15 @@
 -	auto *const item = reinterpret_cast<work_item *>(param);
 -	item->m_compressor->async_compress_hunk(*item, threadid);
 -	return nullptr;
--}
--
--/**
+ }
+ 
+ /**
 - * @fn  void chd_file_compressor::async_compress_hunk(work_item &item, int threadid)
 + * @fn  void chd_file_compressor::async_compress_hunk(work_item &item, uint32_t threadid)
   *
   * @brief   Asynchronous compress hunk.
   *
-@@ -3248,11 +3592,11 @@
+@@ -3248,11 +3600,11 @@
   * @param   threadid        The threadid.
   */
  
@@ -4068,7 +4949,7 @@
  
  	// compute CRC-16 and SHA-1 hashes
  	item.m_hash[0].m_crc16 = util::crc16_creator::simple(item.m_data, hunk_bytes());
-@@ -3260,32 +3604,41 @@
+@@ -3260,32 +3612,49 @@
  
  	// find the best compression scheme, unless we already have a self or parent match
  	// (note we may miss a self match from blocks not yet added, but this just results in extra work)
@@ -4105,32 +4986,40 @@
  {
 -	reinterpret_cast<chd_file_compressor *>(param)->async_read();
 -	return nullptr;
-+	// CD audio: cdfl; CD data: cdlz, which wins almost every data hunk (cdzl wins about one in
-+	// ten by a few bytes, cdfl none); other data: every codec but flac, which wins almost none
-+	// and is the slowest. Without those codecs in the list, or for a hunk that holds both
-+	// kinds, every codec is tried.
-+	uint32_t all = 0, flac = 0, cdlz = 0;
++	// CD audio: cdfl; CD data: cdlz (with adaptive bit 4 fallback to cdzl if >75% entropy);
++	// other data: every codec but flac (with bit 5 200ns PCM probe if flac is configured).
++	// Without those codecs in the list, or for a hunk that holds both kinds, every codec is tried.
++	uint32_t all = 0, flac = 0, cdlz = 0, cdzl = 0, raw_flac = 0;
 +	for (int slot = 0; slot < 4; slot++)
 +	{
 +		chd_codec_type const type = m_compression[slot];
 +		if (type == CHD_CODEC_NONE)
 +			continue;
-+		all |= 1 << slot;
++		all |= 1u << slot;
 +		if ((type == CHD_CODEC_CD_FLAC) || (type == CHD_CODEC_FLAC))
-+			flac |= 1 << slot;
++			flac |= 1u << slot;
++		if (type == CHD_CODEC_FLAC)
++			raw_flac |= 1u << slot;
 +		if (type == CHD_CODEC_CD_LZMA)
-+			cdlz |= 1 << slot;
++			cdlz |= 1u << slot;
++		if (type == CHD_CODEC_CD_ZLIB)
++			cdzl |= 1u << slot;
 +	}
 +	uint32_t codecs = all;
 +	if (content == hunk_content::AUDIO)
 +		codecs = flac;
 +	else if (content == hunk_content::DATA)
-+		codecs = cdlz ? cdlz : (all & ~flac);
-+	return codecs ? codecs : all;
++	{
++		if (cdlz)
++			codecs = cdlz | (cdzl ? 0x10u : 0u);
++		else
++			codecs = (all & ~flac) | (raw_flac ? 0x20u : 0u);
++	}
++	return (codecs & 0x0fu) ? codecs : all;
  }
  
  /**
-@@ -3296,31 +3649,38 @@
+@@ -3296,31 +3665,38 @@
  
  void chd_file_compressor::async_read()
  {
@@ -4158,7 +5047,7 @@
 -	assert((&m_work_buffer[0] == dest) || (&m_work_buffer[work_buffer_bytes / 2] == dest));
 -	assert(!(m_read_done_offset % hunk_bytes()));
 -	uint64_t const end_offset = m_read_done_offset + numbytes;
-+	uint64_t const work_buffer_bytes = uint64_t(WORK_BUFFER_HUNKS) * hunk_bytes();
++	uint64_t const work_buffer_bytes = uint64_t(m_work_buffer_hunks) * hunk_bytes();
 +	uint32_t numbytes = uint32_t(std::min<uint64_t>(work_buffer_bytes / 2, logical_bytes() - read_done));
 +
 +	uint8_t *const dest = m_work_buffer.data() + (read_done % work_buffer_bytes);
@@ -4183,13 +5072,13 @@
  			while (curoffs < end_offset + 1)
  			{
  				std::error_condition err = m_parent->read_hunk(curhunk, curdest);
-@@ -3334,40 +3694,118 @@
+@@ -3334,40 +3710,140 @@
  		else
  		{
  			// otherwise, call the virtual function
 -			read_data(dest, m_read_done_offset, numbytes);
+-		}
 +			read_data(dest, read_done, numbytes);
- 		}
  
 -		// spawn off work for each hunk
 -		for (uint64_t curoffs = m_read_done_offset; curoffs < end_offset; curoffs += hunk_bytes())
@@ -4200,8 +5089,29 @@
 -			item.m_status = WS_QUEUED;
 -			item.m_hunknum = hunknum;
 -			item.m_osd = osd_work_item_queue(m_work_queue, m_walking_parent ? async_walk_parent_static : async_compress_hunk_static, &item, 0);
--		}
--
++			// Discpress: stateless Tier-R 256-hunk tail rule when m_work_buffer_hunks > 256.
++			// Upstream MAME 0.289 leaves trailing bytes past logical_bytes in the final hunk
++			// untouched from hunk (last_hunk - 256) (or 0 if last_hunk < 256). Replicate that
++			// exact tail from our >=512-hunk ring so output stays 100% byte-identical.
++			if (m_work_buffer_hunks > 256u && end_offset == logical_bytes())
++			{
++				uint32_t const tail = uint32_t(logical_bytes() % hunk_bytes());
++				if (tail != 0)
++				{
++					uint32_t const last_hunk = m_hunkcount - 1;
++					uint8_t *const last_ptr = &m_work_buffer[size_t(hunk_bytes()) * (last_hunk % m_work_buffer_hunks)];
++					uint32_t const pad = hunk_bytes() - tail;
++					if (last_hunk < 256u)
++						memset(last_ptr + tail, 0, pad);
++					else
++					{
++						uint8_t const *const prev_ptr = &m_work_buffer[size_t(hunk_bytes()) * ((last_hunk - 256u) % m_work_buffer_hunks)];
++						memcpy(last_ptr + tail, prev_ptr + tail, pad);
++					}
++				}
++			}
+ 		}
+ 
 -		// continue the running SHA-1
 -		if (!m_walking_parent)
 +		// continue the running SHA-1 and advance read pointer before handing off to workers
@@ -4225,7 +5135,7 @@
 +				for (uint64_t curoffs = read_done; curoffs < end_offset; curoffs += hunk_bytes())
 +				{
 +					uint32_t const hunknum = uint32_t(curoffs / hunk_bytes());
-+					work_item &item = m_work_item[hunknum % WORK_BUFFER_HUNKS];
++					work_item &item = m_work_item[hunknum % m_work_buffer_hunks];
 +					assert(item.m_status.load(std::memory_order_relaxed) == WS_READING);
 +					item.m_hunknum = hunknum;
 +					item.m_walking_parent = false;
@@ -4242,14 +5152,14 @@
 +				for (uint64_t curoffs = read_done; curoffs < end_offset; curoffs += hunk_bytes())
 +				{
 +					uint32_t const hunknum = uint32_t(curoffs / hunk_bytes());
-+					work_item &item = m_work_item[hunknum % WORK_BUFFER_HUNKS];
++					work_item &item = m_work_item[hunknum % m_work_buffer_hunks];
 +					assert(item.m_status.load(std::memory_order_relaxed) == WS_READING);
 +					item.m_hunknum = hunknum;
 +					item.m_walking_parent = walking_parent;
 +					item.m_try = (m_codec_plan && !walking_parent) ? codec_plan_codecs(read_content(curoffs, hunk_bytes())) : 0x0f;
 +					item.m_status.store(WS_QUEUED, std::memory_order_release);
 +					m_work_ring[m_work_tail] = &item;
-+					m_work_tail = (m_work_tail + 1) % WORK_BUFFER_HUNKS;
++					m_work_tail = (m_work_tail + 1) % m_work_buffer_hunks;
 +					m_work_count++;
 +				}
 +			}
@@ -4260,7 +5170,7 @@
 +		for (uint64_t curoffs = read_done; curoffs < end_offset; curoffs += hunk_bytes())
 +		{
 +			uint32_t const hunknum = uint32_t(curoffs / hunk_bytes());
-+			work_item &item = m_work_item[hunknum % WORK_BUFFER_HUNKS];
++			work_item &item = m_work_item[hunknum % m_work_buffer_hunks];
 +			assert(item.m_status.load(std::memory_order_relaxed) == WS_READING);
 +			item.m_hunknum = hunknum;
 +			item.m_walking_parent = walking_parent;
@@ -4319,7 +5229,7 @@
  	}
  }
  
-@@ -3389,7 +3827,8 @@
+@@ -3389,7 +3865,8 @@
  	m_block_list(new entry_block(nullptr))
  {
  	// initialize the map to empty
@@ -4329,7 +5239,7 @@
  }
  
  /**
-@@ -3426,7 +3865,8 @@
+@@ -3426,7 +3903,8 @@
  	m_block_list->m_nextalloc = 0;
  
  	// reset the hash
@@ -4339,7 +5249,7 @@
  }
  
  /**
-@@ -3445,9 +3885,9 @@
+@@ -3445,9 +3923,9 @@
  uint64_t chd_file_compressor::hashmap::find(util::crc16_t crc16, util::sha1_t sha1) const noexcept
  {
  	// look up the entry in the map
@@ -4351,7 +5261,7 @@
  	return NOT_FOUND;
  }
  
-@@ -3469,10 +3909,11 @@
+@@ -3469,10 +3947,11 @@
  	if (m_block_list->m_nextalloc == std::size(m_block_list->m_array))
  		m_block_list = new entry_block(m_block_list);
  	entry_t *entry = &m_block_list->m_array[m_block_list->m_nextalloc++];
@@ -4366,7 +5276,7 @@
  }
  
  std::error_condition chd_file::check_is_hd() const noexcept
-@@ -3512,3 +3953,189 @@
+@@ -3512,3 +3991,250 @@
  	metadata_entry metaentry;
  	return metadata_find(AV_METADATA_TAG, 0, metaentry);
  }
@@ -4384,9 +5294,34 @@
 +	item.m_status = WS_COMPLETE;
 +}
 +
++uint8_t *chd_file_compressor::wasm_par_item_compbuf(void *itemp) noexcept
++{
++	return reinterpret_cast<work_item *>(itemp)->m_compressed;
++}
++
++void chd_file_compressor::wasm_par_complete_item_inplace(void *itemp, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen) noexcept
++{
++	work_item &item = *reinterpret_cast<work_item *>(itemp);
++	item.m_hash[0].m_crc16 = util::crc16_t(uint16_t(crc16));
++	memcpy(item.m_hash[0].m_sha1.m_raw, sha1, sizeof(item.m_hash[0].m_sha1.m_raw));
++	item.m_compression = int8_t(compression);
++	item.m_complen = complen;
++	item.m_status = WS_COMPLETE;
++}
++
 +extern "C" EMSCRIPTEN_KEEPALIVE void wasm_par_complete(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen, const uint8_t *data)
 +{
 +	chd_file_compressor::wasm_par_complete_item(item, crc16, sha1, compression, complen, data);
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE uint8_t *wasm_par_item_compbuf(void *item)
++{
++	return chd_file_compressor::wasm_par_item_compbuf(item);
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE void wasm_par_complete_inplace(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen)
++{
++	chd_file_compressor::wasm_par_complete_item_inplace(item, crc16, sha1, compression, complen);
 +}
 +
 +bool chd_file::wasm_read_ahead(uint32_t first, uint32_t count)
@@ -4397,8 +5332,31 @@
 +	if (m_wasm_rd == -2)
 +		return true;
 +
-+	// a new window: drop the hunks before it (one read again is read the usual way); a window that
-+	// goes back (a GD-ROM's split frames) queues its hunks again, those still kept aside
++	// ensure flat power-of-2 ring covers [first, first + 2*count) with zero per-hunk allocations
++	uint32_t need = 16u;
++	uint64_t const want_slots = std::max<uint64_t>(2 * uint64_t(count), 16u);
++	while (need < want_slots && need < 16384u)
++		need <<= 1;
++	if (m_wasm_slots.size() < need)
++	{
++		try
++		{
++			m_wasm_slots.assign(need, wasm_ahead_slot{});
++			m_wasm_buf.resize(size_t(need) * m_hunkbytes);
++			m_wasm_ring_mask = need - 1;
++			m_wasm_queued = first;
++		}
++		catch (...)
++		{
++			std::vector<wasm_ahead_slot>().swap(m_wasm_slots);
++			std::vector<uint8_t>().swap(m_wasm_buf);
++			m_wasm_ring_mask = 0;
++			m_wasm_rd = -2;
++			return true;
++		}
++	}
++
++	// a new window: drop slots before it; a window that goes back queues its hunks again
 +	if ((first != m_wasm_first) || (count != m_wasm_count))
 +	{
 +		m_wasm_first = first;
@@ -4406,26 +5364,27 @@
 +		m_wasm_scan = first;
 +		if (first < m_wasm_queued)
 +			m_wasm_queued = first;
-+		for (auto it = m_wasm_ahead.begin(); it != m_wasm_ahead.end(); )
++		for (auto &slot : m_wasm_slots)
 +		{
-+			if (it->first < first)
-+				it = m_wasm_ahead.erase(it);
-+			else
-+				++it;
++			if (slot.hunk != ~uint32_t(0) && slot.hunk < first)
++			{
++				slot.hunk = ~uint32_t(0);
++				slot.len = 0;
++				slot.state = 0;
++			}
 +		}
 +	}
 +
 +	// the stored data of this window and the next, read in one go when it lies together in the file
-+	// (every read costs far more in the browser than the bytes do): codec-compressed hunks go to the
-+	// helpers, or are kept to be decompressed when read; uncompressed hunks are kept as they are
 +	uint64_t const begin = std::max<uint64_t>(first, m_wasm_queued);
-+	uint64_t const end = std::min<uint64_t>(uint64_t(first) + 2 * uint64_t(count), m_hunkcount);
++	uint64_t const max_end = std::min<uint64_t>(uint64_t(first) + m_wasm_slots.size(), m_hunkcount);
++	uint64_t const end = std::min<uint64_t>(uint64_t(first) + 2 * uint64_t(count), max_end);
 +	if (begin < end)
 +	{
 +		uint64_t lo = ~uint64_t(0), hi = 0;
 +		for (uint64_t hunknum = begin; hunknum < end; hunknum++)
 +		{
-+			uint8_t const *const rawmap = &m_rawmap[m_mapentrybytes * hunknum];
++			uint8_t const *const rawmap = &m_rawmap[size_t(m_mapentrybytes) * hunknum];
 +			if (rawmap[0] > COMPRESSION_NONE)
 +				continue;
 +			uint64_t const blockoffs = get_u48be(&rawmap[4]);
@@ -4449,40 +5408,49 @@
 +
 +		for (uint64_t hunknum = begin; hunknum < end; hunknum++)
 +		{
-+			if (m_wasm_ahead.count(hunknum))
++			uint32_t const idx = uint32_t(hunknum) & m_wasm_ring_mask;
++			wasm_ahead_slot &slot = m_wasm_slots[idx];
++			if (slot.hunk == uint32_t(hunknum))
 +				continue;
-+			uint8_t const *const rawmap = &m_rawmap[m_mapentrybytes * hunknum];
++			if (slot.hunk != ~uint32_t(0) && slot.hunk >= first)
++				break; // ring slot still holds an active in-window hunk
++			uint8_t const *const rawmap = &m_rawmap[size_t(m_mapentrybytes) * hunknum];
 +			uint8_t const type = rawmap[0];
 +			uint64_t const blockoffs = get_u48be(&rawmap[4]);
++			uint8_t *const dst = &m_wasm_buf[size_t(idx) * m_hunkbytes];
 +			if (type == COMPRESSION_NONE)
 +			{
 +				if (span)
-+					m_wasm_ahead[hunknum] = wasm_ahead_hunk{ std::vector<uint8_t>(span + (blockoffs - lo), span + (blockoffs - lo) + m_hunkbytes), 4 };
++				{
++					memcpy(dst, span + (blockoffs - lo), m_hunkbytes);
++					slot = wasm_ahead_slot{ uint32_t(hunknum), m_hunkbytes, 4 };
++				}
 +				continue;
 +			}
 +			if ((type > COMPRESSION_TYPE_3) || !m_decompressor[type] || m_decompressor[type]->lossy())
 +				continue;
 +			uint32_t const blocklen = get_u24be(&rawmap[1]);
 +			if (blocklen == 0 || blocklen > m_compressed.size())
-+				continue; // empty or larger than a hunk (a damaged map): read_hunk will report it
++				continue;
 +			uint8_t const *data = span ? (span + (blockoffs - lo)) : nullptr;
 +			if (!data)
 +			{
 +				if (file_read(blockoffs, m_compressed.data(), blocklen))
-+					continue; // read_hunk will report it
++					continue;
 +				data = m_compressed.data();
 +			}
 +			if (m_wasm_rd > 0)
 +			{
-+				m_wasm_ahead[hunknum];
-+				wasm_rd_submit(this, hunknum, type, data, blocklen);
++				slot = wasm_ahead_slot{ uint32_t(hunknum), 0, 0 };
++				wasm_rd_submit(this, uint32_t(hunknum), type, data, blocklen);
 +			}
 +			else
 +			{
-+				m_wasm_ahead[hunknum] = wasm_ahead_hunk{ std::vector<uint8_t>(data, data + blocklen), 3 };
++				memcpy(dst, data, blocklen);
++				slot = wasm_ahead_slot{ uint32_t(hunknum), blocklen, 3 };
 +			}
 +		}
-+		std::vector<uint8_t>().swap(m_wasm_span); // release the up-to-16 MiB span immediately after slicing
++		std::vector<uint8_t>().swap(m_wasm_span);
 +		m_wasm_queued = end;
 +	}
 +
@@ -4490,8 +5458,8 @@
 +	uint64_t const ready = std::min<uint64_t>(uint64_t(first) + count, m_hunkcount);
 +	for ( ; m_wasm_scan < ready; m_wasm_scan++)
 +	{
-+		auto const found = m_wasm_ahead.find(m_wasm_scan);
-+		if ((found != m_wasm_ahead.end()) && (found->second.state == 0))
++		wasm_ahead_slot const &slot = m_wasm_slots[uint32_t(m_wasm_scan) & m_wasm_ring_mask];
++		if (slot.hunk == uint32_t(m_wasm_scan) && slot.state == 0)
 +			return false;
 +	}
 +	return true;
@@ -4499,47 +5467,50 @@
 +
 +uint8_t *chd_file::wasm_read_slot(uint32_t hunknum) noexcept
 +{
-+	auto const found = m_wasm_ahead.find(hunknum);
-+	if ((found == m_wasm_ahead.end()) || (found->second.state != 0))
-+		return nullptr; // no longer wanted
-+	try
-+	{
-+		found->second.data.resize(m_hunkbytes);
-+	}
-+	catch (...)
-+	{
++	if (m_wasm_slots.empty())
 +		return nullptr;
-+	}
-+	return &found->second.data[0];
++	uint32_t const idx = hunknum & m_wasm_ring_mask;
++	wasm_ahead_slot const &slot = m_wasm_slots[idx];
++	if (slot.hunk != hunknum || slot.state != 0)
++		return nullptr;
++	return &m_wasm_buf[size_t(idx) * m_hunkbytes];
 +}
 +
 +void chd_file::wasm_read_done(uint32_t hunknum, bool ok) noexcept
 +{
-+	auto const found = m_wasm_ahead.find(hunknum);
-+	if ((found != m_wasm_ahead.end()) && (found->second.state == 0))
-+		found->second.state = (ok && (found->second.data.size() == m_hunkbytes)) ? 1 : 2;
++	if (m_wasm_slots.empty())
++		return;
++	wasm_ahead_slot &slot = m_wasm_slots[hunknum & m_wasm_ring_mask];
++	if (slot.hunk == hunknum && slot.state == 0)
++	{
++		slot.len = ok ? m_hunkbytes : 0;
++		slot.state = ok ? 1 : 2;
++	}
 +}
 +
 +// fills dest from the read-ahead if it has this hunk (decompressing kept bytes, which throws
 +// like any decompression); the caller checks the CRC as usual
 +bool chd_file::wasm_read_cached(uint32_t hunknum, uint8_t type, void *dest)
 +{
-+	auto const found = m_wasm_ahead.find(hunknum);
-+	if (found == m_wasm_ahead.end())
++	if (m_wasm_slots.empty())
 +		return false;
-+	wasm_ahead_hunk const &ahead = found->second;
-+	switch (ahead.state)
++	uint32_t const idx = hunknum & m_wasm_ring_mask;
++	wasm_ahead_slot const &slot = m_wasm_slots[idx];
++	if (slot.hunk != hunknum)
++		return false;
++	uint8_t const *const src = &m_wasm_buf[size_t(idx) * m_hunkbytes];
++	switch (slot.state)
 +	{
 +	case 1: // decompressed by a helper
 +	case 4: // stored uncompressed
-+		if (ahead.data.size() < m_hunkbytes)
++		if (slot.len < m_hunkbytes)
 +			return false;
-+		memcpy(dest, ahead.data.data(), m_hunkbytes);
++		memcpy(dest, src, m_hunkbytes);
 +		return true;
 +	case 3: // compressed bytes
-+		if (ahead.data.empty() || !m_decompressor[type])
++		if (slot.len == 0 || !m_decompressor[type])
 +			return false;
-+		m_decompressor[type]->decompress(ahead.data.data(), ahead.data.size(), reinterpret_cast<uint8_t *>(dest), m_hunkbytes);
++		m_decompressor[type]->decompress(src, slot.len, reinterpret_cast<uint8_t *>(dest), m_hunkbytes);
 +		return true;
 +	default:
 +		return false;
@@ -4573,7 +5544,7 @@
  
  
  /***************************************************************************
-@@ -309,6 +317,12 @@
+@@ -309,6 +317,18 @@
  	uint64_t unit_count() const noexcept { return m_unitcount; }
  	bool compressed() const noexcept { return (m_compression[0] != CHD_CODEC_NONE); }
  	chd_codec_type compression(int index) const noexcept { return m_compression[index]; }
@@ -4583,10 +5554,16 @@
 +	// zlib's bytes. Read when a compressor group is made (compress_begin).
 +	void set_libdeflate(bool libdeflate) noexcept { m_libdeflate = libdeflate; }
 +	bool libdeflate() const noexcept { return m_libdeflate; }
++	// Discpress: --ultra enables maximum-density encoder settings (LZMA fb=273/mc=1000, libdeflate 12,
++	// FLAC QLP precision search within 12-order subset) and --zstd-level selects Zstd level (default 22).
++	void set_ultra(bool ultra) noexcept { m_ultra = ultra; }
++	bool ultra() const noexcept { return m_ultra; }
++	void set_zstd_level(int level) noexcept { m_zstd_level = (level < 1) ? 1 : (level > 22 ? 22 : level); }
++	int zstd_level() const noexcept { return m_zstd_level; }
  	chd_file *parent() const noexcept { return m_parent.get(); }
  	bool parent_missing() const noexcept;
  	util::sha1_t sha1() const noexcept;
-@@ -366,6 +380,16 @@
+@@ -366,6 +386,16 @@
  	std::error_condition check_is_dvd() const noexcept;
  	std::error_condition check_is_av() const noexcept;
  
@@ -4603,7 +5580,7 @@
  private:
  	struct metadata_entry;
  	struct metadata_hash;
-@@ -391,6 +415,7 @@
+@@ -391,6 +421,7 @@
  	std::error_condition verify_proper_compression_append(uint32_t hunknum) const noexcept;
  	void hunk_write_compressed(uint32_t hunknum, int8_t compression, const uint8_t *compressed, uint32_t complength, util::crc16_t crc16);
  	void hunk_copy_from_self(uint32_t hunknum, uint32_t otherhunk);
@@ -4611,19 +5588,23 @@
  	void hunk_copy_from_parent(uint32_t hunknum, uint64_t parentunit);
  	std::error_condition metadata_find(chd_metadata_tag metatag, int32_t metaindex, metadata_entry &metaentry, bool resume = false) const noexcept;
  	std::error_condition metadata_set_previous_next(uint64_t prevoffset, uint64_t nextoffset) noexcept;
-@@ -433,6 +458,21 @@
+@@ -433,6 +464,25 @@
  	// caching
  	std::vector<uint8_t>    m_cache;            // single-hunk cache for partial reads/writes
  	uint32_t                m_cachehunk;        // which hunk is in the cache?
 +
 +	bool                    m_libdeflate = false; // Discpress: see set_libdeflate
++	bool                    m_ultra = false;      // Discpress: see set_ultra
++	int                     m_zstd_level = 22;    // Discpress: see set_zstd_level (22 = ZSTD_maxCLevel())
 +
 +#ifdef __EMSCRIPTEN__
-+	// Discpress: hunks handed to helper workers, by hunk number (see wasm_read_ahead)
++	// Discpress: flat fixed-size ring for hunks handed to helper workers (zero per-hunk heap allocations)
 +	// state: 0 = with a helper, 1 = decompressed by it, 2 = it failed, 3 = compressed bytes, 4 = uncompressed hunk
-+	struct wasm_ahead_hunk { std::vector<uint8_t> data; int state = 0; };
++	struct wasm_ahead_slot { uint32_t hunk = ~uint32_t(0); uint32_t len = 0; int state = 0; };
 +	bool wasm_read_cached(uint32_t hunknum, uint8_t type, void *dest);
-+	std::unordered_map<uint32_t, wasm_ahead_hunk> m_wasm_ahead;
++	std::vector<wasm_ahead_slot> m_wasm_slots;
++	std::vector<uint8_t>    m_wasm_buf;         // contiguous backing pool: m_wasm_slots.size() * m_hunkbytes
++	uint32_t                m_wasm_ring_mask = 0;
 +	std::vector<uint8_t>    m_wasm_span;        // this window's stored data, read in one go
 +	int                     m_wasm_rd = -1;     // -1 = not asked yet, -2 = no read-ahead, 0 = without helpers, 1 = with
 +	uint32_t                m_wasm_first = 0, m_wasm_count = 0; // the window last asked for
@@ -4633,7 +5614,7 @@
  };
  
  
-@@ -449,12 +489,30 @@
+@@ -449,12 +499,40 @@
  	// compression management
  	void compress_begin();
  	std::error_condition compress_continue(double &progress, double &ratio);
@@ -4648,6 +5629,16 @@
 +#ifdef __EMSCRIPTEN__
 +	// browser build: completion callback for hunks compressed by helper workers
 +	static void wasm_par_complete_item(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen, const uint8_t *data);
++	static uint8_t *wasm_par_item_compbuf(void *item) noexcept;
++	static void wasm_par_complete_item_inplace(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen) noexcept;
++	// Discpress: progress & read-ahead introspection for compress_common (copy & -op parent walk)
++	bool walking_parent() const noexcept { return m_walking_parent; }
++	uint64_t read_done_offset() const noexcept { return m_read_done_offset.load(std::memory_order_relaxed); }
++	uint64_t total_in_bytes() const noexcept { return m_total_in.load(std::memory_order_relaxed); }
++	uint64_t total_out_bytes() const noexcept { return m_total_out; }
++	uint32_t hunks_written() const noexcept { return m_write_hunk; }
++	uint32_t work_buffer_hunks() const noexcept { return m_work_buffer_hunks; }
++	virtual chd_file *wasm_input_chd(uint64_t &base_offset) noexcept { base_offset = 0; return nullptr; }
 +#endif
  
  protected:
@@ -4664,7 +5655,7 @@
  	// hash map for looking up values
  	class hashmap
  	{
-@@ -472,11 +530,12 @@
+@@ -472,11 +550,12 @@
  		static constexpr uint64_t NOT_FOUND = ~uint64_t(0);
  
  	private:
@@ -4679,7 +5670,7 @@
  			util::sha1_t        m_sha1;             // SHA-1 of the block
  		};
  
-@@ -490,8 +549,8 @@
+@@ -490,8 +569,8 @@
  			entry_t             m_array[16384];     // array of entries
  		};
  
@@ -4690,7 +5681,7 @@
  		entry_block *       m_block_list;           // list of allocated blocks
  	};
  
-@@ -515,8 +574,7 @@
+@@ -515,8 +594,7 @@
  	struct work_item
  	{
  		work_item()
@@ -4700,7 +5691,7 @@
  			, m_status(WS_READY)
  			, m_hunknum(0)
  			, m_data(nullptr)
-@@ -524,12 +582,11 @@
+@@ -524,12 +602,11 @@
  			, m_complen(0)
  			, m_compression(0)
  			, m_codecs(nullptr)
@@ -4715,7 +5706,7 @@
  		std::atomic<int32_t>  m_status;           // current status of this item
  		uint32_t              m_hunknum;          // number of the hunk we're working on
  		uint8_t *             m_data;             // pointer to the data we are working on
-@@ -537,20 +594,25 @@
+@@ -537,20 +614,25 @@
  		uint32_t              m_complen;          // compressed data length
  		int8_t                m_compression;      // type of compression used
  		chd_compressor_group *m_codecs;         // codec instance
@@ -4746,7 +5737,7 @@
  	uint64_t                m_total_out;        // total bytes out
  	util::sha1_creator      m_compsha1;         // running SHA-1 on raw data
  
-@@ -558,19 +620,40 @@
+@@ -558,19 +640,40 @@
  	hashmap                 m_parent_map;       // hash map for parent
  	hashmap                 m_current_map;      // hash map for current
  
@@ -4760,13 +5751,15 @@
  	std::error_condition    m_read_error;       // error during reading, if any
  
 -	// work item thread
-+	// work item buffers and codecs (Discpress: C++20 native thread pool, single codec group in browser)
- 	static constexpr int WORK_BUFFER_HUNKS = 256;
+-	static constexpr int WORK_BUFFER_HUNKS = 256;
 -	osd_work_queue *        m_work_queue;       // queue for doing work on other threads
++	// work item buffers and codecs (Discpress: dynamic ring up to 8 MiB per buffer for DVD throughput; 256 minimum)
++	uint32_t                m_work_buffer_hunks = 256;
  	std::vector<uint8_t>    m_work_buffer;      // buffer containing hunk data to work on
  	std::vector<uint8_t>    m_compressed_buffer;// buffer containing compressed data
- 	work_item               m_work_item[WORK_BUFFER_HUNKS]; // status of each hunk
+-	work_item               m_work_item[WORK_BUFFER_HUNKS]; // status of each hunk
 -	chd_compressor_group *  m_codecs[WORK_MAX_THREADS]; // codecs to use
++	std::unique_ptr<work_item[]> m_work_item;   // status of each hunk
 +	std::vector<std::unique_ptr<chd_compressor_group>> m_codecs; // codecs to use (1 per worker)
 +
 +#ifndef __EMSCRIPTEN__
@@ -4781,7 +5774,7 @@
 +	std::mutex              m_work_mutex;
 +	std::condition_variable m_work_cv;
 +	std::vector<std::thread> m_workers;
-+	work_item *             m_work_ring[WORK_BUFFER_HUNKS];
++	std::vector<work_item *> m_work_ring;
 +	uint32_t                m_work_head;
 +	uint32_t                m_work_tail;
 +	uint32_t                m_work_count;
@@ -4846,7 +5839,22 @@
  };
  
  
-@@ -259,6 +268,7 @@
+@@ -175,12 +184,13 @@
+ 	virtual uint32_t compress(const uint8_t *src, uint32_t srclen, uint8_t *dest) override;
+ 
+ 	// helpers
+-	static void configure_properties(CLzmaEncProps &props, uint32_t hunkbytes);
++	static void configure_properties(CLzmaEncProps &props, uint32_t hunkbytes, bool ultra = false);
+ 
+ private:
+ 	// internal state
+ 	CLzmaEncProps           m_props;
+ 	chd_lzma_allocator      m_allocator;
++	CLzmaEncHandle          m_encoder = nullptr; // Discpress: persisted across hunks (epoch hash reuse)
+ };
+ 
+ 
+@@ -259,6 +269,7 @@
  	// internal state
  	bool            m_big_endian;
  	flac_encoder    m_encoder;
@@ -4854,31 +5862,124 @@
  };
  
  
-@@ -376,7 +386,8 @@
+@@ -303,6 +314,7 @@
+ 	flac_encoder        m_encoder;
+ 	z_stream            m_deflater;
+ 	chd_zlib_allocator  m_allocator;
++	libdeflate_compressor *m_libdeflate = nullptr; // Discpress: libdeflate subcode when chd.libdeflate()
+ 	std::vector<uint8_t>      m_buffer;
+ };
+ 
+@@ -351,33 +363,50 @@
+ 	// core functionality
+ 	virtual uint32_t compress(const uint8_t *src, uint32_t srclen, uint8_t *dest) override
+ 	{
++		cd_prep_cache prep;
++		return compress_prepared(prep, src, srclen, dest);
++	}
++
++	virtual uint32_t compress_prepared(cd_prep_cache &prep, const uint8_t *src, uint32_t srclen, uint8_t *dest) override
++	{
+ 		// determine header bytes
+ 		uint32_t frames = srclen / cdrom_file::FRAME_SIZE;
+ 		uint32_t complen_bytes = (srclen < 65536) ? 2 : 3;
+ 		uint32_t ecc_bytes = (frames + 7) / 8;
+ 		uint32_t header_bytes = ecc_bytes + complen_bytes;
+ 
+-		// clear out destination header
+-		memset(dest, 0, header_bytes);
+-
+-		// copy audio data followed by subcode data
+-		for (uint32_t framenum = 0; framenum < frames; framenum++)
++		// Discpress: deinterleave frames & run ECC verify/clear once per hunk across cdlz/cdzl/cdzs
++		if (!prep.prepared)
+ 		{
+-			memcpy(&m_buffer[framenum * cdrom_file::MAX_SECTOR_DATA], &src[framenum * cdrom_file::FRAME_SIZE], cdrom_file::MAX_SECTOR_DATA);
+-			memcpy(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA + framenum * cdrom_file::MAX_SUBCODE_DATA], &src[framenum * cdrom_file::FRAME_SIZE + cdrom_file::MAX_SECTOR_DATA], cdrom_file::MAX_SUBCODE_DATA);
+-
+-			// clear out ECC data if we can
+-			uint8_t *sector = &m_buffer[framenum * cdrom_file::MAX_SECTOR_DATA];
+-			if (memcmp(sector, f_cd_sync_header, sizeof(f_cd_sync_header)) == 0 && cdrom_file::ecc_verify(sector))
++			prep.ecc_mask.assign(ecc_bytes, 0);
++			prep.base_data.resize(size_t(frames) * cdrom_file::MAX_SECTOR_DATA);
++			prep.subcode_data.resize(size_t(frames) * cdrom_file::MAX_SUBCODE_DATA);
++			for (uint32_t framenum = 0; framenum < frames; framenum++)
+ 			{
+-				dest[framenum / 8] |= 1 << (framenum % 8);
+-				memset(sector, 0, sizeof(f_cd_sync_header));
+-				cdrom_file::ecc_clear(sector);
++				uint8_t *sector = &prep.base_data[framenum * cdrom_file::MAX_SECTOR_DATA];
++				memcpy(sector, &src[framenum * cdrom_file::FRAME_SIZE], cdrom_file::MAX_SECTOR_DATA);
++				memcpy(&prep.subcode_data[framenum * cdrom_file::MAX_SUBCODE_DATA], &src[framenum * cdrom_file::FRAME_SIZE + cdrom_file::MAX_SECTOR_DATA], cdrom_file::MAX_SUBCODE_DATA);
++
++				// clear out ECC data if we can
++				if (memcmp(sector, f_cd_sync_header, sizeof(f_cd_sync_header)) == 0 && cdrom_file::ecc_verify(sector))
++				{
++					prep.ecc_mask[framenum / 8] |= 1 << (framenum % 8);
++					memset(sector, 0, sizeof(f_cd_sync_header));
++					cdrom_file::ecc_clear(sector);
++				}
  			}
++			prep.subcode_zlib_tried = false;
++			prep.subcode_zlib_len = 0;
++			prep.prepared = true;
  		}
  
 -		// encode the base portion
+-		uint32_t complen = m_base_compressor.compress(&m_buffer[0], frames * cdrom_file::MAX_SECTOR_DATA, &dest[header_bytes]);
++		// write ECC header and zero length slot
++		memcpy(dest, prep.ecc_mask.data(), ecc_bytes);
++		memset(dest + ecc_bytes, 0, complen_bytes);
++
 +		// encode the base portion (Discpress: it may give up once header + base reach the limit)
 +		m_base_compressor.set_limit((m_limit > header_bytes) ? (m_limit - header_bytes) : 1);
- 		uint32_t complen = m_base_compressor.compress(&m_buffer[0], frames * cdrom_file::MAX_SECTOR_DATA, &dest[header_bytes]);
++		uint32_t complen = m_base_compressor.compress(prep.base_data.data(), frames * cdrom_file::MAX_SECTOR_DATA, &dest[header_bytes]);
  		if (complen >= srclen)
  			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
-@@ -387,7 +398,12 @@
+ 
+@@ -387,8 +416,39 @@
  		else
  			put_u16be(&dest[ecc_bytes], complen);
  
 -		// encode the subcode
+-		return header_bytes + complen + m_subcode_compressor.compress(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA], frames * cdrom_file::MAX_SUBCODE_DATA, &dest[header_bytes + complen]);
 +		// encode the subcode (Discpress: into what is left of the hunk-sized buffer; 0.289 let it write
 +		// up to frames * 96 bytes past it. A result that doesn't fit reaches the limit, so it never wins)
 +		uint32_t const limit = std::min(m_limit, hunkbytes());
 +		if (header_bytes + complen >= limit)
 +			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
-+		m_subcode_compressor.set_limit(limit - header_bytes - complen);
- 		return header_bytes + complen + m_subcode_compressor.compress(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA], frames * cdrom_file::MAX_SUBCODE_DATA, &dest[header_bytes + complen]);
++		uint32_t const sub_limit = limit - header_bytes - complen;
++		uint32_t const sub_srclen = frames * cdrom_file::MAX_SUBCODE_DATA;
++		if constexpr (std::is_same_v<SubcodeCompressor, chd_zlib_compressor>)
++		{
++			if (!prep.subcode_zlib_tried)
++			{
++				prep.subcode_zlib_tried = true;
++				prep.subcode_zlib.resize(sub_srclen);
++				try
++				{
++					m_subcode_compressor.set_limit(sub_srclen);
++					prep.subcode_zlib_len = m_subcode_compressor.compress(prep.subcode_data.data(), sub_srclen, prep.subcode_zlib.data());
++				}
++				catch (...)
++				{
++					prep.subcode_zlib_len = UINT32_MAX;
++				}
++			}
++			if (prep.subcode_zlib_len == UINT32_MAX || prep.subcode_zlib_len >= sub_limit)
++				throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
++			memcpy(&dest[header_bytes + complen], prep.subcode_zlib.data(), prep.subcode_zlib_len);
++			return header_bytes + complen + prep.subcode_zlib_len;
++		}
++		else
++		{
++			m_subcode_compressor.set_limit(sub_limit);
++			return header_bytes + complen + m_subcode_compressor.compress(prep.subcode_data.data(), sub_srclen, &dest[header_bytes + complen]);
++		}
  	}
  
-@@ -421,13 +437,19 @@
+ private:
+@@ -421,13 +481,19 @@
  	virtual void decompress(const uint8_t *src, uint32_t complen, uint8_t *dest, uint32_t destlen) override
  	{
  		// determine header bytes
@@ -4898,7 +5999,15 @@
  
  		// reset and decode
  		m_base_decompressor.decompress(&src[header_bytes], complen_base, &m_buffer[0], frames * cdrom_file::MAX_SECTOR_DATA);
-@@ -735,17 +757,33 @@
+@@ -704,6 +770,7 @@
+ 	// verify the compression types and initialize the codecs
+ 	for (int codecnum = 0; codecnum < std::size(m_compressor); codecnum++)
+ 	{
++		m_codec_types[codecnum] = compressor_list[codecnum];
+ 		if (compressor_list[codecnum] != CHD_CODEC_NONE)
+ 		{
+ 			m_compressor[codecnum] = chd_codec_list::new_compressor(compressor_list[codecnum], chd);
+@@ -735,58 +802,116 @@
  //  compression for this hunk
  //-------------------------------------------------
  
@@ -4908,11 +6017,43 @@
  	// determine best compression technique
  	complen = m_hunkbytes;
  	int8_t compression = -1;
++	m_cd_prep.prepared = false;
++
++	// Discpress: adaptive codec-plan flags (never set in Tier-R default where codecs == 0x0f)
++	bool const adaptive_cdzl = (codecs & 0x10) != 0;
++	bool const probe_pcm = (codecs & 0x20) != 0;
++	uint32_t active_mask = codecs & 0x0fu;
++	if (probe_pcm && m_hunkbytes >= 256)
++	{
++		// ~200ns 64-sample PCM autocorrelation probe for DVD/raw flac gating
++		uint64_t mag = 0, diff = 0;
++		int32_t prev = 0;
++		uint32_t const step = m_hunkbytes / 128; // 64 16-bit samples across the hunk
++		for (uint32_t i = 0; i < 64; i++)
++		{
++			uint32_t const off = (i * step) & ~1u;
++			int16_t const s = int16_t(uint16_t(src[off]) | (uint16_t(src[off + 1]) << 8));
++			int32_t const v = s;
++			mag += uint32_t(v < 0 ? -v : v);
++			if (i > 0)
++			{
++				int32_t const d = v - prev;
++				diff += uint32_t(d < 0 ? -d : d);
++			}
++			prev = v;
++		}
++		if (mag > 64 * 128 && diff * 2 < mag)
++		{
++			for (int slot = 0; slot < 4; slot++)
++				if (m_codec_types[slot] == CHD_CODEC_FLAC)
++					active_mask |= (1u << slot);
++		}
++	}
 +
 +	// Discpress: the codec that won the previous hunk goes first, and every other codec only
 +	// has to beat the best result so far, so it can give up as soon as it can't (set_limit).
 +	// Ties still go to the lower codec number, so the choice and the data are upstream's.
-+	// Only the codecs in codecs are tried: all of them unless a codec plan says otherwise.
++	// Only the codecs in active_mask are tried: all of them unless a codec plan says otherwise.
 +	int order[std::extent_v<decltype(m_compressor)>], count = 0;
 +	if (m_last_best >= 0)
 +		order[count++] = m_last_best;
@@ -4921,29 +6062,89 @@
 +		if (codecnum != m_last_best)
 +			order[count++] = codecnum;
 +
-+	for (int const codecnum : order)
-+		if (m_compressor[codecnum] && ((codecs >> codecnum) & 1))
++	auto try_slot = [&](int codecnum)
++	{
++		try
  		{
- 			// attempt to compress, swallowing errors
+-			// attempt to compress, swallowing errors
++			bool const precedes = (compression >= 0) && (codecnum < compression);
++			m_compressor[codecnum]->set_limit(precedes ? complen + 1 : complen);
++
++			uint32_t compbytes = m_compressor[codecnum]->compress_prepared(m_cd_prep, src, m_hunkbytes, &m_compress_test[0]);
++#if CHDCODEC_VERIFY_COMPRESSION
  			try
  			{
-+				// Discpress: a codec numbered below the best so far wins a tie, the others must beat it
-+				bool const precedes = (compression >= 0) && (codecnum < compression);
-+				m_compressor[codecnum]->set_limit(precedes ? complen + 1 : complen);
+-				// if this is the best one, copy the data into the permanent buffer
+-				uint32_t compbytes = m_compressor[codecnum]->compress(src, m_hunkbytes, &m_compress_test[0]);
+-#if CHDCODEC_VERIFY_COMPRESSION
++				memset(m_decompressed, 0, m_hunkbytes);
++				m_decompressor[codecnum]->decompress(m_compress_test, compbytes, m_decompressed, m_hunkbytes);
++			}
++			catch (...)
++			{
++			}
 +
- 				// if this is the best one, copy the data into the permanent buffer
- 				uint32_t compbytes = m_compressor[codecnum]->compress(src, m_hunkbytes, &m_compress_test[0]);
- #if CHDCODEC_VERIFY_COMPRESSION
-@@ -772,7 +810,7 @@
++			if (memcmp(src, m_decompressed, m_hunkbytes) != 0)
++			{
++				compbytes = m_compressor[codecnum]->compress(src, m_hunkbytes, m_compress_test);
+ 				try
+ 				{
+-					memset(m_decompressed, 0, m_hunkbytes);
+ 					m_decompressor[codecnum]->decompress(m_compress_test, compbytes, m_decompressed, m_hunkbytes);
  				}
+ 				catch (...)
+ 				{
++					memset(m_decompressed, 0, m_hunkbytes);
+ 				}
+-
+-				if (memcmp(src, m_decompressed, m_hunkbytes) != 0)
+-				{
+-					compbytes = m_compressor[codecnum]->compress(src, m_hunkbytes, m_compress_test);
+-					try
+-					{
+-						m_decompressor[codecnum]->decompress(m_compress_test, compbytes, m_decompressed, m_hunkbytes);
+-					}
+-					catch (...)
+-					{
+-						memset(m_decompressed, 0, m_hunkbytes);
+-					}
+-				}
++			}
  printf("   codec%d=%d bytes            \n", codecnum, compbytes);
  #endif
 -				if (compbytes < complen)
-+				if ((compbytes < complen) || ((compbytes == complen) && (compression >= 0) && (codecnum < compression)))
- 				{
- 					compression = codecnum;
- 					complen = compbytes;
-@@ -787,6 +825,7 @@
+-				{
+-					compression = codecnum;
+-					complen = compbytes;
+-					memcpy(compressed, &m_compress_test[0], compbytes);
+-				}
+-			}
+-			catch (...)
++			if ((compbytes < complen) || ((compbytes == complen) && (compression >= 0) && (codecnum < compression)))
+ 			{
++				compression = codecnum;
++				complen = compbytes;
++				memcpy(compressed, &m_compress_test[0], compbytes);
+ 			}
+ 		}
++		catch (...)
++		{
++		}
++	};
++
++	for (int const codecnum : order)
++		if (m_compressor[codecnum] && ((active_mask >> codecnum) & 1))
++			try_slot(codecnum);
++
++	// Discpress: in --codecplan CD data mode, if cdlz output exceeded 75% (high-entropy hunk),
++	// try cdzl as fallback using the already-prepared ECC/subcode cache
++	if (adaptive_cdzl && complen > (m_hunkbytes * 3) / 4)
++	{
++		for (int slot = 0; slot < 4; slot++)
++			if (m_compressor[slot] && m_codec_types[slot] == CHD_CODEC_CD_ZLIB && !((active_mask >> slot) & 1))
++				try_slot(slot);
++	}
+ 
  	// if the best is none, copy it over
  	if (compression == -1)
  		memcpy(compressed, src, m_hunkbytes);
@@ -4951,7 +6152,7 @@
  	return compression;
  }
  
-@@ -847,27 +886,32 @@
+@@ -847,27 +972,32 @@
  	// reuse a hunk if we can
  	for (int scan = 0; scan < MAX_ZLIB_ALLOCS; scan++)
  	{
@@ -4992,7 +6193,7 @@
  }
  
  
-@@ -881,12 +925,12 @@
+@@ -881,12 +1011,12 @@
  	auto *codec = reinterpret_cast<chd_zlib_allocator *>(opaque);
  
  	// find the hunk
@@ -5008,14 +6209,14 @@
  			return;
  		}
  }
-@@ -904,6 +948,15 @@
+@@ -904,6 +1034,15 @@
  chd_zlib_compressor::chd_zlib_compressor(chd_file &chd, uint32_t hunkbytes, bool lossy)
  	: chd_compressor(chd, hunkbytes, lossy)
  {
-+	// Discpress: libdeflate at its level 9, if asked for (zlib's level 9 is its best); skip allocating an unused zlib stream
++	// Discpress: libdeflate at level 9 (or 12 with --ultra), if asked for; skip allocating an unused zlib stream
 +	if (chd.libdeflate())
 +	{
-+		m_libdeflate = libdeflate_alloc_compressor(9);
++		m_libdeflate = libdeflate_alloc_compressor(chd.ultra() ? 12 : 9);
 +		if (!m_libdeflate)
 +			throw std::bad_alloc();
 +		return;
@@ -5024,7 +6225,7 @@
  	// initialize the deflater
  	m_deflater.next_in = (Bytef *)this; // bogus, but that's ok
  	m_deflater.avail_in = 0;
-@@ -924,7 +977,10 @@
+@@ -924,7 +1063,10 @@
  
  chd_zlib_compressor::~chd_zlib_compressor()
  {
@@ -5036,7 +6237,7 @@
  }
  
  
-@@ -934,12 +990,24 @@
+@@ -934,12 +1076,24 @@
  
  uint32_t chd_zlib_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
@@ -5062,7 +6263,7 @@
  	m_deflater.total_out = 0;
  	int zerr = deflateReset(&m_deflater);
  	if (zerr != Z_OK)
-@@ -949,7 +1017,7 @@
+@@ -949,7 +1103,7 @@
  	zerr = deflate(&m_deflater, Z_FINISH);
  
  	// if we ended up with more data than we started with, return an error
@@ -5071,7 +6272,16 @@
  		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  
  	// otherwise, return the length
-@@ -1066,7 +1134,7 @@
+@@ -1059,14 +1213,14 @@
+ 
+ uint32_t chd_zstd_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
+ {
+-	// reset the compressor
+-	auto result = ZSTD_initCStream(m_stream, ZSTD_maxCLevel());
++	// reset the compressor (Discpress: chd().zstd_level() defaults to 22 = ZSTD_maxCLevel())
++	auto result = ZSTD_initCStream(m_stream, chd().zstd_level());
+ 	if (ZSTD_isError(result))
+ 		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  
  	// do it
  	ZSTD_inBuffer input{ src, srclen, 0 };
@@ -5080,7 +6290,7 @@
  	while (output.pos < output.size)
  	{
  		result = ZSTD_compressStream2(m_stream, &output, &input, ZSTD_e_end);
-@@ -1192,27 +1260,32 @@
+@@ -1192,27 +1346,32 @@
  	// reuse a hunk if we can
  	for (int scan = 0; scan < MAX_LZMA_ALLOCS; scan++)
  	{
@@ -5121,7 +6331,7 @@
  }
  
  
-@@ -1229,12 +1302,12 @@
+@@ -1229,12 +1388,12 @@
  	auto *const codec = static_cast<chd_lzma_allocator *>(const_cast<ISzAlloc *>(p));
  
  	// find the hunk
@@ -5137,18 +6347,98 @@
  			return;
  		}
  }
-@@ -1284,8 +1357,8 @@
- 		if (res != SZ_OK)
- 			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+@@ -1252,8 +1411,17 @@
+ chd_lzma_compressor::chd_lzma_compressor(chd_file &chd, uint32_t hunkbytes, bool lossy)
+ 	: chd_compressor(chd, hunkbytes, lossy)
+ {
+-	// initialize the properties
+-	configure_properties(m_props, hunkbytes);
++	// initialize the properties and create the persistent encoder once (activates LzFind epoch hash reuse)
++	configure_properties(m_props, hunkbytes, chd.ultra());
++	m_encoder = LzmaEnc_Create(&m_allocator);
++	if (m_encoder == nullptr)
++		throw std::bad_alloc();
++	if (LzmaEnc_SetProps(m_encoder, &m_props) != SZ_OK)
++	{
++		LzmaEnc_Destroy(m_encoder, &m_allocator, &m_allocator);
++		m_encoder = nullptr;
++		throw std::error_condition(chd_file::error::CODEC_ERROR);
++	}
+ }
  
+ 
+@@ -1263,6 +1431,8 @@
+ 
+ chd_lzma_compressor::~chd_lzma_compressor()
+ {
++	if (m_encoder)
++		LzmaEnc_Destroy(m_encoder, &m_allocator, &m_allocator);
+ }
+ 
+ 
+@@ -1272,34 +1442,12 @@
+ 
+ uint32_t chd_lzma_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
+ {
+-	// allocate the encoder
+-	CLzmaEncHandle encoder = LzmaEnc_Create(&m_allocator);
+-	if (encoder == nullptr)
++	// run it (Discpress: reuse persistent m_encoder; stop early once output reaches m_limit)
++	SizeT complen = std::min<SizeT>(srclen, SizeT(m_limit) - 1);
++	SRes res = LzmaEnc_MemEncode(m_encoder, dest, &complen, src, srclen, 0, nullptr, &m_allocator, &m_allocator);
++	if (res != SZ_OK)
+ 		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+-
+-	try
+-	{
+-		// configure the encoder
+-		SRes res = LzmaEnc_SetProps(encoder, &m_props);
+-		if (res != SZ_OK)
+-			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+-
 -		// run it
 -		SizeT complen = srclen;
-+		// run it (Discpress: into a buffer only as big as a usable result, so it stops early)
-+		SizeT complen = std::min<SizeT>(srclen, SizeT(m_limit) - 1);
- 		res = LzmaEnc_MemEncode(encoder, dest, &complen, src, srclen, 0, nullptr, &m_allocator, &m_allocator);
- 		if (res != SZ_OK)
- 			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
-@@ -1419,7 +1492,7 @@
+-		res = LzmaEnc_MemEncode(encoder, dest, &complen, src, srclen, 0, nullptr, &m_allocator, &m_allocator);
+-		if (res != SZ_OK)
+-			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
+-
+-		// clean up
+-		LzmaEnc_Destroy(encoder, &m_allocator, &m_allocator);
+-		return complen;
+-	}
+-	catch (...)
+-	{
+-		// destroy before re-throwing
+-		LzmaEnc_Destroy(encoder, &m_allocator, &m_allocator);
+-		throw;
+-	}
++	return complen;
+ }
+ 
+ 
+@@ -1308,10 +1456,19 @@
+ //  codec
+ //-------------------------------------------------
+ 
+-void chd_lzma_compressor::configure_properties(CLzmaEncProps &props, uint32_t hunkbytes)
++void chd_lzma_compressor::configure_properties(CLzmaEncProps &props, uint32_t hunkbytes, bool ultra)
+ {
+ 	LzmaEncProps_Init(&props);
+-	props.level = 8;
++	if (ultra)
++	{
++		props.level = 9;
++		props.fb = 273;
++		props.mc = 1000;
++	}
++	else
++	{
++		props.level = 8;
++	}
+ 	props.reduceSize = hunkbytes;
+ 	LzmaEncProps_Normalize(&props);
+ }
+@@ -1419,7 +1576,7 @@
  uint32_t chd_huffman_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
  	uint32_t complen;
@@ -5157,15 +6447,16 @@
  		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  	return complen;
  }
-@@ -1474,6 +1547,7 @@
+@@ -1474,6 +1631,8 @@
  	m_encoder.set_num_channels(2);
  	m_encoder.set_block_size(blocksize(hunkbytes));
  	m_encoder.set_strip_metadata(true);
++	m_encoder.set_ultra(chd.ultra());
 +	m_buffer_be.resize(hunkbytes);
  }
  
  
-@@ -1483,32 +1557,47 @@
+@@ -1483,32 +1642,47 @@
  
  uint32_t chd_flac_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
@@ -5226,7 +6517,7 @@
  	}
  	return complen + 1;
  }
-@@ -1555,6 +1644,9 @@
+@@ -1555,6 +1729,9 @@
  
  void chd_flac_decompressor::decompress(const uint8_t *src, uint32_t complen, uint8_t *dest, uint32_t destlen)
  {
@@ -5236,7 +6527,36 @@
  	// determine the endianness
  	bool swap_endian;
  	if (src[0] == 'L')
-@@ -1642,14 +1734,16 @@
+@@ -1602,6 +1779,16 @@
+ 	m_encoder.set_num_channels(2);
+ 	m_encoder.set_block_size(blocksize((hunkbytes / cdrom_file::FRAME_SIZE) * cdrom_file::MAX_SECTOR_DATA));
+ 	m_encoder.set_strip_metadata(true);
++	m_encoder.set_ultra(chd.ultra());
++
++	// Discpress: route cdfl subcode through libdeflate when --libdeflate is requested
++	if (chd.libdeflate())
++	{
++		m_libdeflate = libdeflate_alloc_compressor(chd.ultra() ? 12 : 9);
++		if (!m_libdeflate)
++			throw std::bad_alloc();
++		return;
++	}
+ 
+ 	// initialize the deflater
+ 	m_deflater.next_in = (Bytef *)this; // bogus, but that's ok
+@@ -1623,7 +1810,10 @@
+ 
+ chd_cd_flac_compressor::~chd_cd_flac_compressor()
+ {
+-	deflateEnd(&m_deflater);
++	if (m_libdeflate)
++		libdeflate_free_compressor(m_libdeflate);
++	else
++		deflateEnd(&m_deflater);
+ }
+ 
+ 
+@@ -1642,16 +1832,30 @@
  		memcpy(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA + framenum * cdrom_file::MAX_SUBCODE_DATA], &src[framenum * cdrom_file::FRAME_SIZE + cdrom_file::MAX_SECTOR_DATA], cdrom_file::MAX_SUBCODE_DATA);
  	}
  
@@ -5255,8 +6575,22 @@
 +		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  
  	// deflate the subcode data
++	if (m_libdeflate)
++	{
++		uint32_t const limit = std::min(m_limit, srclen);
++		if (complen >= limit)
++			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
++		size_t const sublen = (limit - complen > 1)
++			? libdeflate_deflate_compress(m_libdeflate, &m_buffer[frames * cdrom_file::MAX_SECTOR_DATA], frames * cdrom_file::MAX_SUBCODE_DATA, &dest[complen], limit - complen - 1)
++			: 0;
++		if (!sublen)
++			throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
++		return complen + uint32_t(sublen);
++	}
  	m_deflater.next_in = const_cast<Bytef *>(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA]);
-@@ -1771,6 +1865,8 @@
+ 	m_deflater.avail_in = frames * cdrom_file::MAX_SUBCODE_DATA;
+ 	m_deflater.total_in = 0;
+@@ -1771,6 +1975,8 @@
  void chd_cd_flac_decompressor::decompress(const uint8_t *src, uint32_t complen, uint8_t *dest, uint32_t destlen)
  {
  	// reset and decode
@@ -5265,7 +6599,7 @@
  	uint32_t frames = destlen / cdrom_file::FRAME_SIZE;
  	if (!m_decoder.reset(44100, 2, chd_cd_flac_compressor::blocksize(frames * cdrom_file::MAX_SECTOR_DATA), src, complen))
  		throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
-@@ -1780,6 +1876,8 @@
+@@ -1780,6 +1986,8 @@
  
  	// inflate the subcode data
  	uint32_t offset = m_decoder.finish();
@@ -5274,7 +6608,7 @@
  	m_inflater.next_in = const_cast<Bytef *>(src + offset);
  	m_inflater.avail_in = complen - offset;
  	m_inflater.total_in = 0;
-@@ -1950,8 +2048,8 @@
+@@ -1950,8 +2158,8 @@
  
  void chd_avhuff_decompressor::decompress(const uint8_t *src, uint32_t complen, uint8_t *dest, uint32_t destlen)
  {
@@ -5287,10 +6621,30 @@
  
 --- a/src/lib/util/chdcodec.h
 +++ b/src/lib/util/chdcodec.h
-@@ -71,6 +71,13 @@
+@@ -59,6 +59,18 @@
+ 
+ // ======================> chd_compressor
+ 
++// Discpress: shared per-hunk CD sector/subcode/ECC preparation cache between cdlz/cdzl/cdzs
++struct cd_prep_cache
++{
++	bool                    prepared = false;
++	bool                    subcode_zlib_tried = false;
++	uint32_t                subcode_zlib_len = 0; // UINT32_MAX when incompressible
++	std::vector<uint8_t>    ecc_mask;
++	std::vector<uint8_t>    base_data;
++	std::vector<uint8_t>    subcode_data;
++	std::vector<uint8_t>    subcode_zlib;
++};
++
+ // base class for all compressors
+ class chd_compressor : public chd_codec
+ {
+@@ -71,6 +83,14 @@
  
  	// implementation
  	virtual uint32_t compress(const uint8_t *src, uint32_t srclen, uint8_t *dest) = 0;
++	virtual uint32_t compress_prepared(cd_prep_cache &prep, const uint8_t *src, uint32_t srclen, uint8_t *dest) { return compress(src, srclen, dest); }
 +
 +	// Discpress: a result of limit bytes or more can't be used, so a codec may give up (throw)
 +	// as soon as it knows its output will be that large; results below the limit are unaffected
@@ -5301,20 +6655,24 @@
  };
  
  
-@@ -118,14 +125,15 @@
+@@ -118,14 +138,19 @@
  	chd_compressor_group(chd_file &file, chd_codec_type compressor_list[4]);
  	~chd_compressor_group();
  
 -	// find the best compressor
 -	int8_t find_best_compressor(const uint8_t *src, uint8_t *compressed, uint32_t &complen);
-+	// find the best compressor (Discpress: among the codecs whose slot bits are set in codecs)
++	// find the best compressor (Discpress: among the codecs whose slot bits are set in codecs;
++	// bit 4 = adaptive cdzl fallback when cdlz output exceeds 75% of hunkbytes; bit 5 = 200ns PCM probe for flac)
 +	int8_t find_best_compressor(const uint8_t *src, uint8_t *compressed, uint32_t &complen, uint32_t codecs = 0x0f);
++	void reset_batch_state() noexcept { m_last_best = -1; }
  
  private:
  	// internal state
  	uint32_t                m_hunkbytes;        // number of bytes in a hunk
++	chd_codec_type          m_codec_types[4];   // Discpress: codec tags per slot (for adaptive plan)
  	chd_compressor::ptr     m_compressor[4];    // array of active codecs
  	std::vector<uint8_t>    m_compress_test;    // test buffer for compression
++	cd_prep_cache           m_cd_prep;          // Discpress: shared CD ECC/subcode prep cache per hunk
 +	int                     m_last_best = -1;   // Discpress: codec that won the previous hunk
  #if CHDCODEC_VERIFY_COMPRESSION
  	chd_decompressor::ptr   m_decompressor[4];  // array of active codecs
@@ -5331,7 +6689,7 @@
  
  //**************************************************************************
  //  FLAC ENCODER
-@@ -71,11 +74,15 @@
+@@ -71,12 +74,23 @@
  	m_compressed_offset = 0;
  	m_ignore_bytes = m_strip_metadata ? 4 : 0;
  	m_found_audio = !m_strip_metadata;
@@ -5346,9 +6704,17 @@
 +	// only when writing to a file; in memory it costs time and changes nothing
 +	FLAC__stream_encoder_set_do_md5(m_encoder, m_file != nullptr);
  	FLAC__stream_encoder_set_compression_level(m_encoder, 8);
++	if (m_ultra)
++	{
++		FLAC__stream_encoder_set_do_exhaustive_model_search(m_encoder, true);
++		FLAC__stream_encoder_set_do_qlp_coeff_prec_search(m_encoder, true);
++		FLAC__stream_encoder_set_max_lpc_order(m_encoder, 12);
++		FLAC__stream_encoder_set_apodization(m_encoder, "tukey(0.5);partial_tukey(2);punchout_tukey(3)");
++	}
  	FLAC__stream_encoder_set_channels(m_encoder, m_channels);
  	FLAC__stream_encoder_set_bits_per_sample(m_encoder, 16);
-@@ -192,6 +199,10 @@
+ 	FLAC__stream_encoder_set_sample_rate(m_encoder, m_sample_rate);
+@@ -192,6 +206,10 @@
  
  uint32_t flac_encoder::finish()
  {
@@ -5359,16 +6725,17 @@
  	// process the data and return the amount written
  	FLAC__stream_encoder_finish(m_encoder);
  	if (m_file)
-@@ -229,6 +240,8 @@
+@@ -229,6 +247,9 @@
  	m_strip_metadata = false;
  	m_ignore_bytes = 0;
  	m_found_audio = false;
 +	m_give_up = UINT32_MAX;
 +	m_gave_up = false;
++	m_ultra = false;
  }
  
  
-@@ -273,6 +286,12 @@
+@@ -273,6 +294,12 @@
  			}
  			else
  			{
@@ -5381,7 +6748,7 @@
  				if (m_compressed_offset + count <= m_compressed_length)
  					memcpy(m_compressed_start + m_compressed_offset, buffer, count);
  				m_compressed_offset += count;
-@@ -499,10 +518,25 @@
+@@ -499,10 +526,25 @@
  	m_uncompressed_length = num_samples;
  	m_uncompressed_swap = swap_endian;
  
@@ -5408,7 +6775,7 @@
  	return true;
  }
  
-@@ -527,10 +561,24 @@
+@@ -527,10 +569,24 @@
  	m_uncompressed_length = num_samples;
  	m_uncompressed_swap = swap_endian;
  
@@ -5434,7 +6801,7 @@
  	return true;
  }
  
-@@ -550,8 +598,8 @@
+@@ -550,8 +606,8 @@
  	if (position == 0)
  		return 0;
  	if (m_compressed_start == reinterpret_cast<const FLAC__byte *>(m_custom_header))
@@ -5447,10 +6814,12 @@
  
 --- a/src/lib/util/flac.h
 +++ b/src/lib/util/flac.h
-@@ -40,6 +40,10 @@
+@@ -40,6 +40,12 @@
  	void set_num_channels(uint8_t num_channels) { m_channels = num_channels; }
  	void set_block_size(uint32_t block_size) { m_block_size = block_size; }
  	void set_strip_metadata(bool strip) { m_strip_metadata = strip; }
++	// Discpress: ultra mode enables QLP precision search while staying in the 12-order FLAC subset
++	void set_ultra(bool ultra) { m_ultra = ultra; }
 +	// Discpress: after reset, give up (encode fails) once the output would pass this many bytes;
 +	// finish still completes the encoder, and gave_up tells a give-up from other failures
 +	void set_give_up(uint32_t bytes) { m_give_up = bytes; }
@@ -5458,12 +6827,13 @@
  
  	// getters (valid after reset)
  	FLAC__StreamEncoderState state() const { return FLAC__stream_encoder_get_state(m_encoder); }
-@@ -83,6 +87,8 @@
+@@ -83,6 +89,9 @@
  	bool                    m_strip_metadata;       // strip the metadata?
  	uint32_t                m_ignore_bytes;         // how many bytes to ignore when writing
  	bool                    m_found_audio;          // have we hit the audio yet?
 +	uint32_t                m_give_up;              // Discpress: most output bytes wanted (set_give_up)
 +	bool                    m_gave_up;              // Discpress: stopped at that limit
++	bool                    m_ultra;                // Discpress: exhaustive QLP precision search
  };
  
  
@@ -5477,7 +6847,17 @@
  #include "strformat.h"
  
  #include "eminline.h"
-@@ -44,64 +45,34 @@
+@@ -19,6 +20,9 @@
+ #include <algorithm>
+ #include <iomanip>
+ #include <sstream>
++#ifdef __wasm_simd128__
++#include <wasm_simd128.h>
++#endif
+ 
+ 
+ namespace util {
+@@ -44,64 +48,74 @@
  }
  
  
@@ -5520,8 +6900,67 @@
 -{
 -	d[i % 5] = d[i % 5] + (d[(i + 3) % 5] ^ d[(i + 2) % 5] ^ d[(i + 1) % 5]) + sha1_b(data, i) + 0xca62c1d6U + rotl_32(d[(i + 4) % 5], 5);
 -	d[(i + 3) % 5] = rotl_32(d[(i + 3) % 5], 30);
--}
--
++// Discpress: the 80 rounds unrolled with named variables (upstream indexed an array by i % 5)
++#define SHA1_W(i) (w[(i) & 15U] = rotl_32(w[((i) + 13U) & 15U] ^ w[((i) + 8U) & 15U] ^ w[((i) + 2U) & 15U] ^ w[(i) & 15U], 1))
++#define SHA1_R0(a, b, c, d, e, i) e += ((b & (c ^ d)) ^ d) + w[i] + 0x5a827999U + rotl_32(a, 5); b = rotl_32(b, 30);
++#define SHA1_R1(a, b, c, d, e, i) e += ((b & (c ^ d)) ^ d) + SHA1_W(i) + 0x5a827999U + rotl_32(a, 5); b = rotl_32(b, 30);
++#define SHA1_R2(a, b, c, d, e, i) e += (b ^ c ^ d) + SHA1_W(i) + 0x6ed9eba1U + rotl_32(a, 5); b = rotl_32(b, 30);
++#define SHA1_R3(a, b, c, d, e, i) e += (((b | c) & d) | (b & c)) + SHA1_W(i) + 0x8f1bbcdcU + rotl_32(a, 5); b = rotl_32(b, 30);
++#define SHA1_R4(a, b, c, d, e, i) e += (b ^ c ^ d) + SHA1_W(i) + 0xca62c1d6U + rotl_32(a, 5); b = rotl_32(b, 30);
++#define SHA1_5(R, i) R(a, b, c, d, e, i) R(e, a, b, c, d, i + 1) R(d, e, a, b, c, i + 2) R(c, d, e, a, b, i + 3) R(b, c, d, e, a, i + 4)
++
++// w: the block as 16 big-endian words; used as the message schedule, so it is overwritten
++inline void sha1_process(std::array<uint32_t, 5> &st, uint32_t *w) noexcept
++{
++#ifdef __wasm_simd128__
++	// Discpress: SIMD128 message schedule W[32..79] = rotl32(W[t-6]^W[t-16]^W[t-28]^W[t-32], 2) + K
++	uint32_t W[80];
++	uint32_t WK[80];
++	for (unsigned i = 0; i < 16; i++)
++		W[i] = w[i];
++	for (unsigned i = 16; i < 32; i++)
++		W[i] = rotl_32(W[i - 3] ^ W[i - 8] ^ W[i - 14] ^ W[i - 16], 1);
++	v128_t const k0 = wasm_i32x4_splat(0x5a827999U);
++	v128_t const k1 = wasm_i32x4_splat(0x6ed9eba1U);
++	v128_t const k2 = wasm_i32x4_splat(0x8f1bbcdcU);
++	v128_t const k3 = wasm_i32x4_splat(0xca62c1d6U);
++	for (unsigned i = 0; i < 20; i += 4)
++		wasm_v128_store(&WK[i], wasm_i32x4_add(wasm_v128_load(&W[i]), k0));
++	for (unsigned i = 20; i < 32; i += 4)
++		wasm_v128_store(&WK[i], wasm_i32x4_add(wasm_v128_load(&W[i]), k1));
++	for (unsigned i = 32; i < 80; i += 4)
++	{
++		v128_t x = wasm_v128_xor(
++			wasm_v128_xor(wasm_v128_load(&W[i - 6]), wasm_v128_load(&W[i - 16])),
++			wasm_v128_xor(wasm_v128_load(&W[i - 28]), wasm_v128_load(&W[i - 32])));
++		v128_t r = wasm_v128_or(wasm_i32x4_shl(x, 2), wasm_u32x4_shr(x, 30));
++		wasm_v128_store(&W[i], r);
++		v128_t k = (i < 40) ? k1 : (i < 60) ? k2 : k3;
++		wasm_v128_store(&WK[i], wasm_i32x4_add(r, k));
++	}
++	uint32_t a = st[4], b = st[3], c = st[2], d = st[1], e = st[0];
++	#define SHA1_S0(a, b, c, d, e, i) e += ((b & (c ^ d)) ^ d) + WK[i] + rotl_32(a, 5); b = rotl_32(b, 30);
++	#define SHA1_S2(a, b, c, d, e, i) e += (b ^ c ^ d) + WK[i] + rotl_32(a, 5); b = rotl_32(b, 30);
++	#define SHA1_S3(a, b, c, d, e, i) e += (((b | c) & d) | (b & c)) + WK[i] + rotl_32(a, 5); b = rotl_32(b, 30);
++	SHA1_5(SHA1_S0, 0U)  SHA1_5(SHA1_S0, 5U)  SHA1_5(SHA1_S0, 10U) SHA1_5(SHA1_S0, 15U)
++	SHA1_5(SHA1_S2, 20U) SHA1_5(SHA1_S2, 25U) SHA1_5(SHA1_S2, 30U) SHA1_5(SHA1_S2, 35U)
++	SHA1_5(SHA1_S3, 40U) SHA1_5(SHA1_S3, 45U) SHA1_5(SHA1_S3, 50U) SHA1_5(SHA1_S3, 55U)
++	SHA1_5(SHA1_S2, 60U) SHA1_5(SHA1_S2, 65U) SHA1_5(SHA1_S2, 70U) SHA1_5(SHA1_S2, 75U)
++	#undef SHA1_S3
++	#undef SHA1_S2
++	#undef SHA1_S0
++	st[4] += a; st[3] += b; st[2] += c; st[1] += d; st[0] += e;
++#else
++	uint32_t a = st[4], b = st[3], c = st[2], d = st[1], e = st[0];
++	SHA1_5(SHA1_R0, 0U) SHA1_5(SHA1_R0, 5U) SHA1_5(SHA1_R0, 10U)
++	SHA1_R0(a, b, c, d, e, 15U) SHA1_R1(e, a, b, c, d, 16U) SHA1_R1(d, e, a, b, c, 17U) SHA1_R1(c, d, e, a, b, 18U) SHA1_R1(b, c, d, e, a, 19U)
++	SHA1_5(SHA1_R2, 20U) SHA1_5(SHA1_R2, 25U) SHA1_5(SHA1_R2, 30U) SHA1_5(SHA1_R2, 35U)
++	SHA1_5(SHA1_R3, 40U) SHA1_5(SHA1_R3, 45U) SHA1_5(SHA1_R3, 50U) SHA1_5(SHA1_R3, 55U)
++	SHA1_5(SHA1_R4, 60U) SHA1_5(SHA1_R4, 65U) SHA1_5(SHA1_R4, 70U) SHA1_5(SHA1_R4, 75U)
++	st[4] += a; st[3] += b; st[2] += c; st[1] += d; st[0] += e;
++#endif
+ }
+ 
 -inline void sha1_process(std::array<uint32_t, 5> &st, uint32_t *data) noexcept
 -{
 -	std::array<uint32_t, 5> d = st;
@@ -5539,27 +6978,6 @@
 -	for (i = 0U; i < 5U; i++)
 -		st[i] += d[i];
 -}
-+// Discpress: the 80 rounds unrolled with named variables (upstream indexed an array by i % 5)
-+#define SHA1_W(i) (w[(i) & 15U] = rotl_32(w[((i) + 13U) & 15U] ^ w[((i) + 8U) & 15U] ^ w[((i) + 2U) & 15U] ^ w[(i) & 15U], 1))
-+#define SHA1_R0(a, b, c, d, e, i) e += ((b & (c ^ d)) ^ d) + w[i] + 0x5a827999U + rotl_32(a, 5); b = rotl_32(b, 30);
-+#define SHA1_R1(a, b, c, d, e, i) e += ((b & (c ^ d)) ^ d) + SHA1_W(i) + 0x5a827999U + rotl_32(a, 5); b = rotl_32(b, 30);
-+#define SHA1_R2(a, b, c, d, e, i) e += (b ^ c ^ d) + SHA1_W(i) + 0x6ed9eba1U + rotl_32(a, 5); b = rotl_32(b, 30);
-+#define SHA1_R3(a, b, c, d, e, i) e += (((b | c) & d) | (b & c)) + SHA1_W(i) + 0x8f1bbcdcU + rotl_32(a, 5); b = rotl_32(b, 30);
-+#define SHA1_R4(a, b, c, d, e, i) e += (b ^ c ^ d) + SHA1_W(i) + 0xca62c1d6U + rotl_32(a, 5); b = rotl_32(b, 30);
-+#define SHA1_5(R, i) R(a, b, c, d, e, i) R(e, a, b, c, d, i + 1) R(d, e, a, b, c, i + 2) R(c, d, e, a, b, i + 3) R(b, c, d, e, a, i + 4)
-+
-+// w: the block as 16 big-endian words; used as the message schedule, so it is overwritten
-+inline void sha1_process(std::array<uint32_t, 5> &st, uint32_t *w) noexcept
-+{
-+	uint32_t a = st[4], b = st[3], c = st[2], d = st[1], e = st[0];
-+	SHA1_5(SHA1_R0, 0U) SHA1_5(SHA1_R0, 5U) SHA1_5(SHA1_R0, 10U)
-+	SHA1_R0(a, b, c, d, e, 15U) SHA1_R1(e, a, b, c, d, 16U) SHA1_R1(d, e, a, b, c, 17U) SHA1_R1(c, d, e, a, b, 18U) SHA1_R1(b, c, d, e, a, 19U)
-+	SHA1_5(SHA1_R2, 20U) SHA1_5(SHA1_R2, 25U) SHA1_5(SHA1_R2, 30U) SHA1_5(SHA1_R2, 35U)
-+	SHA1_5(SHA1_R3, 40U) SHA1_5(SHA1_R3, 45U) SHA1_5(SHA1_R3, 50U) SHA1_5(SHA1_R3, 55U)
-+	SHA1_5(SHA1_R4, 60U) SHA1_5(SHA1_R4, 65U) SHA1_5(SHA1_R4, 70U) SHA1_5(SHA1_R4, 75U)
-+	st[4] += a; st[3] += b; st[2] += c; st[1] += d; st[0] += e;
-+}
-+
 +#undef SHA1_5
 +#undef SHA1_R4
 +#undef SHA1_R3
@@ -5570,7 +6988,7 @@
  
  } // anonymous namespace
  
-@@ -193,27 +164,30 @@
+@@ -193,27 +207,30 @@
  #else
  	constexpr unsigned swizzle = 0U;
  #endif
@@ -5600,7 +7018,9 @@
 +		if (residual < 64U)
 +			return;
 +		sha1_process(m_st, m_buf);
-+	}
+ 	}
+-	for ( ; offset < length; residual++, offset++)
+-		reinterpret_cast<uint8_t *>(m_buf)[residual ^ swizzle] = reinterpret_cast<const uint8_t *>(data)[offset];
 +
 +	// Discpress: whole blocks are read straight from the input as big-endian words
 +	for ( ; (length - offset) >= 64U; offset += 64U)
@@ -5609,15 +7029,13 @@
 +		for (unsigned i = 0U; i < 16U; i++)
 +			w[i] = get_u32be(&src[offset + (i << 2)]);
 +		sha1_process(m_st, w);
- 	}
--	for ( ; offset < length; residual++, offset++)
--		reinterpret_cast<uint8_t *>(m_buf)[residual ^ swizzle] = reinterpret_cast<const uint8_t *>(data)[offset];
++	}
 +	for (residual = 0U; offset < length; residual++, offset++)
 +		reinterpret_cast<uint8_t *>(m_buf)[residual ^ swizzle] = src[offset];
  }
  
  
-@@ -395,50 +369,45 @@
+@@ -395,50 +412,45 @@
   * @param   length  The length.
   */
  
@@ -5678,9 +7096,9 @@
 +				t[k][x] = uint16_t((t[k - 1][x] << 8) ^ t[0][t[k - 1][x] >> 8]);
 +	}
 +};
-+
-+constexpr crc16_tables s_crc16;
  
++constexpr crc16_tables s_crc16;
++
 +} // anonymous namespace
 +
 +void crc16_creator::append(const void *data, uint32_t length) noexcept
@@ -5943,7 +7361,7 @@
  #include <iostream>
  #include <limits>
  #include <memory>
-@@ -41,11 +45,122 @@
+@@ -41,11 +45,144 @@
  #include <utility>
  #include <vector>
  
@@ -6048,6 +7466,28 @@
 +	void await_resume() const noexcept { }
 +};
 +
++#ifdef __EMSCRIPTEN__
++// Discpress: 48-byte binary progress snapshot read directly via DataView (zero regex/formatting)
++struct discpress_progress_t
++{
++	double done;
++	double ratio;
++	uint64_t bytes_in;
++	uint64_t bytes_out;
++	uint32_t hunks_done;
++	uint32_t hunks_total;
++	uint32_t phase; // 0=idle, 1=compress, 2=parent, 3=extract, 4=verify, 5=finalize
++	uint32_t seq;
++};
++static_assert(sizeof(discpress_progress_t) == 48, "discpress_progress_t must be 48 bytes");
++static discpress_progress_t s_wasm_progress{};
++
++extern "C" EMSCRIPTEN_KEEPALIVE const discpress_progress_t *wasm_progress_ptr()
++{
++	return &s_wasm_progress;
++}
++#endif
++
 +static chdman_task read_ahead(chd_file &chd, uint64_t offset, uint64_t length)
 +{
 +#ifdef __EMSCRIPTEN__
@@ -6066,7 +7506,7 @@
  //  CONSTANTS & DEFINES
  //**************************************************************************
  // MINGW has adopted the MSVC formatting for 64-bit ints as of GCC 4.4 and deprecated it as of GCC 9.3
-@@ -64,14 +179,22 @@
+@@ -64,14 +201,22 @@
  // default hard disk sector size
  constexpr uint32_t IDE_SECTOR_SIZE = 512;
  
@@ -6090,7 +7530,7 @@
  // osd printf verbosity
  constexpr bool OSD_PRINTF_VERBOSE = false;
  
-@@ -103,6 +226,10 @@
+@@ -103,6 +248,12 @@
  #define OPTION_OUTPUT "output"
  #define OPTION_OUTPUT_BIN "outputbin"
  #define OPTION_OUTPUT_SPLITBIN "splitbin"
@@ -6098,10 +7538,12 @@
 +#define OPTION_KEEPCUE "keepcue"
 +#define OPTION_CODEC_PLAN "codecplan"
 +#define OPTION_LIBDEFLATE "libdeflate"
++#define OPTION_ULTRA "ultra"
++#define OPTION_ZSTD_LEVEL "zstd-level"
  #define OPTION_OUTPUT_FORCE "force"
  #define OPTION_INPUT_START_BYTE "inputstartbyte"
  #define OPTION_INPUT_START_HUNK "inputstarthunk"
-@@ -140,15 +267,16 @@
+@@ -140,15 +291,16 @@
  [[noreturn]] static void report_error(int error, Format &&fmt, Params &&...args);
  
  static void do_info(parameters_map &params);
@@ -6127,7 +7569,7 @@
  static void do_extract_ld(parameters_map &params);
  static void do_add_metadata(parameters_map &params);
  static void do_del_metadata(parameters_map &params);
-@@ -214,12 +342,21 @@
+@@ -214,12 +366,21 @@
  
  // ======================> command_description
  
@@ -6147,11 +7589,11 @@
 +	command_handler handler;
  	const char *description;
 -	const char *valid_options[16];
-+	const char *valid_options[20]; // Discpress: 16 in 0.289, and createhd now has 17
++	const char *valid_options[24]; // Discpress: 16 in 0.289; room for codecplan/libdeflate/ultra/zstd-level
  };
  
  
-@@ -329,9 +466,15 @@
+@@ -329,9 +490,15 @@
  			return 0;
  		if (offset + length > m_maxoffset)
  			length = m_maxoffset - offset;
@@ -6170,7 +7612,31 @@
  		return actual;
  	}
  
-@@ -433,6 +576,31 @@
+@@ -358,7 +525,7 @@
+ 	}
+ 
+ 	// read interface
+-	virtual uint32_t read_data(void *dest, uint64_t offset, uint32_t length)
++	virtual uint32_t read_data(void *dest, uint64_t offset, uint32_t length) override
+ 	{
+ 		offset += m_offset;
+ 		if (offset >= m_maxoffset)
+@@ -406,6 +573,14 @@
+ 		return length;
+ 	}
+ 
++#ifdef __EMSCRIPTEN__
++	virtual chd_file *wasm_input_chd(uint64_t &base_offset) noexcept override
++	{
++		base_offset = m_offset;
++		return &m_file;
++	}
++#endif
++
+ const cdrom_file::toc *   m_toc;
+ 
+ private:
+@@ -433,6 +608,31 @@
  	{
  	}
  
@@ -6202,7 +7668,7 @@
  	// read interface
  	virtual uint32_t read_data(void *_dest, uint64_t offset, uint32_t length)
  	{
-@@ -455,7 +623,8 @@
+@@ -455,7 +655,8 @@
  			if (offset >= startoffs && offset < endoffs)
  			{
  				// if we don't already have this file open, open it now
@@ -6212,7 +7678,7 @@
  				{
  					m_file.reset();
  					m_lastfile = m_info.track[tracknum].fname;
-@@ -497,6 +666,39 @@
+@@ -497,6 +698,39 @@
  						{
  							memset(dest, 0, bytesperframe);
  						}
@@ -6252,7 +7718,7 @@
  						else
  						{
  							std::error_condition err = m_file->seek(
-@@ -676,6 +878,8 @@
+@@ -676,6 +910,8 @@
  	{ OPTION_OUTPUT,                "o",    true, " <filename>: output file name" },
  	{ OPTION_OUTPUT_BIN,            "ob",   true, " <filename>: output file name for binary data" },
  	{ OPTION_OUTPUT_SPLITBIN,       "sb",   false, ": output one binary file per track" },
@@ -6261,16 +7727,18 @@
  	{ OPTION_OUTPUT_FORCE,          "f",    false, ": force overwriting an existing file" },
  	{ OPTION_OUTPUT_PARENT,         "op",   true, " <filename>: parent file name for output CHD" },
  	{ OPTION_INPUT_START_BYTE,      "isb",  true, " <offset>: starting byte offset within the input" },
-@@ -687,6 +891,8 @@
+@@ -687,6 +923,10 @@
  	{ OPTION_HUNK_SIZE,             "hs",   true, " <bytes>: size of each hunk, in bytes" },
  	{ OPTION_UNIT_SIZE,             "us",   true, " <bytes>: size of each unit, in bytes" },
  	{ OPTION_COMPRESSION,           "c",    true, " <none|type1[,type2[,...]]>: which compression codecs to use (up to 4)" },
 +	{ OPTION_CODEC_PLAN,            "cp",   false, ": try each hunk only with the codecs meant for its content (CD audio: cdfl, CD data: cdlz, other data: all but flac): up to twice as fast, the same checksums, slightly larger" },
 +	{ OPTION_LIBDEFLATE,            "ld",   false, ": deflate (zlib, cdzl) with libdeflate: 2 to 3 times faster and a little smaller; the same checksums, and any reader decodes it" },
++	{ OPTION_ULTRA,                 "ul",   false, ": maximum-density encoder settings (LZMA fb=273/mc=1000, libdeflate 12, FLAC QLP precision search within subset)" },
++	{ OPTION_ZSTD_LEVEL,            "zl",   true,  " <1-22>: Zstandard compression level (default 22)" },
  	{ OPTION_IDENT,                 "id",   true, " <filename>: name of ident file to provide CHS information" },
  	{ OPTION_CHS,                   "chs",  true, " <cylinders,heads,sectors>: specifies CHS geometry directly" },
  	{ OPTION_SECTOR_SIZE,           "ss",   true, " <bytes>: size of each hard disk sector" },
-@@ -717,7 +923,8 @@
+@@ -717,7 +957,8 @@
  		{
  			REQUIRED OPTION_INPUT,
  			OPTION_INPUT_PARENT,
@@ -6280,29 +7748,33 @@
  		}
  	},
  
-@@ -734,7 +941,9 @@
+@@ -734,7 +975,11 @@
  			OPTION_HUNK_SIZE,
  			OPTION_UNIT_SIZE,
  			OPTION_COMPRESSION,
 -			OPTION_NUMPROCESSORS
 +			OPTION_NUMPROCESSORS,
 +			OPTION_CODEC_PLAN,
-+			OPTION_LIBDEFLATE
++			OPTION_LIBDEFLATE,
++			OPTION_ULTRA,
++			OPTION_ZSTD_LEVEL
  		}
  	},
  
-@@ -755,7 +964,9 @@
+@@ -755,7 +1000,11 @@
  			OPTION_CHS,
  			OPTION_SIZE,
  			OPTION_SECTOR_SIZE,
 -			OPTION_NUMPROCESSORS
 +			OPTION_NUMPROCESSORS,
 +			OPTION_CODEC_PLAN,
-+			OPTION_LIBDEFLATE
++			OPTION_LIBDEFLATE,
++			OPTION_ULTRA,
++			OPTION_ZSTD_LEVEL
  		}
  	},
  
-@@ -767,7 +978,10 @@
+@@ -767,7 +1016,12 @@
  			REQUIRED OPTION_INPUT,
  			OPTION_HUNK_SIZE,
  			OPTION_COMPRESSION,
@@ -6310,22 +7782,26 @@
 +			OPTION_NUMPROCESSORS,
 +			OPTION_KEEPCUE,
 +			OPTION_CODEC_PLAN,
-+			OPTION_LIBDEFLATE
++			OPTION_LIBDEFLATE,
++			OPTION_ULTRA,
++			OPTION_ZSTD_LEVEL
  		}
  	},
  	{ COMMAND_CREATE_DVD, do_create_dvd, ": create a DVD CHD from the input file",
-@@ -782,7 +996,9 @@
+@@ -782,7 +1036,11 @@
  			OPTION_INPUT_LENGTH_HUNKS,
  			OPTION_HUNK_SIZE,
  			OPTION_COMPRESSION,
 -			OPTION_NUMPROCESSORS
 +			OPTION_NUMPROCESSORS,
 +			OPTION_CODEC_PLAN,
-+			OPTION_LIBDEFLATE
++			OPTION_LIBDEFLATE,
++			OPTION_ULTRA,
++			OPTION_ZSTD_LEVEL
  		}
  	},
  
-@@ -831,13 +1047,14 @@
+@@ -831,13 +1089,14 @@
  			REQUIRED OPTION_OUTPUT,
  			OPTION_OUTPUT_BIN,
  			OPTION_OUTPUT_SPLITBIN,
@@ -6341,7 +7817,20 @@
  		{
  			REQUIRED OPTION_OUTPUT,
  			OPTION_OUTPUT_FORCE,
-@@ -1285,6 +1502,15 @@
+@@ -874,7 +1133,11 @@
+ 			OPTION_INPUT_LENGTH_HUNKS,
+ 			OPTION_HUNK_SIZE,
+ 			OPTION_COMPRESSION,
+-			OPTION_NUMPROCESSORS
++			OPTION_NUMPROCESSORS,
++			OPTION_CODEC_PLAN,
++			OPTION_LIBDEFLATE,
++			OPTION_ULTRA,
++			OPTION_ZSTD_LEVEL
+ 		}
+ 	},
+ 
+@@ -1285,6 +1548,15 @@
  
  static void check_existing_output_file(const parameters_map &params, std::string_view filename)
  {
@@ -6357,11 +7846,26 @@
  	if (params.find(OPTION_OUTPUT_FORCE) == params.end())
  	{
  		util::core_file::ptr file;
-@@ -1498,8 +1724,15 @@
+@@ -1498,35 +1770,169 @@
  //  compress_common - standard compression loop
  //-------------------------------------------------
  
 -static void compress_common(chd_file_compressor &chd)
++static void apply_discpress_options(chd_file_compressor &chd, const parameters_map &params)
++{
++	chd.set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
++	chd.set_libdeflate(params.find(OPTION_LIBDEFLATE) != params.end());
++	chd.set_ultra(params.find(OPTION_ULTRA) != params.end());
++	auto const zlvl = params.find(OPTION_ZSTD_LEVEL);
++	if (zlvl != params.end())
++	{
++		uint64_t const v = parse_number(zlvl->second->c_str());
++		if (v < 1 || v > 22)
++			report_error(1, "Invalid zstd-level '%s' (expected 1-22)", *zlvl->second);
++		chd.set_zstd_level(int(v));
++	}
++}
++
 +static chdman_task compress_common(chd_file_compressor &chd)
  {
 +	// Discpress: stop reader/worker threads before derived compressor destructors run on any exit path
@@ -6374,11 +7878,52 @@
  	// begin compressing
  	chd.compress_begin();
  
-@@ -1507,10 +1740,13 @@
- 	double complete, ratio;
+ 	// loop until done
+-	double complete, ratio;
++	double complete = 0.0, ratio = 1.0;
  	std::error_condition err;
- 	while ((err = chd.compress_continue(complete, ratio)) == chd_file::error::WALKING_PARENT || err == chd_file::error::COMPRESSING)
+-	while ((err = chd.compress_continue(complete, ratio)) == chd_file::error::WALKING_PARENT || err == chd_file::error::COMPRESSING)
++	for (;;)
 +	{
++#ifdef __EMSCRIPTEN__
++		// Discpress: read ahead parent CHD (for -op) or input CHD (for chdman copy) on helper workers
++		uint64_t const window_bytes = uint64_t(chd.work_buffer_hunks() / 2) * chd.hunk_bytes();
++		if (chd.walking_parent() && chd.parent())
++		{
++			uint64_t const off = chd.read_done_offset();
++			if (off < chd.parent()->logical_bytes())
++			{
++				uint64_t const len = std::min<uint64_t>(window_bytes + chd.hunk_bytes(), chd.parent()->logical_bytes() - off);
++				co_await read_ahead(*chd.parent(), off, len);
++			}
++		}
++		else
++		{
++			uint64_t in_base = 0;
++			if (chd_file *in_chd = chd.wasm_input_chd(in_base))
++			{
++				uint64_t const off = chd.read_done_offset();
++				if (off < chd.logical_bytes())
++				{
++					uint64_t const len = std::min<uint64_t>(window_bytes, chd.logical_bytes() - off);
++					co_await read_ahead(*in_chd, in_base + off, len);
++				}
++			}
++		}
++#endif
++		err = chd.compress_continue(complete, ratio);
++		if (err != chd_file::error::WALKING_PARENT && err != chd_file::error::COMPRESSING)
++			break;
++#ifdef __EMSCRIPTEN__
++		s_wasm_progress.done = complete;
++		s_wasm_progress.ratio = ratio;
++		s_wasm_progress.bytes_in = chd.total_in_bytes();
++		s_wasm_progress.bytes_out = chd.total_out_bytes();
++		s_wasm_progress.hunks_done = chd.hunks_written();
++		s_wasm_progress.hunks_total = chd.hunk_count();
++		s_wasm_progress.phase = (err == chd_file::error::WALKING_PARENT) ? 2u : 1u;
++		s_wasm_progress.seq++;
++#endif
  		if (err == chd_file::error::WALKING_PARENT)
  			progress(false, "Examining parent, %.1f%% complete...  \r", 100.0 * complete);
  		else
@@ -6388,7 +7933,22 @@
  
  	// handle errors
  	if (err)
-@@ -1522,11 +1758,70 @@
+ 		report_error(1, "Error during compression: %-40s", err.message());
+ 
++#ifdef __EMSCRIPTEN__
++	s_wasm_progress.done = 1.0;
++	s_wasm_progress.ratio = ratio;
++	s_wasm_progress.bytes_in = chd.total_in_bytes();
++	s_wasm_progress.bytes_out = chd.total_out_bytes();
++	s_wasm_progress.hunks_done = chd.hunk_count();
++	s_wasm_progress.hunks_total = chd.hunk_count();
++	s_wasm_progress.phase = 5u;
++	s_wasm_progress.seq++;
++#endif
++
+ 	// final progress update
+ 	progress(true, "Compression complete ... final ratio = %.1f%%            \n", 100.0 * ratio);
+ }
  
  
  //-------------------------------------------------
@@ -6460,7 +8020,7 @@
  {
  	if (mode == MODE_GDI)
  	{
-@@ -1542,26 +1837,7 @@
+@@ -1542,26 +1948,7 @@
  			file.printf("FILE \"%s\" BINARY\n", filename);
  
  		// determine submode
@@ -6488,7 +8048,7 @@
  
  		// output TRACK entry
  		file.printf("  TRACK %02d %s\n", tracknum + 1, tempstr);
-@@ -1610,7 +1886,9 @@
+@@ -1610,7 +1997,9 @@
  		}
  
  		// output pregap
@@ -6499,7 +8059,7 @@
  			file.printf("ZERO %s %s\n", modesubmode, msf_string_from_frames(info.pregap));
  
  		if (outputoffs == 0)
-@@ -1681,8 +1959,10 @@
+@@ -1681,8 +2070,10 @@
  		chd_metadata_tag metatag;
  		uint8_t metaflags;
  		std::error_condition err = input_chd.read_metadata(CHDMETATAG_WILDCARD, index, buffer, metatag, metaflags);
@@ -6511,7 +8071,7 @@
  
  		// determine our index
  		uint32_t metaindex = ~0;
-@@ -1777,13 +2057,86 @@
+@@ -1777,13 +2168,86 @@
  }
  
  
@@ -6599,7 +8159,7 @@
  	// parse out input files
  	chd_file input_parent_chd;
  	chd_file input_chd;
-@@ -1809,8 +2162,106 @@
+@@ -1809,8 +2273,106 @@
  	if (raw_sha1 == util::sha1_t::null)
  		report_error(0, "No verification to be done; CHD has no checksum");
  
@@ -6708,7 +8268,7 @@
  
  	// read all the data and build up an SHA-1
  	util::sha1_creator rawsha1;
-@@ -1820,17 +2271,47 @@
+@@ -1820,17 +2382,47 @@
  
  		// determine how much to read
  		uint32_t bytes_to_read = (std::min<uint64_t>)(buffer.size(), input_chd.logical_bytes() - offset);
@@ -6757,7 +8317,7 @@
  	if (raw_sha1 != computed_sha1)
  	{
  		util::stream_format(std::cerr, "Error: Raw SHA1 in header = %s\n", raw_sha1.as_string());
-@@ -1844,6 +2325,8 @@
+@@ -1844,6 +2436,8 @@
  				report_error(1, "Error updating SHA1: %s", err.message());
  			util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
  		}
@@ -6766,7 +8326,7 @@
  	}
  	else
  	{
-@@ -1868,9 +2351,28 @@
+@@ -1868,9 +2462,28 @@
  						report_error(1, "Error updating SHA1: %s", err.message());
  					util::stream_format(std::cout, "SHA1 updated to correct value in input CHD\n");
  				}
@@ -6795,7 +8355,7 @@
  }
  
  
-@@ -1879,7 +2381,7 @@
+@@ -1879,7 +2492,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -6804,7 +8364,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -1894,6 +2396,8 @@
+@@ -1894,6 +2507,8 @@
  	if (unit_size_str != params.end())
  	{
  		unit_size = parse_number(unit_size_str->second->c_str());
@@ -6813,12 +8373,11 @@
  		if (output_parent.opened() && (output_parent.unit_bytes() != unit_size))
  			report_error(1, "Specified unit size %u bytes does not match output parent CHD unit size %u bytes", unit_size, output_parent.unit_bytes());
  	}
-@@ -1937,13 +2441,15 @@
+@@ -1937,13 +2552,14 @@
  		// create the new CHD
  		auto chd = std::make_unique<chd_rawfile_compressor>(*input_file, input_start, input_end);
  		create_output_chd(*chd, *output_chd_str, input_end - input_start, hunk_size, unit_size, compression, output_parent);
-+		chd->set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
-+		chd->set_libdeflate(params.find(OPTION_LIBDEFLATE) != params.end());
++		apply_discpress_options(*chd, params);
  
  		// if we have a parent, copy forward all the metadata
  		if (output_parent.opened())
@@ -6830,7 +8389,7 @@
  	}
  	catch (...)
  	{
-@@ -1959,7 +2465,7 @@
+@@ -1959,7 +2575,7 @@
  //  disk image from a raw file
  //-------------------------------------------------
  
@@ -6839,7 +8398,7 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2008,6 +2514,8 @@
+@@ -2008,6 +2624,8 @@
  		if (template_str != params.end())
  			report_error(1, "Sector size cannot be specified separately when a template is specified");
  		sector_size = parse_number(sectorsize_str->second->c_str());
@@ -6848,16 +8407,15 @@
  	}
  	if (output_parent.opened() && (output_parent.unit_bytes() != sector_size))
  		report_error(1, "Sector size %u bytes does not match output parent CHD sector size %u bytes", sector_size, output_parent.unit_bytes());
-@@ -2129,6 +2637,8 @@
+@@ -2129,6 +2747,7 @@
  		else
  			chd.reset(new chd_zero_compressor(input_start, input_end));
  		create_output_chd(*chd, *output_chd_str, uint64_t(totalsectors) * sector_size, hunk_size, sector_size, compression, output_parent);
-+		chd->set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
-+		chd->set_libdeflate(params.find(OPTION_LIBDEFLATE) != params.end());
++		apply_discpress_options(*chd, params);
  
  		// add the standard hard disk metadata
  		std::string metadata = string_format(HARD_DISK_METADATA_FORMAT, cylinders, heads, sectors, sector_size);
-@@ -2147,7 +2657,7 @@
+@@ -2147,7 +2766,7 @@
  
  		// compress it generically
  		if (input_file)
@@ -6866,7 +8424,7 @@
  	}
  	catch (...)
  	{
-@@ -2163,7 +2673,7 @@
+@@ -2163,7 +2782,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -6875,7 +8433,7 @@
  {
  	// process input file
  	cdrom_file::track_input_info track_info;
-@@ -2174,12 +2684,39 @@
+@@ -2174,12 +2793,39 @@
  		std::error_condition err = cdrom_file::parse_toc(*input_file_str->second, toc, track_info);
  		if (err)
  			report_error(1, "Error parsing input file (%s: %s)\n", *input_file_str->second, err.message());
@@ -6915,7 +8473,7 @@
  	// process hunk size
  	const uint32_t hunk_size = parse_hunk_size(params, output_parent, cdrom_file::FRAME_SIZE, cdrom_file::FRAMES_PER_HUNK * cdrom_file::FRAME_SIZE);
  	if (output_parent.opened() && (output_parent.unit_bytes() != cdrom_file::FRAME_SIZE))
-@@ -2203,6 +2740,9 @@
+@@ -2203,6 +2849,9 @@
  		origtotalsectors += trackinfo.frames;
  		totalsectors += trackinfo.frames + trackinfo.extraframes;
  	}
@@ -6925,12 +8483,11 @@
  
  	// print some info
  	util::stream_format(std::cout, "Output CHD:   %s\n", *output_chd_str);
-@@ -2220,14 +2760,24 @@
+@@ -2220,14 +2869,23 @@
  		// create the new CD
  		auto chd = std::make_unique<chd_cd_compressor>(toc, track_info);
  		create_output_chd(*chd, *output_chd_str, uint64_t(totalsectors) * cdrom_file::FRAME_SIZE, hunk_size, cdrom_file::FRAME_SIZE, compression, output_parent);
-+		chd->set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
-+		chd->set_libdeflate(params.find(OPTION_LIBDEFLATE) != params.end());
++		apply_discpress_options(*chd, params);
  
  		// add the standard CD metadata; we do this even if we have a parent because it might be different
  		const std::error_condition err = cdrom_file::write_metadata(chd.get(), toc);
@@ -6951,7 +8508,7 @@
  	}
  	catch (...)
  	{
-@@ -2243,7 +2793,7 @@
+@@ -2243,7 +2901,7 @@
  //  image from a raw file
  //-------------------------------------------------
  
@@ -6960,16 +8517,15 @@
  {
  	// process input file
  	auto [input_file, input_file_str] = open_input_file(params);
-@@ -2288,6 +2838,8 @@
+@@ -2288,6 +2946,7 @@
  		// create the new DVD
  		auto chd = std::make_unique<chd_rawfile_compressor>(*input_file, input_start, input_end);
  		create_output_chd(*chd, *output_chd_str, input_end - input_start, hunk_size, 2048, compression, output_parent);
-+		chd->set_codec_plan(params.find(OPTION_CODEC_PLAN) != params.end());
-+		chd->set_libdeflate(params.find(OPTION_LIBDEFLATE) != params.end());
++		apply_discpress_options(*chd, params);
  
  		// add the standard DVD type tag
  		const std::error_condition err = chd->write_metadata(DVD_METADATA_TAG, 0, "");
-@@ -2295,7 +2847,7 @@
+@@ -2295,7 +2954,7 @@
  			report_error(1, "Error adding DVD metadata: %s", err.message());
  
  		// compress it generically
@@ -6978,7 +8534,7 @@
  	}
  	catch (...)
  	{
-@@ -2311,7 +2863,7 @@
+@@ -2311,7 +2970,7 @@
  //  input AVI file and metadata
  //-------------------------------------------------
  
@@ -6987,7 +8543,7 @@
  {
  	// process input file
  	avi_file::ptr input_file;
-@@ -2399,7 +2951,7 @@
+@@ -2399,7 +3058,7 @@
  			report_error(1, "Error adding AV metadata: %s\n", err.message());
  
  		// create the compressor and then run it generically
@@ -6996,7 +8552,7 @@
  
  		// write the final LD metadata
  		if (info.height == 524/2 || info.height == 624/2)
-@@ -2456,7 +3008,7 @@
+@@ -2456,7 +3115,7 @@
  //  another CHD
  //-------------------------------------------------
  
@@ -7005,7 +8561,15 @@
  {
  	// parse out input files
  	chd_file input_parent_chd;
-@@ -2547,7 +3099,7 @@
+@@ -2504,6 +3163,7 @@
+ 		std::unique_ptr<cdrom_file> cdrom; // want this to be unwound after chd
+ 		auto chd = std::make_unique<chd_chdfile_compressor>(input_chd, input_start, input_end);
+ 		create_output_chd(*chd, *output_chd_str, input_end - input_start, hunk_size, input_chd.unit_bytes(), compression, output_parent);
++		apply_discpress_options(*chd, params);
+ 
+ 		// clone all the metadata, upgrading where appropriate
+ 		std::error_condition err;
+@@ -2547,7 +3207,7 @@
  		}
  
  		// compress it generically
@@ -7014,7 +8578,7 @@
  	}
  	catch (...)
  	{
-@@ -2563,7 +3115,7 @@
+@@ -2563,7 +3223,7 @@
  //  CHD image
  //-------------------------------------------------
  
@@ -7023,7 +8587,7 @@
  {
  	// parse out input files
  	chd_file input_parent_chd;
-@@ -2596,14 +3148,15 @@
+@@ -2596,14 +3256,15 @@
  		if (filerr)
  			report_error(1, "Unable to open file (%s): %s", *output_file_str->second, filerr.message());
  
@@ -7041,7 +8605,7 @@
  			std::error_condition err = input_chd.read_bytes(offset, &buffer[0], bytes_to_read);
  			if (err)
  				report_error(1, "Error reading CHD file (%s): %s", *params.find(OPTION_INPUT)->second, err.message());
-@@ -2639,15 +3192,230 @@
+@@ -2639,15 +3300,230 @@
  //  CHD image
  //-------------------------------------------------
  
@@ -7275,7 +8839,7 @@
  	const cdrom_file::toc &toc = cdrom->get_toc();
  
  	// verify output file doesn't exist
-@@ -2671,8 +3439,19 @@
+@@ -2671,8 +3547,19 @@
  	if (chop != std::string::npos)
  		default_name.erase(chop, default_name.size());
  
@@ -7296,7 +8860,7 @@
  	if (!is_splitbin && cdrom->is_gdrom() && mode == MODE_CUEBIN)
  	{
  		// GD-ROM cue/bin is in Redump format which should always be split by tracks
-@@ -2730,6 +3509,7 @@
+@@ -2730,6 +3617,7 @@
  		std::error_condition filerr = util::core_file::open(*output_file_str->second, OPEN_FLAG_WRITE | OPEN_FLAG_CREATE | OPEN_FLAG_NO_BOM, output_toc_file);
  		if (filerr)
  			report_error(1, "Unable to open file (%s): %s", *output_file_str->second, filerr.message());
@@ -7304,7 +8868,7 @@
  
  		uint64_t total_bytes = 0;
  		for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
-@@ -2807,10 +3587,35 @@
+@@ -2807,10 +3695,35 @@
  			track_filenames.push_back(filename_formatted);
  		}
  
@@ -7341,7 +8905,7 @@
  		}
  		else if (mode == MODE_NORMAL)
  		{
-@@ -2842,77 +3647,11 @@
+@@ -2842,77 +3755,11 @@
  			}
  
  			if (mode2)
@@ -7422,7 +8986,7 @@
  		}
  
  		// iterate over tracks and copy all data
-@@ -2920,6 +3659,7 @@
+@@ -2920,6 +3767,7 @@
  		uint64_t outputoffs = 0;
  		uint32_t discoffs = 0;
  		std::vector<uint8_t> buffer;
@@ -7430,7 +8994,7 @@
  
  		for (int tracknum = 0; tracknum < toc.numtrks; tracknum++)
  		{
-@@ -2942,17 +3682,18 @@
+@@ -2942,17 +3790,18 @@
  				output_bin_filenames.push_back(trackbin_name);
  			}
  
@@ -7454,7 +9018,7 @@
  
  			// If this is bin/cue output and the CHD contains subdata, warn the user and don't include
  			// the subdata size in the buffer calculation.
-@@ -2964,12 +3705,21 @@
+@@ -2964,12 +3813,21 @@
  				output_frame_size = trackinfo.datasize;
  			}
  
@@ -7478,7 +9042,7 @@
  			for (uint32_t frame = 0; frame < actualframes; frame++)
  			{
  				progress(false, "Extracting, %.1f%% complete... \r", 100.0 * double(totaloutputoffs + outputoffs) / double(total_bytes));
-@@ -2987,8 +3737,23 @@
+@@ -2987,8 +3845,23 @@
  					frameofs = frame - trackinfo.splitframes;
  				}
  
@@ -7504,7 +9068,7 @@
  
  				// for CDRWin and GDI audio tracks must be reversed
  				// in the case of GDI and CHD version < 5 we assuming source CHD image is GDROM so audio tracks is already reversed
-@@ -3005,26 +3770,24 @@
+@@ -3005,26 +3878,24 @@
  				// read the subcode data
  				if (toc.tracks[trk].subtype != cdrom_file::CD_SUB_NONE && (mode == MODE_NORMAL))
  				{
@@ -7539,7 +9103,7 @@
  		output_bin_file.reset();
  		output_toc_file.reset();
  		util::stream_format(std::cout, "Extraction complete                                    \n");
-@@ -3387,7 +4150,8 @@
+@@ -3387,7 +4258,8 @@
  	{
  		// delete the output file
  		output_file.reset();
@@ -7549,7 +9113,7 @@
  		throw;
  	}
  }
-@@ -3425,14 +4189,42 @@
+@@ -3425,14 +4297,42 @@
  //  main - entry point
  //-------------------------------------------------
  
@@ -7596,7 +9160,7 @@
  
  	// handle help specially
  	if (args.size() < 2)
-@@ -3459,7 +4251,7 @@
+@@ -3459,7 +4359,7 @@
  				return print_help(args[0], desc);
  
  			// otherwise, verify the parameters
@@ -7605,7 +9169,7 @@
  			while (argnum < args.size())
  			{
  				// should be an option name
-@@ -3519,30 +4311,94 @@
+@@ -3519,30 +4419,102 @@
  					return print_help(args[0], desc, "Required parameters missing");
  			}
  
@@ -7712,6 +9276,7 @@
 +// return -1 (paused while helper workers compress); anything else is the exit code
 +extern "C" EMSCRIPTEN_KEEPALIVE int chdman_begin(int argc, char *argv[])
 +{
++	s_wasm_progress = discpress_progress_t{};
 +	int const result = chdman_start(argc, argv);
 +	return (result == CHDMAN_PAUSED) ? chdman_continue() : result;
 +}
@@ -7719,5 +9284,12 @@
 +extern "C" EMSCRIPTEN_KEEPALIVE int chdman_resume()
 +{
 +	return chdman_continue();
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE void chdman_abort()
++{
++	s_paused = nullptr;
++	s_run.reset();
++	s_wasm_progress = discpress_progress_t{};
 +}
 +#endif

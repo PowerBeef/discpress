@@ -323,6 +323,12 @@ public:
 	// zlib's bytes. Read when a compressor group is made (compress_begin).
 	void set_libdeflate(bool libdeflate) noexcept { m_libdeflate = libdeflate; }
 	bool libdeflate() const noexcept { return m_libdeflate; }
+	// Discpress: --ultra enables maximum-density encoder settings (LZMA fb=273/mc=1000, libdeflate 12,
+	// FLAC QLP precision search within 12-order subset) and --zstd-level selects Zstd level (default 22).
+	void set_ultra(bool ultra) noexcept { m_ultra = ultra; }
+	bool ultra() const noexcept { return m_ultra; }
+	void set_zstd_level(int level) noexcept { m_zstd_level = (level < 1) ? 1 : (level > 22 ? 22 : level); }
+	int zstd_level() const noexcept { return m_zstd_level; }
 	chd_file *parent() const noexcept { return m_parent.get(); }
 	bool parent_missing() const noexcept;
 	util::sha1_t sha1() const noexcept;
@@ -460,13 +466,17 @@ private:
 	uint32_t                m_cachehunk;        // which hunk is in the cache?
 
 	bool                    m_libdeflate = false; // Discpress: see set_libdeflate
+	bool                    m_ultra = false;      // Discpress: see set_ultra
+	int                     m_zstd_level = 22;    // Discpress: see set_zstd_level (22 = ZSTD_maxCLevel())
 
 #ifdef __EMSCRIPTEN__
-	// Discpress: hunks handed to helper workers, by hunk number (see wasm_read_ahead)
+	// Discpress: flat fixed-size ring for hunks handed to helper workers (zero per-hunk heap allocations)
 	// state: 0 = with a helper, 1 = decompressed by it, 2 = it failed, 3 = compressed bytes, 4 = uncompressed hunk
-	struct wasm_ahead_hunk { std::vector<uint8_t> data; int state = 0; };
+	struct wasm_ahead_slot { uint32_t hunk = ~uint32_t(0); uint32_t len = 0; int state = 0; };
 	bool wasm_read_cached(uint32_t hunknum, uint8_t type, void *dest);
-	std::unordered_map<uint32_t, wasm_ahead_hunk> m_wasm_ahead;
+	std::vector<wasm_ahead_slot> m_wasm_slots;
+	std::vector<uint8_t>    m_wasm_buf;         // contiguous backing pool: m_wasm_slots.size() * m_hunkbytes
+	uint32_t                m_wasm_ring_mask = 0;
 	std::vector<uint8_t>    m_wasm_span;        // this window's stored data, read in one go
 	int                     m_wasm_rd = -1;     // -1 = not asked yet, -2 = no read-ahead, 0 = without helpers, 1 = with
 	uint32_t                m_wasm_first = 0, m_wasm_count = 0; // the window last asked for
@@ -500,6 +510,16 @@ public:
 #ifdef __EMSCRIPTEN__
 	// browser build: completion callback for hunks compressed by helper workers
 	static void wasm_par_complete_item(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen, const uint8_t *data);
+	static uint8_t *wasm_par_item_compbuf(void *item) noexcept;
+	static void wasm_par_complete_item_inplace(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen) noexcept;
+	// Discpress: progress & read-ahead introspection for compress_common (copy & -op parent walk)
+	bool walking_parent() const noexcept { return m_walking_parent; }
+	uint64_t read_done_offset() const noexcept { return m_read_done_offset.load(std::memory_order_relaxed); }
+	uint64_t total_in_bytes() const noexcept { return m_total_in.load(std::memory_order_relaxed); }
+	uint64_t total_out_bytes() const noexcept { return m_total_out; }
+	uint32_t hunks_written() const noexcept { return m_write_hunk; }
+	uint32_t work_buffer_hunks() const noexcept { return m_work_buffer_hunks; }
+	virtual chd_file *wasm_input_chd(uint64_t &base_offset) noexcept { base_offset = 0; return nullptr; }
 #endif
 
 protected:
@@ -626,11 +646,11 @@ private:
 	std::atomic<bool>       m_has_read_error;   // whether m_read_error is set
 	std::error_condition    m_read_error;       // error during reading, if any
 
-	// work item buffers and codecs (Discpress: C++20 native thread pool, single codec group in browser)
-	static constexpr int WORK_BUFFER_HUNKS = 256;
+	// work item buffers and codecs (Discpress: dynamic ring up to 8 MiB per buffer for DVD throughput; 256 minimum)
+	uint32_t                m_work_buffer_hunks = 256;
 	std::vector<uint8_t>    m_work_buffer;      // buffer containing hunk data to work on
 	std::vector<uint8_t>    m_compressed_buffer;// buffer containing compressed data
-	work_item               m_work_item[WORK_BUFFER_HUNKS]; // status of each hunk
+	std::unique_ptr<work_item[]> m_work_item;   // status of each hunk
 	std::vector<std::unique_ptr<chd_compressor_group>> m_codecs; // codecs to use (1 per worker)
 
 #ifndef __EMSCRIPTEN__
@@ -645,7 +665,7 @@ private:
 	std::mutex              m_work_mutex;
 	std::condition_variable m_work_cv;
 	std::vector<std::thread> m_workers;
-	work_item *             m_work_ring[WORK_BUFFER_HUNKS];
+	std::vector<work_item *> m_work_ring;
 	uint32_t                m_work_head;
 	uint32_t                m_work_tail;
 	uint32_t                m_work_count;

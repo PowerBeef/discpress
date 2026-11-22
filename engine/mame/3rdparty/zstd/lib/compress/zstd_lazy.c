@@ -1036,6 +1036,25 @@ ZSTD_row_getNEONMask(const U32 rowEntries, const BYTE* const src, const BYTE tag
  * Each row is a circular buffer beginning at the value of "headGrouped". So we
  * must rotate the "matches" bitfield to match up with the actual layout of the
  * entries within the hashTable */
+#if defined(__wasm_simd128__)
+FORCE_INLINE_TEMPLATE ZSTD_VecMask
+ZSTD_row_getWasmMask(int nbChunks, const BYTE* const src, const BYTE tag, const U32 head)
+{
+    const v128_t comparisonMask = wasm_i8x16_splat((int8_t)tag);
+    int matches[4] = {0};
+    int i;
+    assert(nbChunks == 1 || nbChunks == 2 || nbChunks == 4);
+    for (i=0; i<nbChunks; i++) {
+        const v128_t chunk = wasm_v128_load(src + 16*i);
+        matches[i] = wasm_i8x16_bitmask(wasm_i8x16_eq(chunk, comparisonMask));
+    }
+    if (nbChunks == 1) return ZSTD_rotateRight_U16((U16)matches[0], head);
+    if (nbChunks == 2) return ZSTD_rotateRight_U32((U32)matches[1] << 16 | (U32)matches[0], head);
+    assert(nbChunks == 4);
+    return ZSTD_rotateRight_U64((U64)matches[3] << 48 | (U64)matches[2] << 32 | (U64)matches[1] << 16 | (U64)matches[0], head);
+}
+#endif
+
 FORCE_INLINE_TEMPLATE ZSTD_VecMask
 ZSTD_row_getMatchMask(const BYTE* const tagRow, const BYTE tag, const U32 headGrouped, const U32 rowEntries)
 {
@@ -1047,6 +1066,10 @@ ZSTD_row_getMatchMask(const BYTE* const tagRow, const BYTE tag, const U32 headGr
 #if defined(ZSTD_ARCH_X86_SSE2)
 
     return ZSTD_row_getSSEMask(rowEntries / 16, src, tag, headGrouped);
+
+#elif defined(__wasm_simd128__)
+
+    return ZSTD_row_getWasmMask(rowEntries / 16, src, tag, headGrouped);
 
 #else /* SW or NEON-LE */
 

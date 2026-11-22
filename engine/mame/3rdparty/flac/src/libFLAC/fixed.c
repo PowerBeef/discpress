@@ -42,6 +42,9 @@
 #include "private/macros.h"
 #include "FLAC/assert.h"
 #include "flac_libm.h" /* Discpress: the same log in every build (engine/libm) */
+#ifdef __wasm_simd128__
+#include <wasm_simd128.h>
+#endif
 
 #ifdef local_abs
 #undef local_abs
@@ -250,8 +253,41 @@ uint32_t FLAC__fixed_compute_best_predictor(const FLAC__int32 data[], uint32_t d
 		error -= last_error_3; total_error_4 += local_abs(error); last_error_3 = save;
 	}
 #else
-	int i;
-	for(i = 0; i < (int)data_len; i++) {
+	int i = 0;
+#ifdef __wasm_simd128__
+	{
+		v128_t a0 = wasm_i32x4_splat(0), a1 = wasm_i32x4_splat(0), a2 = wasm_i32x4_splat(0);
+		v128_t a3 = wasm_i32x4_splat(0), a4 = wasm_i32x4_splat(0);
+		for (; i + 4 <= (int)data_len; i += 4) {
+			v128_t d0 = wasm_v128_load(&data[i]);
+			v128_t d1 = wasm_v128_load(&data[i - 1]);
+			v128_t d2 = wasm_v128_load(&data[i - 2]);
+			v128_t d3 = wasm_v128_load(&data[i - 3]);
+			v128_t d4 = wasm_v128_load(&data[i - 4]);
+			v128_t e1_0 = wasm_i32x4_sub(d0, d1);
+			v128_t e1_1 = wasm_i32x4_sub(d1, d2);
+			v128_t e1_2 = wasm_i32x4_sub(d2, d3);
+			v128_t e1_3 = wasm_i32x4_sub(d3, d4);
+			v128_t e2_0 = wasm_i32x4_sub(e1_0, e1_1);
+			v128_t e2_1 = wasm_i32x4_sub(e1_1, e1_2);
+			v128_t e2_2 = wasm_i32x4_sub(e1_2, e1_3);
+			v128_t e3_0 = wasm_i32x4_sub(e2_0, e2_1);
+			v128_t e3_1 = wasm_i32x4_sub(e2_1, e2_2);
+			v128_t e4_0 = wasm_i32x4_sub(e3_0, e3_1);
+			a0 = wasm_i32x4_add(a0, wasm_i32x4_abs(d0));
+			a1 = wasm_i32x4_add(a1, wasm_i32x4_abs(e1_0));
+			a2 = wasm_i32x4_add(a2, wasm_i32x4_abs(e2_0));
+			a3 = wasm_i32x4_add(a3, wasm_i32x4_abs(e3_0));
+			a4 = wasm_i32x4_add(a4, wasm_i32x4_abs(e4_0));
+		}
+		total_error_0 = (FLAC__uint32)wasm_i32x4_extract_lane(a0, 0) + (FLAC__uint32)wasm_i32x4_extract_lane(a0, 1) + (FLAC__uint32)wasm_i32x4_extract_lane(a0, 2) + (FLAC__uint32)wasm_i32x4_extract_lane(a0, 3);
+		total_error_1 = (FLAC__uint32)wasm_i32x4_extract_lane(a1, 0) + (FLAC__uint32)wasm_i32x4_extract_lane(a1, 1) + (FLAC__uint32)wasm_i32x4_extract_lane(a1, 2) + (FLAC__uint32)wasm_i32x4_extract_lane(a1, 3);
+		total_error_2 = (FLAC__uint32)wasm_i32x4_extract_lane(a2, 0) + (FLAC__uint32)wasm_i32x4_extract_lane(a2, 1) + (FLAC__uint32)wasm_i32x4_extract_lane(a2, 2) + (FLAC__uint32)wasm_i32x4_extract_lane(a2, 3);
+		total_error_3 = (FLAC__uint32)wasm_i32x4_extract_lane(a3, 0) + (FLAC__uint32)wasm_i32x4_extract_lane(a3, 1) + (FLAC__uint32)wasm_i32x4_extract_lane(a3, 2) + (FLAC__uint32)wasm_i32x4_extract_lane(a3, 3);
+		total_error_4 = (FLAC__uint32)wasm_i32x4_extract_lane(a4, 0) + (FLAC__uint32)wasm_i32x4_extract_lane(a4, 1) + (FLAC__uint32)wasm_i32x4_extract_lane(a4, 2) + (FLAC__uint32)wasm_i32x4_extract_lane(a4, 3);
+	}
+#endif
+	for(; i < (int)data_len; i++) {
 		total_error_0 += local_abs(data[i]);
 		total_error_1 += local_abs(data[i] - data[i-1]);
 		total_error_2 += local_abs(data[i] - 2 * data[i-1] + data[i-2]);

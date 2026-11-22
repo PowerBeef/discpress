@@ -141,12 +141,12 @@ static DTableDesc HUF_getDTableDesc(const HUF_DTable* table)
     return dtd;
 }
 
-static size_t HUF_initFastDStream(BYTE const* ip) {
+static U64 HUF_initFastDStream(BYTE const* ip) {
     BYTE const lastByte = ip[7];
     size_t const bitsConsumed = lastByte ? 8 - ZSTD_highbit32(lastByte) : 0;
-    size_t const value = MEM_readLEST(ip) | 1;
+    U64 const value = MEM_readLE64(ip) | 1;
     assert(bitsConsumed <= 8);
-    assert(sizeof(size_t) == 8);
+    assert(sizeof(ZSTD_bit_t) == 8);
     return value << bitsConsumed;
 }
 
@@ -190,10 +190,10 @@ static size_t HUF_DecompressFastArgs_init(HUF_DecompressFastArgs* args, void* ds
 
     BYTE* const oend = (BYTE*)dst + dstSize;
 
-    /* The fast decoding loop assumes 64-bit little-endian.
-     * This condition is false on x32.
+    /* The fast decoding loop assumes 64-bit little-endian bitstream container.
+     * Discpress: wasm32 has native 64-bit U64 registers (ZSTD_BIT_64).
      */
-    if (!MEM_isLittleEndian() || MEM_32bits())
+    if (!MEM_isLittleEndian() || !ZSTD_BIT_64)
         return 0;
 
     /* strict minimum : jump table + 1 byte per stream */
@@ -282,11 +282,11 @@ static size_t HUF_initRemainingDStream(BIT_DStream_t* bit, HUF_DecompressFastArg
         return ERROR(corruption_detected);
 
     /* Construct the BIT_DStream_t. */
-    assert(sizeof(size_t) == 8);
-    bit->bitContainer = MEM_readLEST(args->ip[stream]);
+    assert(sizeof(bit->bitContainer) == 8);
+    bit->bitContainer = ZSTD_BIT_READ_LE(args->ip[stream]);
     bit->bitsConsumed = ZSTD_countTrailingZeros64(args->bits[stream]);
     bit->start = (const char*)args->iend[0];
-    bit->limitPtr = bit->start + sizeof(size_t);
+    bit->limitPtr = bit->start + sizeof(bit->bitContainer);
     bit->ptr = (const char*)args->ip[stream];
 
     return 0;
@@ -503,11 +503,11 @@ HUF_decodeSymbolX1(BIT_DStream_t* Dstream, const HUF_DEltX1* dt, const U32 dtLog
     *ptr++ = HUF_decodeSymbolX1(DStreamPtr, dt, dtLog)
 
 #define HUF_DECODE_SYMBOLX1_1(ptr, DStreamPtr)  \
-    if (MEM_64bits() || (HUF_TABLELOG_MAX<=12)) \
+    if (ZSTD_BIT_64 || (HUF_TABLELOG_MAX<=12)) \
         HUF_DECODE_SYMBOLX1_0(ptr, DStreamPtr)
 
 #define HUF_DECODE_SYMBOLX1_2(ptr, DStreamPtr) \
-    if (MEM_64bits()) \
+    if (ZSTD_BIT_64) \
         HUF_DECODE_SYMBOLX1_0(ptr, DStreamPtr)
 
 HINT_INLINE size_t
@@ -528,7 +528,7 @@ HUF_decodeStreamX1(BYTE* p, BIT_DStream_t* const bitDPtr, BYTE* const pEnd, cons
     }
 
     /* [0-3] symbols remaining */
-    if (MEM_32bits())
+    if (!ZSTD_BIT_64)
         while ((BIT_reloadDStream(bitDPtr) == BIT_DStream_unfinished) & (p < pEnd))
             HUF_DECODE_SYMBOLX1_0(p, bitDPtr);
 
@@ -700,7 +700,7 @@ void HUF_decompress4X1_usingDTable_internal_fast_c_loop(HUF_DecompressFastArgs* 
     ZSTD_memcpy(&op, &args->op, sizeof(op));
 
     assert(MEM_isLittleEndian());
-    assert(!MEM_32bits());
+    assert(ZSTD_BIT_64);
 
     for (;;) {
         BYTE* olimit;
@@ -1242,11 +1242,11 @@ HUF_decodeLastSymbolX2(void* op, BIT_DStream_t* DStream, const HUF_DEltX2* dt, c
     ptr += HUF_decodeSymbolX2(ptr, DStreamPtr, dt, dtLog)
 
 #define HUF_DECODE_SYMBOLX2_1(ptr, DStreamPtr) \
-    if (MEM_64bits() || (HUF_TABLELOG_MAX<=12)) \
+    if (ZSTD_BIT_64 || (HUF_TABLELOG_MAX<=12)) \
         ptr += HUF_decodeSymbolX2(ptr, DStreamPtr, dt, dtLog)
 
 #define HUF_DECODE_SYMBOLX2_2(ptr, DStreamPtr) \
-    if (MEM_64bits()) \
+    if (ZSTD_BIT_64) \
         ptr += HUF_decodeSymbolX2(ptr, DStreamPtr, dt, dtLog)
 
 HINT_INLINE size_t
@@ -1257,7 +1257,7 @@ HUF_decodeStreamX2(BYTE* p, BIT_DStream_t* bitDPtr, BYTE* const pEnd,
 
     /* up to 8 symbols at a time */
     if ((size_t)(pEnd - p) >= sizeof(bitDPtr->bitContainer)) {
-        if (dtLog <= 11 && MEM_64bits()) {
+        if (dtLog <= 11 && ZSTD_BIT_64) {
             /* up to 10 symbols at a time */
             while ((BIT_reloadDStream(bitDPtr) == BIT_DStream_unfinished) & (p < pEnd-9)) {
                 HUF_DECODE_SYMBOLX2_0(p, bitDPtr);
@@ -1336,7 +1336,7 @@ HUF_decompress4X2_usingDTable_internal_body(
     {   const BYTE* const istart = (const BYTE*) cSrc;
         BYTE* const ostart = (BYTE*) dst;
         BYTE* const oend = ostart + dstSize;
-        BYTE* const olimit = oend - (sizeof(size_t)-1);
+        BYTE* const olimit = oend - (sizeof(ZSTD_bit_t)-1);
         const void* const dtPtr = DTable+1;
         const HUF_DEltX2* const dt = (const HUF_DEltX2*)dtPtr;
 
@@ -1374,7 +1374,7 @@ HUF_decompress4X2_usingDTable_internal_body(
         CHECK_F( BIT_initDStream(&bitD4, istart4, length4) );
 
         /* 16-32 symbols per loop (4-8 symbols per stream) */
-        if ((size_t)(oend - op4) >= sizeof(size_t)) {
+        if ((size_t)(oend - op4) >= sizeof(ZSTD_bit_t)) {
             for ( ; (endSignal) & (op4 < olimit); ) {
 #if defined(__clang__) && (defined(__x86_64__) || defined(__i386__))
                 HUF_DECODE_SYMBOLX2_2(op1, &bitD1);
@@ -1485,7 +1485,7 @@ void HUF_decompress4X2_usingDTable_internal_fast_c_loop(HUF_DecompressFastArgs* 
     oend[3] = args->oend;
 
     assert(MEM_isLittleEndian());
-    assert(!MEM_32bits());
+    assert(ZSTD_BIT_64);
 
     for (;;) {
         BYTE* olimit;

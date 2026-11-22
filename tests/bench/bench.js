@@ -54,7 +54,7 @@ const CODECS = {
   cd: { default: [], plan: ['--codecplan', '--libdeflate'], fast: ['-c', 'cdzl,cdfl', '--libdeflate'], zstd: ['-c', 'cdzs,cdfl'], none: ['-c', 'none'] },
   other: { default: [], plan: ['--codecplan', '--libdeflate'], fast: ['-c', 'zlib,huff', '--libdeflate'], zstd: ['-c', 'zstd'], none: ['-c', 'none'] },
 };
-const PRESET_LABEL = { default: 'Smallest (default)', plan: 'Nearly as small, faster', fast: 'Faster to create', zstd: 'Faster to load (Zstd)', none: 'No compression' };
+const PRESET_LABEL = { default: 'Smallest (default)', ultra: 'Smaller still', plan: 'Nearly as small, faster', fast: 'Faster to create', zstd: 'Faster to load (Zstd)', none: 'No compression' };
 
 // ------------------------------------------------------------------ fixtures
 const needBench = cfg.fixtures.some(k => k.startsWith('bench-'));

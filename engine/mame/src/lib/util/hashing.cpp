@@ -20,6 +20,9 @@
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
+#ifdef __wasm_simd128__
+#include <wasm_simd128.h>
+#endif
 
 
 namespace util {
@@ -57,6 +60,45 @@ constexpr int char_to_hex(char c)
 // w: the block as 16 big-endian words; used as the message schedule, so it is overwritten
 inline void sha1_process(std::array<uint32_t, 5> &st, uint32_t *w) noexcept
 {
+#ifdef __wasm_simd128__
+	// Discpress: SIMD128 message schedule W[32..79] = rotl32(W[t-6]^W[t-16]^W[t-28]^W[t-32], 2) + K
+	uint32_t W[80];
+	uint32_t WK[80];
+	for (unsigned i = 0; i < 16; i++)
+		W[i] = w[i];
+	for (unsigned i = 16; i < 32; i++)
+		W[i] = rotl_32(W[i - 3] ^ W[i - 8] ^ W[i - 14] ^ W[i - 16], 1);
+	v128_t const k0 = wasm_i32x4_splat(0x5a827999U);
+	v128_t const k1 = wasm_i32x4_splat(0x6ed9eba1U);
+	v128_t const k2 = wasm_i32x4_splat(0x8f1bbcdcU);
+	v128_t const k3 = wasm_i32x4_splat(0xca62c1d6U);
+	for (unsigned i = 0; i < 20; i += 4)
+		wasm_v128_store(&WK[i], wasm_i32x4_add(wasm_v128_load(&W[i]), k0));
+	for (unsigned i = 20; i < 32; i += 4)
+		wasm_v128_store(&WK[i], wasm_i32x4_add(wasm_v128_load(&W[i]), k1));
+	for (unsigned i = 32; i < 80; i += 4)
+	{
+		v128_t x = wasm_v128_xor(
+			wasm_v128_xor(wasm_v128_load(&W[i - 6]), wasm_v128_load(&W[i - 16])),
+			wasm_v128_xor(wasm_v128_load(&W[i - 28]), wasm_v128_load(&W[i - 32])));
+		v128_t r = wasm_v128_or(wasm_i32x4_shl(x, 2), wasm_u32x4_shr(x, 30));
+		wasm_v128_store(&W[i], r);
+		v128_t k = (i < 40) ? k1 : (i < 60) ? k2 : k3;
+		wasm_v128_store(&WK[i], wasm_i32x4_add(r, k));
+	}
+	uint32_t a = st[4], b = st[3], c = st[2], d = st[1], e = st[0];
+	#define SHA1_S0(a, b, c, d, e, i) e += ((b & (c ^ d)) ^ d) + WK[i] + rotl_32(a, 5); b = rotl_32(b, 30);
+	#define SHA1_S2(a, b, c, d, e, i) e += (b ^ c ^ d) + WK[i] + rotl_32(a, 5); b = rotl_32(b, 30);
+	#define SHA1_S3(a, b, c, d, e, i) e += (((b | c) & d) | (b & c)) + WK[i] + rotl_32(a, 5); b = rotl_32(b, 30);
+	SHA1_5(SHA1_S0, 0U)  SHA1_5(SHA1_S0, 5U)  SHA1_5(SHA1_S0, 10U) SHA1_5(SHA1_S0, 15U)
+	SHA1_5(SHA1_S2, 20U) SHA1_5(SHA1_S2, 25U) SHA1_5(SHA1_S2, 30U) SHA1_5(SHA1_S2, 35U)
+	SHA1_5(SHA1_S3, 40U) SHA1_5(SHA1_S3, 45U) SHA1_5(SHA1_S3, 50U) SHA1_5(SHA1_S3, 55U)
+	SHA1_5(SHA1_S2, 60U) SHA1_5(SHA1_S2, 65U) SHA1_5(SHA1_S2, 70U) SHA1_5(SHA1_S2, 75U)
+	#undef SHA1_S3
+	#undef SHA1_S2
+	#undef SHA1_S0
+	st[4] += a; st[3] += b; st[2] += c; st[1] += d; st[0] += e;
+#else
 	uint32_t a = st[4], b = st[3], c = st[2], d = st[1], e = st[0];
 	SHA1_5(SHA1_R0, 0U) SHA1_5(SHA1_R0, 5U) SHA1_5(SHA1_R0, 10U)
 	SHA1_R0(a, b, c, d, e, 15U) SHA1_R1(e, a, b, c, d, 16U) SHA1_R1(d, e, a, b, c, 17U) SHA1_R1(c, d, e, a, b, 18U) SHA1_R1(b, c, d, e, a, 19U)
@@ -64,6 +106,7 @@ inline void sha1_process(std::array<uint32_t, 5> &st, uint32_t *w) noexcept
 	SHA1_5(SHA1_R3, 40U) SHA1_5(SHA1_R3, 45U) SHA1_5(SHA1_R3, 50U) SHA1_5(SHA1_R3, 55U)
 	SHA1_5(SHA1_R4, 60U) SHA1_5(SHA1_R4, 65U) SHA1_5(SHA1_R4, 70U) SHA1_5(SHA1_R4, 75U)
 	st[4] += a; st[3] += b; st[2] += c; st[1] += d; st[0] += e;
+#endif
 }
 
 #undef SHA1_5

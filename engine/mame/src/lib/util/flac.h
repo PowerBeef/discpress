@@ -40,6 +40,8 @@ public:
 	void set_num_channels(uint8_t num_channels) { m_channels = num_channels; }
 	void set_block_size(uint32_t block_size) { m_block_size = block_size; }
 	void set_strip_metadata(bool strip) { m_strip_metadata = strip; }
+	// Discpress: ultra mode enables QLP precision search while staying in the 12-order FLAC subset
+	void set_ultra(bool ultra) { m_ultra = ultra; }
 	// Discpress: after reset, give up (encode fails) once the output would pass this many bytes;
 	// finish still completes the encoder, and gave_up tells a give-up from other failures
 	void set_give_up(uint32_t bytes) { m_give_up = bytes; }
@@ -89,6 +91,7 @@ private:
 	bool                    m_found_audio;          // have we hit the audio yet?
 	uint32_t                m_give_up;              // Discpress: most output bytes wanted (set_give_up)
 	bool                    m_gave_up;              // Discpress: stopped at that limit
+	bool                    m_ultra;                // Discpress: exhaustive QLP precision search
 };
 
 

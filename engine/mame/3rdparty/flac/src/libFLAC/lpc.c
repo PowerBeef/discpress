@@ -44,6 +44,9 @@
 #include "private/lpc.h"
 #include "private/macros.h"
 #include "flac_libm.h" /* Discpress: the same log in every build (engine/libm) */
+#ifdef __wasm_simd128__
+#include <wasm_simd128.h>
+#endif
 
 #if !defined(NDEBUG) || defined FLAC__OVERFLOW_DETECT || defined FLAC__OVERFLOW_DETECT_VERBOSE
 #include <stdio.h>
@@ -364,6 +367,31 @@ void FLAC__lpc_compute_residual_from_qlp_coefficients(const FLAC__int32 * flac_r
 
 	FLAC__ASSERT(order > 0);
 	FLAC__ASSERT(order <= 32);
+
+#ifdef __wasm_simd128__
+	/* Discpress: integer-only SIMD128 QLP residual (strictly associative, bit-exact) */
+	if (lp_quantization >= 0 && lp_quantization < 32) {
+		i = 0;
+		for (; i + 4 <= (int)data_len; i += 4) {
+			v128_t vsum = wasm_i32x4_splat(0);
+			int j = (int)order - 1;
+			for (; j >= 0; j--) {
+				v128_t c = wasm_i32x4_splat(qlp_coeff[j]);
+				v128_t d = wasm_v128_load(&data[i - j - 1]);
+				vsum = wasm_i32x4_add(vsum, wasm_i32x4_mul(c, d));
+			}
+			v128_t cur = wasm_v128_load(&data[i]);
+			wasm_v128_store(&residual[i], wasm_i32x4_sub(cur, wasm_i32x4_shr(vsum, (uint32_t)lp_quantization)));
+		}
+		for (; i < (int)data_len; i++) {
+			sum = 0;
+			for (int j = (int)order - 1; j >= 0; j--)
+				sum += qlp_coeff[j] * data[i - j - 1];
+			residual[i] = data[i] - (sum >> lp_quantization);
+		}
+		return;
+	}
+#endif
 
 	/*
 	 * We do unique versions up to 12th order since that's the subset limit.

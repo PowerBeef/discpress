@@ -30,6 +30,9 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+#ifdef __wasm_simd128__
+#include <wasm_simd128.h>
+#endif
 
 
 /***************************************************************************
@@ -1212,6 +1215,15 @@ inline uint64_t ecc_load64(const uint8_t *p)
 	return v;
 }
 
+#ifdef __wasm_simd128__
+// sixteen bytes, each multiplied by 2 in GF(2^8) (poly 0x11d)
+inline v128_t ecc_mul2x16(v128_t a)
+{
+	v128_t const hi = wasm_i8x16_shr(a, 7);
+	return wasm_v128_xor(wasm_i8x16_shl(a, 1), wasm_v128_and(hi, wasm_i8x16_splat(0x1d)));
+}
+#endif
+
 // eight bytes, each multiplied by 2 in GF(2^8)
 inline uint64_t ecc_mul2x8(uint64_t a)
 {
@@ -1245,8 +1257,50 @@ void cdrom_file::ecc_region(const uint8_t *sector, uint8_t *region)
 
 void cdrom_file::ecc_parity(const uint8_t *region, bool q, uint8_t *parity)
 {
-	uint64_t a[11] = { }, b[11] = { };
 	int const count = q ? ECC_Q_NUM_BYTES : ECC_P_NUM_BYTES;
+#ifdef __wasm_simd128__
+	v128_t a[6], b[6];
+	for (int l = 0; l < 6; l++)
+		a[l] = b[l] = wasm_i8x16_splat(0);
+	if (!q)
+	{
+		// 6 * 16 = 96 >= 86 bytes; row 23 + 80 + 16 = 2074 <= ECC_REGION_BYTES (2236)
+		for (int row = 0; row < ECC_P_COMP; row++)
+			for (int l = 0; l < 6; l++)
+			{
+				v128_t const x = wasm_v128_load(&region[ECC_P_NUM_BYTES * row + 16 * l]);
+				a[l] = ecc_mul2x16(wasm_v128_xor(a[l], x));
+				b[l] = wasm_v128_xor(b[l], x);
+			}
+	}
+	else
+	{
+		uint8_t v[64] = { };
+		for (int col = 0; col < ECC_Q_COMP; col++)
+		{
+			int row = col % 26;
+			for (int d = 0; d < 26; d++)
+			{
+				memcpy(&v[2 * d], &region[ECC_P_NUM_BYTES * row + 2 * col], 2);
+				if (++row == 26)
+					row = 0;
+			}
+			for (int l = 0; l < 4; l++)
+			{
+				v128_t const x = wasm_v128_load(&v[16 * l]);
+				a[l] = ecc_mul2x16(wasm_v128_xor(a[l], x));
+				b[l] = wasm_v128_xor(b[l], x);
+			}
+		}
+	}
+	uint8_t av[96], bv[96];
+	for (int l = 0; l < 6; l++)
+	{
+		wasm_v128_store(&av[16 * l], a[l]);
+		wasm_v128_store(&bv[16 * l], b[l]);
+	}
+#else
+	uint64_t a[11] = { }, b[11] = { };
 	if (!q)
 	{
 		// the columns of the first 24 rows (a row's last word also reads 2 bytes of the next row, unused)
@@ -1282,6 +1336,7 @@ void cdrom_file::ecc_parity(const uint8_t *region, bool q, uint8_t *parity)
 	uint8_t av[sizeof(a)], bv[sizeof(b)];
 	memcpy(av, a, sizeof(a));
 	memcpy(bv, b, sizeof(b));
+#endif
 	for (int i = 0; i < count; i++)
 	{
 		uint8_t const p0 = ecchigh[ecclow[av[i]] ^ bv[i]];
