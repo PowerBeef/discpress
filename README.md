@@ -3,7 +3,7 @@
     <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/hero-mobile-dark.png">
     <source media="(max-width: 600px)" srcset="docs/brand/hero-mobile-light.png">
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/hero-dark.png">
-    <img src="docs/brand/hero-light.png" width="100%" alt="Discpress: pack your game discs into CHD files, right in your browser. No install, nothing uploaded. Works on iPhone, iPad, Android, Mac, Windows and Linux.">
+    <img src="docs/brand/hero-light.png" width="100%" alt="Discpress: convert, verify, and prep your retro discs right in your browser. Offline retro disc studio supporting CHD, CSO/ZSO, and Xbox XISO, named from Redump and tuned per emulator on phone, tablet, and desktop.">
   </picture>
 </p>
 
@@ -14,10 +14,11 @@
       <img src="docs/brand/download-light.png" width="380" alt="Download Discpress: one HTML file, works offline">
     </picture>
   </a>
+  &nbsp;&nbsp;
   <a href="https://powerbeef.github.io/discpress/">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/brand/open-dark.png">
-      <img src="docs/brand/open-light.png" width="406" alt="Use Discpress online: nothing to download, big files on iPhone">
+      <img src="docs/brand/open-light.png" width="405" alt="Use Discpress online: nothing to download, big files on iPhone">
     </picture>
   </a>
 </p>
@@ -27,117 +28,111 @@
   <a href="https://github.com/PowerBeef/discpress/actions/workflows/ci.yml"><img src="https://github.com/PowerBeef/discpress/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-BSD--3--Clause-13a9ba" alt="BSD 3-Clause license"></a>
   <br><br>
-  <b>Free and open source</b> &nbsp;·&nbsp; <b>No install</b> &nbsp;·&nbsp; <b>Nothing uploaded</b> &nbsp;·&nbsp; <b>Phone and desktop</b>
+  <b>Free &amp; open source</b> &nbsp;·&nbsp; <b>Zero install</b> &nbsp;·&nbsp; <b>100% offline</b> &nbsp;·&nbsp; <b>Phone, tablet &amp; desktop</b>
   <br><br>
-  <a href="#how-it-works">How it works</a> &nbsp;·&nbsp;
-  <a href="#features">Features</a> &nbsp;·&nbsp;
-  <a href="#systems-and-files">Systems and files</a> &nbsp;·&nbsp;
-  <a href="#ready-for-your-emulator">Your emulator</a> &nbsp;·&nbsp;
+  <a href="#what-discpress-does">Overview</a> &nbsp;·&nbsp;
+  <a href="#target-profiles">Target profiles</a> &nbsp;·&nbsp;
+  <a href="#audit-and-repair-your-library">Library auditor</a> &nbsp;·&nbsp;
+  <a href="#formats-and-hardware-outputs">Formats &amp; hardware</a> &nbsp;·&nbsp;
+  <a href="#supported-systems">Systems</a> &nbsp;·&nbsp;
   <a href="#get-started">Get started</a> &nbsp;·&nbsp;
   <a href="#faq">FAQ</a> &nbsp;·&nbsp;
-  <a href="#build-it-yourself">Build it yourself</a>
+  <a href="#under-the-hood">Under the hood</a>
 </p>
 
 > [!TIP]
-> **New in 2.0: complete reliability, speed, and format overhaul.** Target Environment selector (Universal, Fast Universal, ES-DE/PC, Handheld, MiSTer FPGA, Legacy), crash-resumable OPFS checkpoints, 12-check CHD Library Health Auditor with 1-click fixes, reversible Tier X layout repairs (`--sessions`, `--trailer`, `--stripmeta`), streaming `.7z` archives, Alcohol 120% `.mds`/`.mdf`, DiscJuggler `.cdi`, audio track cues (FLAC, extended WAV/RF64, AIFF, Ogg Vorbis, MP3, GOG `.ins`), `--block=2048` CSO/ZSO output for real PSP/Vita/PS2 OPL hardware, and scrubbed Original Xbox XISOs (`.xiso.iso`) for `xemu`. [See what's new](https://github.com/PowerBeef/discpress/releases/latest).
+> **New in 2.0:** Target Environment profiles (Universal, Fast Universal, ES-DE/PC, Handheld, MiSTer FPGA, Legacy), crash-resumable OPFS checkpoints, a 12-check CHD Library Health Auditor with 1-click fixes, reversible Tier X layout repairs (`--sessions`, `--trailer`, `--stripmeta`), streaming `.7z` archives, Alcohol 120% `.mds`/`.mdf`, DiscJuggler `.cdi`, built-in audio track decoding (FLAC, extended WAV/RF64, AIFF, Ogg Vorbis, MP3, GOG `.ins`), `--block=2048` CSO/ZSO output for real PSP/Vita/PS2 OPL hardware, and Original Xbox scrubbed XISOs (`.xiso.iso`) for `xemu`. [Read the v2.0.0 release notes](https://github.com/PowerBeef/discpress/releases/tag/v2.0.0).
 
 <img src="docs/brand/divider.png" width="100%" alt="">
 
-## What is Discpress?
+## What Discpress does
 
-A single PlayStation or Saturn game can be a dozen `.bin` files plus a `.cue`. **CHD** packs the whole disc into one compressed file: much smaller, nothing lost, and loaded directly by MAME, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast, MiSTer and more.
+Managing a retro disc collection usually takes half a dozen command-line utilities, manual batch scripts, separate unzip tools, audio converters, DAT managers, and wiki pages full of per-emulator caveats.
 
-The standard tool for making CHDs is **chdman**, a command-line program from the MAME project. **Discpress** runs its own fork of chdman (MAME 0.289, faster, with its bugs fixed) in a friendly app in your browser, on your phone or your computer. It:
+**Discpress puts the entire workflow into one self-contained HTML file** that runs locally in your browser on desktop, iPhone, iPad, and Android — nothing installed, nothing uploaded. Under the hood it combines a hardened, WebAssembly SIMD128-accelerated fork of MAME 0.289's `chdman` with native archive unpackers, disc/audio decoders, a built-in 33,000+ disc Redump database, a CHD health auditor, and real-hardware format writers:
 
-- makes **the very same CHD files** as chdman 0.289;
-- **names each game** after its official title, from the Redump database;
-- **checks your dumps** against Redump and your DAT files;
-- **opens the files your games come in**: cue sheets (including `.flac`/`.wav`/`.aiff`/`.ogg`/`.mp3` audio tracks and GOG `.ins`), `.gdi`, `.iso`, `.zip`, `.7z`, Alcohol `.mds`/`.mdf`, DiscJuggler `.cdi`, CloneCD `.ccd`/`.sub`, ECM, CSO/ZSO, `EBOOT.PBP`, and more;
-- **ships hardware-ready outputs** when CHD isn't supported: `--block=2048` CSO/ZSO for real PSP, PS Vita Adrenaline, and PS2 OPL hardware, and scrubbed Original Xbox XISOs (`.xiso.iso`) for `xemu`;
-- **warns you and fixes broken CHDs** before you hit emulator headaches (Target profiles, reversible Tier X layout repairs, and a 12-check CHD Library Health Auditor).
-
-There is nothing to install, and your files never leave your device. **Download it** as one HTML file that works anywhere, even offline, or **use it online** with nothing to download (the way to convert big games on iPhone and iPad).
-
-## How it works
+| Pillar | What it replaces |
+|---|---|
+| **Convert &amp; unpack** | Turns `.cue`/`.bin`, `.gdi`, `.iso`, `.zip`, `.7z`, Alcohol `.mds`/`.mdf`, DiscJuggler `.cdi`, CloneCD `.ccd`/`.sub`, Nero `.nrg`, `.toc`, ECM, CSO/ZSO, `EBOOT.PBP`, and audio-track cues (`.flac`/`.wav`/`.aiff`/`.ogg`/`.mp3`, GOG `.ins`) into standard CHD v5 — or extracts CHDs back to exact Redump dumps. |
+| **Hardware formats** | Writes `--block=2048` **CSO v1 / CSO v2 / ZSO** directly (from ISOs or existing DVD CHDs) for real PSP CFW, PS Vita Adrenaline, and PS2 OPL; scrubs 7.28 GB Redump **Original Xbox** `.iso` dumps into compact `xemu`-bootable `.xiso.iso` images in seconds. |
+| **Identify &amp; organize** | Reads disc boot headers (even inside CHDs, PBPs, ECMs, `.mds`, and `.cdi`) to name outputs from the built-in **Redump database (33,312 discs)**, verifies every track against your own Redump/No-Intro DATs in a single pass, pairs/extracts PAL PlayStation **LibCrypt `.sbi`** files, and writes **Flat / Console / Tree** folders and **ES-DE / Handheld / MinUI** `.m3u` playlists. |
+| **Audit &amp; repair** | Drop an existing CHD library to run a **12-check health audit** (v3/v4 upgrades, wrong CD/DVD mode, oversized PSP hunks, incompatible codecs, disallowed `CUES` tags, damaged hunks) with **1-click lossless `copy` fixes**, 2-step rebuilds, and reversible layout repairs. |
 
 <p align="center">
   <picture>
     <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/steps-mobile-dark.png">
     <source media="(max-width: 600px)" srcset="docs/brand/steps-mobile-light.png">
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/steps-dark.png">
-    <img src="docs/brand/steps-light.png" width="100%" alt="1. Add your games: pick the cue and bin files, a gdi set, an iso or a zip; Discpress spots the console and the exact game. 2. Press Start: Discpress’s chdman compresses every disc on several CPU cores at once. 3. Save the CHDs, named after the official title and ready for your emulator.">
+    <img src="docs/brand/steps-light.png" width="100%" alt="1. Drop your library: add .cue/.bin, .gdi, .iso, .zip, .7z, .mds/.mdf, .cdi, audio cues or existing .chd files. 2. Pick your target: choose Universal, ES-DE, Handheld, MiSTer or hardware outputs, or audit CHDs in one click. 3. Save ready to play: officially named, Redump-verified and organized into folders with .m3u playlists and LibCrypt .sbi files attached.">
   </picture>
 </p>
+
+<br>
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/brand/showcase-dark.png">
-    <img src="docs/brand/showcase-light.png" width="100%" alt="Discpress on a desktop browser with a Saturn game converted and a PlayStation disc identified as Metal Gear Solid (USA) (Disc 1), next to the phone version.">
+    <img src="docs/brand/showcase-light.png" width="100%" alt="Discpress on desktop with Target: Universal in the top bar, a converted Sega Saturn disc, Metal Gear Solid (USA) (Disc 1) queued with batch size and time estimates, next to the mobile start screen.">
   </picture>
 </p>
 
-## Features
+## Target profiles
+
+Every emulator and device has its own quirks — hunk sizes, Zstd support, metadata tag limits, multi-disc `.m3u` layouts, and CD-vs-DVD rules. Pick where you play directly in the top bar (or Settings) and Discpress sets every disc up cleanly before you press Start:
+
+| Profile | Best for | Compression & layout | Compatibility contract |
+|---|---|---|---|
+| **Universal** *(default)* | Sharing, archival & running on every emulator | Standard MAME 0.289 codecs (`cdlz`/`cdzl`/`cdfl`, `lzma`/`zlib`/`huff`/`flac`), console-accurate hunk sizes (`-hs 2048` for PSP) | **Tier R** — byte-identical to Linux MAME 0.289 `chdman` |
+| **Fast Universal** | Large batch conversions with full compatibility | Adaptive `--codecplan` (entropy fallback + 200 ns PCM probe) + `libdeflate` | **Tier C** — ~1.5–1.7× faster, ≤0.3% size diff, identical checksums |
+| **ES-DE / PC** | EmulationStation-DE, RetroArch, DuckStation, PCSX2, PPSSPP, Flycast | Fast Zstd decompression + ES-DE `.m3u/` directory playlists | Warns automatically for any emulator without Zstd support |
+| **Handheld** | Steam Deck, Retroid, Odin, Anbernic, OnionOS / muOS / Rocknix | Zstd decompression + Handheld (`.hidden`/`.discs`) or MinUI `.m3u` playlists | Fast random seek and lower CPU load on ARM/handhelds |
+| **MiSTer FPGA** | MiSTer PSX, Saturn, MegaCD, TurboGrafx-16 CD, Neo Geo CD cores | `cdzs,cdfl` in 4-sector (9,792-byte) hunks | Warns on systems without a MiSTer CD core |
+| **Legacy** | AetherSX2, NetherSX2, pre-April-2023 PCSX2, older libchdr builds | PS2 DVDs written as CD CHDs, conservative codecs | Warns on Zstd across every system |
 
 <p align="center">
   <picture>
-    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/features-mobile-dark.png">
-    <source media="(max-width: 600px)" srcset="docs/brand/features-mobile-light.png">
-    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/features-dark.png">
-    <img src="docs/brand/features-light.png" width="100%" alt="chdman, improved. Knows your games: console, serial, disc number and region, named from over 33,000 Redump discs. Multi-core fast. Made for phones. Big discs welcome. Totally private. Checks your dumps. Opens what you have. Ready to play.">
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/emulators-mobile-dark.png">
+    <source media="(max-width: 600px)" srcset="docs/brand/emulators-mobile-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/emulators-dark.png">
+    <img src="docs/brand/emulators-light.png" width="100%" alt="The right CHD per console, Saturn/Sega CD/PCE-CD cue-tag stripping, timely emulator warnings, LibCrypt .sbi extraction, ES-DE/Handheld/MinUI .m3u sets, 6 Target profiles, --block=2048 CSO/ZSO and scrubbed Xbox XISO outputs, 12-check CHD Health Auditor, and safe reversible repairs.">
   </picture>
 </p>
 
 <details>
-<summary><b>Everything it can do</b></summary>
+<summary><b>Per-console rules, companion files &amp; warnings reference</b></summary>
 <br>
 
-**Converting**
+**Automatic per-console handling**
 
-- **Real chdman output.** Standard CHD v5 files, byte for byte the same as desktop chdman 0.289 makes on Linux, with the same checksums as any chdman 0.289.
-- **The right command, picked for you:** `createcd`, `createdvd`, `createhd`, `createraw`, `createld`, `extractcd`, `extractdvd`, `extracthd`, `extractld`, `extractraw`, `verify` and `info`, with the type and hunk size each console's emulators need. The **Advanced** tab has every chdman command and option, including `copy`, parent CHDs, `addmeta` and hard disk templates.
-- **Compression to suit you.** *Smallest* (the default) is chdman's own. *Nearly as small, faster* tries each track only with the codec that suits it: about 1.7 times as fast for CDs, at most 0.3% bigger, same checksums. *Faster to create*, *Faster to load (Zstd)*, *For MiSTer FPGA* and *No compression* are there too.
-- **Fast.** Compression is spread over several CPU cores, as many as make it faster on your device (a one-off speed test decides; Settings has the choice), with WebAssembly SIMD when your browser supports it. Extracting and verifying use several cores too.
-- **Back again.** A CD CHD extracts to its Redump dump: the same cue sheet and one `.bin` per track, so the files match Redump's checksums. A GD-ROM comes back as its `.gdi` set, a DVD as its `.iso`. Settings → *Keep the cue sheet in CD CHDs* also keeps what a CHD doesn't otherwise hold (CATALOG, FLAGS, ISRC, extra indexes), for discs that have it.
+| System / scenario | What Discpress does |
+|---|---|
+| **PSP** | Writes DVD CHD with 2,048-byte hunks (PPSSPP), or `--block=2048` CSO v1/v2 / ZSO for real PSP CFW and PS Vita Adrenaline |
+| **PlayStation 2** | Detects CD vs DVD from the disc's filesystem (or writes `--block=2048` ZSO/CSO for PS2 OPL); **Legacy** mode writes PS2 DVDs as CD CHDs for AetherSX2/NetherSX2 |
+| **Original Xbox** | Defaults to clean-room scrubbed XISO (`.xiso.iso`) for `xemu`, preserving XDVDFS AVL trees and `FILETIME` |
+| **PlayStation (PAL LibCrypt)** | Pairs `.sbi`/`.lsd`, extracts `.sbi` directly from CloneCD `.sub` or Alcohol `.mdf` (`+96B` interleaved Q), names it next to the CHD, and flags any of the 197 protected serials missing one |
+| **Saturn, Sega CD &amp; PC Engine CD** | Strips optional `CUES` metadata tags even when *Keep the cue sheet* is on (Kronos, Yabause, and jgenesis reject unknown metadata tags); displays Saturn RAM/backup cartridge requirements (`db/facts/saturn-cart.tsv`) |
+| **Dreamcast &amp; NAOMI** | Stores GD-ROMs properly from `.gdi` or Redump `.cue`/`.bin`; preserves NAOMI romset filenames (`gdl-xxxx` / `gds-xxxx`); warns on `MODE2/2048`, `MODE2/2324`, `MODE2_FORM_MIX`, and pregaps that break Flycast |
+| **Multi-disc sets** | Tracks missing discs across the set and generates `.m3u` playlists in **Flat**, **ES-DE** (`Game.m3u/` folder), **Handheld** (`.hidden`/`.discs`), or **MinUI** layouts, alongside **Flat**, **Console**, or **Tree** output folders |
 
-**Knowing your games**
+**Emulator warnings shown before you convert**
 
-- **Game recognition.** Discpress reads the disc's own boot files to find the console, the serial number, which disc of a set it is and its region. It then looks the game up in a built-in copy of the [Redump](https://redump.org) database (over 33,000 discs). When the size and CRC-32 match, the dump is marked as verified. When several releases still fit, you choose which one.
-- **Official names.** For example `Metal Gear Solid (USA) (Disc 1).chd`. You can also type your own name, turn renaming off, or use **Rename** to fix the name of a CHD you already have.
-- **Your DAT files.** Add Redump or No-Intro DAT files (the `.dat` or `.xml`, or the `.zip` they come in) and every track of a disc is checked against them by size and CRC-32: before converting, and for a CHD after **Verify**, without extracting it. A disc whose every track matches is named after its DAT entry. The DATs are kept in the browser for your next visits.
-- **Verify** checks a CHD's own checksums, then compares it with Redump without extracting it.
-
-**Reading what you have**
-
-- **Archives and packed images are opened as they are read:** `.zip` (zip64 included) and streaming `.7z` archives (LZMA/LZMA2/Deflate/BCJ/Delta), ECM images (`.bin.ecm`), CSO and ZSO compressed ISOs, Alcohol 120% v1.x (`.mds` + `.mdf`), DiscJuggler (`.cdi` v2/v3/v3.5), and PlayStation `EBOOT.PBP` files made with popstation, one card per disc. Each is checked as it is unpacked.
-- **Disc images and audio cues of every common kind:** cue sheets with `.bin` or `.flac`/extended `.wav`/`.aiff`/`.ogg`/`.mp3` tracks (plus GOG `.ins`), Dreamcast `.gdi` sets, `.iso` images (2,048- or 2,352-byte sectors), CloneCD (`.ccd` + `.img` + `.sub`, including opt-in CD+G `RW_RAW`), Nero (`.nrg`), and cdrdao (`.toc`). Cue sheets in odd encodings, with lower-case keywords or Windows line ends, are read correctly.
-- **Adjacent hardware formats:** write `--block=2048` CSO v1, CSO v2, or ZSO from PSP/PS2 ISOs or DVD CHDs for real PSP CFW, PS Vita Adrenaline, and PS2 OPL; scrub 7.28 GB Redump Original Xbox `.iso` dumps directly into `xemu`-bootable `.xiso.iso` images in seconds.
-- **Clear refusals.** Formats that still require external tools (Daemon Tools v2 `.mdx`, UltraISO `.isz`, `.rar`, encrypted PlayStation Store PBPs, PC-98 `.hdi`/`.nhd`, `.vhd`) get a card that says why and what to do instead.
-
-**Ready for your emulator** (see [below](#ready-for-your-emulator))
-
-- **Settings that boot:** the CHD type and hunk size each console needs, and nothing its emulators reject.
-- **LibCrypt `.sbi` files** for PAL PlayStation games: one you add (or DuckStation's `.lsd`) is saved next to the CHD under its name, a CloneCD dump's is made from its `.sub` file, and a protected game added without one says so.
-- **`.m3u` playlists** for games on several discs, so the emulator can swap them, and a note of the discs a set still needs.
-- **Warnings where an emulator can't load the result**, before you convert.
-
-**Phones, big files and privacy**
-
-- **Big files.** Results are written to the browser's private disk storage, so multi-gigabyte DVD images work, and results not saved yet are still there after a reload. On desktop Chrome and Edge, results can go straight into a folder you choose, and saving a result of 1 GB or more asks where to put it, so a save you cancel leaves it waiting. (Chrome and Edge give a page opened as a downloaded file no disk storage, so there it keeps results in memory: for big DVD images, choose a folder or use it online.)
-- **Made for phones.** It adapts to any screen, notch, rotation and text size, in light or dark mode, and can be added to the Home Screen. On iPhone and iPad, **Save to Files** uses the share sheet; results over 512 MB are downloaded instead, since the share sheet loads the whole file into memory. If iOS reloads the page before you save, finished results are still there, under **From your last visit**.
-- **Private and offline.** It's one self-contained HTML file with nothing to load from the internet. The online version is that same file: it runs on your device too, and once opened it works offline.
+- **Zstd &amp; MiSTer compatibility:** names the exact emulators per console that can't read Zstd (Kronos, Yabause, BlastEm, Beetle SuperGrafx, Opera, WinUAE, older SwanStation, AetherSX2/NetherSX2, Flycast &lt; 2.3, Redream, Demul, older Beetle PC-FX) and warns when MiSTer has no core for a system.
+- **Cue &amp; disc layout traps:** flags 2,048-byte PS1 rips (missing XA audio/FMVs, rejected by Beetle PSX), multi-session discs (CD-Extra, MIL-CD, Jaguar CD), `PREGAP`/`POSTGAP` offset issues (Saturn, PCE-CD, PC-FX, PS1, Sega CD, NeoCD), PS2 CD music tracks (PCSX2 track-1 limit), Sega CD ≥80 min (PicoDrive) / mixed-track (Genesis Plus GX) / late-audio (BlastEm) layouts, Neo Geo CD Mode 2 tracks, lossy/resampled audio tracks, and CD+G `RW_RAW` subcode caveats (Beetle PCE).
+- **Non-CHD media:** identifies GameCube &amp; Wii discs (pointing to Dolphin's right-click **Convert File → RVZ**), PS3, Xbox 360, UMD Video, Video CD, DVD-Video, and Blu-ray clearly so you never waste time converting discs an emulator won't load.
 
 </details>
 
-## Systems and files
+## Audit and repair your library
 
-<p align="center">
-  <picture>
-    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/systems-mobile-dark.png">
-    <source media="(max-width: 600px)" srcset="docs/brand/systems-mobile-light.png">
-    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/systems-dark.png">
-    <img src="docs/brand/systems-light.png" width="100%" alt="PlayStation, PlayStation 2, PSP, Saturn, Sega CD / Mega CD, Dreamcast, NAOMI, PC Engine CD / TurboGrafx-CD, PC-FX, Neo Geo CD, 3DO, CD-i, Amiga CD32, CDTV, Jaguar CD, PC-98, arcade hard disks and LaserDisc.">
-  </picture>
-</p>
+Already have a folder full of `.chd` files collected over the years? Drop them straight onto Discpress — you don't have to extract anything to inspect, verify, or fix them:
+
+- **12-check CHD Library Health Auditor:** inspects every dropped `.chd` against your active Target profile and console rules, flagging legacy v3/v4 CHDs, PS2 DVDs mis-encoded as CD CHDs, PSP CHDs with oversized hunks, Zstd/MiSTer codec mismatches, disallowed `CUES` metadata tags on Saturn/Sega CD/PCE-CD, and corrupted hunks.
+- **1-click lossless fixes:** metadata-only and recompression issues (such as upgrading v3/v4 → v5, stripping disallowed `CUES` via `--stripmeta`, or re-packing codecs/hunks) fix in **1 click via `copy`**; structural mismatches (such as CD ↔ DVD mode) offer guided 2-step lossless rebuilds.
+- **Single-pass `verify --redump`:** checks CHD integrity and computes Redump/DAT per-track CRC-32s simultaneously without writing extracted `.bin` files to disk.
+- **Reversible Tier X layout repairs:** opt-in `--sessions` (`CHSE` session metadata) and reversible `--trailer` (`DPRC0001`, stripped cleanly by `extractcd --redump`) repair multi-session and gap-sensitive layouts without breaking round-trip Redump restoration.
+- **Batch safety:** pre-flight overwrite conflict dialog (`Skip existing`, `Overwrite`, `Cancel`), batch size/time/storage-quota estimates before `Start all`, and **Rename** for fixing existing CHD filenames from Redump or your DATs.
+
+## Formats and hardware outputs
 
 <p align="center">
   <picture>
@@ -148,113 +143,79 @@ There is nothing to install, and your files never leave your device. **Download 
   </picture>
 </p>
 
-<details>
-<summary><b>Which files for which console</b></summary>
-<br>
+### What goes in, what comes out
 
-| System | Add these files | Becomes |
+| Source format | How Discpress handles it | Output choices |
 |---|---|---|
-| PlayStation | `.cue` + `.bin`/audio, CloneCD `.ccd` + `.img` + `.sub`, Alcohol `.mds` + `.mdf`, or popstation `EBOOT.PBP` | CD CHD (one per disc) + `.sbi` when LibCrypt-protected |
-| Saturn, Sega CD, PC Engine CD, PC-FX, Neo Geo CD, 3DO, CD-i, Amiga CD32, CDTV, Jaguar CD, PC-98 | `.cue` + `.bin`/audio (`.flac`/`.wav`/`.aiff`/`.ogg`/`.mp3`, GOG `.ins`), CloneCD `.ccd` + `.img`, `.mds` + `.mdf`, `.cdi`, `.nrg`, `.toc` | CD CHD |
-| Dreamcast and NAOMI | `.gdi` + tracks, Redump `.cue` + `.bin`, or `.cdi` (1-session CHD; multi-session `.cue`/`.bin` extract or Flycast 2.8+ Tier-X CHD) | CD CHD (GD-ROM detected) |
-| PlayStation 2 | DVD games: `.iso`, `.cso`, `.zso`, or `.mds` + `.mdf` · CD games: `.cue` + `.bin` | DVD or CD CHD (or `--block=2048` CSO/ZSO for PS2 OPL hardware) |
-| PSP | `.iso`, `.cso`, `.zso`, or `.chd` | DVD CHD (`-hs 2048`, as PPSSPP recommends) or `--block=2048` CSO/ZSO for real PSP / PS Vita Adrenaline |
-| Original Xbox | Redump 7.28 GB `.iso` or un-scrubbed XISO | Scrubbed XISO (`.xiso.iso`) for `xemu`, preserving XDVDFS AVL trees and `FILETIME` |
-| Arcade and computer hard disks | `.img`, `.hdd` | Hard disk CHD |
-| LaserDisc arcade games | `.avi` | LaserDisc CHD |
-| Any of the above | `.chd` | Back to `.cue`/`.bin` (Redump dump layout), `.gdi`, `.toc`, `.iso`, or `--block=2048` CSO/ZSO (DVD CHDs); hard disk CHD to `.img`, LaserDisc CHD to `.avi`; plus 12-check health audit & 1-click fixes |
-
-GameCube, Wii, PS3, Video CD, DVD-Video, Blu-ray and UMD Video discs are recognized too, with clear notes (including Dolphin's right-click RVZ conversion for GameCube and Wii).
-
-</details>
+| **`.cue` + `.bin`**, **`.gdi`**, **`.toc`**, **`.nrg`**, **`.iso`** | Read directly from disk (no copy into RAM); fixes encodings, case mismatches, macOS accents, and lone-`.bin` cues | CD / GD-ROM / DVD **CHD v5**; PSP/PS2 **CSO v1 / CSO v2 / ZSO** (`--block=2048`); Original Xbox scrubbed **`.xiso.iso`** |
+| **Audio cues &amp; GOG `.ins`** (`.flac`, `.wav`/RF64, `.aiff`, `.ogg`, `.mp3`) | Decoded on-the-fly in WebAssembly (`FLAC`, 24-bit/float/extensible `WAV`, `AIFF`, `stb_vorbis`, gapless `minimp3`), with `lossy-audio`/`resampled-audio` warnings | CD **CHD v5** (lossless tracks match raw Red Book PCM byte for byte) |
+| **`.zip` (zip64) &amp; `.7z`** | Unpacked in the worker (stored zips read in place; LZMA/LZMA2/Deflate/BCJ/Delta `.7z` streamed via Public Domain LZMA SDK) | Same as the disc image inside |
+| **Alcohol 120% v1.x (`.mds` + `.mdf`)** | CD tracks via stride virtual store (plus PS1 `+96B` interleaved Q `.sbi` extraction); DVD `.mdf` direct pass-through; v2 `.mdx`/`.mds` clearly refused | CD / DVD **CHD v5** (+ `.sbi`) |
+| **DiscJuggler (`.cdi` v2/v3/v3.5)** | 1-session `.cdi` converts directly to CHD; multi-session Dreamcast MIL-CD defaults to `.cue` + `.bin` extraction with optional guarded Flycast 2.8+ Tier-X CHD | CD **CHD v5** or extracted **`.cue` + `.bin`** |
+| **CloneCD (`.ccd` + `.img` + `.sub`) &amp; CD+G** | Extracts LibCrypt `.sbi` from `.sub` for PAL PS1; supports `TRACK nn CDG` and opt-in `.sub` → `RW_RAW` subcode preservation | CD **CHD v5** (+ `.sbi`) |
+| **`.bin.ecm`, `.cso`, `.zso`, popstation `EBOOT.PBP`** | Decompressed block by block as they are read (multi-disc PBPs split into one card per disc) | CD / DVD **CHD v5**, or re-packed **CSO / ZSO** |
+| **Existing `.chd`** | Audited (12 health checks), verified in one pass, renamed, or extracted losslessly | Redump **`.cue`/`.bin`**, **`.gdi`**, **`.toc`**, **`.iso`**, **`.img`**, **`.avi`**, **CSO / ZSO** (from DVD CHD), or repaired **`.chd`** |
+| **Arcade hard disks &amp; LaserDisc** (`.img`, `.hdd`, `.avi`) | Full `createhd` / `extracthd` / `createld` / `extractld` support + every `chdman` command in the **Advanced** tab | Hard disk / LaserDisc **CHD v5** (and back) |
 
 <details>
-<summary><b>Formats it can't read, and what to do</b></summary>
+<summary><b>Formats intentionally refused (and what to use instead)</b></summary>
 <br>
 
-| Format | Instead |
+| Format | What to do instead |
 |---|---|
-| Daemon Tools v2 `.mdx` / `.mds` v2 | Convert it to `.cue`/`.bin` or `.iso` first (Alcohol 120% v1.x `.mds`/`.mdf` is supported directly) |
-| UltraISO `.isz` | Convert it to `.iso` with UltraISO first |
-| `.rar` (and password-encrypted `.zip`/`.7z`) | Unpack them first (standard `.zip` and `.7z` archives are supported directly) |
-| Encrypted `EBOOT.PBP` (PlayStation Store) | Use a dump of the disc |
-| GameCube / Wii `.iso` (for Dolphin RVZ) | In Dolphin, right-click the game → Convert File → RVZ |
-
-A lone `.bin` or raw `.iso` without its cue sheet works for single-track data discs: one is generated.
+| **Daemon Tools v2 `.mdx` / `.mds` v2** | Convert to `.cue`/`.bin` or `.iso` first (Alcohol 120% v1.x `.mds`/`.mdf` works directly) |
+| **UltraISO `.isz`** | Convert to `.iso` with UltraISO first |
+| **`.rar`** &amp; password-encrypted `.zip`/`.7z` | Unpack first (standard `.zip` and `.7z` archives work directly) |
+| **Encrypted PlayStation Store `EBOOT.PBP`** | Use a disc dump or popstation PBP |
+| **GameCube / Wii `.iso`** | In Dolphin, right-click the game → **Convert File → RVZ** |
 
 </details>
 
-## Ready for your emulator
+## Supported systems
 
-The right CHD type and hunk size for each console, compression that every emulator reads unless you choose otherwise (DOSBox Pure, for PC discs, wants none, and the card says so), the files your emulator wants next to the CHD, and a warning before you make one it can't play.
+Over **30 consoles, home computers, and arcade systems** recognized from disc headers and backed by **33,312 Redump database entries** (plus unlimited custom Redump and No-Intro DAT files):
 
 <p align="center">
   <picture>
-    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/emulators-mobile-dark.png">
-    <source media="(max-width: 600px)" srcset="docs/brand/emulators-mobile-light.png">
-    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/emulators-dark.png">
-    <img src="docs/brand/emulators-light.png" width="100%" alt="The right CHD: CD or DVD, and the hunk size each console's emulators want. Boots as it should: Saturn, Sega CD and PCE-CD skip the cue tag their emulators reject; NAOMI GD-ROMs keep their romset name. Warns in time: says when an emulator can't read Zstd, or misreads a disc's sessions, gaps or tracks. LibCrypt .sbi: saved next to a PAL PlayStation CHD, extracted from CloneCD .sub or .mdf, and asked for when missing. Whole sets: ES-DE, Handheld, MinUI and flat .m3u playlists plus folder organization. Target profiles: Universal, Fast Universal, ES-DE/PC, Handheld, MiSTer FPGA and Legacy. Hardware outputs: --block=2048 CSO/ZSO for PSP/Vita/PS2 OPL, scrubbed Xbox XISOs for xemu. Health auditor: 12-check CHD library auditor with 1-click fixes. Safe repairs: reversible layout fixes, guarded CD+G RW_RAW, and clear guidance on non-CHD discs.">
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/systems-mobile-dark.png">
+    <source media="(max-width: 600px)" srcset="docs/brand/systems-mobile-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/systems-dark.png">
+    <img src="docs/brand/systems-light.png" width="100%" alt="PlayStation, PlayStation 2, PSP, Saturn, Sega CD / Mega-CD, Dreamcast, Original Xbox (XISO), NAOMI / Triforce / Chihiro, PC Engine CD / TurboGrafx-CD, PC-FX, Neo Geo CD, 3DO, CD-i, Amiga CD32, CDTV, Amiga CD, Jaguar CD, PC-98, FM Towns, X68000, Pippin / Playdia / Nuon, System 573 / 246, arcade hard disks, and LaserDisc.">
   </picture>
 </p>
 
-<details>
-<summary><b>Settings it picks for you</b></summary>
-<br>
+## Built like a native app — still one offline file
 
-| When | What Discpress does |
-|---|---|
-| Target Environment selector | Choose **Universal** (default, byte-identical to MAME 0.289), **Fast Universal**, **ES-DE / PC**, **Handheld**, **MiSTer FPGA**, or **Legacy** directly in the top bar or Settings |
-| A PSP game | Makes a DVD CHD with 2,048-byte hunks (PPSSPP), or `--block=2048` CSO/ZSO for real PSP / PS Vita Adrenaline hardware |
-| A PS2 game | Makes a DVD or CD CHD, or `--block=2048` ZSO/CSO for PS2 OPL; **Legacy** mode makes CD CHDs of DVD games for AetherSX2, NetherSX2 and pre-April-2023 PCSX2 |
-| An Original Xbox ISO | Defaults to scrubbing into a `xemu`-bootable `.xiso.iso`, preserving XDVDFS AVL trees and timestamps |
-| A Dreamcast or NAOMI GD-ROM | Stores it as a GD-ROM, from a `.gdi` or a Redump cue sheet |
-| *Keep the cue sheet* on, for a Saturn, Sega CD or PC Engine CD game | Leaves it out and says why: Kronos, Yabause and jgenesis can't open such a CHD |
-| A NAOMI GD-ROM | Keeps its file's name, which MAME and Flycast look for in the game's romset |
-| A PAL PlayStation game with LibCrypt | Saves its `.sbi` (or `.lsd`, or extracts from `.sub`/`.mdf`) under the CHD's name, where DuckStation, Beetle PSX, SwanStation, PCSX ReARMed and MiSTer look for it |
-| Two or more discs of a game | Offers an `.m3u` playlist (Flat, ES-DE `.m3u/` folder, Handheld `.hidden`/`.discs`, or MinUI hidden) and tracks missing discs |
-| Existing `.chd` files | Runs a 12-check **CHD Library Health Audit** (v3/v4 upgrades, wrong CD/DVD mode, oversized PSP hunks, incompatible codecs, bad tags) with 1-click fixes |
+<p align="center">
+  <picture>
+    <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/brand/features-mobile-dark.png">
+    <source media="(max-width: 600px)" srcset="docs/brand/features-mobile-light.png">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/features-dark.png">
+    <img src="docs/brand/features-light.png" width="100%" alt="Full disc toolkit, knows your games across 33,000+ Redump discs, multi-core WASM SIMD128 fast, phone and desktop ready, crash-resumable multi-GB DVDs, totally private and offline, DAT verification, opens packed/audio formats, and hardware-ready outputs.">
+  </picture>
+</p>
 
-</details>
-
-<details>
-<summary><b>Warnings and notes</b></summary>
-<br>
-
-| When | What the card says |
-|---|---|
-| Zstd, or the MiSTer preset | Which of the console's emulators can't read it: Kronos and Yabause (Saturn), BlastEm (Sega CD), Beetle SuperGrafx (PC Engine CD), Opera (3DO), WinUAE (CD32, CDTV), SwanStation builds from before April 2026 (PlayStation), AetherSX2 and NetherSX2 (PS2), Flycast before 2.3, and probably Redream and Demul (Dreamcast, NAOMI), Beetle PC-FX before August 2026; with the compatibility mode on, that older emulators can't open Zstd CHDs, for every console |
-| The MiSTer preset, for Dreamcast, NAOMI, PS2, PC-FX, PC-98 or Jaguar CD | That MiSTer has no core that plays them from CHDs |
-| A LibCrypt game without its `.sbi` | That emulators stop it partway, and where to get the file |
-| A 2,048-byte copy of a PlayStation disc | That its videos and sound may be missing and Beetle PSX can't load it: convert the `.bin` and `.cue` dump instead |
-| A disc with several sessions (CD-Extra, MIL-CD) | That emulators read the later sessions from the wrong place (for a Dreamcast or NAOMI disc: except Flycast builds from September 2026 on, which guess it for MIL-CDs); for a Jaguar CD, that its emulators may not load it at all |
-| A CD-based Dreamcast disc with pregaps, or a Dreamcast or NAOMI disc with MODE2/2048, MODE2/2324 or MODE2_FORM_MIX tracks | That Flycast 2.7 and earlier, or any Flycast, can't load it |
-| A PS2 game on CD with music tracks | That PCSX2 plays only the first track of a CD CHD |
-| PREGAP or POSTGAP lines in a cue sheet | Which emulators read the tracks after them from the wrong place: Beetle Saturn, Kronos and Yabause; Beetle PCE, Geargrafx, Beetle PC-FX, Beetle PSX and jgenesis; ares and PCSX ReARMed; NeoCD |
-| Sega CD layouts | When Genesis Plus GX reads the tracks only up to the first data track after track 1, PicoDrive won't take a disc of 80 minutes or more, or BlastEm starts music late |
-| A Neo Geo CD with a Mode 2 track | That NeoCD can't load it |
-| A UMD Video | That it's a film, which PPSSPP doesn't play |
-| GameCube, Wii, Xbox or PS3; Video CDs and video discs | That their emulators or players don't load CHDs |
-
-More than two notes on one card are grouped under *Emulator notes*; warnings always stay in view.
-
-</details>
+- **Fast multi-core WebAssembly SIMD128:** bit-exact SIMD acceleration for FLAC predictors and QLP residuals, 64-bit FLAC bitstreams, shared CD ECC/subcode preparation (`cd_prep_cache`), persistent warm worker pool, and auto-tuned thread counts.
+- **Crash-resumable multi-gigabyte jobs:** results stream straight to private disk storage (OPFS) or directly into a chosen folder on Chrome/Edge, checkpointing progress so reloads, mobile tab kills, or thermal/battery pauses resume instead of starting over. **Save &amp; Free** reclaims disk space immediately after saving.
+- **Every `chdman` command when you want full control:** the **Advanced** tab exposes every `chdman` verb and flag (`createcd`, `createdvd`, `createhd`, `createraw`, `createld`, `extract*`, `copy`, `verify`, `info`, `addmeta`, `delmeta`, `dumpmeta`, `listtemplates`, parent/delta CHDs, custom hunk sizes, `--ultra`, `--zstd-level`, `--codecplan`, `--libdeflate`, `--sessions`, `--trailer`, `--stripmeta`) as a guided form or typed CLI.
+- **Zero-network privacy guarantee:** enforced by `Content-Security-Policy: connect-src 'none'`. No servers, no analytics, no cookies, no uploads — even the online GitHub Pages edition is the exact same file byte for byte and runs offline once opened or installed to your Home Screen.
 
 ## Get started
 
-1. **Pick a way to run it.** Both are the same app, both work in every modern browser, and both keep your files on your device.
+1. **Choose how to run it** — both editions are byte-for-byte identical:
 
-   | | **[⬇ Download the file](https://github.com/PowerBeef/discpress/releases/latest/download/discpress.html)** | **[🌐 Use it online](https://powerbeef.github.io/discpress/)** |
+   | | **[⬇ Download `discpress.html`](https://github.com/PowerBeef/discpress/releases/latest/download/discpress.html)** | **[🌐 Open online](https://powerbeef.github.io/discpress/)** |
    |---|---|---|
-   | **What it is** | `discpress.html`, the whole app in one file you keep | The same file on [powerbeef.github.io/discpress/](https://powerbeef.github.io/discpress/), updated with each release |
-   | **Best for** | Computers and Android, and using it without any internet | Nothing to download, and **big games on iPhone and iPad** |
-   | **How to open it** | Double-click it on a computer; on Android, open it with Chrome or another browser | Open the link. On iPhone and iPad, use Safari |
-   | **Offline** | Always | Once opened; you can also install it (Share → **Add to Home Screen**, or the install button in Chrome and Edge) |
-   | **Big DVD images** | In Chrome and Edge, choose a folder for the results (Settings): opened as a file, the page keeps them in memory | Results go to disk in every modern browser |
-   | **Updates** | Download the file again for a new version | Automatic: the next visit gets the new version |
+   | **What it is** | One ~3.2 MB self-contained HTML file you keep | The exact same file on GitHub Pages, updated automatically on every release |
+   | **Best for** | Computers, Android, and permanent air-gapped offline use | Zero downloads, and **multi-GB games on iPhone &amp; iPad** |
+   | **Offline support** | Always | Works offline after first visit (or **Add to Home Screen** / install as a PWA) |
+   | **Big DVD images** | On desktop Chrome/Edge, pick a destination folder in Settings (file:// pages have no OPFS) | Disk-backed OPFS storage in every modern browser |
+   | **Updates** | Download the file again for a new release | Automatic on next visit |
 
-   **On iPhone and iPad, use it online, in Safari:** Safari can't open a downloaded HTML file, and results of any size download to Files → Downloads.
-2. **Add your games.** Pick every file of a game together (the `.cue` *and* its `.bin` files, or their `.zip`), or drag them onto the page.
-3. **Press Start all**, then **Save** or **Download** each CHD when it's ready. Keep the page open while it works; on a phone, keep the screen on too, since iOS and Android pause pages in the background.
+   > **iPhone &amp; iPad:** open [powerbeef.github.io/discpress](https://powerbeef.github.io/discpress/) in Safari. Safari blocks local `file://` HTML files, and file-viewer apps cap saves at ~512 MB; Safari online saves results of any size to **Files → Downloads** and recovers unfinished saves under **From your last visit**.
+
+2. **Drop your files or folder** — cue/bin sets, `.gdi`, `.iso`, `.zip`, `.7z`, `.mds`/`.mdf`, `.cdi`, audio cues, or existing `.chd` files.
+3. **Pick your Target profile** in the top bar (or leave **Universal**), review any warnings or audit suggestions, and press **Start all**.
 
 <img src="docs/brand/divider.png" width="100%" alt="">
 
@@ -264,141 +225,128 @@ More than two notes on one card are grouped under *Emulator notes*; warnings alw
 <summary><b>Are my games uploaded anywhere?</b></summary>
 <br>
 
-No. Discpress runs entirely on your device, downloaded or online, and works in airplane mode. Its Content-Security-Policy (`connect-src 'none'`) forbids the page any network connection, in the downloaded file and on [powerbeef.github.io/discpress/](https://powerbeef.github.io/discpress/) alike. There are no cookies and no analytics, and the DAT files you add stay in your browser.
+No. Discpress runs 100% locally on your device and works in airplane mode. Its Content-Security-Policy (`connect-src 'none'`) forbids network requests in both the downloaded file and the online site. There are no cookies, no analytics, and custom DAT files stay in your browser's local storage.
 
-Opening the online version is an ordinary visit to a GitHub Pages site: GitHub sees the request for the page, never your files. That page is the release file byte for byte: each release lists its SHA-256 (`discpress.html.sha256`), and the site serves the same file, so you can compare them.
+Opening the online edition only loads the static HTML file from GitHub Pages; GitHub never sees your files. Every release publishes `discpress.html.sha256` alongside both builds so you can verify they are byte-for-byte identical.
 </details>
 
 <details>
-<summary><b>Are the CHDs as good as the ones from desktop chdman?</b></summary>
+<summary><b>Are the CHDs identical to desktop chdman 0.289?</b></summary>
 <br>
 
-Yes. Discpress runs chdman from the official MAME 0.289 release, so its files are standard CHD v5 with the same checksums as desktop chdman 0.289's, and byte for byte the same as chdman 0.289 makes on Linux, CD audio included. (chdman builds for Windows or macOS round the FLAC encoder's math differently, so their CD-audio bytes can differ, never the audio itself.)
+Yes. With the default **Universal** target and *Smallest* compression, CHDs are standard CHD v5 files with the exact same checksums as desktop `chdman 0.289`, and **byte for byte identical** to Linux MAME 0.289 `chdman` (including CD audio, via a deterministic glibc-compatible `libm`, across any thread count and with or without SIMD128).
 
-Its source is in <a href="engine/README.md"><code>engine/</code></a>, and <a href="engine/mame-0.289.diff"><code>engine/mame-0.289.diff</code></a> lists every change: running in a browser and on several cores, more speed without changing a byte, packed images, and fixes for chdman 0.289's crashes on bad input. Only opt-in choices change that. The two faster compressions and keeping cue sheets in CD CHDs give other bytes with the same checksums. Zstd, the MiSTer preset and another hunk size are chdman's own options, and give what desktop chdman gives with them. Making a PS2 DVD game as a CD CHD (<i>Create as</i>, or the compatibility mode for older emulators) gives chdman's <code>createcd</code> CHD of it.
+Every change to MAME's code is documented in [`engine/mame-0.289.diff`](engine/mame-0.289.diff). Opt-in profiles and flags (*Fast Universal* `--codecplan`/`--libdeflate`, *Smaller still* `--ultra`/Zstd L19, Zstd, MiSTer, `--keepcue`, Tier X `--sessions`/`--trailer`) keep standard CHD checksums and compatibility contracts documented in [`docs/chd/fork-plan.md`](docs/chd/fork-plan.md).
 </details>
 
 <details>
-<summary><b>Which compression should I choose?</b></summary>
+<summary><b>Which compression preset or Target profile should I pick?</b></summary>
 <br>
 
-Keep the default, <i>Smallest</i> (<b>Universal</b> target), unless you have a reason not to: every emulator reads it and it matches MAME 0.289 byte for byte (DOSBox Pure, for PC discs, wants <i>No compression</i>). <i>Nearly as small, faster</i> (<b>Fast Universal</b>) uses adaptive per-track codec planning: much faster with files at most ~0.3% bigger and identical checksums. <i>Smaller still</i> enables exhaustive LZMA/FLAC (`--ultra`) and Zstd level 19 for maximum archival savings. <i>Faster to load (Zstd)</i> (<b>ES-DE / PC</b> or <b>Handheld</b>) helps weak devices, and cards warn when an emulator can't read it. On MiSTer, choose the <b>MiSTer FPGA</b> target.
+- **Universal (*Smallest*)**: default, works in every emulator, byte-identical to MAME `0.289` (exception: DOSBox Pure wants *No compression*).
+- **Fast Universal (*Nearly as small, faster*)**: best everyday speed/size trade-off (~1.5–1.7× faster, ≤0.3% difference, identical checksums).
+- **Smaller still**: exhaustive LZMA/FLAC (`--ultra`) and Zstd level 19 for maximum archival savings.
+- **ES-DE / PC** or **Handheld**: fast Zstd loading + automatic `.m3u` playlist structure; cards warn whenever an emulator doesn't support Zstd.
+- **MiSTer FPGA**: `cdzs,cdfl` in 4-sector (9,792-byte) hunks tuned for MiSTer's CD cores.
+- **Legacy**: PS2 DVDs as CD CHDs for AetherSX2/NetherSX2 and older PCSX2 builds.
 </details>
 
 <details>
-<summary><b>How do I check my games against Redump or No-Intro?</b></summary>
+<summary><b>When should I use CSO/ZSO or Xbox XISO instead of CHD?</b></summary>
 <br>
 
-Every disc is already looked up in the built-in Redump database, which lists one file per game: the ISO, the only <code>.bin</code> or the main data track. To check <i>every</i> track, download the DAT files for your consoles from <a href="https://redump.org/downloads/">Redump</a> or No-Intro and add them, with your games or in Settings → <i>Your DAT files</i>. Each disc then says whether all its tracks match a game in them, before you convert it; a CHD says so after <b>Verify</b>. A fully matched disc is named after the DAT entry.
+- **Real PSP, PS Vita (Adrenaline), and PS2 (OPL):** original hardware loaders don't read CHD; switch a PSP or PS2 DVD job's output format to **ZSO**, **CSO v2**, or **CSO v1** (`--block=2048`) — you can even convert directly from an existing DVD `.chd`.
+- **Original Xbox (`xemu`):** `xemu` boots scrubbed XISO images rather than CHD; drop a 7.28 GB Redump Xbox `.iso` and Discpress defaults to clean-room XDVDFS scrubbing into a compact `.xiso.iso`.
+- **GameCube &amp; Wii (`Dolphin`):** Dolphin uses RVZ rather than CHD; Discpress identifies the disc and points you to Dolphin's built-in **Convert File → RVZ**.
 </details>
 
 <details>
-<summary><b>Which browsers work?</b></summary>
+<summary><b>How do Redump, No-Intro DATs, and CHD auditing work?</b></summary>
+<br>
+
+Discpress ships with a built-in Redump database (**33,312 discs**) for instant offline recognition. Drop Redump or No-Intro `.dat`/`.xml` files (or their `.zip`s) anywhere on the page or in **Settings → Your DAT files** to verify *every* track by size and CRC-32 — both before converting and on existing `.chd` files via single-pass **Verify** (`verify --redump`) without extracting. Dropping existing `.chd` files also runs the **12-check CHD Library Health Auditor** automatically.
+</details>
+
+<details>
+<summary><b>Can I restore a CHD back into Redump .cue/.bin or .iso files?</b></summary>
+<br>
+
+Yes. Drop any `.chd` and choose **Extract**. CDs restore into Redump's exact layout (`.cue` with CRLF + one `.bin` per track), GD-ROMs back to `.gdi`, DVDs back to `.iso`, hard disks to `.img`, and LaserDiscs to `.avi`. Enable **Settings → Keep the cue sheet in CD CHDs** to preserve extra metadata (`CATALOG`, `FLAGS`, `ISRC`, `INDEX 02+`, CD-i track types); Saturn, Sega CD, and PC Engine CD automatically omit `CUES` so Kronos, Yabause, and jgenesis stay happy.
+</details>
+
+<details>
+<summary><b>Which browsers and devices are supported?</b></summary>
 <br>
 
 | Browser | Support |
 |---|---|
-| Safari 16.4+ (iPhone, iPad, Mac) | Full (DAT persistence and disk-backed zip unpacking need Safari 26+ for `createWritable()`) |
-| Chrome and Edge 103+ (desktop) | Full, plus saving straight into a folder |
-| Chrome and Edge 103+ (Android) | Full |
-| Firefox 113+ | Full |
+| **Chrome &amp; Edge 103+ (desktop)** | Full, plus direct-to-folder saving with persistent folder handles &amp; crash-resumable OPFS checkpoints |
+| **Chrome &amp; Edge 103+ (Android)** | Full, with OPFS checkpoints |
+| **Firefox 113+** | Full, with OPFS checkpoints |
+| **Safari 16.4+ (Mac, iPhone, iPad)** | Full via [powerbeef.github.io/discpress](https://powerbeef.github.io/discpress/) (Safari 26+ enables OPFS `createWritable()` for disk-backed zip/DAT storage) |
 
-Older browsers keep results in memory instead of on disk, and so do Chrome and Edge when Discpress is opened as a downloaded file. That limits how big a disc can be, and a reload loses the results not saved yet (the page then says which). Choose a folder for results in desktop Chrome and Edge, or use the online version. Unpacking deflated files from a `.zip` needs Chrome/Edge 103+, Firefox 113+ or Safari 16.4+ (`DecompressionStream('deflate-raw')`) and uses disk storage where `createWritable()` is supported, else memory up to 1 GB.
-
-The downloaded file and the online version work the same in each of them. On iPhone and iPad, use the [online version](https://powerbeef.github.io/discpress/) in Safari. Apps that open HTML files, such as Sitecase, run it too, but they can't save results over about 512 MB (most DVD, PSP and PS2 games): the page tells you when that's the case. Lockdown Mode turns off WebAssembly, which Discpress needs.
+Lockdown Mode disables WebAssembly, which Discpress requires.
 </details>
 
 <details>
-<summary><b>How big can a disc be?</b></summary>
+<summary><b>Does Discpress come with any games or BIOS files?</b></summary>
 <br>
 
-Multi-gigabyte DVD images work as long as your device has the free space, because results are written to disk rather than memory. Where the browser keeps them in memory instead (see the question above), a job whose results could take over 2 GB, or 1 GB on phones and tablets, asks before it starts. Creating a CHD is CPU-heavy, so expect a few minutes per CD on a computer and longer on a phone; the faster compressions in Options trade a little size for speed.
+No. Discpress only processes disc images you already own.
+</details>
+
+## Under the hood
+
+<details>
+<summary><b>Architecture &amp; repository layout</b></summary>
+<br>
+
+- **Zero-copy Emscripten VFS &amp; worker pool:** a custom Emscripten filesystem streams source files directly from `File`/`Blob` handles without copying gigabytes into RAM and writes outputs to OPFS, a user-picked folder (`FileSystemDirectoryHandle`), or memory. C++20 coroutines pause `chdman` commands while persistent helper workers compress or decompress hunks in parallel across cores.
+- **On-the-fly virtual stores:** packed and multi-track inputs (`.zip`, `.7z`, ECM, CSO/ZSO, `EBOOT.PBP`, `.mds`/`.mdf`, `.cdi`, audio tracks) decode block by block through virtual stores (`AudioStore`, `StrideSliceStore`, `ConcatStore`, `ZeroStore`, `CisoStore`) as `chdman` or the identifier reads them.
+- **Reproducible single-file assembly:** `scripts/assemble.py` packs `app/`, `db/`, and both SIMD128 and non-SIMD WebAssembly builds into one deterministic [`dist/discpress.html`](dist/discpress.html) (~3.2 MB), verified on every commit by `.github/workflows/ci.yml`, `.github/workflows/sanitizers.yml` (ASan + LSan + UBSan), and `.github/workflows/rebuild.yml` (clean Emscripten `6.0.10` byte-for-byte check).
+
+| Path | What it is |
+|---|---|
+| `app/` | Zero-dependency UI, styling, target profiles, CHD health auditor, game identification, quirks engine, Xbox XISO scrubber, CSO/ZSO writer, and Web Worker runtime |
+| `engine/` | Hardened MAME 0.289 `chdman` fork (`engine/mame-0.289.diff` lists every change), BSD-3-Clause only, plus `libdeflate`, deterministic `engine/libm`, and Public Domain LZMA SDK |
+| `wasm/` | Emscripten build, parallel-compression bridge, ECM decoder (`ecm.cpp`), audio decoder (`audio.cpp`, `stb_vorbis.c`, `minimp3.h`), streaming `.7z` (`7z_stream.c`), LZ4 (`lz4_block.c`), and SDL stub |
+| `db/` | Compact columnar Redump database (`db.json.gz`), generator script (`mkdb.py`), and hand-curated per-game facts (`facts/libcrypt.tsv`, `facts/saturn-cart.tsv`) |
+| `web/` | Online PWA layer: network-first offline service worker (`sw.js`), web app manifest, and icons |
+| `scripts/` | Build, assembly, diff/license/dist verification, DB refresh, release checks, and README brand renderers |
+| `dist/` | The ready-to-use, reproducibly built `discpress.html` |
+| `tests/` | 412+ Playwright end-to-end UI, accessibility, mobile, and native `chdman` byte-for-byte tests + benchmarks using synthetic disc fixtures |
+| `docs/` | CHD format &amp; emulator research ([`docs/chd/`](docs/chd/README.md), [`fork-plan.md`](docs/chd/fork-plan.md)), iOS limits ([`docs/ios/`](docs/ios/README.md)), and brand assets |
+
 </details>
 
 <details>
-<summary><b>My game says "not recognized". Is something wrong?</b></summary>
+<summary><b>Build it yourself (reproducible Emscripten 6.0.10 build)</b></summary>
 <br>
 
-No. Hacks, translations, homebrew and modified dumps aren't in the Redump database, so they keep their original file name. The conversion works exactly the same. You can also type any name you like in Options.
-</details>
-
-<details>
-<summary><b>Can I turn a CHD back into a .cue/.bin or .iso?</b></summary>
-<br>
-
-Yes. Add the <code>.chd</code> and choose Extract. A CD comes back as its Redump dump: the same cue sheet and <code>.bin</code> files. For discs whose cue sheet holds more than a CHD stores (CATALOG, FLAGS, ISRC, extra indexes, CD-i track types: common on 3DO and CD-i), turn on Settings → <i>Keep the cue sheet in CD CHDs</i> before converting, and that sheet comes back too. Saturn, Sega CD and PC Engine CD games leave it out, since Kronos, Yabause and jgenesis can't open a CHD that keeps one. You can also verify a CHD's checksums, which compares it with Redump too, or view its details.
-</details>
-
-<details>
-<summary><b>Does Discpress come with any games?</b></summary>
-<br>
-
-No. It only converts files you already have. Please convert only discs you own.
-</details>
-
-## Build it yourself
-
-The build is fully reproducible: building from a clean checkout gives a byte-identical `dist/discpress.html`, and CI checks it by rebuilding the WebAssembly on GitHub's machines (`.github/workflows/rebuild.yml`).
-
-<details>
-<summary><b>Build instructions</b></summary>
-<br>
-
-Requirements: [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) 6.0.10 exactly (`build.sh` refuses another version, which could give other bytes), Python 3 and make. The chdman source is in `engine/` (see [`engine/README.md`](engine/README.md)).
+Requirements: [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) **6.0.10** exactly (`build.sh` enforces the pinned version for byte-identical output), Python 3, and `make`.
 
 ```sh
 # one-time setup
 git clone https://github.com/emscripten-core/emsdk.git ~/emsdk
 ~/emsdk/emsdk install 6.0.10 && ~/emsdk/emsdk activate 6.0.10
 
-# build
+# full reproducible build
 source ~/emsdk/emsdk_env.sh
 ./build.sh                      # -> dist/discpress.html
 ```
 
-- If you only change files in `app/`, run `python3 scripts/assemble.py` instead of the full build. Without Emscripten, run `python3 scripts/extract-build.py` once first: it recovers the WebAssembly build from `dist/discpress.html`. A change to `engine/`, `wasm/` or `build.sh` needs the full build: the page records the sources its WebAssembly was built from, and `scripts/check-dist.sh` (run by every release) refuses a page built from older ones.
-- `tests/` has end-to-end UI tests (Playwright) that check every conversion against native chdman, with synthetic disc images of every supported kind, plus conversion benchmarks. CI runs them on every pull request and every push to `main` (`.github/workflows/ci.yml`). See [`tests/README.md`](tests/README.md).
-- To refresh the game database with the latest Redump data, run `./scripts/update-db.sh`, then `python3 scripts/assemble.py`.
-- The README graphics are rendered from `scripts/brand/brand.html` with `python3 scripts/brand/render.py`, after `python3 scripts/brand/screenshots.py` takes the app screenshots they show (both need Playwright).
-- Running **Actions → Release → Run workflow** on `main` with a tag such as `v2.0.0` (always `vX.Y.Z`: there are no prereleases) publishes a release: `discpress.html` and its SHA-256 as the download, and the same file on GitHub Pages as the online version. The download goes public only once the site is deployed, so both always carry the same version; a daily check (`scripts/check-release.sh`) confirms it. See `.github/workflows/release.yml` and [`web/README.md`](web/README.md). Release notes come from `.github/release-notes/<tag>.md` when that file exists.
-
-</details>
-
-<details>
-<summary><b>Repository layout</b></summary>
-<br>
-
-| Path | What it is |
-|---|---|
-| `app/` | The web app: page, styles, UI, game identification, and the Web Worker that runs chdman |
-| `engine/` | Discpress's chdman: MAME 0.289's chdman and the sources it links, with every change listed in `mame-0.289.diff`, plus libdeflate and the math FLAC needs |
-| `wasm/` | WebAssembly build: Makefile, link flags, parallel-compression helper, ECM/audio/7z/LZ4 decoders (`ecm.cpp`, `audio.cpp`, `7z_stream.c`, `lz4_block.c`, `stb_vorbis.c`, `minimp3.h`), and SDL stub |
-| `db/` | Game database (`db.json.gz`), the script that builds it from libretro-database, and hand-curated per-game facts (`facts/`) |
-| `web/` | What the online version adds to `discpress.html`: offline service worker, web app manifest and icons |
-| `scripts/` | Fetch MAME, build native chdman, update the database, assemble the single HTML file, check releases, and render the README graphics |
-| `dist/` | The ready-to-use `discpress.html` |
-| `tests/` | End-to-end UI tests and benchmarks (Playwright) with synthetic disc images |
-| `docs/` | README graphics and screenshots, research on the CHD format and chdman (`docs/chd/`), and on iPhone and iPad (`docs/ios/`) |
-
-</details>
-
-<details>
-<summary><b>How it works inside</b></summary>
-<br>
-
-- **File access.** A custom Emscripten file system reads your files directly (no copy into memory) and writes results to the browser's private storage (OPFS), to a folder, or to memory. Packed inputs (CSO/ZSO, ECM, PBP) are unpacked block by block as chdman reads them; a zip's stored files are read in place, and its deflated ones are unpacked into private storage first.
-- **Multi-core compression.** Helper workers compress hunks in parallel. chdman's commands are C++20 coroutines that pause while the helpers work; extracting and verifying use the helpers the same way to decompress ahead of the reads.
-- **Game identification.** It reads boot headers (IP.BIN, SYSTEM.CNF, PARAM.SFO, IPL.TXT and others) through ISO 9660, including inside existing CHDs and packed images, then matches the serial number, or the size and CRC-32, against the database and your DAT files. Checking a CHD against them extracts it into checksums only, never to files.
-- **iPhone and iPad.** When a worker can't read the picked files (inside some file-viewer apps), the page streams them to the worker in chunks instead. A small record in the page's storage lets results survive a reload. [`docs/ios/`](docs/ios/README.md) explains iOS's limits and how Discpress works around them.
-- **The plan.** [`docs/chd/fork-plan.md`](docs/chd/fork-plan.md) is the roadmap of the chdman fork, with the research behind it in [`docs/chd/`](docs/chd/README.md).
+- **UI / DB changes only (no Emscripten needed):** run `python3 scripts/extract-build.py --if-stale`, then `python3 scripts/assemble.py` (< 1 s) and `./scripts/check-dist.sh`.
+- **Tests &amp; benchmarks:** see [`tests/README.md`](tests/README.md) (`REQUIRE_NATIVE=1 npm test` runs the full suite against native `chdman 0.289`).
+- **Database refresh:** run `./scripts/update-db.sh`, then `python3 scripts/assemble.py`.
+- **Releases:** running **Actions → Release → Run workflow** on `main` with a `vX.Y.Z` tag atomically publishes the GitHub Release download and GitHub Pages online site byte for byte (`.github/workflows/release.yml`, verified daily by `scripts/check-release.sh`).
 
 </details>
 
 ## Credits and license
 
-Discpress is released under the [BSD 3-Clause license](LICENSE). It is built on **chdman** and MAME's `lib/util` (BSD 3-Clause, © Aaron Giles, R. Belmont, Vas Crabb, Olivier Galibert, Nathan Woods, Mietek Bak and the MAMEdev team), with zlib, LZMA SDK, FLAC, Zstandard, libdeflate, stb_vorbis, minimp3 and a few smaller libraries. Game data comes from [Redump](https://redump.org) via [libretro-database](https://github.com/libretro/libretro-database). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the full list.
+Discpress is released under the [BSD 3-Clause license](LICENSE). It builds on **chdman** and MAME's `lib/util` (BSD 3-Clause, © Aaron Giles, R. Belmont, Vas Crabb, Olivier Galibert, Nathan Woods, Mietek Bak and the MAMEdev team), with zlib, LZMA SDK, FLAC, Zstandard, libdeflate, stb_vorbis, minimp3, and deterministic libm routines. Game data comes from [Redump](https://redump.org) via [libretro-database](https://github.com/libretro/libretro-database). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the complete list.
 
-Discpress is not affiliated with the MAME team, Redump or libretro.
+Discpress is not affiliated with the MAME team, Redump, or libretro.
 
 <br>
 <p align="center">
