@@ -104,6 +104,8 @@ JSON object supporting:
 - `"stage": 1` (async-copy inputs into storage + main-thread CRC) or `2` (fail worker reads to force page chunk streaming, iOS web-view path)
 - `"identDelay"`, `"crcDelay"`, `"crcSlow"` (ms delays)
 - `"sinkMax"`, `"memMax"`, `"shareMax"`, `"savePickerMin"` (override byte thresholds)
+- `"ckptStride"` (override OPFS checkpoint interval in hunks for deterministic mid-conversion resume testing)
+- `"poolIdleMs"`, `"poolMemCap"` (override warm worker pool idle-reap delay in ms and memory-eviction threshold in bytes)
 - `"failHelpers"`: `"one"`, `"all"`, `"always"` (simulate WASM traps), or `"lie"` (wrong hunk response)
 - `"failStorage"`: `"lock"` or truthy (simulate locked/missing OPFS)
 - `"unzipFull"`: simulate full storage during zip extraction
