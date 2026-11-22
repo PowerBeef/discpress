@@ -1101,9 +1101,11 @@ std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
  * @return  A std::error_condition.
  */
 
-std::error_condition cdrom_file::write_metadata(chd_file *chd, const toc &toc)
+std::error_condition cdrom_file::write_metadata(chd_file *chd, const toc &toc, bool write_sessions)
 {
 	std::error_condition err;
+	int last_session = -1;
+	uint32_t session_idx = 0;
 
 	/* write the metadata */
 	for (int i = 0; i < toc.numtrks; i++)
@@ -1120,6 +1122,15 @@ std::error_condition cdrom_file::write_metadata(chd_file *chd, const toc &toc)
 		}
 		else
 		{
+			// Discpress: opt-in CHSE session metadata (--sessions, e.g. Jaguar CD for Virtual Jaguar)
+			// with sequential metaindex per session (MAME PR #15931)
+			if (write_sessions && toc.numsessions > 1 && int(toc.tracks[i].session) != last_session)
+			{
+				last_session = int(toc.tracks[i].session);
+				err = chd->write_metadata(CHD_MAKE_TAG('C','H','S','E'), session_idx++, util::string_format("SESSION:%d", last_session + 1));
+				if (err)
+					return err;
+			}
 			char submode[32];
 
 			if (toc.tracks[i].pgdatasize > 0)

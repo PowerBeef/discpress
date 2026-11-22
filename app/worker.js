@@ -159,6 +159,59 @@ MemStore.prototype.toBlob = function () {
   return new Blob(parts, { type: 'application/octet-stream' });
 };
 
+// Virtual zero-filled file of arbitrary length (zero RAM): used for materialized PREGAP/POSTGAP
+// and PC multi-session lead-out repairs without copying or allocating buffers.
+function ZeroStore(size) {
+  this.sizeV = Math.max(0, size || 0);
+  this.readonly = true;
+}
+ZeroStore.prototype.read = function (dst, pos, len) {
+  if (pos >= this.sizeV) return 0;
+  len = Math.min(len, this.sizeV - pos);
+  dst.fill(0, 0, len);
+  return len;
+};
+
+// Virtual concatenation of { store, start, len } slices (including ZeroStore, BlobStore,
+// OpfsStore, EcmStore, PbpStore) with zero copying or temporary files.
+function ConcatStore(parts) {
+  this.parts = [];
+  this.readonly = true;
+  var off = 0;
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i];
+    if (!p || !p.store || !(p.len > 0)) continue;
+    this.parts.push({ store: p.store, start: p.start || 0, len: p.len, off: off });
+    off += p.len;
+  }
+  this.sizeV = off;
+  this.last = 0;
+}
+ConcatStore.prototype.read = function (dst, pos, len) {
+  if (pos >= this.sizeV) return 0;
+  len = Math.min(len, this.sizeV - pos);
+  var done = 0, parts = this.parts, idx = this.last;
+  if (idx >= parts.length || pos < parts[idx].off || pos >= parts[idx].off + parts[idx].len) {
+    var lo = 0, hi = parts.length - 1;
+    while (lo < hi) {
+      var mid = (lo + hi + 1) >> 1;
+      if (parts[mid].off <= pos) lo = mid; else hi = mid - 1;
+    }
+    idx = lo;
+  }
+  while (done < len && idx < parts.length) {
+    var p = parts[idx], rel = (pos + done) - p.off;
+    if (rel >= p.len) { idx++; continue; }
+    var want = Math.min(len - done, p.len - rel);
+    var got = p.store.read(dst.subarray(done, done + want), p.start + rel, want);
+    if (got <= 0) break;
+    done += got;
+    if (rel + got >= p.len) idx++;
+  }
+  this.last = Math.min(idx, Math.max(0, parts.length - 1));
+  return done;
+};
+
 // A CSO (CISO, versions 1 and 2) or ZSO (ZISO) compressed ISO, read as the ISO itself: blocks are
 // decompressed as they are read, a chunk of them at a time (chunkBytes, 4 MiB by default; formats:
 // maxcso's README_CSO/ZSO). Deflate blocks go through the module's zlib (setModule); LZ4 blocks are
@@ -1806,7 +1859,7 @@ async function runJob(msg) {
   var backing = await makeBacking(msg);
   postMessage({ type: 'storage', mode: backing.mode, reason: memReason });
 
-  var stages = [], inStores = [];
+  var stages = [], inStores = [], allStores = [];
   async function dropStages() {
     for (var si = 0; si < stages.length; si++) {
       try { stages[si].slot.handle.close(); } catch (e) { /* ignore */ }
@@ -1815,7 +1868,7 @@ async function runJob(msg) {
     stages = [];
   }
   function freeStores() {
-    for (var i = 0; i < inStores.length; i++) if (inStores[i].store && inStores[i].store.free) inStores[i].store.free();
+    for (var i = 0; i < allStores.length; i++) if (allStores[i].store && allStores[i].store.free) allStores[i].store.free();
   }
   function unmountFS(M) {
     if (!M || !M.FS) return;
@@ -1846,32 +1899,59 @@ async function runJob(msg) {
     }
   }
 
-  // inputs: read directly when possible, otherwise staged first
-  var inputs = msg.inputs || [];
+  // inputs: read directly when possible, otherwise staged first (also supports virtual zero/concat stores)
+  var inputs = msg.inputs || [], storeByName = Object.create(null);
   for (var ii = 0; ii < inputs.length; ii++) {
-    var bs = new BlobStore(inputs[ii].blob);
-    if (msg.debugStage || !storeReadable(bs)) {
-      try { bs = await stageInput(msg, ii, stages); }
-      catch (e) {
-        await dropStages();
-        await backing.finalize(false);
-        var full = e && typeof e.errno === 'number';
-        postMessage({ type: 'done', code: -1, readFail: !full, error: full ? 'Could not copy "' + inputs[ii].name + '" to private storage: ' + errText(e) + '.' : 'The browser could not read "' + inputs[ii].name + '": ' + errText(e), outputs: [] });
-        return;
+    var inp = inputs[ii], bs;
+    if (inp.zero != null) {
+      bs = new ZeroStore(inp.zero);
+    } else if (inp.concat) {
+      var cparts = [];
+      for (var ci = 0; ci < inp.concat.length; ci++) {
+        var cp = inp.concat[ci];
+        if (cp.zero != null) {
+          cparts.push({ store: new ZeroStore(cp.zero), start: 0, len: cp.zero });
+        } else {
+          var ref = storeByName[cp.ref];
+          if (!ref) {
+            await dropStages();
+            await backing.finalize(false);
+            postMessage({ type: 'done', code: -1, error: 'Missing virtual input source "' + cp.ref + '".', outputs: [] });
+            return;
+          }
+          var st0 = cp.start || 0;
+          var ln0 = cp.len != null ? cp.len : Math.max(0, ref.sizeV - st0);
+          cparts.push({ store: ref, start: st0, len: ln0 });
+        }
+      }
+      bs = new ConcatStore(cparts);
+    } else {
+      bs = new BlobStore(inp.blob);
+      if (msg.debugStage || !storeReadable(bs)) {
+        try { bs = await stageInput(msg, ii, stages); }
+        catch (e) {
+          await dropStages();
+          await backing.finalize(false);
+          var full = e && typeof e.errno === 'number';
+          postMessage({ type: 'done', code: -1, readFail: !full, error: full ? 'Could not copy "' + inp.name + '" to private storage: ' + errText(e) + '.' : 'The browser could not read "' + inp.name + '": ' + errText(e), outputs: [] });
+          return;
+        }
+      }
+      // a CSO/ZSO compressed ISO, an ECM image or a PS1 PBP's disc: chdman reads what they hold
+      if (inp.ciso || inp.ecm || inp.pbp) {
+        var label = inp.blob.name || inp.name;
+        try { bs = inp.ciso ? new CisoStore(bs, 0, label) : inp.pbp ? new PbpStore(bs, inp.pbp, label) : new EcmStore(bs, label); }
+        catch (e) {
+          await dropStages();
+          await backing.finalize(false);
+          postMessage({ type: 'done', code: -1, error: '"' + label + '" could not be read as ' + (inp.ciso ? 'a compressed ISO' : inp.pbp ? 'a PS1 PBP file' : 'an ECM image') + ': ' + (e && e.message || e), outputs: [] });
+          return;
+        }
       }
     }
-    // a CSO/ZSO compressed ISO, an ECM image or a PS1 PBP's disc: chdman reads what they hold
-    if (inputs[ii].ciso || inputs[ii].ecm || inputs[ii].pbp) {
-      var label = inputs[ii].blob.name || inputs[ii].name;
-      try { bs = inputs[ii].ciso ? new CisoStore(bs, 0, label) : inputs[ii].pbp ? new PbpStore(bs, inputs[ii].pbp, label) : new EcmStore(bs, label); }
-      catch (e) {
-        await dropStages();
-        await backing.finalize(false);
-        postMessage({ type: 'done', code: -1, error: '"' + label + '" could not be read as ' + (inputs[ii].ciso ? 'a compressed ISO' : inputs[ii].pbp ? 'a PS1 PBP file' : 'an ECM image') + ': ' + (e && e.message || e), outputs: [] });
-        return;
-      }
-    }
-    inStores.push({ name: inputs[ii].name, store: bs });
+    storeByName[inp.name] = bs;
+    allStores.push({ name: inp.name, store: bs });
+    if (!inp.hidden) inStores.push({ name: inp.name, store: bs });
   }
 
   var out = makeLineSink(1), err = makeLineSink(2), M;
@@ -1889,7 +1969,7 @@ async function runJob(msg) {
       coordM.FS.mkdir('/out');
     }
     M = coordM;
-    inStores.forEach(function (st) { if (st.store.setModule) st.store.setModule(M); });
+    allStores.forEach(function (st) { if (st.store.setModule) st.store.setModule(M); });
     backing.M = M;
     M.outFull = sinkFull; // wasm_out_full: chdman pauses while a folder is behind
     M.FS.mount(coordCHDFS, { files: inStores }, '/in');
@@ -1905,7 +1985,7 @@ async function runJob(msg) {
   }
 
   if (msg.ports && msg.ports.length) setupParallel(M, msg.ports);
-  var ckpt = await setupCheckpoint(M, backing, inStores, msg);
+  var ckpt = await setupCheckpoint(M, backing, allStores, msg);
   activeBacking = backing;
 
   var started = performance.now(), code;

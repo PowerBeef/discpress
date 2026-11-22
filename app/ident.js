@@ -356,7 +356,7 @@ function readerWorker(msg, timeout, onScan) {
 function chdReader(file, ciso, parent) {
   return readerWorker({ type: 'reader', name: 'x.chd', blob: file, ciso: !!ciso, parent: parent || null }).then(function (r) {
     var m = r.info;
-    return { kind: m.kind, tracks: m.tracks, logical: m.logical, read: function (track, lba) { return r.request({ track: track, lba: lba }); }, close: r.close };
+    return { kind: m.kind, tracks: m.tracks, logical: m.logical, inspect: m.inspect || null, read: function (track, lba) { return r.request({ track: track, lba: lba }); }, close: r.close };
   });
 }
 // opens ECM images, and PS1 PBP files' discs, in a worker (which scans each ECM file whole): for each,
@@ -1239,6 +1239,8 @@ async function identifyJob(job, onStatus, onProvisional) {
   try {
     if (job.kind === 'chd') {
       chd = await chdReader(job.files[0].file, false, job.parentJob && job.parentJob.files[0].file);
+      job.chdTracks = chd.tracks || [];
+      job.chdInspect = chd.inspect || null;
       if (chd.kind === 1) {
         // as for .gdi files, a GD-ROM's IP.BIN header is on the high-density data track, the last one;
         // the low-density track 1 holds a plain ISO 9660 volume that alone would pass for a PC disc

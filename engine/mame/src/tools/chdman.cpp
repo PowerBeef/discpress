@@ -250,6 +250,9 @@ constexpr bool OSD_PRINTF_VERBOSE = false;
 #define OPTION_OUTPUT_SPLITBIN "splitbin"
 #define OPTION_REDUMP "redump"
 #define OPTION_KEEPCUE "keepcue"
+#define OPTION_SESSIONS "sessions"
+#define OPTION_TRAILER "trailer"
+#define OPTION_STRIP_META "stripmeta"
 #define OPTION_CODEC_PLAN "codecplan"
 #define OPTION_LIBDEFLATE "libdeflate"
 #define OPTION_ULTRA "ultra"
@@ -912,6 +915,9 @@ static const option_description s_options[] =
 	{ OPTION_OUTPUT_SPLITBIN,       "sb",   false, ": output one binary file per track" },
 	{ OPTION_REDUMP,                "rd",   false, ": write a .cue as Redump does: CRLF line ends, and one binary file per track unless there is only one" },
 	{ OPTION_KEEPCUE,               "kc",   false, ": keep the input .cue in the CHD, as metadata that leaves its checksums unchanged; extractcd --redump writes it back" },
+	{ OPTION_SESSIONS,              "ss",   false, ": write CHSE session metadata on multi-session CDs (for Jaguar CD in Virtual Jaguar)" },
+	{ OPTION_TRAILER,               "tr",   true,  " <filename>: append unlinked DPRC0001 provenance trailer after CHD v5 map (invisible to emulators, reversed by extractcd --redump)" },
+	{ OPTION_STRIP_META,            "sm",   false, ": drop non-standard metadata tags (such as CUES or CHSE) when copying" },
 	{ OPTION_OUTPUT_FORCE,          "f",    false, ": force overwriting an existing file" },
 	{ OPTION_OUTPUT_PARENT,         "op",   true, " <filename>: parent file name for output CHD" },
 	{ OPTION_INPUT_START_BYTE,      "isb",  true, " <offset>: starting byte offset within the input" },
@@ -1018,6 +1024,8 @@ static const command_description s_commands[] =
 			OPTION_COMPRESSION,
 			OPTION_NUMPROCESSORS,
 			OPTION_KEEPCUE,
+			OPTION_SESSIONS,
+			OPTION_TRAILER,
 			OPTION_CODEC_PLAN,
 			OPTION_LIBDEFLATE,
 			OPTION_ULTRA,
@@ -1134,6 +1142,7 @@ static const command_description s_commands[] =
 			OPTION_HUNK_SIZE,
 			OPTION_COMPRESSION,
 			OPTION_NUMPROCESSORS,
+			OPTION_STRIP_META,
 			OPTION_CODEC_PLAN,
 			OPTION_LIBDEFLATE,
 			OPTION_ULTRA,
@@ -2811,6 +2820,18 @@ static chdman_task do_create_cd(parameters_map &params)
 			report_error(1, "The cue sheet (%s) is too large to keep", *input_file_str->second);
 	}
 
+	// Discpress: --trailer, unlinked DPRC0001 EOF provenance payload (invisible to emulators, reversed by extractcd --redump)
+	std::vector<uint8_t> trailer_payload;
+	if (auto const tr_it = params.find(OPTION_TRAILER); tr_it != params.end())
+	{
+		std::error_condition const err = util::core_file::load(*tr_it->second, trailer_payload);
+		if (err)
+			report_error(1, "Unable to read trailer file (%s): %s", *tr_it->second, err.message());
+		if (trailer_payload.size() < 10 || trailer_payload.size() > 1024 * 1024 || memcmp(trailer_payload.data(), "DPR1", 4) != 0)
+			report_error(1, "Invalid DPRC trailer payload (%s)", *tr_it->second);
+	}
+	bool const write_sessions = params.find(OPTION_SESSIONS) != params.end();
+
 	// process output CHD
 	chd_file output_parent;
 	const auto output_chd_str = parse_output_chd_parameters(params, output_parent);
@@ -2872,7 +2893,7 @@ static chdman_task do_create_cd(parameters_map &params)
 		apply_discpress_options(*chd, params);
 
 		// add the standard CD metadata; we do this even if we have a parent because it might be different
-		const std::error_condition err = cdrom_file::write_metadata(chd.get(), toc);
+		const std::error_condition err = cdrom_file::write_metadata(chd.get(), toc, write_sessions);
 		if (err)
 			report_error(1, "Error adding CD metadata: %s", err.message());
 
@@ -2886,6 +2907,26 @@ static chdman_task do_create_cd(parameters_map &params)
 
 		// compress it generically
 		co_await compress_common(*chd);
+
+		// Discpress: append unlinked DPRC0001 provenance trailer after the CHD v5 map
+		if (!trailer_payload.empty())
+		{
+			chd->close();
+			util::core_file::ptr outf;
+			std::error_condition ferr = util::core_file::open(*output_chd_str, OPEN_FLAG_READ | OPEN_FLAG_WRITE, outf);
+			if (ferr)
+				report_error(1, "Unable to reopen output CHD for provenance trailer: %s", ferr.message());
+			outf->seek(0, SEEK_END);
+			uint32_t const tcrc = uint32_t(util::crc32_creator::simple(trailer_payload.data(), uint32_t(trailer_payload.size())));
+			uint8_t foot[16];
+			put_u32le(&foot[0], tcrc);
+			put_u32le(&foot[4], uint32_t(trailer_payload.size()));
+			memcpy(&foot[8], "DPRC0001", 8);
+			auto [w1, n1] = write(*outf, trailer_payload.data(), trailer_payload.size());
+			auto [w2, n2] = write(*outf, foot, sizeof(foot));
+			if (w1 || w2 || n1 != trailer_payload.size() || n2 != sizeof(foot))
+				report_error(1, "Unable to write provenance trailer");
+		}
 	}
 	catch (...)
 	{
@@ -3173,6 +3214,7 @@ static chdman_task do_copy(parameters_map &params)
 		uint32_t index = 0;
 		bool redo_cd = false;
 		bool cdda_swap = false;
+		bool const strip_meta = params.find(OPTION_STRIP_META) != params.end();
 		for (err = input_chd.read_metadata(CHDMETATAG_WILDCARD, index++, metadata, metatag, metaflags); !err; err = input_chd.read_metadata(CHDMETATAG_WILDCARD, index++, metadata, metatag, metaflags))
 		{
 			// if this is an old CD-CHD tag, note that we want to re-do it
@@ -3187,6 +3229,11 @@ static chdman_task do_copy(parameters_map &params)
 				cdda_swap = redo_cd = true;
 				continue;
 			}
+			// Discpress: --stripmeta drops non-standard tags (such as CUES/CHSE) that strict CD readers reject
+			if (strip_meta && metatag != CDROM_TRACK_METADATA2_TAG && metatag != GDROM_TRACK_METADATA_TAG &&
+					metatag != HARD_DISK_METADATA_TAG && metatag != HARD_DISK_IDENT_METADATA_TAG &&
+					metatag != DVD_METADATA_TAG && metatag != AV_METADATA_TAG && metatag != AV_LD_METADATA_TAG)
+				continue;
 
 			// otherwise, clone it
 			err = chd->write_metadata(metatag, CHDMETAINDEX_APPEND, metadata, metaflags);
@@ -3701,16 +3748,81 @@ static chdman_task do_extract_cd(parameters_map &params)
 			adjust_gdrom_toc_for_cue(*const_cast<cdrom_file::toc *>(&toc), redump);
 		}
 
-		// Discpress: with --redump, the cue sheet createcd --keepcue stored, if it fits these files
+		// Discpress: with --redump, check unlinked DPRC0001 EOF provenance trailer (layout reversal + kept cue)
+		uint32_t dpr_trim_head[cdrom_file::MAX_TRACKS] = {};
+		uint32_t dpr_trim_tail[cdrom_file::MAX_TRACKS] = {};
+		uint32_t dpr_pull_prev[cdrom_file::MAX_TRACKS] = {};
+		bool dpr_orig_mode2[cdrom_file::MAX_TRACKS] = {};
+		std::vector<uint8_t> dpr_cue;
+		if (redump)
+		{
+			util::core_file::ptr inf;
+			if (!util::core_file::open(*params.find(OPTION_INPUT)->second, OPEN_FLAG_READ, inf))
+			{
+				uint64_t fsz = 0;
+				if (!inf->length(fsz) && fsz >= 26)
+				{
+					uint8_t foot[16];
+					inf->seek(fsz - 16, SEEK_SET);
+					auto [rerr, got] = read(*inf, foot, sizeof(foot));
+					if (!rerr && got == 16 && memcmp(&foot[8], "DPRC0001", 8) == 0)
+					{
+						uint32_t const want_crc = get_u32le(&foot[0]);
+						uint32_t const plen = get_u32le(&foot[4]);
+						if (plen >= 10 && plen <= 1024 * 1024 && uint64_t(plen) + 16 <= fsz)
+						{
+							std::vector<uint8_t> pbuf(plen);
+							inf->seek(fsz - 16 - plen, SEEK_SET);
+							auto [perr, pgot] = read(*inf, pbuf.data(), plen);
+							if (!perr && pgot == plen && memcmp(pbuf.data(), "DPR1", 4) == 0 &&
+									uint32_t(util::crc32_creator::simple(pbuf.data(), plen)) == want_crc)
+							{
+								uint16_t const nops = get_u16le(&pbuf[4]);
+								uint32_t const clen = get_u32le(&pbuf[6]);
+								if (10u + uint64_t(nops) * 8u + clen == plen)
+								{
+									for (uint16_t oi = 0; oi < nops; oi++)
+									{
+										uint8_t const *op = &pbuf[10 + size_t(oi) * 8];
+										uint8_t const kind = op[0];
+										uint8_t const trk1 = op[1];
+										uint32_t const fr = get_u32le(&op[4]);
+										if (trk1 >= 1 && trk1 <= toc.numtrks)
+										{
+											int const ti = int(trk1) - 1;
+											if (kind == 1) dpr_trim_head[ti] += fr;
+											else if (kind == 2) dpr_trim_tail[ti] += fr;
+											else if (kind == 3 && ti > 0) { dpr_pull_prev[ti] += fr; dpr_trim_tail[ti - 1] += fr; }
+											else if (kind == 4) dpr_orig_mode2[ti] = true;
+										}
+									}
+									if (clen > 0)
+										dpr_cue.assign(pbuf.begin() + 10 + size_t(nops) * 8, pbuf.end());
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Discpress: with --redump, the cue sheet createcd --keepcue (or DPRC0001 trailer) stored, if it fits these files
 		std::string kept_cue;
 		if (redump)
 		{
 			std::vector<uint8_t> sheet;
-			if (!input_chd.read_metadata(CUE_SHEET_METADATA_TAG, 0, sheet))
+			bool has_sheet = !input_chd.read_metadata(CUE_SHEET_METADATA_TAG, 0, sheet);
+			if (!has_sheet && !dpr_cue.empty()) { sheet = std::move(dpr_cue); has_sheet = true; }
+			if (has_sheet)
 			{
 				std::vector<std::string> track_types;
 				for (int t = 0; t < toc.numtrks; t++)
-					track_types.push_back(cue_track_type(toc.tracks[t]));
+				{
+					std::string tt = cue_track_type(toc.tracks[t]);
+					if (dpr_orig_mode2[t] && tt == "MODE1/2048")
+						tt = "MODE2/2048";
+					track_types.push_back(std::move(tt));
+				}
 				kept_cue = kept_cue_sheet(sheet, track_filenames, track_types, cdrom->is_gdrom() ? &toc : nullptr);
 			}
 			if (!kept_cue.empty())
@@ -3818,7 +3930,11 @@ static chdman_task do_extract_cd(parameters_map &params)
 
 			// now read and output the actual data
 			uint32_t bufferoffs = 0;
-			uint32_t actualframes = trackinfo.frames - trackinfo.padframes + trackinfo.splitframes;
+			uint32_t const eff_split = trackinfo.splitframes + dpr_pull_prev[tracknum];
+			uint32_t const skip_head = dpr_trim_head[tracknum];
+			uint32_t const skip_tail = dpr_trim_tail[tracknum];
+			uint32_t const base_frames = trackinfo.frames - trackinfo.padframes + eff_split;
+			uint32_t const actualframes = (base_frames > skip_head + skip_tail) ? (base_frames - skip_head - skip_tail) : 0;
 			auto const flush_buffer = [&] (uint32_t frame)
 			{
 				output_bin_file->seek(outputoffs, SEEK_SET);
@@ -3833,16 +3949,16 @@ static chdman_task do_extract_cd(parameters_map &params)
 				progress(false, "Extracting, %.1f%% complete... \r", 100.0 * double(totaloutputoffs + outputoffs) / double(total_bytes));
 
 				int trk, frameofs;
-				if (tracknum > 0 && frame < trackinfo.splitframes)
+				if (tracknum > 0 && frame < eff_split)
 				{
-					// pull data from previous track, the reverse of how splitframes is used when making the GD-ROM CHDs
+					// pull data from previous track (GD-ROM splitframes or DPRC0001 pregap un-absorption)
 					trk = tracknum - 1;
-					frameofs = toc.tracks[trk].frames - trackinfo.splitframes + frame;
+					frameofs = toc.tracks[trk].frames - eff_split + frame;
 				}
 				else
 				{
 					trk = tracknum;
-					frameofs = frame - trackinfo.splitframes;
+					frameofs = skip_head + (frame - eff_split);
 				}
 
 				// Discpress: flush before reading if the next frame would not fit (prevents overflow if sector sizes differ)

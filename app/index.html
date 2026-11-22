@@ -78,7 +78,7 @@
 
 <div class="scroller" id="scroller">
 <main class="wrap">
-  <div class="chips" id="chips"><span class="chip" id="chipEngine"><i></i>Loading engine…</span></div>
+  <div class="chips" id="chips"><span class="chip" id="chipEngine"><i></i>Loading engine…</span><span class="chip chip-target" id="chipTarget"><label for="targetSelect">Target:</label><select id="targetSelect"><option value="universal">Universal</option><option value="fast-universal">Fast Universal</option><option value="esde-modern">ES-DE / PC</option><option value="handheld-linux">Handheld</option><option value="mister">MiSTer FPGA</option><option value="legacy">Legacy</option></select></span></div>
   <div id="fatal"></div>
 
   <section class="panel" id="tab-convert" role="tabpanel" aria-labelledby="tabbtn-convert">
@@ -106,6 +106,7 @@
     <div class="note warn" id="memTip" hidden>This page cannot use the browser's private storage here (for example when it is opened as a local file), so results are kept in memory, and closing or reloading the page loses those not saved yet. That is fine for CDs; for large DVD images, <span id="memTipWays"></span> <button class="btn sm" id="memTipBtn" style="margin-left:4px">Choose a folder</button></div>
     <div class="note warn" id="iosTip" hidden><b>Big games: use Discpress online, in Safari.</b> Apps like this one usually can't download files, and the share sheet can't take files over 512 MB, so most DVD, PSP and PS2 results can't be saved here. Open <a id="hostedLink" href="https://powerbeef.github.io/discpress/" target="_blank" rel="noopener">powerbeef.github.io/discpress/</a> in Safari: it's the same app with nothing to download, results of any size download to Files there, and it works offline once opened. <button class="btn sm" id="copyHosted">Copy link</button> <button class="btn sm" id="iosTipOk">OK</button></div>
     <div id="earlier" hidden></div>
+    <div id="chdAudit" hidden></div>
     <div class="jobs" id="jobs"></div>
   </section>
 
@@ -158,14 +159,25 @@
 </div>
 
 <dialog id="settings" aria-labelledby="settingsTitle">
-  <div class="dhead"><h2 id="settingsTitle">Settings</h2><button class="icon-btn" id="settingsClose" aria-label="Close"><svg aria-hidden="true"><use href="#i-x"/></svg></button></div>
+  <div class="dhead"><h2 id="settingsTitle">Settings</h2><button type="button" class="icon-btn" id="settingsClose" aria-label="Close"><svg aria-hidden="true"><use href="#i-x"/></svg></button></div>
   <div class="dbody">
+    <label class="field"><span>Target environment</span>
+      <select id="setTarget">
+        <option value="universal">Universal (default — byte-identical to MAME 0.289)</option>
+        <option value="fast-universal">Fast Universal (~1.7× faster, same checksums)</option>
+        <option value="esde-modern">ES-DE / RetroDECK / PC</option>
+        <option value="handheld-linux">Handheld (muOS / Knulli / Batocera / Android)</option>
+        <option value="mister">MiSTer FPGA</option>
+        <option value="legacy">Legacy / Older emulators</option>
+      </select>
+      <span class="hint" id="targetInfo">Byte-identical to MAME 0.289 chdman. Works in every modern emulator.</span>
+    </label>
     <label class="field"><span>CPU threads for compression</span>
       <select id="setThreads"></select>
       <span class="hint">More threads create, extract and verify CHDs faster.</span>
       <span class="hint" id="threadsInfo"></span>
     </label>
-    <div class="row" id="retuneRow" hidden><button class="btn sm" id="retune">Measure again</button><span class="small muted" id="retuneInfo"></span></div>
+    <div class="row" id="retuneRow" hidden><button type="button" class="btn sm" id="retune">Measure again</button><span class="small muted" id="retuneInfo"></span></div>
     <label class="field"><span>Where to keep results</span>
       <select id="setStorage">
         <option value="auto">Browser storage, then save (recommended)</option>
@@ -174,7 +186,25 @@
       </select>
       <span class="hint" id="storageInfo"></span>
     </label>
-    <div class="row" id="folderRow" hidden><button class="btn sm" id="pickFolder"><svg aria-hidden="true"><use href="#i-folder"/></svg>Choose folder</button><span class="small muted">Current: <b id="folderName">none</b>. A file already there is replaced only if you agree.</span><span class="hint" id="safHint" hidden style="width:100%">On Android, choose or create a subfolder (for example <code>Download/Games</code> or <code>ROMs</code>); Android blocks picking the root <code>Download</code> folder directly.</span></div>
+    <div class="row" id="folderRow" hidden><button type="button" class="btn sm" id="pickFolder"><svg aria-hidden="true"><use href="#i-folder"/></svg>Choose folder</button><span class="small muted">Current: <b id="folderName">none</b>. A file already there is replaced only if you agree.</span><span class="hint" id="safHint" hidden style="width:100%">On Android, choose or create a subfolder (for example <code>Download/Games</code> or <code>ROMs</code>); Android blocks picking the root <code>Download</code> folder directly.</span></div>
+    <label class="field" id="folderLayoutRow" hidden><span>Folder organization (when saving to a folder)</span>
+      <select id="setFolderLayout">
+        <option value="flat">Flat (all outputs in the chosen folder)</option>
+        <option value="tree">Keep input subfolders</option>
+        <option value="console">Group by console (psx, ps2, saturn…)</option>
+      </select>
+      <span class="hint">Controls subfolders created inside your chosen output folder for both direct writing and Save all to folder.</span>
+    </label>
+    <label class="field"><span>Multi-disc playlist (.m3u) layout</span>
+      <select id="setM3uLayout">
+        <option value="auto">Follow target environment</option>
+        <option value="flat">Flat (Game.m3u beside discs)</option>
+        <option value="esde">ES-DE / RetroDECK (Game.m3u/ folder)</option>
+        <option value="discs">Handheld (_discs/ subfolder)</option>
+        <option value="minui">MinUI (Game/ subfolder)</option>
+      </select>
+      <span class="hint">Never uses dot-prefixed hidden folders so Android, Batocera and OnionOS keep playlists visible.</span>
+    </label>
     <label class="check"><input type="checkbox" id="setRename"> Name results after the official (Redump) game title</label>
     <div class="field" id="datBox"><span>Your DAT files (Redump, No-Intro)</span>
       <ul class="files-list" id="datList"></ul>
@@ -211,6 +241,21 @@
       <div class="row" style="margin-top:8px"><button class="btn sm" id="diagCopy">Copy</button></div>
     </details>
   </div>
+</dialog>
+
+<dialog id="collisionDlg" aria-labelledby="collisionTitle">
+  <form method="dialog">
+    <div class="dhead"><h2 id="collisionTitle">Files already exist</h2></div>
+    <div class="dbody">
+      <p id="collisionMsg" style="margin:0"></p>
+      <ul class="files-list" id="collisionList" style="max-height:180px;overflow:auto"></ul>
+      <div class="row end">
+        <button type="submit" value="cancel" class="btn sm" autofocus>Cancel</button>
+        <button type="submit" value="skip" class="btn sm">Skip existing</button>
+        <button type="submit" value="replace" class="btn sm primary">Replace all</button>
+      </div>
+    </div>
+  </form>
 </dialog>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>

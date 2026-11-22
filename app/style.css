@@ -166,7 +166,18 @@ code { font-family: var(--mono); font-size: .92em; background: var(--surface-2);
 #chipThreads { flex-shrink: 100; }
 #chipStore:not(.warn):not(.err) { flex-shrink: 1; }
 .chip.warn, .chip.err { flex-shrink: 0; }
+.chip.chip-target { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; height: 1.4em; line-height: 1.4; }
 .chip.squeezed { display: none; }
+.chip.chip-target label { font: inherit; color: var(--muted); cursor: pointer; }
+.chip.chip-target select {
+  width: auto; min-height: 0; height: 1.4em; line-height: 1.4;
+  padding: 0 14px 0 2px; border: 0; border-radius: 4px;
+  background-color: transparent; color: var(--text);
+  font: 700 1em/1.4 var(--body); cursor: pointer;
+  background-position: calc(100% - 6px) 55%, calc(100% - 2px) 55%;
+  background-size: 4px 4px, 4px 4px;
+}
+.chip.chip-target select:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; box-shadow: none; }
 .chip i { width: 7px; height: 7px; border-radius: 2px; background: var(--muted); display: inline-block; margin-right: 6px; vertical-align: 1px; }
 .chip.ok i { background: var(--ok); }
 .chip.warn i { background: var(--warn); }
@@ -247,7 +258,7 @@ h2, h3 { font-family: var(--display); letter-spacing: -.01em; }
   #tab-convert.has-jobs .drop.compact .row { justify-content: center; flex-direction: column; }
   #tab-convert.has-jobs .drop.compact .systems { display: flex; margin-top: 16px; }
   #tab-convert.has-jobs .drop.compact .drop-foot { display: block; }
-  #tab-convert.has-jobs #memTip, #tab-convert.has-jobs #iosTip, #tab-convert.has-jobs #earlier, #tab-convert.has-jobs .jobs { grid-column: 2; }
+  #tab-convert.has-jobs #memTip, #tab-convert.has-jobs #iosTip, #tab-convert.has-jobs #earlier, #tab-convert.has-jobs #chdAudit, #tab-convert.has-jobs .jobs { grid-column: 2; }
 }
 @media (min-width: 720px) and (max-width: 1039px) {
   .drop.compact { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
@@ -327,6 +338,17 @@ details.opts[open] > .fields { margin-top: 10px; }
 .note.ok { background: var(--ok-soft); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
 .note b { font-weight: 800; }
 .note ul { margin: 4px 0 0; padding-left: 20px; }
+
+/* layout repair bars, tier badges & CHD library auditor */
+.repair-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 6px; }
+.tier-badge { display: inline-flex; align-items: center; gap: 4px; font: 700 0.6875rem/1.2 var(--mono); padding: 3px 7px; border-radius: 6px; border: 1.5px solid var(--line); background: var(--surface-2); color: var(--text); }
+.tier-badge.ok { background: var(--ok-soft); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+.tier-badge.warn { background: var(--warn-soft); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+.tier-badge.err { background: var(--err-soft); color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, transparent); }
+.audit-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.audit-bar .seg button { padding: 5px 10px; min-height: 32px; font-size: 0.7812rem; }
+.audit-item { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 6px; }
+.audit-item .audit-msg { flex: 1 1 200px; min-width: 0; }
 
 /* identification ribbon */
 .note.ident { display: grid; gap: 4px; background: none; color: var(--text); border: 0; border-radius: 0; padding: 0; }
@@ -419,7 +441,8 @@ code.cmd { display: block; font: 0.7812rem/1.55 var(--mono); background: var(--s
 
 /* ---------- settings dialog / sheet ---------- */
 dialog { border: 2px solid var(--edge); border-radius: 20px; background: var(--surface); color: var(--text); padding: 0; width: min(540px, calc(100vw - 32px)); max-height: min(86vh, 760px); box-shadow: 6px 6px 0 var(--ink); }
-dialog::backdrop { background: rgba(12, 9, 28, .55); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+dialog:modal { overscroll-behavior: contain; }
+dialog::backdrop { background: rgba(12, 9, 28, .55); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); overflow: hidden; overscroll-behavior: contain; }
 dialog .dhead { display: flex; align-items: center; padding: 16px 12px 8px 20px; position: sticky; top: 0; background: var(--surface); z-index: 1; }
 dialog .dhead h2 { margin: 0; font-size: 1.25rem; flex: 1; font-weight: 900; }
 dialog .dbody { padding: 6px 20px 22px; display: grid; gap: 16px; }
@@ -561,7 +584,7 @@ dialog { max-height: min(calc(var(--app-h, 100vh) * .88), 760px); }
     column-gap: calc(env(viewport-segment-left 1 0) - env(viewport-segment-right 0 0) + 24px);
   }
   #tab-convert .drop { grid-row: span 3; position: sticky; top: 12px; margin: 0; max-width: none; }
-  #tab-convert .jobs, #tab-convert #memTip, #tab-convert #iosTip, #tab-convert #earlier { grid-column: 2; }
+  #tab-convert .jobs, #tab-convert #memTip, #tab-convert #iosTip, #tab-convert #earlier, #tab-convert #chdAudit { grid-column: 2; }
 }
 @media (vertical-viewport-segments: 2) {
   html.mode-shell .scroller { scroll-padding-top: calc(env(viewport-segment-top 0 1) - env(viewport-segment-top 0 0) + 12px); }

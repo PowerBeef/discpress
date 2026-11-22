@@ -92,7 +92,7 @@ var QUIRKS = [
   {
     // a GD-ROM (Redump's cue lists its high-density area) is laid out as chdman 0.289 does; a CD-based
     // Dreamcast disc with pregaps is rejected by Flycast up to 2.7 ("Unsupported subtype or pre/postgap")
-    id: 'dc-cd-gaps', sys: ['dc'],
+    id: 'dc-cd-gaps', sys: ['dc'], repair: 'dcgaps',
     when: function (c) { return c.disc && c.job.disc === 'cd' && !c.disc.gd && c.disc.gaps; },
     text: 'Flycast 2.7 and earlier can\u2019t load CD-based Dreamcast CHDs whose tracks have pregaps, as this one\u2019s do; newer Flycast builds can. Keep the original files if you use an older one.',
     src: 'docs/chd/ecosystem-sony-dreamcast.md §5.1 (flycast #906)'
@@ -118,14 +118,14 @@ var QUIRKS = [
   },
   {
     // every Jaguar CD is multi-session (Redump: 38 of 38); 0.289 writes no session data
-    id: 'jagcd-sessions', sys: ['jagcd'], warn: true,
+    id: 'jagcd-sessions', sys: ['jagcd'], warn: true, repair: 'sessions',
     when: function () { return true; },
     text: 'Jaguar CD emulators may not load this CHD: BigPEmu doesn\u2019t take CHDs, MiSTer\u2019s Jaguar core loads .cdi only, and Virtual Jaguar (RetroArch) needs session data that chdman 0.289 doesn\u2019t write. Keep the original files too.',
     src: 'docs/chd/optical-media.md §3.5; docs/chd/ecosystem-other.md §0 findings 4 and 12'
   },
   {
     // a CHD keeps no session gap (about 11,400 sectors), so session 2 is read that much too early
-    id: 'multisession', warn: true,
+    id: 'multisession', warn: true, repair: function (c) { return c.sys === 'pc' && c.disc && c.disc.sessions === 2 ? 'pcsession' : ''; },
     when: function (c) { return c.sys !== 'jagcd' && c.disc && c.disc.sessions > 1; },
     text: function (c) {
       return 'This disc has ' + c.disc.sessions + ' sessions. Its CHD doesn\u2019t keep where each starts, so emulators read the data after the first session from the wrong place' +
@@ -136,6 +136,7 @@ var QUIRKS = [
   {
     // chdman stores MODE2/2048, MODE2/2324 and MODE2_FORM_MIX tracks as Mode 2 Form 1/2/Mix, which Flycast refuses
     id: 'dc-mode2-form', sys: ['dc', 'naomi', 'naomi2', 'triforce', 'chihiro'], warn: true,
+    repair: function (c) { return c.disc && c.disc.tracks.some(function (t) { return t.mode === 'MODE2/2048'; }) ? 'mode2' : ''; },
     when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return /^MODE2\/(2048|2324)$|^MODE2_FORM_MIX$/.test(t.mode); }); },
     text: 'Flycast can\u2019t load CHDs with MODE2/2048, MODE2/2324 or MODE2_FORM_MIX tracks, as this disc has (chdman stores them as Mode 2 Form 1/2/Mix). Keep the original files for Flycast.',
     src: 'docs/chd/ecosystem-sony-dreamcast.md §5.1 (core/imgread/chd.cpp: track types)'
@@ -235,7 +236,7 @@ var QUIRKS = [
   },
   {
     // Beetle Saturn, Kronos and Yabause take every pregap as stored and leave postgaps out of the image; ares drops virtual PREGAP
-    id: 'saturn-gapcmd', sys: ['saturn'], warn: true,
+    id: 'saturn-gapcmd', sys: ['saturn'], warn: true, repair: 'gaps',
     when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return (t.pregapCmd && t.pregap > 0) || t.postgap > 0; }); },
     text: 'Beetle Saturn, Kronos and Yabause read the tracks after a PREGAP or POSTGAP line from the wrong place, and this cue sheet has one (ares also drops virtual PREGAP lines from its track list). A Redump dump (with INDEX 00 lines instead) doesn\u2019t have this problem.',
     src: 'docs/chd/ecosystem-other.md §3.1 to §3.3, §11.2 (PGTYPE ignored, postgap ignored)'
@@ -243,7 +244,7 @@ var QUIRKS = [
   {
     // the Beetle PCE family, Beetle PC-FX, Geargrafx and Beetle PSX count a postgap into the file offset;
     // jgenesis (Sega CD, PCE CD) ignores postgaps
-    id: 'postgap', sys: ['pcecd', 'pcfx', 'ps1', 'segacd'], warn: true,
+    id: 'postgap', sys: ['pcecd', 'pcfx', 'ps1', 'segacd'], warn: true, repair: 'gaps',
     when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return t.postgap > 0; }); },
     text: function (c) {
       return (c.sys === 'segacd' ? 'jgenesis reads' : { pcecd: 'Beetle PCE, Geargrafx and jgenesis', pcfx: 'Beetle PC-FX', ps1: 'Beetle PSX' }[c.sys] + ' read') + ' the tracks after a POSTGAP line from the wrong place, and this cue sheet has one (chdman keeps no postgap data).';
@@ -253,7 +254,7 @@ var QUIRKS = [
   {
     // ares drops a virtual pregap of track 2 or later from its TOC; jgenesis (Sega CD, PCE CD) and
     // PCSX ReARMed (PS1) ignore PGTYPE and assume every pregap is stored
-    id: 'ares-pregap', sys: ['pcecd', 'segacd', 'ps1'],
+    id: 'ares-pregap', sys: ['pcecd', 'segacd', 'ps1'], repair: 'gaps',
     when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return t.pregapCmd && t.pregap > 0; }); },
     text: function (c) {
       var hasLater = c.disc.tracks.some(function (t) { return t.no > 1 && t.pregapCmd && t.pregap > 0; });
@@ -267,6 +268,7 @@ var QUIRKS = [
   {
     // NeoCD takes MODE1 and AUDIO tracks only, and misreads virtual pregaps from track 3 on
     id: 'ngcd-layout', sys: ['ngcd'], warn: true,
+    repair: function (c) { return c.disc && !c.disc.tracks.some(function (t) { return /^MODE2/.test(t.mode); }) ? 'gaps' : ''; },
     when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return /^MODE2/.test(t.mode) || (t.no > 2 && t.pregapCmd && t.pregap > 0); }); },
     text: function (c) {
       return c.disc.tracks.some(function (t) { return /^MODE2/.test(t.mode); })
@@ -303,7 +305,7 @@ function quirkCtx(job) {
   return { job: job, id: id, sys: id.sys || '', det: det, disc: discModel(job), keepCue: keepCueWanted(job),
     facts: id.sys ? GameFacts.of(id.sys, factSerials) : {} };
 }
-// the rules that apply to a job: [{id, act, warn, text}]
+// the rules that apply to a job: [{id, act, warn, repair, text}]
 function quirks(job) {
   var ctx = quirkCtx(job);
   return QUIRKS.filter(function (r) {
@@ -311,10 +313,369 @@ function quirks(job) {
     return (!r.sys || r.sys.indexOf(ctx.sys) >= 0) && r.when(ctx);
   }).map(function (r) {
     var act = typeof r.act === 'function' ? r.act(ctx) : r.act || '';
-    return { id: r.id, act: act, warn: !!r.warn, text: typeof r.text === 'function' ? r.text(ctx) : r.text || '' };
+    var rep = typeof r.repair === 'function' ? r.repair(ctx) : r.repair || '';
+    // cue-rewriting repairs require an editable .cue descriptor; --sessions also works on .toc
+    if (rep && !(job.kind === 'create' && (rep === 'sessions' ? (job.src === 'cue' || job.src === 'toc') : (job.src === 'cue' && !job.fromCcd && !!job.descText)))) rep = '';
+    return { id: r.id, act: act, warn: !!r.warn, repair: rep, text: typeof r.text === 'function' ? r.text(ctx) : r.text || '' };
   });
 }
 function quirkAct(job, act) { return quirks(job).some(function (q) { return q.act === act; }); }
+
+/* ============================================================
+   Milestone 7 reversible cue/disc layout repairs (Tier X) & DPRC0001 trailer
+   Never active on Universal / Fast Universal unless explicitly clicked by the user.
+   ============================================================ */
+var REPAIR_INFO = {
+  gaps:      { label: 'Fix PREGAP/POSTGAP layout',   short: 'Materialize virtual gaps', raOk: true,  rev: true },
+  sessions:  { label: 'Add session tags (--sessions)', short: 'CHSE session metadata',   raOk: true,  rev: true },
+  mode2:     { label: 'Remap MODE2/2048 \u2192 MODE1/2048', short: 'Flycast Mode 1 map', raOk: true,  rev: true },
+  dcgaps:    { label: 'Absorb pregaps (Flycast \u2264 2.7)', short: 'Pregap absorption',  raOk: true,  rev: true },
+  pcsession: { label: 'Insert 11,400-frame session gap', short: 'Session 2 LBA shift',   raOk: false, rev: true }
+};
+function repairEnabled(job, key) {
+  if (!key) return false;
+  if (job.repairs && key in job.repairs) return !!job.repairs[key];
+  var tgt = typeof targetProfile === 'function' ? targetProfile() : null;
+  return !!(tgt && tgt.repair);
+}
+function activeRepairs(job) {
+  if (job.kind !== 'create') return [];
+  var out = [];
+  quirks(job).forEach(function (q) {
+    if (q.repair && repairEnabled(job, q.repair) && out.indexOf(q.repair) < 0) out.push(q.repair);
+  });
+  return out;
+}
+function cueSectorSize(mode) {
+  return /\/2048$|^MODE1$/.test(mode) ? 2048 : /\/2324$/.test(mode) ? 2324 : /\/2336$/.test(mode) ? 2336 : 2352;
+}
+function splitHeadSegs(segs, bytes) {
+  var head = [], tail = [], rem = bytes;
+  for (var i = 0; i < segs.length; i++) {
+    var s = segs[i];
+    if (rem <= 0) { tail.push(s); continue; }
+    var slen = s.zero != null ? s.zero : s.len;
+    if (slen <= rem) { head.push(s); rem -= slen; }
+    else {
+      if (s.zero != null) {
+        head.push({ zero: rem });
+        tail.push({ zero: slen - rem });
+      } else {
+        head.push({ ref: s.ref, start: s.start, len: rem });
+        tail.push({ ref: s.ref, start: s.start + rem, len: slen - rem });
+      }
+      rem = 0;
+    }
+  }
+  return { head: head, tail: tail };
+}
+function buildDpr1Trailer(ops, origCueText) {
+  var cueBytes = new TextEncoder().encode(origCueText || '');
+  var buf = new Uint8Array(10 + ops.length * 8 + cueBytes.length);
+  var dv = new DataView(buf.buffer);
+  buf[0] = 68; buf[1] = 80; buf[2] = 82; buf[3] = 49; // "DPR1"
+  dv.setUint16(4, ops.length, true);
+  dv.setUint32(6, cueBytes.length, true);
+  for (var i = 0; i < ops.length; i++) {
+    var o = 10 + i * 8;
+    buf[o] = ops[i].kind & 255;
+    buf[o + 1] = ops[i].trk1 & 255;
+    dv.setUint32(o + 4, ops[i].frames >>> 0, true);
+  }
+  buf.set(cueBytes, 10 + ops.length * 8);
+  return new Blob([buf], { type: 'application/octet-stream' });
+}
+// Builds repaired virtual cue, ConcatStore/ZeroStore inputs, extra args (--sessions, --trailer)
+function buildRepairedCueJob(job) {
+  var reps = activeRepairs(job);
+  if (!reps.length) return null;
+  var wantSessions = reps.indexOf('sessions') >= 0;
+  var needCueRewrite = reps.some(function (k) { return k !== 'sessions'; });
+  if (!needCueRewrite) return { extraArgs: wantSessions ? ['--sessions'] : [], extraDisp: wantSessions ? ['--sessions'] : [], inputs: null };
+  if (job.src !== 'cue' || !job.descText) return null;
+
+  var map = {};
+  job.files.forEach(function (f) { if (f.ref) map[refKey(f.ref)] = f.name; });
+  var normCue = rewriteRefs('cue', job.descText, map);
+  var fileByName = Object.create(null);
+  var rawInputs = [];
+  job.files.forEach(function (f, idx) {
+    var rname = '__raw_' + idx;
+    var sz = f.ecm && f.imageSize ? f.imageSize : f.file.size;
+    fileByName[f.name.toLowerCase()] = { ref: rname, size: sz, f: f };
+    rawInputs.push({ name: rname, blob: f.file, ecm: f.ecm, hidden: true });
+  });
+
+  var catalog = '', curFile = null, session = 1, fileGroups = [], tracks = [], curTrack = null;
+  var lines = normCue.split(/\r?\n/);
+  for (var li = 0; li < lines.length; li++) {
+    var ln = lines[li], m;
+    if ((m = /^\s*CATALOG\s+(\S+)/i.exec(ln))) { catalog = m[1]; continue; }
+    if ((m = /^\s*REM\s+SESSION\s+0*(\d+)/i.exec(ln))) { session = +m[1]; continue; }
+    var fw = refWord('cue', ln);
+    if (fw) {
+      curFile = fileByName[fw.text.toLowerCase()] || null;
+      fileGroups.push({ file: curFile, tracks: [] });
+      continue;
+    }
+    if ((m = /^\s*TRACK\s+(\d+)\s+(\S+)/i.exec(ln))) {
+      curTrack = { no: +m[1], mode: m[2].toUpperCase(), session: session, pregap: 0, postgap: 0, index: {}, flags: '', isrc: '', file: curFile };
+      tracks.push(curTrack);
+      if (fileGroups.length) fileGroups[fileGroups.length - 1].tracks.push(curTrack);
+      continue;
+    }
+    if (!curTrack) continue;
+    if ((m = /^\s*FLAGS\s+(.+)/i.exec(ln))) curTrack.flags = m[1].trim();
+    else if ((m = /^\s*ISRC\s+(\S+)/i.exec(ln))) curTrack.isrc = m[1].trim();
+    else if ((m = /^\s*PREGAP\s+(\d+:\d+:\d+)/i.exec(ln))) curTrack.pregap = msfFrames(m[1]);
+    else if ((m = /^\s*POSTGAP\s+(\d+:\d+:\d+)/i.exec(ln))) curTrack.postgap = msfFrames(m[1]);
+    else if ((m = /^\s*INDEX\s+(\d+)\s+(\d+:\d+:\d+)/i.exec(ln))) curTrack.index[+m[1]] = msfFrames(m[2]);
+  }
+  if (!tracks.length) return null;
+
+  // Map every track to its exact byte slice inside its source file
+  for (var gi = 0; gi < fileGroups.length; gi++) {
+    var fg = fileGroups[gi];
+    if (!fg.file || !fg.tracks.length) continue;
+    if (fg.tracks.length === 1) {
+      var t0 = fg.tracks[0];
+      t0.baseFr = 0;
+      t0.segs = [{ ref: fg.file.ref, start: 0, len: fg.file.size }];
+    } else {
+      var starts = fg.tracks.map(function (t, ti) {
+        var fr = ti === 0 ? 0 : (0 in t.index ? t.index[0] : (t.index[1] || 0));
+        return fr;
+      });
+      for (var ti = 0; ti < fg.tracks.length; ti++) {
+        var tk = fg.tracks[ti], ss0 = cueSectorSize(tk.mode);
+        var stB = starts[ti] * ss0;
+        var enB = ti + 1 < starts.length ? starts[ti + 1] * ss0 : fg.file.size;
+        tk.baseFr = starts[ti];
+        tk.segs = enB > stB ? [{ ref: fg.file.ref, start: stB, len: enB - stB }] : [];
+      }
+    }
+  }
+  for (var i = 0; i < tracks.length; i++) {
+    var tr = tracks[i];
+    if (!tr.segs) return null;
+    tr.relIdx = {};
+    Object.keys(tr.index).forEach(function (k) { tr.relIdx[k] = Math.max(0, tr.index[k] - (tr.baseFr || 0)); });
+  }
+
+  var ops = [];
+  var doGaps = reps.indexOf('gaps') >= 0;
+  var doMode2 = reps.indexOf('mode2') >= 0;
+  var doDcGaps = reps.indexOf('dcgaps') >= 0;
+  var doPcSess = reps.indexOf('pcsession') >= 0;
+
+  for (var i = 0; i < tracks.length; i++) {
+    var tr = tracks[i], ss = cueSectorSize(tr.mode);
+    if (doGaps && !doDcGaps) {
+      if (tr.pregap > 0) {
+        var pg = tr.pregap;
+        tr.segs.unshift({ zero: pg * ss });
+        var shifted = { 0: 0 };
+        Object.keys(tr.relIdx).forEach(function (k) { if (+k > 0) shifted[k] = tr.relIdx[k] + pg; });
+        if (!(1 in shifted)) shifted[1] = pg;
+        tr.relIdx = shifted;
+        tr.pregap = 0;
+        ops.push({ kind: 1, trk1: tr.no, frames: pg });
+      }
+      if (tr.postgap > 0) {
+        var post = tr.postgap;
+        tr.segs.push({ zero: post * ss });
+        tr.postgap = 0;
+        ops.push({ kind: 2, trk1: tr.no, frames: post });
+      }
+    }
+    if (doMode2 && tr.mode === 'MODE2/2048') {
+      tr.mode = 'MODE1/2048';
+      ops.push({ kind: 4, trk1: tr.no, frames: 0 });
+    }
+    if (doDcGaps && i > 0) {
+      var prev = tracks[i - 1], prevSs = cueSectorSize(prev.mode);
+      if (tr.pregap > 0) {
+        var dpg = tr.pregap;
+        prev.segs.push({ zero: dpg * prevSs });
+        tr.pregap = 0;
+        ops.push({ kind: 2, trk1: prev.no, frames: dpg });
+      }
+      if ((0 in tr.relIdx) && (1 in tr.relIdx) && tr.relIdx[1] > tr.relIdx[0]) {
+        var moveFr = tr.relIdx[1] - tr.relIdx[0];
+        var sp = splitHeadSegs(tr.segs, moveFr * ss);
+        prev.segs = prev.segs.concat(sp.head);
+        tr.segs = sp.tail;
+        var sh2 = {};
+        Object.keys(tr.relIdx).forEach(function (k) { if (+k > 0) sh2[k] = Math.max(0, tr.relIdx[k] - moveFr); });
+        tr.relIdx = sh2;
+        ops.push({ kind: 3, trk1: tr.no, frames: moveFr });
+      }
+    }
+    if (doPcSess && i + 1 < tracks.length && tracks[i + 1].session > tr.session) {
+      tr.segs.push({ zero: 11400 * ss });
+      ops.push({ kind: 2, trk1: tr.no, frames: 11400 });
+    }
+  }
+  if (!ops.length && !wantSessions) return null;
+
+  var cueOut = [];
+  if (catalog) cueOut.push('CATALOG ' + catalog);
+  var outInputs = rawInputs.slice(), lastSess = 0;
+  for (var i = 0; i < tracks.length; i++) {
+    var tr = tracks[i];
+    if (tr.session !== lastSess && tracks.some(function (x) { return x.session > 1; })) {
+      cueOut.push('REM SESSION ' + (tr.session < 10 ? '0' : '') + tr.session);
+      lastSess = tr.session;
+    }
+    var vname = '__trk' + (tr.no < 10 ? '0' : '') + tr.no + '.bin';
+    outInputs.push({ name: vname, concat: tr.segs });
+    cueOut.push('FILE "' + vname + '" BINARY');
+    cueOut.push('  TRACK ' + (tr.no < 10 ? '0' : '') + tr.no + ' ' + tr.mode);
+    if (tr.flags) cueOut.push('    FLAGS ' + tr.flags);
+    if (tr.isrc) cueOut.push('    ISRC ' + tr.isrc);
+    if (tr.pregap > 0) cueOut.push('    PREGAP ' + cueMsf(tr.pregap));
+    Object.keys(tr.relIdx).map(Number).sort(function (a, b) { return a - b; }).forEach(function (k) {
+      cueOut.push('    INDEX ' + (k < 10 ? '0' : '') + k + ' ' + cueMsf(tr.relIdx[k]));
+    });
+    if (tr.postgap > 0) cueOut.push('    POSTGAP ' + cueMsf(tr.postgap));
+  }
+  outInputs.unshift({ name: job.descName, blob: new Blob([cueOut.join('\n') + '\n'], { type: 'text/plain' }) });
+  var extraArgs = [], extraDisp = [];
+  if (wantSessions) { extraArgs.push('--sessions'); extraDisp.push('--sessions'); }
+  if (ops.length) {
+    outInputs.push({ name: '__dprc_trailer.bin', blob: buildDpr1Trailer(ops, job.descText) });
+    extraArgs.push('--trailer', '/in/__dprc_trailer.bin');
+    extraDisp.push('--trailer', '__dprc_trailer.bin');
+  }
+  return { inputs: outInputs, extraArgs: extraArgs, extraDisp: extraDisp, ops: ops };
+}
+
+/* ============================================================
+   Existing CHD Library Health & Compatibility Auditor (12 checks)
+   ============================================================ */
+function auditChd(job) {
+  if (job.kind !== 'chd' || !job.info) return [];
+  var info = job.info, ins = job.chdInspect || null, tracks = job.chdTracks || [];
+  var id = job.ident || {}, sys = id.sys || '', det = id.detected || {};
+  var tags = (ins && ins.tags && ins.tags.length) ? ins.tags : (info.tags || []);
+  var comps = (ins && ins.comps && ins.comps.length) ? ins.comps : (info.compression ? info.compression.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean) : []);
+  var ver = (ins && ins.version) || parseInt(info.version || '0', 10) || 0;
+  var hb = (ins && ins.hunkbytes) || info.hunkBytes || 0;
+  var compressed = ins ? !!ins.compressed : !!(info.compression && !/^none$/i.test(info.compression));
+  var hasZstd = comps.some(function (c) { return c === 'cdzs' || c === 'zstd'; });
+  var pf = typeof profile === 'function' ? profile(sys) : {};
+  var tgt = typeof targetProfile === 'function' ? targetProfile() : { ps2cd: false };
+  var findings = [];
+  var CD_ONLY = /^(ps1|saturn|segacd|dc|pcecd|pcfx|ngcd|3do|cdi|cd32|cdtv|amigacd|jagcd)$/;
+
+  // 1. Broken GD-ROM (MAME #15870: Track 3 logical offset != 45000)
+  if (info.type === 'gdrom' && tracks.length >= 3 && tracks[2].logframeofs && tracks[2].logframeofs !== 45000) {
+    findings.push({ id: 'chd-gdrom-broken', sev: 'err',
+      text: 'Broken Dreamcast GD-ROM layout: Track 3 starts at LBA ' + tracks[2].logframeofs + ' instead of 45000 (caused by a buggy chdman build). Rebuilding restores the exact GD-ROM layout.',
+      fix: { kind: 'rebuild', mode: 'gdi-to-cd', label: 'Rebuild GD-ROM CHD' } });
+  }
+  // 2. Flycast <= 2.7 unloadable GD-ROM (#15808: pregap or subcode on GD-ROM)
+  if (info.type === 'gdrom' && tracks.some(function (t) { return t.pregap > 0 || t.subtype !== 0; })) {
+    findings.push({ id: 'chd-gdrom-flycast', sev: 'warn',
+      text: 'This GD-ROM CHD contains track pregaps or subcode metadata, which Flycast 2.7 and earlier refuse to load.',
+      fix: { kind: 'rebuild', mode: 'gdi-to-cd', label: 'Rebuild clean GD-ROM' } });
+  }
+  // 3. Pre-0.227 Dreamcast GD-ROM packed as plain CD CHD
+  if (sys === 'dc' && info.type === 'cd' && info.logical > 750 * 1048576) {
+    findings.push({ id: 'chd-dc-legacy-cd', sev: 'warn',
+      text: 'This Dreamcast GD-ROM (>750 MB) is stored as a plain CD CHD (pre-MAME 0.227 format). Modern Flycast and Redream expect a GD-ROM CHD (CHGD).' });
+  }
+  // 4. PSP wrong container (createcd) or wrong hunk size (!= 2048)
+  if (sys === 'psp') {
+    if (info.type === 'cd') {
+      findings.push({ id: 'chd-psp-layout', sev: 'err',
+        text: 'This PSP game was packed as a CD CHD instead of a DVD CHD with 2,048-byte hunks (PPSSPP requires DVD CHD with -hs 2048).',
+        fix: { kind: 'rebuild', mode: 'cd-to-dvd-2048', label: 'Rebuild as PSP DVD CHD' } });
+    } else if (info.type === 'dvd' && hb && hb !== 2048) {
+      findings.push({ id: 'chd-psp-layout', sev: 'warn',
+        text: 'This PSP DVD CHD uses ' + hb.toLocaleString('en-US') + '-byte hunks; PPSSPP recommends 2,048-byte hunks (-hs 2048) to avoid seek stutters.',
+        fix: { kind: 'copy', extra: ['-hs', '2048'], label: 'Fix 2,048-byte hunks' } });
+    }
+  }
+  // 5. CD-only console mistakenly packed as createdvd
+  if (info.type === 'dvd' && CD_ONLY.test(sys)) {
+    findings.push({ id: 'chd-cd-as-dvd', sev: 'err',
+      text: sysName(sys) + ' games must be CD CHDs (createcd), not DVD CHDs: emulators cannot boot a DVD CHD for this system.',
+      fix: { kind: 'rebuild', mode: 'dvd-to-cd', label: 'Rebuild as CD CHD' } });
+  }
+  // 6. PS2 DVD container mismatch for active Target
+  if (sys === 'ps2') {
+    if (info.type === 'dvd' && (settings.compat || tgt.ps2cd)) {
+      findings.push({ id: 'chd-ps2-target', sev: 'warn',
+        text: 'This PS2 game is a DVD CHD, which AetherSX2, NetherSX2 and older PCSX2 builds cannot open.',
+        fix: { kind: 'rebuild', mode: 'dvd-to-cd', label: 'Convert to CD CHD' } });
+    } else if (info.type === 'cd' && info.logical > 900 * 1048576 && !settings.compat && !tgt.ps2cd) {
+      findings.push({ id: 'chd-ps2-target', sev: 'warn',
+        text: 'This PS2 DVD game is stored as a legacy CD CHD (~7\u201310% larger than a DVD CHD on modern PCSX2).',
+        fix: { kind: 'rebuild', mode: 'cd-to-dvd', label: 'Convert to DVD CHD' } });
+    }
+  }
+  // 7. Incompatible Zstd compression for this console or Target
+  if (hasZstd && (settings.compat || settings.target === 'legacy' || pf.noZstd)) {
+    var zCodecs = (info.type === 'cd' || info.type === 'gdrom') ? 'cdlz,cdzl,cdfl' : 'lzma,zlib,huff,flac';
+    var zWhy = pf.noZstd ? pf.noZstd + ' cannot read Zstd CHDs of ' + sysName(sys) + ' games.' : 'Older emulators cannot read Zstd CHDs.';
+    findings.push({ id: 'chd-zstd-compat', sev: 'warn',
+      text: zWhy + ' Re-encoding with standard codecs is lossless and keeps identical disc data.',
+      fix: { kind: 'copy', extra: ['-c', zCodecs, '--codecplan', '--libdeflate'], label: 'Re-encode without Zstd' } });
+  }
+  // 8. Fatal non-track metadata (e.g., CUES/CHSE) on strict consoles (Saturn/Sega CD/PCE-CD)
+  if (/^(saturn|segacd|pcecd)$/.test(sys)) {
+    var badTags = tags.filter(function (t) { return !/^(CHT2|CHTR|CHGD|CHGT|CHCD)$/.test(t); });
+    if (badTags.length) {
+      findings.push({ id: 'chd-strict-meta', sev: 'err',
+        text: (sys === 'saturn' ? 'Kronos and Yabause reject' : 'jgenesis rejects') + ' CHDs carrying extra metadata tags (' + badTags.join(', ') + '). Stripping them is lossless.',
+        fix: { kind: 'copy', extra: ['--stripmeta'], label: 'Strip extra metadata' } });
+    }
+  }
+  // 9. Subcode tracks on Beetle/Flycast systems or hunk size > 512 KiB (rchd cap)
+  if (info.type === 'cd' && tracks.some(function (t) { return t.subtype !== 0; }) && /^(ps1|saturn|segacd|pcecd|dc)$/.test(sys)) {
+    findings.push({ id: 'chd-subcode', sev: 'warn',
+      text: 'This CHD stores raw subchannel data (RW/RW_RAW), which Beetle cores and Flycast can reject.' });
+  }
+  if (hb > 524288) {
+    var stdHs = (info.type === 'cd' || info.type === 'gdrom') ? '19584' : '4096';
+    findings.push({ id: 'chd-hunk-large', sev: 'warn',
+      text: 'Hunk size (' + fmtBytes(hb) + ') exceeds 512 KB, which RetroAchievements (rchd) and many libretro cores reject.',
+      fix: { kind: 'copy', extra: ['-hs', stdHs], label: 'Fix hunk size' } });
+  }
+  // 10. Legacy CHD v3 / v4 or old CHTR/CHGT metadata tags
+  if ((ver > 0 && ver < 5) || tags.some(function (t) { return t === 'CHTR' || t === 'CHGT'; })) {
+    findings.push({ id: 'chd-legacy-ver', sev: 'warn',
+      text: 'This is a legacy CHD v' + (ver || 4) + ' file. Upgrading losslessly to CHD v5 shrinks it and improves emulator compatibility.',
+      fix: { kind: 'copy', extra: ['--codecplan', '--libdeflate'], label: 'Upgrade to CHD v5' } });
+  }
+  // 11. Missing .sbi for PAL PS1 LibCrypt CHD
+  if (sys === 'ps1' && !job.sbi) {
+    var facts = quirkCtx(job).facts;
+    if (facts.libcrypt) {
+      findings.push({ id: 'chd-libcrypt-missing', sev: 'warn',
+        text: 'This PAL PlayStation CHD is protected by LibCrypt and has no paired .sbi file. Drop its .sbi alongside this CHD so emulators can boot it.' });
+    }
+  }
+  // 12. Compressed PC CHD on Legacy target (DOSBox Pure) or cooked 2048-byte PS1 CHD
+  if (sys === 'pc' && compressed && settings.target === 'legacy') {
+    findings.push({ id: 'chd-pc-compressed', sev: 'warn',
+      text: 'DOSBox Pure requires uncompressed CD CHDs (-c none).',
+      fix: { kind: 'copy', extra: ['-c', 'none'], label: 'Decompress for DOSBox Pure' } });
+  }
+  if (sys === 'ps1' && info.type === 'cd' && tracks.length && tracks.some(function (t) { return t.datasize === 2048; })) {
+    findings.push({ id: 'chd-ps1-cooked', sev: 'warn',
+      text: 'This PlayStation CHD has cooked 2,048-byte sectors instead of raw 2,352-byte Mode 2 sectors; Beetle PSX cannot load it.' });
+  }
+  return findings;
+}
+function auditState(job) {
+  if (job.kind !== 'chd' || !job.info) return '';
+  var f = auditChd(job);
+  if (f.some(function (x) { return x.sev === 'err'; })) return 'err';
+  if (f.some(function (x) { return x.sev === 'warn'; })) return 'warn';
+  return 'ok';
+}
 // how long a CD job's disc is, in minutes (sector-size-aware for 2,048-byte vs raw tracks)
 function discMinutes(job, disc) {
   if (disc && disc.tracks && disc.tracks.length) {

@@ -199,7 +199,7 @@ public:
 	static const char *get_type_string(uint32_t trktype);
 	static const char *get_subtype_string(uint32_t subtype);
 	static std::error_condition parse_metadata(chd_file *chd, toc &toc);
-	static std::error_condition write_metadata(chd_file *chd, const toc &toc);
+	static std::error_condition write_metadata(chd_file *chd, const toc &toc, bool write_sessions = false);
 	bool is_gdrom() const { return cdtoc.flags & (CD_FLAG_GDROM|CD_FLAG_GDROMLE); }
 
 	// ECC utilities
