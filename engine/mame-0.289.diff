@@ -3804,7 +3804,7 @@
  	static uint64_t read_uint64(FILE *infile);
 --- a/src/lib/util/chd.cpp
 +++ b/src/lib/util/chd.cpp
-@@ -28,6 +28,20 @@
+@@ -28,6 +28,25 @@
  #include <new>
  #include <tuple>
  
@@ -3818,6 +3818,11 @@
 +	int wasm_rd_enabled(const void *chd, uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression);
 +	void wasm_rd_submit(const void *chd, uint32_t hunknum, uint32_t codec, const uint8_t *data, uint32_t length);
 +	void wasm_rd_close(const void *chd);
++	// crash-resumable checkpoints (browser build, OPFS-backed compressed non-parent runs)
++	uint32_t wasm_ckpt_enabled(uint32_t hunkbytes, uint32_t hunkcount);
++	int wasm_ckpt_requested();
++	int wasm_ckpt_save(uint32_t next_hunk, uint32_t hunk_count, double write_offset, double total_out, const uint8_t *sha1_state92, const uint8_t *delta32, uint32_t delta_count);
++	int wasm_ckpt_try_resume(void *compressor, uint32_t hunk_bytes, uint32_t hunk_count, uint32_t unit_bytes, const uint32_t *comps4, double logical_bytes, double meta_end, uint8_t *out_state112);
 +}
 +static int s_wasm_par = 0;
 +#endif
@@ -3825,7 +3830,7 @@
  
  //**************************************************************************
  //  CONSTANTS
-@@ -853,6 +867,19 @@
+@@ -853,6 +872,19 @@
  
  void chd_file::close()
  {
@@ -3845,7 +3850,7 @@
  	// reset file characteristics
  	m_file.reset();
  	m_allow_reads = false;
-@@ -892,6 +919,48 @@
+@@ -892,6 +924,48 @@
  	m_cachehunk = ~0;
  }
  
@@ -3894,7 +3899,7 @@
  std::error_condition chd_file::codec_process_hunk(uint32_t hunknum)
  {
  	// punt if no file
-@@ -912,13 +981,16 @@
+@@ -912,13 +986,16 @@
  		case 3:
  		case 4:
  			{
@@ -3912,7 +3917,7 @@
  						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  						if (UNEXPECTED(err))
  							return err;
-@@ -931,7 +1003,14 @@
+@@ -931,7 +1008,14 @@
  					return std::error_condition(error::UNSUPPORTED_FORMAT);
  
  				case V34_MAP_ENTRY_TYPE_SELF_HUNK:
@@ -3928,7 +3933,7 @@
  
  				case V34_MAP_ENTRY_TYPE_PARENT_HUNK:
  					if (UNEXPECTED(m_parent_missing))
-@@ -948,7 +1027,7 @@
+@@ -948,7 +1032,7 @@
  					return std::error_condition(error::UNSUPPORTED_FORMAT);
  
  				// compressed case
@@ -3937,7 +3942,7 @@
  				uint32_t const blocklen = get_u24be(&rawmap[1]);
  				uint64_t const blockoffs = get_u48be(&rawmap[4]);
  				switch (rawmap[0])
-@@ -958,6 +1037,9 @@
+@@ -958,6 +1042,9 @@
  				case COMPRESSION_TYPE_2:
  				case COMPRESSION_TYPE_3:
  					{
@@ -3947,7 +3952,7 @@
  						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  						if (UNEXPECTED(err))
  							return err;
-@@ -970,7 +1052,14 @@
+@@ -970,7 +1057,14 @@
  					return std::error_condition(error::UNSUPPORTED_FORMAT);
  
  				case COMPRESSION_SELF:
@@ -3963,7 +3968,7 @@
  
  				case COMPRESSION_PARENT:
  					if (UNEXPECTED(m_parent_missing))
-@@ -1036,7 +1125,7 @@
+@@ -1036,7 +1130,7 @@
  		case 3:
  		case 4:
  			{
@@ -3972,7 +3977,7 @@
  				uint64_t const blockoffs = get_u64be(&rawmap[0]);
  				util::crc32_t const blockcrc = get_u32be(&rawmap[8]);
  				bool const nocrc = rawmap[15] & V34_MAP_ENTRY_FLAG_NO_CRC;
-@@ -1045,6 +1134,9 @@
+@@ -1045,6 +1139,9 @@
  				case V34_MAP_ENTRY_TYPE_COMPRESSED:
  					{
  						uint32_t const blocklen = get_u16be(&rawmap[12]) | (uint32_t(rawmap[14]) << 16);
@@ -3982,7 +3987,7 @@
  						std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  						if (UNEXPECTED(err))
  							return err;
-@@ -1073,7 +1165,14 @@
+@@ -1073,7 +1170,14 @@
  					return std::error_condition();
  
  				case V34_MAP_ENTRY_TYPE_SELF_HUNK:
@@ -3998,7 +4003,7 @@
  
  				case V34_MAP_ENTRY_TYPE_PARENT_HUNK:
  					if (UNEXPECTED(m_parent_missing))
-@@ -1086,7 +1185,7 @@
+@@ -1086,7 +1190,7 @@
  		// v5 map entries
  		case 5:
  			{
@@ -4007,7 +4012,7 @@
  
  				if (!compressed())
  				{
-@@ -1115,6 +1214,14 @@
+@@ -1115,6 +1219,14 @@
  					case COMPRESSION_TYPE_2:
  					case COMPRESSION_TYPE_3:
  						{
@@ -4022,7 +4027,7 @@
  							std::error_condition err = file_read(blockoffs, &m_compressed[0], blocklen);
  							if (UNEXPECTED(err))
  								return err;
-@@ -1130,16 +1237,29 @@
+@@ -1130,16 +1242,29 @@
  
  					case COMPRESSION_NONE:
  						{
@@ -4053,7 +4058,7 @@
  
  					case COMPRESSION_PARENT:
  						if (UNEXPECTED(m_parent_missing))
-@@ -1512,12 +1632,15 @@
+@@ -1512,12 +1637,15 @@
  	if (err)
  		return err;
  
@@ -4073,7 +4078,7 @@
  	resulttag = metaentry.metatag;
  	resultflags = metaentry.flags;
  	return std::error_condition();
-@@ -1864,7 +1987,7 @@
+@@ -1864,7 +1992,7 @@
  	// look for hard disk metadata; if found, then the unit size == sector size
  	std::string metadata;
  	int i0, i1, i2, i3;
@@ -4082,7 +4087,7 @@
  		return i3;
  
  	// look for CD-ROM metadata; if found, then the unit size == CD frame size
-@@ -1907,6 +2030,8 @@
+@@ -1907,6 +2035,8 @@
  	m_metaoffset = get_u64be(&rawheader[36]);
  	m_hunkbytes = get_u32be(&rawheader[76]);
  	m_hunkcount = get_u32be(&rawheader[24]);
@@ -4091,7 +4096,7 @@
  
  	// extract parent SHA-1
  	uint32_t flags = get_u32be(&rawheader[16]);
-@@ -1939,7 +2064,9 @@
+@@ -1939,7 +2069,9 @@
  
  	// guess at the units based on snooping the metadata
  	m_unitbytes = guess_unitbytes();
@@ -4102,7 +4107,7 @@
  }
  
  /**
-@@ -1970,6 +2097,8 @@
+@@ -1970,6 +2102,8 @@
  	m_metaoffset = get_u64be(&rawheader[36]);
  	m_hunkbytes = get_u32be(&rawheader[44]);
  	m_hunkcount = get_u32be(&rawheader[24]);
@@ -4111,7 +4116,7 @@
  
  	// extract parent SHA-1
  	uint32_t flags = get_u32be(&rawheader[16]);
-@@ -2002,7 +2131,9 @@
+@@ -2002,7 +2136,9 @@
  
  	// guess at the units based on snooping the metadata
  	m_unitbytes = guess_unitbytes();
@@ -4122,7 +4127,7 @@
  }
  
  /**
-@@ -2024,14 +2155,19 @@
+@@ -2024,14 +2160,19 @@
  	if (UNEXPECTED(get_u32be(&rawheader[8]) != V5_HEADER_SIZE))
  		throw std::error_condition(error::INVALID_FILE);
  
@@ -4145,7 +4150,7 @@
  
  	// determine compression
  	m_compression[0] = get_u32be(&rawheader[16]);
-@@ -2073,7 +2209,7 @@
+@@ -2073,7 +2214,7 @@
  	try
  	{
  		// first get a CRC-16 of the original rawmap
@@ -4154,7 +4159,7 @@
  
  		// create a buffer to hold the RLE data
  		std::vector<uint8_t> compression_rle(m_hunkcount);
-@@ -2093,12 +2229,12 @@
+@@ -2093,12 +2234,12 @@
  		int count = 0;
  		for (uint32_t hunknum = 0; hunknum < m_hunkcount; hunknum++)
  		{
@@ -4169,7 +4174,7 @@
  				if (refhunk == last_self)
  					curcomp = COMPRESSION_SELF_0;
  				else if (refhunk == last_self + 1)
-@@ -2110,7 +2246,7 @@
+@@ -2110,7 +2251,7 @@
  			else if (curcomp == COMPRESSION_PARENT)
  			{
  				// promote parent block references to more compact forms
@@ -4178,7 +4183,7 @@
  				if (refunit == mulu_32x32(hunknum, m_hunkbytes) / m_unitbytes)
  					curcomp = COMPRESSION_PARENT_SELF;
  				else if (refunit == last_parent)
-@@ -2124,7 +2260,7 @@
+@@ -2124,7 +2265,7 @@
  
  			// track maximum compressed length
  			else //if (curcomp >= COMPRESSION_TYPE_0 && curcomp <= COMPRESSION_TYPE_3)
@@ -4187,7 +4192,7 @@
  
  			// track repeats
  			if (curcomp == lastcomp)
-@@ -2172,8 +2308,15 @@
+@@ -2172,8 +2313,15 @@
  		// for COMPRESSION_SELF: selfbits
  		// for COMPRESSION_PARENT: parentbits
  		// the overall size is clamped later with bitbuf.flush()
@@ -4205,7 +4210,7 @@
  		bitstream_out bitbuf(&compressed[16], compressed.size() - 16);
  
  		// compute a tree and export it to the buffer
-@@ -2195,7 +2338,7 @@
+@@ -2195,7 +2343,7 @@
  		uint64_t firstoffs = 0;
  		for (uint32_t hunknum = 0; hunknum < m_hunkcount; hunknum++)
  		{
@@ -4214,7 +4219,7 @@
  			uint32_t length = get_u24be(&rawmap[1]);
  			uint64_t offset = get_u48be(&rawmap[4]);
  			uint16_t crc = get_u16be(&rawmap[10]);
-@@ -2255,7 +2398,8 @@
+@@ -2255,7 +2403,8 @@
  
  		// write the map header
  		uint32_t complen = bitbuf.flush();
@@ -4224,7 +4229,7 @@
  		put_u32be(&compressed[0], complen);
  		put_u48be(&compressed[4], firstoffs);
  		put_u16be(&compressed[10], mapcrc);
-@@ -2315,12 +2459,18 @@
+@@ -2315,12 +2464,18 @@
  	uint8_t const selfbits = rawbuf[13];
  	uint8_t const parentbits = rawbuf[14];
  
@@ -4245,7 +4250,7 @@
  
  	// first decode the compression types
  	huffman_decoder<16, 8> decoder;
-@@ -2331,7 +2481,7 @@
+@@ -2331,7 +2486,7 @@
  	int repcount = 0;
  	for (uint32_t hunknum = 0; hunknum < m_hunkcount; hunknum++)
  	{
@@ -4254,7 +4259,7 @@
  		if (repcount > 0)
  			rawmap[0] = lastcomp, repcount--;
  		else
-@@ -2352,7 +2502,7 @@
+@@ -2352,7 +2507,7 @@
  	uint64_t last_parent = 0;
  	for (uint32_t hunknum = 0; hunknum < m_hunkcount; hunknum++)
  	{
@@ -4263,7 +4268,7 @@
  		uint64_t offset = curoffset;
  		uint32_t length = 0;
  		uint16_t crc = 0;
-@@ -2377,7 +2527,9 @@
+@@ -2377,7 +2532,9 @@
  				break;
  
  			case COMPRESSION_PARENT:
@@ -4274,7 +4279,7 @@
  				last_parent = offset;
  				break;
  
-@@ -2409,7 +2561,7 @@
+@@ -2409,7 +2566,7 @@
  	}
  
  	// verify the final CRC
@@ -4283,7 +4288,7 @@
  		throw std::error_condition(error::DECOMPRESSION_ERROR);
  }
  
-@@ -2443,7 +2595,7 @@
+@@ -2443,7 +2600,7 @@
  			throw std::error_condition(error::UNSUPPORTED_VERSION);
  
  		// must be an even number of units per hunk
@@ -4292,7 +4297,7 @@
  			throw std::error_condition(std::errc::invalid_argument);
  		if (UNEXPECTED(m_parent && m_unitbytes != m_parent->unit_bytes()))
  			throw std::error_condition(std::errc::invalid_argument);
-@@ -2495,12 +2647,12 @@
+@@ -2495,12 +2652,12 @@
  		// write out the map (if not compressed)
  		if (!compressed())
  		{
@@ -4307,7 +4312,7 @@
  				err = file_write(offset, buffer, bytes_to_write);
  				if (UNEXPECTED(err))
  					throw err;
-@@ -2518,6 +2670,11 @@
+@@ -2518,6 +2675,11 @@
  		close();
  		return err;
  	}
@@ -4319,7 +4324,7 @@
  	catch (...)
  	{
  		close();
-@@ -2612,6 +2769,11 @@
+@@ -2612,6 +2774,11 @@
  		close();
  		return err;
  	}
@@ -4331,7 +4336,7 @@
  }
  
  /**
-@@ -2636,14 +2798,18 @@
+@@ -2636,14 +2803,18 @@
  	}
  
  	// read the map; v5+ compressed drives need to read and decompress their map
@@ -4352,7 +4357,7 @@
  		if (UNEXPECTED(err))
  			throw err;
  	}
-@@ -2683,7 +2849,7 @@
+@@ -2683,7 +2854,7 @@
  		return std::error_condition(error::FILE_NOT_WRITEABLE);
  
  	// only permitted to write new blocks
@@ -4361,7 +4366,7 @@
  	if (UNEXPECTED(rawmap[0] != 0xff))
  		return std::error_condition(error::COMPRESSION_ERROR);
  
-@@ -2720,7 +2886,7 @@
+@@ -2720,7 +2891,7 @@
  	uint64_t offset = file_append(compressed, complength);
  
  	// update the map entry
@@ -4370,7 +4375,7 @@
  	rawmap[0] = (compression == -1) ? COMPRESSION_NONE : compression;
  	put_u24be(&rawmap[1], complength);
  	put_u48be(&rawmap[4], offset);
-@@ -2753,7 +2919,7 @@
+@@ -2753,7 +2924,7 @@
  		throw std::error_condition(error::HUNK_OUT_OF_RANGE);
  
  	// update the map entry
@@ -4379,7 +4384,7 @@
  	rawmap[0] = COMPRESSION_SELF;
  	put_u24be(&rawmap[1], 0);
  	put_u48be(&rawmap[4], otherhunk);
-@@ -2779,7 +2945,7 @@
+@@ -2779,7 +2950,7 @@
  		throw err;
  
  	// update the map entry
@@ -4388,7 +4393,7 @@
  	rawmap[0] = COMPRESSION_PARENT;
  	put_u24be(&rawmap[1], 0);
  	put_u48be(&rawmap[4], parentunit);
-@@ -2815,9 +2981,14 @@
+@@ -2815,9 +2986,14 @@
  		metaentry.offset = metaentry.next;
  	}
  
@@ -4404,7 +4409,7 @@
  		// read the raw header
  		uint8_t raw_meta_header[METADATA_HEADER_SIZE];
  		std::error_condition err = file_read(metaentry.offset, raw_meta_header, sizeof(raw_meta_header));
-@@ -2838,6 +3009,17 @@
+@@ -2838,6 +3014,17 @@
  		// no match, fetch the next link
  		metaentry.prev = metaentry.offset;
  		metaentry.offset = metaentry.next;
@@ -4422,7 +4427,7 @@
  	}
  
  	// if we get here, we didn't find it
-@@ -2942,18 +3124,21 @@
+@@ -2942,18 +3129,21 @@
  	m_walking_parent(false),
  	m_total_in(0),
  	m_total_out(0),
@@ -4452,7 +4457,7 @@
  }
  
  /**
-@@ -2966,14 +3151,126 @@
+@@ -2966,15 +3156,127 @@
  
  chd_file_compressor::~chd_file_compressor()
  {
@@ -4464,8 +4469,8 @@
 -	for (auto & elem : m_codecs)
 -		delete elem;
 +	compress_abort();
-+}
-+
+ }
+ 
 +void chd_file_compressor::compress_abort() noexcept
 +{
 +#ifndef __EMSCRIPTEN__
@@ -4581,12 +4586,13 @@
 +		}
 +		m_done_cv.notify_one();
 +	}
- }
++}
 +#endif
- 
++
  /**
   * @fn  void chd_file_compressor::compress_begin()
-@@ -2985,9 +3282,11 @@
+  *
+@@ -2985,9 +3287,11 @@
  
  void chd_file_compressor::compress_begin()
  {
@@ -4599,7 +4605,7 @@
  	m_total_out = 0;
  	m_compsha1.reset();
  
-@@ -2997,31 +3296,67 @@
+@@ -2997,31 +3301,124 @@
  
  	// reset read state
  	m_read_queue_offset = 0;
@@ -4616,9 +4622,25 @@
 +	// reset work item state (Discpress: target 8 MiB per buffer -> 4 MiB half-reads for DVD throughput;
 +	// keep 256 hunks when walking a parent; always a multiple of 256 for stateless Tier-R tail padding)
 +	uint32_t target_hunks = m_parent ? 256u : std::clamp<uint32_t>((8u << 20) / hunk_bytes(), 256u, 4096u);
++#ifdef __EMSCRIPTEN__
++	m_ckpt_stride = (!m_parent && compressed()) ? wasm_ckpt_enabled(hunk_bytes(), hunk_count()) : 0u;
++	m_ckpt_snap_wr = 0;
++	m_ckpt_delta.clear();
++	for (auto &s : m_ckpt_snaps)
++		s.hunk = ~uint32_t(0);
++	if (m_ckpt_stride > 0u && m_ckpt_stride < target_hunks / 2u)
++		target_hunks = std::max<uint32_t>(256u, m_ckpt_stride);
++#endif
 +	m_work_buffer_hunks = (target_hunks / 256u) * 256u;
 +	if (m_work_buffer_hunks < 256u)
 +		m_work_buffer_hunks = 256u;
++#ifdef __EMSCRIPTEN__
++	if (m_ckpt_stride > 0u)
++	{
++		uint32_t const step = std::max<uint32_t>(256u, m_work_buffer_hunks / 2u);
++		m_ckpt_stride = ((m_ckpt_stride + step - 1u) / step) * step;
++	}
++#endif
 +	m_work_buffer.resize(size_t(hunk_bytes()) * (m_work_buffer_hunks + 1));
 +	memset(m_work_buffer.data(), 0, m_work_buffer.size());
 +	m_compressed_buffer.resize(size_t(hunk_bytes()) * m_work_buffer_hunks);
@@ -4661,6 +4683,47 @@
  	m_write_hunk = 0;
 +
 +#ifdef __EMSCRIPTEN__
++	// Discpress: restore from OPFS checkpoint if one matches this job & parameters
++	if (m_ckpt_stride > 0u && !m_parent && compressed() && m_file)
++	{
++		uint64_t meta_end = 0;
++		if (!m_file->length(meta_end))
++		{
++			uint8_t out_state[112] = { 0 };
++			int const resumed = wasm_ckpt_try_resume(this, hunk_bytes(), hunk_count(), unit_bytes(), m_compression, double(logical_bytes()), double(meta_end), out_state);
++			bool ok = false;
++			if (resumed == 1)
++			{
++				uint32_t const next_hunk = get_u32le(&out_state[0]);
++				uint64_t const write_offset = get_u64le(&out_state[4]);
++				uint64_t const total_out = get_u64le(&out_state[12]);
++				util::sha1_creator::state_t st{};
++				st.cnt = get_u64le(&out_state[20]);
++				for (int i = 0; i < 5; i++)
++					st.st[i] = get_u32le(&out_state[28 + i * 4]);
++				for (int i = 0; i < 16; i++)
++					st.buf[i] = get_u32le(&out_state[48 + i * 4]);
++				auto *cf = dynamic_cast<util::core_file *>(m_file.get());
++				if (cf && next_hunk > 0u && (next_hunk % 256u) == 0u && next_hunk + 256u < m_hunkcount &&
++						write_offset >= meta_end && !cf->truncate(write_offset))
++				{
++					uint64_t const byte_pos = uint64_t(next_hunk) * hunk_bytes();
++					m_write_hunk = next_hunk;
++					m_read_queue_offset = byte_pos;
++					m_read_done_offset.store(byte_pos, std::memory_order_relaxed);
++					m_total_in.store(byte_pos, std::memory_order_relaxed);
++					m_total_out = total_out;
++					m_compsha1.load_state(st);
++					ok = true;
++				}
++			}
++			if (!ok)
++			{
++				memset(m_rawmap.data(), 0xff, m_rawmap.size());
++				m_current_map.reset();
++			}
++		}
++	}
 +	uint32_t const par_flags = (m_libdeflate ? 1u : 0u) | (m_ultra ? 2u : 0u) | (uint32_t(m_zstd_level) << 8);
 +	s_wasm_par = compressed() ? wasm_par_enabled(hunk_bytes(), unit_bytes(), m_compression, par_flags) : 0;
 +#else
@@ -4681,7 +4744,7 @@
  }
  
  /**
-@@ -3040,17 +3375,30 @@
+@@ -3040,17 +3437,30 @@
  std::error_condition chd_file_compressor::compress_continue(double &progress, double &ratio)
  {
  	// if we got an error, return the error
@@ -4717,7 +4780,7 @@
  			++curitem;
  
  		// if it's not all clear, defer
-@@ -3059,28 +3407,44 @@
+@@ -3059,28 +3469,44 @@
  
  		// if we're walking the parent, we want one more item to have cleared so we
  		// can read an extra hunk there
@@ -4773,7 +4836,7 @@
  		if (m_walking_parent)
  		{
  			// for parent walking, just add to the hashmap
-@@ -3091,7 +3455,7 @@
+@@ -3091,7 +3517,7 @@
  			for (uint32_t unit = 0; unit < units; unit++)
  			{
  				if (m_parent_map.find(item.m_hash[unit].m_crc16, item.m_hash[unit].m_sha1) == hashmap::NOT_FOUND)
@@ -4782,7 +4845,7 @@
  			}
  		}
  		else if (!compressed())
-@@ -3123,6 +3487,11 @@
+@@ -3123,6 +3549,11 @@
  			}
  			else
  			{
@@ -4794,14 +4857,67 @@
  				// otherwise, append it compressed and add to the self map
  				hunk_write_compressed(item.m_hunknum, item.m_compression, item.m_compressed, item.m_complen, item.m_hash[0].m_crc16);
  				m_total_out += item.m_complen;
-@@ -3131,25 +3500,43 @@
+@@ -3130,26 +3561,99 @@
+ 			}
  		}
  
++#ifdef __EMSCRIPTEN__
++		// Discpress: record 32B/hunk delta (12B rawmap + 20B sha1 for unique hunks) for crash-resumable checkpoints
++		if (m_ckpt_stride > 0u && !m_walking_parent && compressed())
++		{
++			uint8_t const *const raw = &m_rawmap[size_t(item.m_hunknum) * 12];
++			size_t const off = m_ckpt_delta.size();
++			m_ckpt_delta.resize(off + 32);
++			memcpy(&m_ckpt_delta[off], raw, 12);
++			if (raw[0] <= COMPRESSION_NONE)
++				memcpy(&m_ckpt_delta[off + 12], item.m_hash[0].m_sha1.m_raw, 20);
++			else
++				memset(&m_ckpt_delta[off + 12], 0, 20);
++		}
++#endif
++
  		// reset the item and advance
 -		item.m_status = WS_READY;
 +		item.m_status.store(WS_READY, std::memory_order_release);
  		m_write_hunk++;
  
++#ifdef __EMSCRIPTEN__
++		if (m_ckpt_stride > 0u && !m_walking_parent && compressed() && m_write_hunk + 256u < m_hunkcount)
++		{
++			bool const due = (m_write_hunk % m_ckpt_stride == 0u) || ((m_write_hunk % 256u == 0u) && wasm_ckpt_requested());
++			if (due && !m_ckpt_delta.empty())
++			{
++				ckpt_snap_t const *snap = nullptr;
++				for (auto const &s : m_ckpt_snaps)
++				{
++					if (s.hunk == m_write_hunk)
++					{
++						snap = &s;
++						break;
++					}
++				}
++				uint64_t file_len = 0;
++				if (snap && m_file && !m_file->length(file_len))
++				{
++					uint8_t sha92[92];
++					put_u64le(&sha92[0], snap->sha1.cnt);
++					for (int i = 0; i < 5; i++)
++						put_u32le(&sha92[8 + i * 4], snap->sha1.st[i]);
++					for (int i = 0; i < 16; i++)
++						put_u32le(&sha92[28 + i * 4], snap->sha1.buf[i]);
++					int const ok = wasm_ckpt_save(m_write_hunk, m_hunkcount, double(file_len), double(m_total_out), sha92, m_ckpt_delta.data(), uint32_t(m_ckpt_delta.size() / 32));
++					if (ok)
++						m_ckpt_delta.clear();
++					else
++					{
++						m_ckpt_stride = 0u;
++						std::vector<uint8_t>().swap(m_ckpt_delta);
++					}
++				}
++			}
++		}
++#endif
++
  		// if we hit the end, finalize
  		if (m_write_hunk == m_hunkcount)
  		{
@@ -4841,10 +4957,13 @@
 +				m_work_item.reset();
 +				m_codecs.clear();
 +				m_codecs.shrink_to_fit();
++#ifdef __EMSCRIPTEN__
++				std::vector<uint8_t>().swap(m_ckpt_delta);
++#endif
  				if (!compressed())
  					return std::error_condition();
  				std::error_condition err = set_raw_sha1(m_compsha1.finish());
-@@ -3162,42 +3549,28 @@
+@@ -3162,42 +3666,28 @@
  
  	// update progress and ratio
  	if (m_walking_parent)
@@ -4901,14 +5020,14 @@
   * @fn  void chd_file_compressor::async_walk_parent(work_item &item)
   *
   * @brief   Asynchronous walk parent.
-@@ -3216,31 +3589,10 @@
+@@ -3216,31 +3706,10 @@
  		item.m_hash[unit].m_crc16 = util::crc16_creator::simple(item.m_data + unit * unit_bytes(), hunk_bytes());
  		item.m_hash[unit].m_sha1 = util::sha1_creator::simple(item.m_data + unit * unit_bytes(), hunk_bytes());
  	}
 -	item.m_status = WS_COMPLETE;
--}
--
--/**
+ }
+ 
+ /**
 - * @fn  void *chd_file_compressor::async_compress_hunk_static(void *param, int threadid)
 - *
 - * @brief   -------------------------------------------------
@@ -4926,15 +5045,15 @@
 -	auto *const item = reinterpret_cast<work_item *>(param);
 -	item->m_compressor->async_compress_hunk(*item, threadid);
 -	return nullptr;
- }
- 
- /**
+-}
+-
+-/**
 - * @fn  void chd_file_compressor::async_compress_hunk(work_item &item, int threadid)
 + * @fn  void chd_file_compressor::async_compress_hunk(work_item &item, uint32_t threadid)
   *
   * @brief   Asynchronous compress hunk.
   *
-@@ -3248,11 +3600,11 @@
+@@ -3248,11 +3717,11 @@
   * @param   threadid        The threadid.
   */
  
@@ -4949,7 +5068,7 @@
  
  	// compute CRC-16 and SHA-1 hashes
  	item.m_hash[0].m_crc16 = util::crc16_creator::simple(item.m_data, hunk_bytes());
-@@ -3260,32 +3612,49 @@
+@@ -3260,32 +3729,49 @@
  
  	// find the best compression scheme, unless we already have a self or parent match
  	// (note we may miss a self match from blocks not yet added, but this just results in extra work)
@@ -5019,7 +5138,7 @@
  }
  
  /**
-@@ -3296,31 +3665,38 @@
+@@ -3296,31 +3782,38 @@
  
  void chd_file_compressor::async_read()
  {
@@ -5072,7 +5191,7 @@
  			while (curoffs < end_offset + 1)
  			{
  				std::error_condition err = m_parent->read_hunk(curhunk, curdest);
-@@ -3334,40 +3710,140 @@
+@@ -3334,40 +3827,154 @@
  		else
  		{
  			// otherwise, call the virtual function
@@ -5118,8 +5237,22 @@
 +		if (!walking_parent)
  		{
  			if (compressed())
++			{
  				m_compsha1.append(dest, numbytes);
 -			m_total_in += numbytes;
++#ifdef __EMSCRIPTEN__
++				if (m_ckpt_stride > 0u && end_offset < logical_bytes())
++				{
++					uint32_t const end_hunk = uint32_t(end_offset / hunk_bytes());
++					if ((end_hunk % 256u) == 0u && end_hunk + 256u < m_hunkcount)
++					{
++						ckpt_snap_t &slot = m_ckpt_snaps[m_ckpt_snap_wr++ & 3u];
++						slot.hunk = end_hunk;
++						slot.sha1 = m_compsha1.save_state();
++					}
++				}
++#endif
++			}
 +			m_total_in.fetch_add(numbytes, std::memory_order_relaxed);
  		}
 +		m_read_done_offset.store(end_offset, std::memory_order_relaxed);
@@ -5229,7 +5362,7 @@
  	}
  }
  
-@@ -3389,7 +3865,8 @@
+@@ -3389,7 +3996,8 @@
  	m_block_list(new entry_block(nullptr))
  {
  	// initialize the map to empty
@@ -5239,7 +5372,7 @@
  }
  
  /**
-@@ -3426,7 +3903,8 @@
+@@ -3426,7 +4034,8 @@
  	m_block_list->m_nextalloc = 0;
  
  	// reset the hash
@@ -5249,7 +5382,7 @@
  }
  
  /**
-@@ -3445,9 +3923,9 @@
+@@ -3445,9 +4054,9 @@
  uint64_t chd_file_compressor::hashmap::find(util::crc16_t crc16, util::sha1_t sha1) const noexcept
  {
  	// look up the entry in the map
@@ -5261,7 +5394,7 @@
  	return NOT_FOUND;
  }
  
-@@ -3469,10 +3947,11 @@
+@@ -3469,10 +4078,11 @@
  	if (m_block_list->m_nextalloc == std::size(m_block_list->m_array))
  		m_block_list = new entry_block(m_block_list);
  	entry_t *entry = &m_block_list->m_array[m_block_list->m_nextalloc++];
@@ -5276,7 +5409,7 @@
  }
  
  std::error_condition chd_file::check_is_hd() const noexcept
-@@ -3512,3 +3991,250 @@
+@@ -3512,3 +4122,276 @@
  	metadata_entry metaentry;
  	return metadata_find(AV_METADATA_TAG, 0, metaentry);
  }
@@ -5322,6 +5455,32 @@
 +extern "C" EMSCRIPTEN_KEEPALIVE void wasm_par_complete_inplace(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen)
 +{
 +	chd_file_compressor::wasm_par_complete_item_inplace(item, crc16, sha1, compression, complen);
++}
++
++bool chd_file_compressor::wasm_ckpt_restore_chunk(uint32_t start_hunk, const uint8_t *entries32, uint32_t count)
++{
++	if (!entries32 || start_hunk > m_hunkcount || count > m_hunkcount - start_hunk)
++		return false;
++	for (uint32_t i = 0; i < count; i++)
++	{
++		uint32_t const hunknum = start_hunk + i;
++		uint8_t const *const src = entries32 + size_t(i) * 32;
++		uint8_t *const rawmap = &m_rawmap[size_t(hunknum) * 12];
++		memcpy(rawmap, src, 12);
++		if (rawmap[0] <= COMPRESSION_NONE)
++		{
++			util::crc16_t const crc16 = get_u16be(&rawmap[10]);
++			util::sha1_t sha1;
++			memcpy(sha1.m_raw, src + 12, 20);
++			m_current_map.add(hunknum, crc16, sha1);
++		}
++	}
++	return true;
++}
++
++extern "C" EMSCRIPTEN_KEEPALIVE int wasm_ckpt_restore_chunk(chd_file_compressor *comp, uint32_t start_hunk, const uint8_t *entries32, uint32_t count)
++{
++	return comp && comp->wasm_ckpt_restore_chunk(start_hunk, entries32, count) ? 1 : 0;
 +}
 +
 +bool chd_file::wasm_read_ahead(uint32_t first, uint32_t count)
@@ -5614,7 +5773,7 @@
  };
  
  
-@@ -449,12 +499,40 @@
+@@ -449,12 +499,42 @@
  	// compression management
  	void compress_begin();
  	std::error_condition compress_continue(double &progress, double &ratio);
@@ -5631,6 +5790,8 @@
 +	static void wasm_par_complete_item(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen, const uint8_t *data);
 +	static uint8_t *wasm_par_item_compbuf(void *item) noexcept;
 +	static void wasm_par_complete_item_inplace(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen) noexcept;
++	// Discpress: crash-resumable checkpoint restore helper (populates m_rawmap and m_current_map)
++	bool wasm_ckpt_restore_chunk(uint32_t start_hunk, const uint8_t *entries32, uint32_t count);
 +	// Discpress: progress & read-ahead introspection for compress_common (copy & -op parent walk)
 +	bool walking_parent() const noexcept { return m_walking_parent; }
 +	uint64_t read_done_offset() const noexcept { return m_read_done_offset.load(std::memory_order_relaxed); }
@@ -5655,7 +5816,7 @@
  	// hash map for looking up values
  	class hashmap
  	{
-@@ -472,11 +550,12 @@
+@@ -472,11 +552,12 @@
  		static constexpr uint64_t NOT_FOUND = ~uint64_t(0);
  
  	private:
@@ -5670,7 +5831,7 @@
  			util::sha1_t        m_sha1;             // SHA-1 of the block
  		};
  
-@@ -490,8 +569,8 @@
+@@ -490,8 +571,8 @@
  			entry_t             m_array[16384];     // array of entries
  		};
  
@@ -5681,7 +5842,7 @@
  		entry_block *       m_block_list;           // list of allocated blocks
  	};
  
-@@ -515,8 +594,7 @@
+@@ -515,8 +596,7 @@
  	struct work_item
  	{
  		work_item()
@@ -5691,7 +5852,7 @@
  			, m_status(WS_READY)
  			, m_hunknum(0)
  			, m_data(nullptr)
-@@ -524,12 +602,11 @@
+@@ -524,12 +604,11 @@
  			, m_complen(0)
  			, m_compression(0)
  			, m_codecs(nullptr)
@@ -5706,7 +5867,7 @@
  		std::atomic<int32_t>  m_status;           // current status of this item
  		uint32_t              m_hunknum;          // number of the hunk we're working on
  		uint8_t *             m_data;             // pointer to the data we are working on
-@@ -537,20 +614,25 @@
+@@ -537,20 +616,25 @@
  		uint32_t              m_complen;          // compressed data length
  		int8_t                m_compression;      // type of compression used
  		chd_compressor_group *m_codecs;         // codec instance
@@ -5737,7 +5898,7 @@
  	uint64_t                m_total_out;        // total bytes out
  	util::sha1_creator      m_compsha1;         // running SHA-1 on raw data
  
-@@ -558,19 +640,40 @@
+@@ -558,22 +642,51 @@
  	hashmap                 m_parent_map;       // hash map for parent
  	hashmap                 m_current_map;      // hash map for current
  
@@ -5786,6 +5947,17 @@
  
  	// output state
  	uint32_t                m_write_hunk;       // next hunk to write
++#ifdef __EMSCRIPTEN__
++	// Discpress: Tier-R crash-resumable checkpoint state (4-slot SHA-1 snapshot ring + rawmap/sha1 delta)
++	struct ckpt_snap_t { uint32_t hunk = ~uint32_t(0); util::sha1_creator::state_t sha1{}; };
++	uint32_t                m_ckpt_stride = 0;
++	uint32_t                m_ckpt_snap_wr = 0;
++	ckpt_snap_t             m_ckpt_snaps[4];
++	std::vector<uint8_t>    m_ckpt_delta;
++#endif
+ };
+ 
+ 
 --- a/src/lib/util/chdcodec.cpp
 +++ b/src/lib/util/chdcodec.cpp
 @@ -20,9 +20,12 @@
@@ -7117,6 +7289,39 @@
  	m_accum.m_raw = crc;
  }
  
+--- a/src/lib/util/hashing.h
++++ b/src/lib/util/hashing.h
+@@ -59,6 +59,30 @@
+ 	// finalize and compute the final digest
+ 	sha1_t finish() noexcept;
+ 
++	// Discpress: snapshot/restore mid-stream SHA-1 state for crash-resumable checkpoints
++	struct state_t
++	{
++		uint64_t cnt;
++		uint32_t st[5];
++		uint32_t buf[16];
++	};
++	state_t save_state() const noexcept
++	{
++		state_t s;
++		s.cnt = m_cnt;
++		for (int i = 0; i < 5; i++)
++			s.st[i] = m_st[i];
++		memcpy(s.buf, m_buf, sizeof(s.buf));
++		return s;
++	}
++	void load_state(const state_t &s) noexcept
++	{
++		m_cnt = s.cnt;
++		for (int i = 0; i < 5; i++)
++			m_st[i] = s.st[i];
++		memcpy(m_buf, s.buf, sizeof(m_buf));
++	}
++
+ 	// static wrapper to just get the digest from a block
+ 	static sha1_t simple(const void *data, uint32_t length) noexcept
+ 	{
 --- a/src/lib/util/huffman.cpp
 +++ b/src/lib/util/huffman.cpp
 @@ -174,6 +174,8 @@

@@ -195,8 +195,16 @@ db_b64, db_size = pack_bytes(db_bin)
 # The worker is the Emscripten glue followed by our worker code.
 wsrc = inline_script(rd(os.path.join(B, 'chdman.js')) + '\n' + rd(os.path.join(A, 'worker.js')),
                      'the worker source (build/chdman.js + app/worker.js)')
+worker_crc = '%08x' % (zlib.crc32(wsrc.encode('utf-8')) & 0xffffffff)
 simd_b64, simd_size = pack(os.path.join(B, 'chdman.wasm'))
 base_b64, base_size = pack(os.path.join(B, 'chdman-nosimd.wasm'))
+ver_file = os.path.join(ROOT, 'VERSION')
+app_ver = rd(ver_file).strip() if os.path.exists(ver_file) else 'dev'
+src_file = os.path.join(B, 'engine-sources.sha256')
+src_hash = rd(src_file).strip() if os.path.exists(src_file) else ''
+if src_hash:
+    check(bool(re.fullmatch('[0-9a-f]{64}', src_hash)), 'no SHA-256 in ' + src_file)
+engine_sha = src_hash[:12] if src_hash else 'dev'
 
 # Shown in Help > About: every change the engine makes to MAME 0.289 (scripts/engine-diff.sh),
 # plus the new files (gzip+base64 packed and inflated lazily when Help is opened).
@@ -212,13 +220,19 @@ for path, name, label in [(os.path.join(W, 'wasm_helper.cpp'), 'wasm_helper.cpp'
     patch += ''.join('+' + l + '\n' for l in rd(path).splitlines())
 patch_b64, patch_size = pack_bytes(patch.encode('utf-8'))
 
-helpc = replace_once(rd(os.path.join(A, 'help.html')), {'/*DBVER*/': 'version ' + html.escape(dbver)}, 'app/help.html')
+helpc = replace_once(rd(os.path.join(A, 'help.html')), {
+    '/*DBVER*/': 'version ' + html.escape(dbver),
+    '/*VERSION*/': html.escape(app_ver),
+}, 'app/help.html')
 ident_src = replace_once(rd(os.path.join(A, 'ident.js')),
                          {'/*GAMEFACTS*/{}': json.dumps(facts, sort_keys=True, separators=(',', ':'))},
                          'app/ident.js')
-ui_src = replace_once(rd(os.path.join(A, 'ui.js')),
-                      {'/*IDENT*/': ident_src, '/*QUIRKS*/': rd(os.path.join(A, 'quirks.js'))},
-                      'app/ui.js')
+ui_src = replace_once(rd(os.path.join(A, 'ui.js')), {
+    '/*IDENT*/': ident_src,
+    '/*QUIRKS*/': rd(os.path.join(A, 'quirks.js')),
+    '/*VERSION*/': app_ver,
+    '/*ENGINE_SHA*/': engine_sha,
+}, 'app/ui.js')
 ui = inline_script(ui_src, 'app/ui.js + app/ident.js + app/quirks.js')
 style = rd(os.path.join(A, 'style.css'))
 check('</style' not in style.lower(), '</style in app/style.css')
@@ -226,6 +240,7 @@ check('</style' not in style.lower(), '</style in app/style.css')
 page = replace_once(rd(os.path.join(A, 'index.html')), {
     '/*STYLE*/': style,
     '<!--HELP-->': helpc,
+    '/*WORKER_CRC*/': worker_crc,
     '/*WORKER*/': wsrc,
     '/*SIMD_SIZE*/': str(simd_size),
     '/*WASM_SIMD*/': simd_b64,
@@ -240,10 +255,7 @@ page = replace_once(rd(os.path.join(A, 'index.html')), {
 
 # The sources the wasm was built from, after </html> (build.sh writes the file; extract-build.py
 # recovers it from a page).
-src_file = os.path.join(B, 'engine-sources.sha256')
-if os.path.exists(src_file):
-    src_hash = rd(src_file).strip()
-    check(bool(re.fullmatch('[0-9a-f]{64}', src_hash)), 'no SHA-256 in ' + src_file)
+if src_hash:
     page += '<!-- engine sources sha256 %s -->\n' % src_hash
 else:
     print('warning: no %s, so the page records no engine sources and scripts/check-dist.sh refuses it '

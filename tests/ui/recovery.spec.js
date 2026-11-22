@@ -151,3 +151,64 @@ test('where results live in memory, a conversion stopped by a reload is reported
   await expect(page.locator('#chipEngine')).toContainText(/ready/i, { timeout: 60_000 });
   await expect(page.locator('#earlier .note.warn').first()).toContainText('A conversion didn’t finish');
 });
+
+for (const threads of [1, 4]) {
+  test(`an interrupted conversion resumes from its OPFS checkpoint and matches chdman byte for byte (${threads} thread${threads > 1 ? 's' : ''})`, async ({ app, page }) => {
+    await page.addInitScript(() => {
+      const W = window.Worker;
+      window.__killed = false;
+      window.Worker = class extends W {
+        constructor(...a) {
+          super(...a);
+          this.addEventListener('message', e => {
+            if (e.data && e.data.type === 'ckpt' && window.__killOnCkpt && !window.__killed) {
+              window.__ckpt = e.data;
+              window.__killed = true;
+              setTimeout(() => { this.terminate(); }, 30);
+            }
+          });
+        }
+      };
+    });
+    await app.open({ settings: { threads, rename: false }, debug: { ckptStride: 256 } });
+    await page.evaluate(() => { window.__killOnCkpt = true; });
+    await app.add(fixture('ps2-dvd').add);
+    const card = app.jobs().first();
+    await app.settled(card);
+    await card.locator('.job-foot button.primary').click();
+    await expect.poll(() => page.evaluate(() => window.__killed), { timeout: 60_000 }).toBe(true);
+    // give localStorage write a moment to settle, then simulate crash/reload
+    await page.waitForTimeout(80);
+    await page.reload();
+    await expect(page.locator('#chipEngine')).toContainText(/ready/i, { timeout: 60_000 });
+    const earlier = page.locator('#earlier');
+    await expect(earlier).toBeVisible();
+    await expect(earlier).toContainText('Resume interrupted conversion');
+    await expect(earlier.locator('.resume-item')).toContainText('% saved');
+    // re-adding the original source file auto-attaches the checkpoint
+    await app.add(fixture('ps2-dvd').add);
+    const resumed = app.jobs().first();
+    await app.settled(resumed);
+    await expect(resumed.locator('.resume-note')).toContainText('Resumable from');
+    await expect(resumed.locator('.job-foot button.primary')).toContainText('Resume CHD');
+    await expect(earlier).toBeHidden();
+    // resume and finish the conversion
+    await app.run(resumed, { timeout: 90_000 });
+    await expect(resumed.locator('pre.logtext')).toContainText('Resumed from checkpoint at');
+    const [dl] = await Promise.all([page.waitForEvent('download'), resumed.locator('.result .out button').first().click()]);
+    const file = test.info().outputPath(`resumed-${threads}.chd`);
+    await dl.saveAs(file);
+    if (nativeChdman() && sameVersion()) expect(sha1File(file)).toBe(sha1File(reference('createdvd', 'agent.iso')));
+    // no checkpoint files left behind in OPFS, and reload shows nothing left in #earlier
+    const ckptLeft = await page.evaluate(async () => {
+      const work = await (await navigator.storage.getDirectory()).getDirectoryHandle('chdman-work');
+      const found = [];
+      for await (const [, d] of work.entries()) if (d.kind === 'directory') for await (const [, j] of d.entries()) if (j.kind === 'directory') for await (const k of j.keys()) if (/^ckpt\./.test(k)) found.push(k);
+      return found;
+    });
+    expect(ckptLeft).toEqual([]);
+    await page.reload();
+    await expect(page.locator('#chipEngine')).toContainText(/ready/i, { timeout: 60_000 });
+    await expect(page.locator('#earlier')).toBeHidden();
+  });
+}

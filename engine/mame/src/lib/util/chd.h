@@ -512,6 +512,8 @@ public:
 	static void wasm_par_complete_item(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen, const uint8_t *data);
 	static uint8_t *wasm_par_item_compbuf(void *item) noexcept;
 	static void wasm_par_complete_item_inplace(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen) noexcept;
+	// Discpress: crash-resumable checkpoint restore helper (populates m_rawmap and m_current_map)
+	bool wasm_ckpt_restore_chunk(uint32_t start_hunk, const uint8_t *entries32, uint32_t count);
 	// Discpress: progress & read-ahead introspection for compress_common (copy & -op parent walk)
 	bool walking_parent() const noexcept { return m_walking_parent; }
 	uint64_t read_done_offset() const noexcept { return m_read_done_offset.load(std::memory_order_relaxed); }
@@ -677,6 +679,14 @@ private:
 
 	// output state
 	uint32_t                m_write_hunk;       // next hunk to write
+#ifdef __EMSCRIPTEN__
+	// Discpress: Tier-R crash-resumable checkpoint state (4-slot SHA-1 snapshot ring + rawmap/sha1 delta)
+	struct ckpt_snap_t { uint32_t hunk = ~uint32_t(0); util::sha1_creator::state_t sha1{}; };
+	uint32_t                m_ckpt_stride = 0;
+	uint32_t                m_ckpt_snap_wr = 0;
+	ckpt_snap_t             m_ckpt_snaps[4];
+	std::vector<uint8_t>    m_ckpt_delta;
+#endif
 };
 
 

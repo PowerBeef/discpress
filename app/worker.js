@@ -447,7 +447,22 @@ function EcmStore(base, label) {
   this.last = 0;
   this.edc = 0;      // of the image read in order so far, up to edcAt
   this.edcAt = 0;
+  this.edcHist = [{ at: 0, edc: 0 }];
 }
+EcmStore.prototype.edcAtOrBefore = function (limit) {
+  var best = { at: 0, edc: 0 };
+  for (var i = 0; i < this.edcHist.length; i++) {
+    if (this.edcHist[i].at <= limit && this.edcHist[i].at >= best.at) best = this.edcHist[i];
+  }
+  return best;
+};
+EcmStore.prototype.restoreEdc = function (st) {
+  if (st && typeof st.at === 'number' && st.at >= 0) {
+    this.edcAt = st.at;
+    this.edc = st.edc >>> 0;
+    this.edcHist = [{ at: this.edcAt, edc: this.edc }];
+  }
+};
 EcmStore.prototype.damaged = function (o, why) {
   if (!this.reported) {
     this.reported = true;
@@ -498,6 +513,8 @@ EcmStore.prototype.window = function (w) {
   if (cp.out[w] === this.edcAt) {
     this.edc = M._wasm_ecm_edc(this.edc, dst, outLen) >>> 0;
     this.edcAt += outLen;
+    this.edcHist.push({ at: this.edcAt, edc: this.edc });
+    if (this.edcHist.length > 16) this.edcHist.shift();
     if (this.edcAt === this.sizeV && this.edc !== this.edcWant) { this.bad = true; throw this.damaged(0, 'the image rebuilt from it doesn’t match the checksum it ends with.'); }
   }
   var data = M.HEAPU8.slice(dst, dst + outLen);
@@ -569,12 +586,13 @@ function lz4Block(src, from, to, out, o, want) {
 // overlap, reads flush what they touch, and switching to another file writes this one's out,
 // so only one file holds buffers at a time.
 var WBUF = 2 << 20, NBUF = 4, lastWriter = null;
-function OpfsStore(slot) {
+function OpfsStore(slot, preserveOnInit) {
   this.slot = slot;
   this.h = slot.handle;
   this.sizeV = 0;
   this.bufs = [];
   this.tick = 0;
+  this.preserveOnInit = !!preserveOnInit;
 }
 OpfsStore.prototype.put = function (src, pos) {
   var n;
@@ -660,6 +678,11 @@ OpfsStore.prototype.write = function (src, pos) {
   return len;
 };
 OpfsStore.prototype.truncate = function (n) {
+  if (this.preserveOnInit && n === 0) {
+    this.bufs = [];
+    this.sizeV = 0;
+    return;
+  }
   for (var i = 0; i < this.bufs.length; i++) {
     var b = this.bufs[i];
     if (!b.len) continue;
@@ -970,13 +993,14 @@ async function makeBacking(msg) {
         var name = 'slot' + i;
         var fh = await dir.getFileHandle(name, { create: true });
         var handle = await openSyncHandle(fh);
-        var t = handle.truncate(0);
-        if (t && typeof t.then === 'function') {
+        var preserve = !!(msg.resume && i === 0);
+        var probe = preserve ? handle.getSize() : handle.truncate(0);
+        if (probe && typeof probe.then === 'function') {
           // early Safari versions only had asynchronous access handles
-          try { await t; await handle.close(); } catch (e) { /* ignore */ }
+          try { await probe; await handle.close(); } catch (e) { /* ignore */ }
           throw new Error('synchronous file access is not supported');
         }
-        slots.push({ name: name, handle: handle, used: false, store: null });
+        slots.push({ name: name, handle: handle, used: false, store: null, preserveOnInit: preserve });
       }
     } catch (err) {
       slots.forEach(function (s) { try { s.handle.close(); } catch (e) { /* ignore */ } });
@@ -989,13 +1013,15 @@ async function makeBacking(msg) {
   var streaming = msg.outMode === 'stream', crcOnly = msg.outMode === 'crc';
   var backing = {
     mode: crcOnly ? 'crc' : streaming ? 'stream' : dir ? 'opfs' : 'mem',
+    dir: dir,
+    slots: slots,
     M: null, // the module, once instantiated (CrcStore uses its crc32)
     create: function (name, writableCopy) {
       var slot = slots.find(function (s) { return !s.used; });
       var store;
       if (crcOnly && !writableCopy) store = new CrcStore(backing);
       else if (streaming && !writableCopy) store = new StreamStore(name);
-      else if (slot) { slot.used = true; store = new OpfsStore(slot); slot.store = store; }
+      else if (slot) { slot.used = true; store = new OpfsStore(slot, slot.preserveOnInit); slot.store = store; }
       else store = new MemStore();
       store.name = name;
       registry.push(store);
@@ -1134,7 +1160,8 @@ function setupParallel(M, ports) {
   var helpers = ports.map(function (port, i) { return { port: port, inflight: 0, id: i, dead: false, sent: {}, dsent: {} }; });
   function liveHelpers() { return helpers.filter(function (h) { return !h.dead; }); }
   var hunkbytes = 0, batchSize = 1, scratch = 0, parComps = [], bufPool = [], open = null, pending = [], fifo = [], done = new Set();
-  var sleeper = null, seq = 0, failed = null, closed = false;
+  var sleeper = null, seq = 0, failed = null, closed = false, maxActive = helpers.length;
+  M.setThrottle = function (n) { maxActive = Math.max(1, Math.min(helpers.length, n | 0)); };
   var mc = new MessageChannel(), wakeFn = null;
   mc.port1.onmessage = function () { var w = wakeFn; wakeFn = null; if (w) w(); };
   function wake(w) { wakeFn = w; mc.port2.postMessage(0); }
@@ -1150,9 +1177,12 @@ function setupParallel(M, ports) {
   function dispatch() {
     flushOpen();
     for (var round = 0; round < 2; round++) {
+      var activeSeen = 0;
       for (var i = 0; i < helpers.length && pending.length; i++) {
         var h = helpers[i];
-        if (h.dead || h.inflight > round) continue;
+        if (h.dead) continue;
+        if (activeSeen++ >= maxActive) break;
+        if (h.inflight > round) continue;
         var b = pending.shift(), id = ++seq;
         h.inflight++;
         h.sent[id] = b;
@@ -1303,7 +1333,7 @@ function setupParallel(M, ports) {
     rd.busy = 0;
     helpers.forEach(function (h) { h.sent = {}; h.dsent = {}; h.port.onmessage = null; try { h.port.close(); } catch (e) { /* ignore */ } });
     try { mc.port1.close(); mc.port2.close(); } catch (e) { /* ignore */ }
-    M.parSetup = M.parSubmit = M.parWait = M.parClose = M.rdSetup = M.rdSubmit = M.rdClose = M.rdBusy = M.rdWait = null;
+    M.parSetup = M.parSubmit = M.parWait = M.parClose = M.rdSetup = M.rdSubmit = M.rdClose = M.rdBusy = M.rdWait = M.setThrottle = null;
   };
   // codecs: the codec slots the codec plan tries for this hunk, a bit each (15 = all; bits 4-5 adaptive)
   M.parSubmit = function (item, ptr, len, codecs) {
@@ -1546,6 +1576,179 @@ function sinkAck(bytes) {
 }
 
 var coordM = null, coordCHDFS = null, curOut = null, curErr = null, curAborted = null;
+var ckptUrgent = false, activeBacking = null;
+
+function bytesToHex(b) {
+  var s = '';
+  for (var i = 0; i < b.length; i++) s += ('0' + b[i].toString(16)).slice(-2);
+  return s;
+}
+function hexToBytes(hex, dst, off) {
+  for (var i = 0; i < hex.length; i += 2) dst[off + (i >> 1)] = parseInt(hex.slice(i, i + 2), 16) & 255;
+}
+function readCkptJson(handle) {
+  try {
+    var sz = handle.getSize();
+    if (!(sz > 4 && sz < 65536)) return null;
+    var buf = new Uint8Array(sz);
+    if (handle.read(buf, { at: 0 }) !== sz) return null;
+    var dv = new DataView(buf.buffer, buf.byteOffset, 4);
+    var want = dv.getUint32(0, true);
+    var got = (crcUpdate(-1, buf.subarray(4)) ^ -1) >>> 0;
+    if (got !== want) return null;
+    return JSON.parse(new TextDecoder('utf-8').decode(buf.subarray(4)));
+  } catch (e) { return null; }
+}
+function writeCkptJson(handle, obj) {
+  var json = new TextEncoder().encode(JSON.stringify(obj));
+  var pkt = new Uint8Array(4 + json.length);
+  new DataView(pkt.buffer).setUint32(0, (crcUpdate(-1, json) ^ -1) >>> 0, true);
+  pkt.set(json, 4);
+  if (handle.write(pkt, { at: 0 }) !== pkt.length) return false;
+  handle.truncate(pkt.length);
+  handle.flush();
+  return true;
+}
+
+async function setupCheckpoint(M, backing, inStores, msg) {
+  var dir = backing.dir, slot0 = backing.slots && backing.slots[0];
+  if (backing.mode !== 'opfs' || !dir || !slot0 || !msg.ckpt || !msg.ckpt.enabled) return null;
+  var logH = null, h0 = null, h1 = null;
+  try {
+    logH = await openSyncHandle(await dir.getFileHandle('ckpt.log', { create: true }));
+    h0 = await openSyncHandle(await dir.getFileHandle('ckpt.0', { create: true }));
+    h1 = await openSyncHandle(await dir.getFileHandle('ckpt.1', { create: true }));
+    var cand = null;
+    if (msg.resume) {
+      var a = readCkptJson(h0), b = readCkptJson(h1);
+      if (a && b) cand = (a.seq >= b.seq) ? a : b;
+      else cand = a || b || null;
+    } else {
+      logH.truncate(0);
+      h0.truncate(0);
+      h1.truncate(0);
+    }
+    var metaH = [h0, h1], seq = 0, metaEndSaved = 0, runParams = null;
+    var closeHandles = async function (remove) {
+      M.ckptEnabled = M.ckptRequested = M.ckptSave = M.ckptTryResume = null;
+      [logH, h0, h1].forEach(function (h) { if (h) { try { h.close(); } catch (e) { /* ignore */ } } });
+      logH = h0 = h1 = null;
+      if (remove) {
+        for (var k = 0; k < 3; k++) {
+          try { await dir.removeEntry(['ckpt.log', 'ckpt.0', 'ckpt.1'][k]); } catch (e) { /* ignore */ }
+        }
+      }
+    };
+    var cfg = msg.ckpt;
+    M.ckptEnabled = function (hb, hc) {
+      if (hc <= 512) return 0;
+      if (cfg.stride && cfg.stride > 0) return cfg.stride >>> 0;
+      var targetBytes = cfg.short ? (16 << 20) : (32 << 20);
+      return Math.max(256, Math.round(targetBytes / hb)) >>> 0;
+    };
+    M.ckptRequested = function () { return ckptUrgent ? 1 : 0; };
+    M.ckptTryResume = function (comp, hb, hc, ub, comps, logical, metaEnd, outStatePtr) {
+      metaEndSaved = metaEnd;
+      runParams = { hb: hb, hc: hc, ub: ub, comps: comps.slice(), logical: logical };
+      var st = slot0.store;
+      var fail = function () {
+        if (st && st.preserveOnInit) {
+          st.preserveOnInit = false;
+          try { st.flush(); slot0.handle.truncate(st.sizeV); } catch (e) { /* ignore */ }
+        }
+        try { logH.truncate(0); h0.truncate(0); h1.truncate(0); } catch (e) { /* ignore */ }
+        return false;
+      };
+      if (!msg.resume || !cand || cand.v !== 1 || !st) return fail();
+      if (cand.hunkBytes !== hb || cand.hunkCount !== hc || cand.unitBytes !== ub || cand.logicalBytes !== logical || cand.metaEnd !== metaEnd) return fail();
+      if (!cand.comps || cand.comps.length !== 4 || cand.comps[0] !== comps[0] || cand.comps[1] !== comps[1] || cand.comps[2] !== comps[2] || cand.comps[3] !== comps[3]) return fail();
+      if (!(cand.nextHunk > 0 && (cand.nextHunk % 256) === 0 && cand.nextHunk + 256 < hc)) return fail();
+      if (!(cand.writeOffset >= metaEnd && cand.sha1 && cand.sha1.length === 184)) return fail();
+      if (slot0.handle.getSize() < cand.writeOffset || logH.getSize() < cand.nextHunk * 32) return fail();
+      var tmp = 0, CHUNK = 2048;
+      try {
+        tmp = wasmAlloc(M, CHUNK * 32);
+        var buf = new Uint8Array(CHUNK * 32);
+        for (var doneH = 0; doneH < cand.nextHunk; doneH += CHUNK) {
+          var cnt = Math.min(CHUNK, cand.nextHunk - doneH), bytes = cnt * 32;
+          if (logH.read(buf.subarray(0, bytes), { at: doneH * 32 }) !== bytes) return fail();
+          M.HEAPU8.set(buf.subarray(0, bytes), tmp);
+          if (!M._wasm_ckpt_restore_chunk(comp, doneH, tmp, cnt)) return fail();
+        }
+      } catch (e) { return fail(); }
+      finally { if (tmp) M._free(tmp); }
+      try { logH.truncate(cand.nextHunk * 32); } catch (e) { return fail(); }
+      st.preserveOnInit = false;
+      seq = cand.seq || 0;
+      if (cand.ecm && cand.ecm.length) {
+        for (var ei = 0; ei < inStores.length; ei++) {
+          var es = inStores[ei].store;
+          if (!(es instanceof EcmStore)) continue;
+          for (var ej = 0; ej < cand.ecm.length; ej++) {
+            if (cand.ecm[ej].name === inStores[ei].name) es.restoreEdc(cand.ecm[ej]);
+          }
+        }
+      }
+      var dv = new DataView(M.HEAPU8.buffer, outStatePtr, 112);
+      dv.setUint32(0, cand.nextHunk >>> 0, true);
+      dv.setUint32(4, cand.writeOffset >>> 0, true);
+      dv.setUint32(8, Math.floor(cand.writeOffset / 4294967296) >>> 0, true);
+      dv.setUint32(12, cand.totalOut >>> 0, true);
+      dv.setUint32(16, Math.floor(cand.totalOut / 4294967296) >>> 0, true);
+      hexToBytes(cand.sha1, M.HEAPU8, outStatePtr + 20);
+      postMessage({ type: 'resumed', nextHunk: cand.nextHunk, hunkCount: hc, pct: 100 * cand.nextHunk / hc });
+      return true;
+    };
+    M.ckptSave = function (nextHunk, hunkCount, writeOffset, totalOut, sha1Ptr, deltaPtr, deltaCount) {
+      var st = slot0.store;
+      if (!st || !runParams) return false;
+      try {
+        st.flush();
+        slot0.handle.flush();
+        var deltaBytes = deltaCount * 32;
+        var deltaOff = (nextHunk - deltaCount) * 32;
+        var deltaView = M.HEAPU8.subarray(deltaPtr, deltaPtr + deltaBytes);
+        if (logH.write(deltaView, { at: deltaOff }) !== deltaBytes) return false;
+        logH.flush();
+        var ecmSnap = [];
+        var byteLimit = nextHunk * runParams.hb;
+        for (var ei = 0; ei < inStores.length; ei++) {
+          if (inStores[ei].store instanceof EcmStore) {
+            var est = inStores[ei].store.edcAtOrBefore(byteLimit);
+            ecmSnap.push({ name: inStores[ei].name, at: est.at, edc: est.edc });
+          }
+        }
+        var nextSeq = seq + 1;
+        var obj = {
+          v: 1,
+          seq: nextSeq,
+          jobMeta: cfg.meta || null,
+          hunkBytes: runParams.hb,
+          hunkCount: hunkCount,
+          unitBytes: runParams.ub,
+          comps: runParams.comps,
+          logicalBytes: runParams.logical,
+          metaEnd: metaEndSaved,
+          nextHunk: nextHunk,
+          writeOffset: writeOffset,
+          totalOut: totalOut,
+          sha1: bytesToHex(M.HEAPU8.subarray(sha1Ptr, sha1Ptr + 92)),
+          ecm: ecmSnap,
+          ts: Date.now()
+        };
+        if (!writeCkptJson(metaH[nextSeq & 1], obj)) return false;
+        seq = nextSeq;
+        ckptUrgent = false;
+        postMessage({ type: 'ckpt', nextHunk: nextHunk, hunkCount: hunkCount, writeOffset: writeOffset, pct: 100 * nextHunk / hunkCount });
+        return true;
+      } catch (e) { return false; }
+    };
+    return { close: closeHandles };
+  } catch (e) {
+    [logH, h0, h1].forEach(function (h) { if (h) { try { h.close(); } catch (x) { /* ignore */ } } });
+    return null;
+  }
+}
 
 function emitBinProgress(M, lastSeq) {
   if (!M._wasm_progress_ptr) return lastSeq;
@@ -1597,7 +1800,7 @@ async function runChdman(M, args) {
 }
 
 async function runJob(msg) {
-  sinkPending = 0; sinkWaiter = null; lastWriter = null;
+  sinkPending = 0; sinkWaiter = null; lastWriter = null; ckptUrgent = false;
   SINK_MAX = msg.debugSinkMax || (64 << 20);
   await loadModule(msg);
   var backing = await makeBacking(msg);
@@ -1702,6 +1905,8 @@ async function runJob(msg) {
   }
 
   if (msg.ports && msg.ports.length) setupParallel(M, msg.ports);
+  var ckpt = await setupCheckpoint(M, backing, inStores, msg);
+  activeBacking = backing;
 
   var started = performance.now(), code;
   try {
@@ -1711,6 +1916,8 @@ async function runJob(msg) {
     out.flush(); err.flush();
     unmountFS(M);
     freeStores();
+    activeBacking = null;
+    if (ckpt) await ckpt.close(true);
     await backing.finalize(false);
     await dropStages();
     postMessage({ type: 'done', code: -1, error: curAborted || String(e && e.message || e), outputs: [], ms: performance.now() - started, aborted: !!curAborted, memBytes: M ? M.HEAPU8.buffer.byteLength : 0 });
@@ -1719,6 +1926,8 @@ async function runJob(msg) {
   out.flush(); err.flush();
   unmountFS(M);
   freeStores();
+  activeBacking = null;
+  if (ckpt) await ckpt.close(true);
   var flushError = code === 0 ? backing.flush() : null;
   if (flushError) {
     await backing.finalize(false);
@@ -2014,6 +2223,15 @@ self.onmessage = function (e) {
   if (msg.type === 'stage-fail' && stageWaiter) { stageWaiter.reject(new Error(msg.message)); return; }
   if (msg.type === 'attach') { attachHelper(msg); return; }
   if (msg.type === 'detach') { attachHelper({ port: null }); return; }
+  if (msg.type === 'visibility') {
+    ckptUrgent = !!msg.hidden;
+    if (msg.hidden && activeBacking && activeBacking.flush) { try { activeBacking.flush(); } catch (err) { /* ignore */ } }
+    return;
+  }
+  if (msg.type === 'throttle') {
+    if (coordM && coordM.setThrottle) coordM.setThrottle(msg.max);
+    return;
+  }
   if (msg.type === 'unzip') { runUnzip(msg).catch(function (err) { postMessage({ type: 'unzip-done', reqId: msg.reqId, error: errText(err) }); }); return; }
   if (msg.type === 'crc') { runCrc(msg).catch(function (err) { postMessage({ type: 'fatal', message: errText(err) }); }); return; }
   var p = msg.type === 'helper' ? runHelper(msg) : msg.type === 'run' ? runJob(msg) : msg.type === 'reader' ? runReader(msg) : null;

@@ -174,7 +174,7 @@
       </select>
       <span class="hint" id="storageInfo"></span>
     </label>
-    <div class="row" id="folderRow" hidden><button class="btn sm" id="pickFolder"><svg aria-hidden="true"><use href="#i-folder"/></svg>Choose folder</button><span class="small muted">Current: <b id="folderName">none</b>. A file already there is replaced only if you agree.</span></div>
+    <div class="row" id="folderRow" hidden><button class="btn sm" id="pickFolder"><svg aria-hidden="true"><use href="#i-folder"/></svg>Choose folder</button><span class="small muted">Current: <b id="folderName">none</b>. A file already there is replaced only if you agree.</span><span class="hint" id="safHint" hidden style="width:100%">On Android, choose or create a subfolder (for example <code>Download/Games</code> or <code>ROMs</code>); Android blocks picking the root <code>Download</code> folder directly.</span></div>
     <label class="check"><input type="checkbox" id="setRename"> Name results after the official (Redump) game title</label>
     <div class="field" id="datBox"><span>Your DAT files (Redump, No-Intro)</span>
       <ul class="files-list" id="datList"></ul>
@@ -196,7 +196,7 @@
     <label class="field"><span>Appearance</span>
       <select id="setTheme"><option value="">Match system</option><option value="light">Light</option><option value="dark">Dark</option></select>
     </label>
-    <div class="row"><button class="btn sm" id="clearStorage">Free temporary storage</button></div>
+    <div class="row"><button class="btn sm" id="clearStorage">Free temporary storage</button><button class="btn sm" id="persistStorage" hidden>Protect temporary storage</button></div>
     <details class="log" id="diagBox"><summary>Troubleshooting</summary>
       <label class="field" style="margin-top:10px"><span>Scrolling</span>
         <select id="setScroll">
@@ -225,7 +225,8 @@
 <input type="file" id="cliFileInput" multiple hidden>
 <input type="file" id="datInput" multiple accept=".dat,.xml,.zip" hidden>
 
-<script type="text/plain" id="worker-src">/*WORKER*/</script>
+<iframe name="dl-sink" hidden aria-hidden="true" tabindex="-1"></iframe>
+<script type="text/plain" id="worker-src" data-crc="/*WORKER_CRC*/">/*WORKER*/</script>
 <script type="application/octet-stream" id="wasm-simd" data-size="/*SIMD_SIZE*/">/*WASM_SIMD*/</script>
 <script type="application/octet-stream" id="wasm-base" data-size="/*BASE_SIZE*/">/*WASM_BASE*/</script>
 <script type="application/octet-stream" id="gamedb" data-size="/*DB_SIZE*/">/*GAMEDB*/</script>

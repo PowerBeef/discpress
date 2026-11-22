@@ -84,8 +84,12 @@ function announce(msg) {
    settings
    ============================================================ */
 var isMobile = (window.matchMedia && matchMedia('(pointer: coarse)').matches) || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+var isTouchOS = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+if (isIOS) isTouchOS = true;
+var APP_VERSION = '/*VERSION*/', ENGINE_SHA = '/*ENGINE_SHA*/';
 var cores = Math.max(1, navigator.hardwareConcurrency || 4);
+var lowBattery = false, cpuThrottle = 0;
 // an iPhone/iPad app's web view (not Safari, not a home-screen web app): usually no downloads (docs/ios)
 var iosWebView = isIOS && !/Safari\//.test(navigator.userAgent) && navigator.standalone !== true && !(window.matchMedia && matchMedia('(display-mode: standalone)').matches);
 // opened from the Home Screen as a web app, where iOS may not start downloads (docs/ios/hosting.md)
@@ -97,7 +101,7 @@ var iosThreadCap = isIOS && !(/iPad/.test(navigator.userAgent) || (!/iPhone|iPod
 var maxThreads = Math.min(cores, 16);
 // threads: 'auto' (measured per device, see Tuning) or a fixed number of compression threads
 var settings = { threads: 'auto', storage: 'auto', wake: true, theme: '', rename: true, scroll: 'auto', keepCue: false, notify: false, compat: false, verifyAfter: false };
-var outDir = null; // folder picked for direct writing (not persisted)
+var outDir = null, savedOutDir = null; // folder picked for direct writing (persisted in HandleStore)
 try {
   var saved = JSON.parse(localStorage.getItem('chdman-web-settings') || '{}');
   // each stored value of the type of its default (a damaged or foreign one is left out); threads: a
@@ -228,6 +232,39 @@ function inflateRaw(src, outLen) {
   return out;
 }
 
+var CRC32_T = null;
+function crc32Bytes(u8) {
+  if (!CRC32_T) {
+    CRC32_T = new Uint32Array(256);
+    for (var n = 0; n < 256; n++) {
+      var c = n;
+      for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      CRC32_T[n] = c >>> 0;
+    }
+  }
+  var crc = 0xFFFFFFFF;
+  for (var i = 0; i < u8.length; i++) crc = CRC32_T[(crc ^ u8[i]) & 255] ^ (crc >>> 8);
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+async function sampleFingerprint(file) {
+  var sz = file.size, step = 65536, parts = [];
+  if (sz <= step * 3) {
+    parts.push(new Uint8Array(await file.arrayBuffer()));
+  } else {
+    var mid = Math.floor((sz - step) / 2);
+    parts.push(new Uint8Array(await file.slice(0, step).arrayBuffer()));
+    parts.push(new Uint8Array(await file.slice(mid, mid + step).arrayBuffer()));
+    parts.push(new Uint8Array(await file.slice(sz - step, sz).arrayBuffer()));
+  }
+  var crc = 0xFFFFFFFF;
+  if (!CRC32_T) crc32Bytes(new Uint8Array(0));
+  for (var p = 0; p < parts.length; p++) {
+    var b = parts[p];
+    for (var i = 0; i < b.length; i++) crc = CRC32_T[(crc ^ b[i]) & 255] ^ (crc >>> 8);
+  }
+  return sz + ':' + ('00000000' + ((crc ^ 0xFFFFFFFF) >>> 0).toString(16)).slice(-8);
+}
+
 async function gunzip(bytes, size) {
   if (typeof DecompressionStream === 'function') {
     try {
@@ -235,7 +272,15 @@ async function gunzip(bytes, size) {
       return new Uint8Array(await new Response(stream).arrayBuffer());
     } catch (e) { /* fall back */ }
   }
-  return inflateRaw(bytes.subarray(10), size);
+  var out = inflateRaw(bytes.subarray(10), size);
+  if (bytes.length >= 18) {
+    var dv = new DataView(bytes.buffer, bytes.byteOffset + bytes.length - 8, 8);
+    var wantCrc = dv.getUint32(0, true), wantSize = dv.getUint32(4, true);
+    if (crc32Bytes(out) !== wantCrc || (out.length >>> 0) !== wantSize) {
+      throw new Error('This copy of Discpress is incomplete or damaged (data checksum mismatch). Re-download it.');
+    }
+  }
+  return out;
 }
 
 // writes results streamed by the worker into a folder the user picked
@@ -339,7 +384,15 @@ var Engine = {
   coordPool: [], helperPool: [], unzipSeq: 0,
   workerUrl: function () {
     if (!this.url) {
-      var src = document.getElementById('worker-src').textContent;
+      var node = document.getElementById('worker-src');
+      var src = node.textContent;
+      var wantCrc = node.getAttribute('data-crc');
+      if (wantCrc && /^[0-9a-f]{8}$/i.test(wantCrc)) {
+        var gotCrc = ('00000000' + crc32Bytes(new TextEncoder().encode(src)).toString(16)).slice(-8);
+        if (gotCrc !== wantCrc.toLowerCase()) {
+          throw new Error('This copy of Discpress is incomplete or damaged (worker checksum mismatch). Re-download it.');
+        }
+      }
       this.url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
     }
     return this.url;
@@ -544,6 +597,8 @@ var Engine = {
         else if (m.type === 'line') o.onLine && o.onLine(m.stream, m.text);
         else if (m.type === 'progress') o.onProgress && o.onProgress(m.text);
         else if (m.type === 'prog-bin') o.onBinProgress && o.onBinProgress(m);
+        else if (m.type === 'ckpt') o.onCkpt && o.onCkpt(m);
+        else if (m.type === 'resumed') o.onResumed && o.onResumed(m);
         else if (m.type === 'scan') o.onScan && o.onScan(m.done / m.total);
         else if (m.type === 'notice') o.onNotice && o.onNotice(m);
         else if (m.type === 'storage') o.onStorage && o.onStorage(m.mode, m.reason);
@@ -571,7 +626,9 @@ var Engine = {
       try {
         self.post(worker, {
           type: 'run', jobId: o.jobId, dirPath: o.dirPath, args: o.args, inputs: o.inputs || [],
-          writable: o.writable || [], slots: o.slots || 0, outMode: o.outMode || 'mem', ports: ports, debugStage: DEBUG.stage, debugSinkMax: DEBUG.sinkMax, debugStorage: DEBUG.failStorage
+          writable: o.writable || [], slots: o.slots || 0, outMode: o.outMode || 'mem', ports: ports,
+          ckpt: o.ckpt || null, resume: !!o.resume,
+          debugStage: DEBUG.stage, debugSinkMax: DEBUG.sinkMax, debugStorage: DEBUG.failStorage
         }, ports);
       } catch (e) {
         cleanup(true);
@@ -581,6 +638,12 @@ var Engine = {
     });
     return {
       promise: promise,
+      postVisibility: function (hidden) {
+        if (worker && !finished) { try { worker.postMessage({ type: 'visibility', hidden: !!hidden }); } catch (e) { /* ignore */ } }
+      },
+      setThrottle: function (max) {
+        if (worker && !finished) { try { worker.postMessage({ type: 'throttle', max: max }); } catch (e) { /* ignore */ } }
+      },
       cancel: function () {
         if (finished && !saving) return Promise.resolve();
         saving = false;
@@ -745,6 +808,52 @@ async function heldLocks() {
   } catch (e) { /* unknown */ }
   return null;
 }
+/* Persistent output folder handle (IndexedDB 'chdman-handles'): remembers the chosen directory across visits
+   and checks/re-requests permission (Chrome 122+ persistent permissions) on the first click gesture. */
+var HandleStore = {
+  DB: 'chdman-handles', STORE: 'handles',
+  open: function () {
+    return new Promise(function (resolve, reject) {
+      if (typeof indexedDB === 'undefined') { reject(new Error('no indexedDB')); return; }
+      var req = indexedDB.open(HandleStore.DB, 1);
+      req.onupgradeneeded = function () { req.result.createObjectStore(HandleStore.STORE); };
+      req.onsuccess = function () { resolve(req.result); };
+      req.onerror = function () { reject(req.error); };
+    });
+  },
+  get: async function (key) {
+    try {
+      var db = await this.open();
+      return await new Promise(function (resolve) {
+        var tx = db.transaction(HandleStore.STORE, 'readonly');
+        var req = tx.objectStore(HandleStore.STORE).get(key || 'outDir');
+        req.onsuccess = function () { db.close(); resolve(req.result || null); };
+        req.onerror = function () { db.close(); resolve(null); };
+      });
+    } catch (e) { return null; }
+  },
+  put: async function (handle, key) {
+    try {
+      var db = await this.open();
+      await new Promise(function (resolve) {
+        var tx = db.transaction(HandleStore.STORE, 'readwrite');
+        tx.objectStore(HandleStore.STORE).put(handle, key || 'outDir');
+        tx.oncomplete = tx.onerror = tx.onabort = function () { db.close(); resolve(); };
+      });
+    } catch (e) { /* uncloneable mock or private window */ }
+  },
+  clear: async function (key) {
+    try {
+      var db = await this.open();
+      await new Promise(function (resolve) {
+        var tx = db.transaction(HandleStore.STORE, 'readwrite');
+        tx.objectStore(HandleStore.STORE).delete(key || 'outDir');
+        tx.oncomplete = tx.onerror = tx.onabort = function () { db.close(); resolve(); };
+      });
+    } catch (e) { /* ignore */ }
+  }
+};
+
 var Store = {
   available: false,
   session: 's' + Date.now().toString(36) + uid(),
@@ -767,22 +876,41 @@ var Store = {
       var root = await navigator.storage.getDirectory();
       work = await root.getDirectoryHandle('chdman-work', { create: true });
       this.available = true;
+      // silently ask for persistent storage in installed standalone PWAs / Home Screen apps
+      var standalone = iosHomeApp || !!(window.matchMedia && matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches);
+      if (standalone && navigator.storage.persist && navigator.storage.persisted) {
+        navigator.storage.persisted().then(function (ok) { if (!ok) navigator.storage.persist().catch(function () {}); }).catch(function () {});
+      }
     } catch (e) { this.available = false; }
     // (each step on its own: one that fails leaves the others, and the page, working)
     try {
       if (work) await this.cleanupStale(work);
       // results in memory (a page opened as a file in Chrome or Edge, older browsers): nothing to keep,
       // but say what an ended visit lost
-      else Recovery.settle(Recovery.read(), [], await heldLocks());
+      else Recovery.settle(Recovery.read(), [], await heldLocks(), {});
     } catch (e) { /* what an ended visit left stays for the next one */ }
     if (work) try { await Unzip.cleanup(); } catch (e) { /* ignore */ }
     this.checked = true;
+  },
+  hasCkpt: async function (session, jobId) {
+    try {
+      var d = await navigator.storage.getDirectory();
+      d = await d.getDirectoryHandle('chdman-work');
+      d = await d.getDirectoryHandle(session);
+      d = await d.getDirectoryHandle(jobId);
+      await d.getFileHandle('slot0');
+      await d.getFileHandle('ckpt.log');
+      var hasMeta = await d.getFileHandle('ckpt.0').then(function () { return true; }, function () {
+        return d.getFileHandle('ckpt.1').then(function () { return true; }, function () { return false; });
+      });
+      return hasMeta;
+    } catch (e) { return false; }
   },
   cleanupStale: async function (work) {
     var held = await heldLocks();
     var names = [];
     try { for await (var entry of work.keys()) names.push(entry); } catch (e) { return; }
-    var records = Recovery.read();
+    var records = Recovery.read(), ckptValid = {};
     for (var i = 0; i < names.length; i++) {
       var n = names[i];
       if (n === this.session) continue;
@@ -794,11 +922,13 @@ var Store = {
         stale = !t || Date.now() - t > 6 * 3600e3;
       }
       if (!stale) continue;
-      // a closed or reloaded visit: keep its finished results that weren't saved (Recovery)
-      if (Recovery.adopt(n, records[n])) continue;
+      var cOk = !!(records[n] && records[n].ckpt && records[n].ckpt.jobId && await this.hasCkpt(n, records[n].ckpt.jobId));
+      ckptValid[n] = cOk;
+      // a closed or reloaded visit: keep its finished results that weren't saved, or its resumable checkpoint (Recovery)
+      if (Recovery.adopt(n, records[n], cOk)) continue;
       try { await work.removeEntry(n, { recursive: true }); } catch (e) { /* in use */ }
     }
-    Recovery.settle(records, names, held);
+    Recovery.settle(records, names, held, ckptValid);
   },
   dirPath: function (jobId, session) { return ['chdman-work', session || this.session, jobId]; },
   // a run about to write the job's folder: a removal still retrying on it (removeJob) gives up
@@ -849,6 +979,7 @@ var Store = {
 var Recovery = {
   KEY: 'chdman-web-sessions',
   earlier: [], // [{ session, jobId, title, outputs: [{ name, size, slot, kind, session }] }]
+  resumable: [], // [{ session, jobId, title, outName, pct, nextHunk, hunkCount, inputs, argsSig, ts }]
   stopped: [], // titles of jobs that were running when their visit ended
   lost: [], // results an ended visit held only in memory: [{ title, name }]
   // the records, with only what has the shape this version writes (a damaged or foreign one is no more)
@@ -866,7 +997,8 @@ var Recovery = {
           results[id] = { title: String(r.title || ''), outputs: r.outputs.filter(function (o) { return o && typeof o === 'object' && typeof o.name === 'string'; }) };
         }
       });
-      out[k] = Object.assign({}, rec, { results: results, running: typeof rec.running === 'string' ? rec.running : null });
+      var ck = rec.ckpt && typeof rec.ckpt === 'object' && typeof rec.ckpt.jobId === 'string' && Array.isArray(rec.ckpt.inputs) ? rec.ckpt : null;
+      out[k] = Object.assign({}, rec, { results: results, running: typeof rec.running === 'string' ? rec.running : null, ckpt: ck });
     });
     return out;
   },
@@ -882,32 +1014,43 @@ var Recovery = {
     rec.results = rec.results || {};
     fn(rec);
     if (key === Store.session) rec.alive = Date.now(); // for visits in browsers without Web Locks (settle)
-    if (!rec.running && !Object.keys(rec.results).length) delete all[key];
+    if (!rec.running && !rec.ckpt && !Object.keys(rec.results).length) delete all[key];
     else all[key] = rec;
     this.write(all);
   },
   running: function (job) {
     this.update(function (rec) { rec.running = job ? job.title : null; });
   },
+  checkpoint: function (meta, session) {
+    this.update(function (rec) { rec.ckpt = meta || null; }, session);
+  },
+  forgetCkpt: function (jobId, session) {
+    this.update(function (rec) { if (rec.ckpt && (!jobId || rec.ckpt.jobId === jobId)) rec.ckpt = null; }, session);
+  },
   // results in memory ('blob') are recorded too: a reload loses them, and the next visit says so
   finished: function (job) {
     var outs = job.outputs.filter(function (o) { return (o.kind === 'opfs' || o.kind === 'blob') && !o.downloaded && !o.input; });
+    var storeId = job.storeId || job.id, storeSess = job.storeSession || Store.session;
     this.update(function (rec) {
-      if (outs.length) rec.results[job.id] = { title: job.title, outputs: outs.map(function (o) { return { name: o.name, size: o.size, slot: o.slot, kind: o.kind }; }) };
-      else delete rec.results[job.id];
-    });
+      if (rec.ckpt && rec.ckpt.jobId === storeId) rec.ckpt = null;
+      if (outs.length) rec.results[storeId] = { title: job.title, outputs: outs.map(function (o) { return { name: o.name, size: o.size, slot: o.slot, kind: o.kind }; }) };
+      else delete rec.results[storeId];
+    }, storeSess);
   },
   saved: function (job, out) {
-    var id = job.id;
+    var id = out.storeJobId || job.storeId || job.id;
     this.update(function (rec) {
       var r = rec.results[id];
       if (!r) return;
       r.outputs = r.outputs.filter(function (o) { return o.slot != null ? o.slot !== out.slot : o.name !== out.name; });
       if (!r.outputs.length) delete rec.results[id];
-    }, out.session);
+    }, out.session || job.storeSession);
   },
   forget: function (jobId, session) {
-    this.update(function (rec) { delete rec.results[jobId]; }, session);
+    this.update(function (rec) {
+      delete rec.results[jobId];
+      if (rec.ckpt && rec.ckpt.jobId === jobId) rec.ckpt = null;
+    }, session);
   },
   // a record's results still in storage (records from before 1.3.4 have only those)
   kept: function (rec) {
@@ -918,42 +1061,47 @@ var Recovery = {
     });
     return out;
   },
-  // an ended visit's losses: the job it was running, and the results it held in memory
-  report: function (rec) {
+  // an ended visit's losses: the job it was running (unless resumable), and the results it held in memory
+  report: function (rec, hasResumable) {
     var self = this;
-    if (rec.running) this.stopped.push(rec.running);
+    if (rec.running && !hasResumable) this.stopped.push(rec.running);
     Object.keys(rec.results || {}).forEach(function (id) {
       var r = rec.results[id];
       r.outputs.forEach(function (o) { if (o.kind === 'blob') self.lost.push({ title: r.title, name: o.name }); });
     });
   },
-  // at start, for a visit that has ended: true if it left unsaved results (its folder is then kept)
-  adopt: function (session, rec) {
+  // at start, for a visit that has ended: true if it left unsaved results or a resumable checkpoint (its folder is then kept)
+  adopt: function (session, rec, ckptOk) {
     if (!rec) return false;
-    if (this.earlier.some(function (e) { return e.session === session; })) return true; // listed already
-    this.report(rec);
+    if (this.earlier.some(function (e) { return e.session === session; }) || this.resumable.some(function (c) { return c.session === session; })) return true; // listed already
+    var hasCkpt = !!(ckptOk && rec.ckpt);
+    this.report(rec, hasCkpt);
+    if (hasCkpt) {
+      this.resumable.push(Object.assign({}, rec.ckpt, { session: session }));
+    }
     var res = this.kept(rec), ids = Object.keys(res);
     for (var i = 0; i < ids.length; i++) {
       var r = res[ids[i]];
-      this.earlier.push({ session: session, jobId: ids[i], title: r.title, outputs: r.outputs.map(function (o) { return { name: o.name, size: o.size, slot: o.slot, kind: 'opfs', session: session }; }) });
+      this.earlier.push({ session: session, jobId: ids[i], title: r.title, outputs: r.outputs.map(function (o) { return { name: o.name, size: o.size, slot: o.slot, kind: 'opfs', session: session, storeJobId: ids[i] }; }) });
     }
-    return ids.length > 0;
+    return ids.length > 0 || hasCkpt;
   },
-  // records of other visits: keep those still open, and ended ones' results still in storage; report
+  // records of other visits: keep those still open, and ended ones' results/checkpoints still in storage; report
   // what ended visits without a folder lost (they kept everything in memory, or ran no job to the end)
-  settle: function (records, names, held) {
+  settle: function (records, names, held, ckptValid) {
     var keep = {}, self = this;
+    ckptValid = ckptValid || {};
     Object.keys(records).forEach(function (k) {
       if (k === Store.session) return;
       // open: holds its Web Lock; where the browser has none, wrote its record in the last few minutes
       var rec = records[k], open = held ? held.has('chdman-web-' + k) : !!rec.alive && Date.now() - rec.alive < 5 * 60000;
       if (open) { keep[k] = rec; return; }
       if (names.indexOf(k) >= 0) {
-        var res = self.kept(rec);
-        if (Object.keys(res).length) keep[k] = { results: res };
+        var res = self.kept(rec), keepCk = ckptValid[k] ? rec.ckpt : null;
+        if (Object.keys(res).length || keepCk) keep[k] = { results: res, ckpt: keepCk };
         return;
       }
-      self.report(rec);
+      self.report(rec, false);
     });
     // records written meanwhile, while old folders were deleted: this visit's, and those of other open
     // visits (or visits opened since), which keep their newest state
@@ -2248,6 +2396,35 @@ function finalizeCreateJob(job) {
     job.descBlob = changed || job.descDirty ? new Blob([rewriteRefs(job.src, job.descText, map)], { type: 'text/plain' }) : job.descFile;
   }
   if (!job.action) job.action = KIND[job.disc].cmd;
+  matchResumable(job);
+}
+
+async function matchResumable(job) {
+  if (!job || job.kind !== 'create' || job.state !== 'ready' || job.resumeFrom || !Recovery.resumable.length) return;
+  var spec;
+  try { spec = buildJob(job); } catch (e) { return; }
+  if (!spec || !spec.inputs || !spec.inputs.length) return;
+  for (var ci = 0; ci < Recovery.resumable.length; ci++) {
+    var ck = Recovery.resumable[ci];
+    if (!ck.inputs || ck.inputs.length !== spec.inputs.length) continue;
+    var sizesOk = true;
+    for (var i = 0; i < spec.inputs.length; i++) {
+      if (spec.inputs[i].name !== ck.inputs[i].name || spec.inputs[i].blob.size !== ck.inputs[i].size) { sizesOk = false; break; }
+    }
+    if (!sizesOk) continue;
+    var fpOk = true;
+    for (var j = 0; j < spec.inputs.length; j++) {
+      var fp = await sampleFingerprint(spec.inputs[j].blob);
+      if (fp !== ck.inputs[j].fp) { fpOk = false; break; }
+    }
+    if (!fpOk) continue;
+    if (job.resumeFrom || job.state !== 'ready' || Recovery.resumable.indexOf(ck) < 0) return;
+    job.resumeFrom = ck;
+    Recovery.resumable = Recovery.resumable.filter(function (x) { return x !== ck; });
+    refreshJob(job, true);
+    renderEarlier();
+    return;
+  }
 }
 
 /* ---------- CHD probing ---------- */
@@ -2619,6 +2796,25 @@ function renderControls(job) {
     var soft = function () { ui.cmd.textContent = safeCmd(job); };
 
     if (job.kind === 'create') {
+      if (job.resumeFrom && job.state === 'ready') {
+        box.append(el('div', { class: 'note ok resume-note' },
+          el('b', null, 'Resumable from ' + job.resumeFrom.pct.toFixed(1) + '%. '),
+          'Saved progress from an earlier interrupted run will continue where it left off. ',
+          el('button', { class: 'btn sm', style: 'margin-left:6px', onclick: async function () {
+            var ck = job.resumeFrom;
+            job.resumeFrom = null;
+            await Store.removeJob(ck.jobId, ck.session);
+            refreshJob(job, true);
+          } }, 'Start over')));
+      }
+      if (iosHomeApp && job.state === 'ready' && !job.resumeFrom) {
+        var totalIn = job.files.reduce(function (a, f) { return a + (f.file ? f.file.size : 0); }, 0);
+        if (totalIn > SHARE_MAX * 1.4) {
+          box.append(el('div', { class: 'note warn' },
+            el('b', null, 'Large game in a Home Screen app. '),
+            'iOS Home Screen apps may not download results over ' + fmtBytes(SHARE_MAX) + '. For best results on large discs, open ' + HOSTED_URL.replace(/^https:\/\//, '') + ' directly in Safari.'));
+        }
+      }
       var pickDisc = function (v) {
         // the compression picked stays, if the other type has it too (a DVD has no MiSTer preset)
         var keep = presetsFor(v).some(function (p) { return p[0] === o.preset; });
@@ -2891,12 +3087,12 @@ function renderFoot(job) {
   if (job.invalid) st = ['err', 'Can\u2019t convert'];
   f.append(el('span', { class: 'state' }, el('span', { class: 'dot ' + st[0] }), st[1]));
   if (job.state === 'ready') {
-    var label = job.kind === 'create' ? 'Create CHD' : job.action === 'extract' ? 'Extract' : job.action === 'verify' ? 'Verify' : job.action === 'rename' ? 'Save renamed copy' : 'Show info';
+    var label = job.kind === 'create' ? (job.resumeFrom ? 'Resume CHD' : 'Create CHD') : job.action === 'extract' ? 'Extract' : job.action === 'verify' ? 'Verify' : job.action === 'rename' ? 'Save renamed copy' : 'Show info';
     f.append(el('button', { class: 'btn primary', onclick: function () { enqueueChecked(job); } }, icon('i-play'), label));
   } else if (job.state === 'queued' || job.state === 'running') {
     f.append(el('button', { class: 'btn danger sm fit', onclick: function () { cancelJob(job); } }, 'Cancel'));
   } else if (job.state === 'done' || job.state === 'error' || job.state === 'canceled') {
-    if (job.kind === 'chd' && job.info || job.kind === 'create' && !job.invalid) {
+    if ((job.kind === 'chd' && job.info || job.kind === 'create' && !job.invalid) && !job.zipPruned) {
       f.append(el('button', { class: 'btn' + (job.state === 'done' ? ' sm fit' : ''), onclick: function () {
         if (unsaved(job) && !confirm('Discard the results of the previous run? Download them first if you need them.')) return;
         resetJob(job);
@@ -2950,13 +3146,42 @@ function updateTabCount() {
 var queue = [], current = null, wakeLock = null, wakeAsking = false, activeTab = 'convert';
 
 async function ensureFolder() {
-  if (settings.storage !== 'folder' || outDir) return true;
+  if (settings.storage !== 'folder') return true;
+  if (outDir) {
+    if (typeof outDir.queryPermission === 'function') {
+      try {
+        var q = await outDir.queryPermission({ mode: 'readwrite' });
+        if (q === 'granted') return true;
+        if (typeof outDir.requestPermission === 'function') {
+          var r = await outDir.requestPermission({ mode: 'readwrite' });
+          if (r === 'granted') return true;
+        }
+      } catch (e) { /* re-pick */ }
+      outDir = null;
+    } else return true;
+  }
+  if (savedOutDir) {
+    try {
+      var perm = typeof savedOutDir.requestPermission === 'function' ? await savedOutDir.requestPermission({ mode: 'readwrite' }) : 'granted';
+      if (perm === 'granted') {
+        outDir = savedOutDir;
+        savedOutDir = null;
+        var lbl = $('#folderName');
+        if (lbl) lbl.textContent = outDir.name;
+        updateChips();
+        return true;
+      }
+    } catch (e) { /* fall through to picker */ }
+    savedOutDir = null;
+  }
   return await pickFolder();
 }
 async function pickFolder() {
   if (!window.showDirectoryPicker) return false;
   try {
     outDir = await window.showDirectoryPicker({ mode: 'readwrite', id: 'chdman-out' });
+    savedOutDir = null;
+    HandleStore.put(outDir, 'outDir');
     updateChips();
     var lbl = $('#folderName');
     if (lbl) lbl.textContent = outDir.name;
@@ -2989,7 +3214,10 @@ function stopVerify(job) {
 }
 function resetJob(job) {
   stopVerify(job);
-  Store.removeJob(job.id);
+  if (job.storeId) {
+    Store.removeJob(job.storeId, job.storeSession && job.storeSession !== Store.session ? job.storeSession : undefined);
+    job.storeId = null; job.storeSession = null;
+  } else Store.removeJob(job.id);
   job.outputs = [];
   job.log = [];
   job.ui.logPre.textContent = '';
@@ -3036,18 +3264,27 @@ function removeJob(job, silent, keepFiles) {
     }));
   }
   if (job.el) job.el.remove();
-  // if a large browser <a download> just started from OPFS, keep the backing file alive for up to 30s
-  // while still clearing Recovery immediately so a reload does not resurrect the removed job
-  var dlWait = 0, nowMs = Date.now();
-  (job.outputs || []).forEach(function (o) {
-    if (o.kind === 'opfs' && o.downloadStartedAt && (o.size || 0) >= 16 * 1048576) {
-      dlWait = Math.max(dlWait, 30000 - (nowMs - o.downloadStartedAt));
-    }
-  });
-  if (dlWait > 0) {
-    Recovery.forget(job.id);
-    setTimeout(function () { Store.removeJob(job.id); }, dlWait);
-  } else Store.removeJob(job.id);
+  // if this card had an unstarted resumable checkpoint attached, return it to #earlier rather than deleting it
+  if (job.resumeFrom && job.state !== 'done' && job.state !== 'running') {
+    Recovery.resumable.push(job.resumeFrom);
+    job.resumeFrom = null;
+    renderEarlier();
+  } else {
+    // if a large browser <a download> just started from OPFS, keep the backing file alive for up to 30s
+    // while still clearing Recovery immediately so a reload does not resurrect the removed job
+    var rmId = job.storeId || job.id;
+    var rmSess = job.storeSession && job.storeSession !== Store.session ? job.storeSession : undefined;
+    var dlWait = 0, nowMs = Date.now();
+    (job.outputs || []).forEach(function (o) {
+      if (o.kind === 'opfs' && o.downloadStartedAt && (o.size || 0) >= 16 * 1048576) {
+        dlWait = Math.max(dlWait, 30000 - (nowMs - o.downloadStartedAt));
+      }
+    });
+    if (dlWait > 0) {
+      Recovery.forget(rmId, rmSess);
+      setTimeout(function () { Store.removeJob(rmId, rmSess); }, dlWait);
+    } else Store.removeJob(rmId, rmSess);
+  }
   if (!keepFiles) {
     job.files.forEach(function (f) { forgetFile(f.file); });
     if (job.descFile) forgetFile(job.descFile);
@@ -3211,18 +3448,40 @@ async function runJobNow(job) {
     }
   }
   if (job.aborted) { job.runBase = ''; Recovery.running(null); job.state = 'canceled'; if (jobs.indexOf(job) >= 0) refreshJob(job, true); return; }
-  var t0 = performance.now(), phaseStart = t0, lastPhase = '', lastPct = 0, workerError = '';
+  var resumeInfo = (spec.outMode === 'opfs' && job.kind === 'create' && job.opts.preset !== 'none' && job.resumeFrom) ? job.resumeFrom : null;
+  var storeId = resumeInfo ? resumeInfo.jobId : job.id;
+  var storeSess = resumeInfo ? resumeInfo.session : Store.session;
+  job.storeId = storeId;
+  job.storeSession = storeSess;
+  var runDirPath = resumeInfo ? Store.dirPath(storeId, storeSess) : Store.claim(job.id);
+  var ckptOpt = null, inputsMeta = null;
+  if (spec.outMode === 'opfs' && job.kind === 'create' && job.opts.preset !== 'none') {
+    inputsMeta = [];
+    for (var mi = 0; mi < spec.inputs.length; mi++) {
+      inputsMeta.push({ name: spec.inputs[mi].name, size: spec.inputs[mi].blob.size, fp: await sampleFingerprint(spec.inputs[mi].blob) });
+    }
+    if (job.aborted) { job.runBase = ''; Recovery.running(null); job.state = 'canceled'; if (jobs.indexOf(job) >= 0) refreshJob(job, true); return; }
+    ckptOpt = {
+      enabled: true,
+      stride: DEBUG.ckptStride || 0,
+      short: lowBattery,
+      meta: { title: job.title, outName: runBase + '.chd', cmd: spec.args[0], argsSig: JSON.stringify(spec.args), inputs: inputsMeta }
+    };
+  }
+  var t0 = performance.now(), phaseStart = t0, lastPhase = '', lastPct = 0, resumeBasePct = 0, workerError = '';
   var hiddenAt = document.hidden ? performance.now() : 0, hiddenMs = 0;
   function onRunVis() {
     if (document.hidden) { if (!hiddenAt) hiddenAt = performance.now(); }
     else if (hiddenAt) { hiddenMs += performance.now() - hiddenAt; hiddenAt = 0; }
+    if (job.run && job.run.postVisibility) job.run.postVisibility(document.hidden);
   }
   document.addEventListener('visibilitychange', onRunVis);
   job.storageRefused = false;
   var verifyRedump = [];
   job.run = Engine.run({
-    jobId: job.id, dirPath: Store.claim(job.id), args: spec.args, inputs: spec.inputs, writable: spec.writable,
+    jobId: storeId, dirPath: runDirPath, args: spec.args, inputs: spec.inputs, writable: spec.writable,
     slots: spec.slots, helpers: spec.helpers, outMode: spec.outMode, outDir: runDir, agreed: main ? [main] : [],
+    ckpt: ckptOpt, resume: !!resumeInfo,
     // tests: 'one' or 'all' helpers fail on the first run, 'always' (all) on every run
     debugFail: DEBUG.failHelpers === 'always' ? 'all' : job.engineRetried ? null : DEBUG.failHelpers,
     onLine: function (s, t) {
@@ -3232,15 +3491,39 @@ async function runJobNow(job) {
       var fm = /final ratio = ([\d.]+)%/.exec(t);
       if (fm) setProgress(job, 100, 'Finishing…', [fm[1] + '% of the original']);
     },
+    onCkpt: function (m) {
+      job.ckptPct = m.pct;
+      Recovery.checkpoint({
+        jobId: storeId, session: storeSess, title: job.title, outName: runBase + '.chd',
+        pct: m.pct, nextHunk: m.nextHunk, hunkCount: m.hunkCount, inputs: inputsMeta || [],
+        argsSig: ckptOpt && ckptOpt.meta ? ckptOpt.meta.argsSig : '', ts: Date.now()
+      }, storeSess);
+    },
+    onResumed: function (m) {
+      job.resumedAt = m.pct;
+      resumeBasePct = m.pct;
+      lastPct = m.pct;
+      phaseStart = performance.now();
+      hiddenMs = 0;
+      hiddenAt = document.hidden ? phaseStart : 0;
+      appendLog(job, 'Resumed from checkpoint at ' + m.pct.toFixed(1) + '% (hunk ' + m.nextHunk + ' of ' + m.hunkCount + ').');
+      setProgress(job, m.pct, 'Resuming ' + m.pct.toFixed(1) + '%');
+      updateDock();
+    },
     onProgress: function (t) {
       if (stalledProgress(t)) { if (!job.stalled) { job.stalled = true; job.run.cancel(); } return; }
       var m = /^\s*([A-Za-z][A-Za-z ]*?),\s*([\d.]+)% complete(?:.*ratio=([\d.]+)%)?/.exec(t);
       if (!m) return;
       var phase = m[1], pct = parseFloat(m[2]);
-      if (phase !== lastPhase) { lastPhase = phase; phaseStart = performance.now(); hiddenMs = 0; hiddenAt = document.hidden ? phaseStart : 0; }
+      if (phase !== lastPhase) {
+        lastPhase = phase; phaseStart = performance.now(); hiddenMs = 0; hiddenAt = document.hidden ? phaseStart : 0;
+        if (!/^Compressing/i.test(phase)) resumeBasePct = 0;
+      }
       lastPct = pct;
       var curHidden = hiddenMs + (hiddenAt ? performance.now() - hiddenAt : 0);
-      var el2 = Math.max(0.1, (performance.now() - phaseStart - curHidden) / 1000), eta = pct > 1.5 ? el2 * (100 - pct) / pct : NaN;
+      var el2 = Math.max(0.1, (performance.now() - phaseStart - curHidden) / 1000);
+      var deltaPct = pct - resumeBasePct;
+      var eta = deltaPct > 1.5 ? el2 * (100 - pct) / deltaPct : NaN;
       var bits = [];
       if (m[3]) bits.push(m[3] + '% of the original');
       if (isFinite(eta)) bits.push(fmtDur(eta) + ' left');
@@ -3264,6 +3547,7 @@ async function runJobNow(job) {
       if (reason !== 'NoModificationAllowedError' && reason !== 'InvalidStateError') { Store.available = false; updateChips(); }
     }
   });
+  if (cpuThrottle > 0 && job.run && job.run.setThrottle) job.run.setThrottle(cpuThrottle);
   job.progressPct = function () { return lastPct; };
   try {
     var res = await job.run.promise;
@@ -3276,12 +3560,19 @@ async function runJobNow(job) {
       }
       if (job.aborted || jobs.indexOf(job) < 0) { Recovery.running(null); job.state = 'canceled'; if (jobs.indexOf(job) >= 0) refreshJob(job, true); return; }
       job.state = 'done';
+      job.resumeFrom = null;
       job.folderName = spec.outMode === 'stream' && runDir ? runDir.name : '';
       job.outputs = (res.outputs || []).filter(function (o) { return o.name; }).sort(function (a, b) {
         var ea = /\.(cue|gdi|toc)$/i.test(a.name) ? 0 : 1, eb = /\.(cue|gdi|toc)$/i.test(b.name) ? 0 : 1;
         return ea - eb || a.name.localeCompare(b.name, undefined, { numeric: true });
       });
-      job.outputs.forEach(function (o) { if (o.kind === 'disk') o.dir = runDir; });
+      job.outputs.forEach(function (o) {
+        if (o.kind === 'disk') o.dir = runDir;
+        if (o.kind === 'opfs') {
+          o.storeJobId = storeId;
+          if (storeSess !== Store.session) o.session = storeSess;
+        }
+      });
       if (job.kind === 'chd' && job.action === 'info') job.lastInfo = parseInfo(job.log);
       if (job.kind === 'create' && job.sbi) await addSbi(job, spec, runDir, runBase);
       if (job.aborted || jobs.indexOf(job) < 0) { Recovery.running(null); return; }
@@ -3296,10 +3587,21 @@ async function runJobNow(job) {
         refreshJob(job, true);
         await verifyResult(job);
       }
+      // During multi-job batches, prune finished zip OPFS staging if free space gets tight (< 2 GiB)
+      if (queue.length > 0 && job.files.some(function (f) { return f.file && f.file.unzipDir; })) {
+        var est2 = await Store.estimate();
+        if (est2 && est2.quota && (est2.quota - est2.usage) < 2 * 1073741824) {
+          job.files.forEach(function (f) { if (f.file && f.file.unzipDir) delete f.file.unzipDir; });
+          if (job.descFile && job.descFile.unzipDir) delete job.descFile.unzipDir;
+          if (job.subFile && job.subFile.unzipDir) delete job.subFile.unzipDir;
+          job.zipPruned = true;
+          Unzip.prune();
+        }
+      }
     } else {
       Recovery.running(null);
       job.state = 'error';
-      if (res.readFail) { job.errorText = readFailHint(res.error); Store.removeJob(job.id); refreshJob(job, true); return; }
+      if (res.readFail) { job.errorText = readFailHint(res.error); Store.removeJob(storeId, storeSess !== Store.session ? storeSess : undefined); refreshJob(job, true); return; }
       // (a helper that stopped, whose work the others did, isn't why)
       var errs = job.log.filter(function (l) { return /error|failed|invalid|unsupported|missing|not /i.test(l) && !/^\$ |^A helper thread stopped/.test(l); });
       job.errorText = (errs.slice(-3).join('\n') || res.error || 'chdman exited with code ' + res.code) + (job.action === 'verify' ? '' : '');
@@ -3307,7 +3609,7 @@ async function runJobNow(job) {
       // the worker's own report (a damaged compressed ISO, an unreadable input, full storage) explains chdman's error best
       if (workerError && job.errorText.indexOf(workerError) < 0) job.errorText = workerError + '\n' + job.errorText;
       if (job.kind === 'chd' && job.action === 'verify') job.errorText = 'Verification failed. ' + job.errorText;
-      Store.removeJob(job.id);
+      Store.removeJob(storeId, storeSess !== Store.session ? storeSess : undefined);
     }
   } catch (e) {
     Recovery.running(null);
@@ -3315,7 +3617,7 @@ async function runJobNow(job) {
     else if (e.canceled && job.storageRefused) { job.state = 'error'; job.errorText = 'The browser\u2019s storage wasn\u2019t available for this job, so it stopped rather than keep its results in memory. Try again in a moment.'; }
     else if (e.canceled) { job.state = 'canceled'; }
     else { job.state = 'error'; job.errorText = readFailHint(e.message); appendLog(job, e.message); }
-    Store.removeJob(job.id);
+    Store.removeJob(storeId, storeSess !== Store.session ? storeSess : undefined);
   } finally {
     job.runBase = '';
     document.removeEventListener('visibilitychange', onRunVis);
@@ -3327,7 +3629,7 @@ async function runJobNow(job) {
       job.engineRetried = true;
       appendLog(job, 'The browser\u2019s WebAssembly engine failed (' + job.errorText.split('\n')[0] + '). Converting again\u2026');
       job.retryLog = job.log.slice();
-      if (await stopped(Store.removeJob(job.id))) return;
+      if (await stopped(Store.removeJob(storeId, storeSess !== Store.session ? storeSess : undefined))) return;
       if (!job.aborted && jobs.indexOf(job) >= 0) return runJobNow(job);
     }
     job.errorText += '\n' + ENGINE_HINT;
@@ -3367,8 +3669,10 @@ async function verifyResult(job) {
   refreshJob(job, true);
   var lines = [], vRedump = [], file;
   try {
-    // (in the folder it was written to, even if another one was picked since)
-    file = out.kind === 'disk' ? await (await (out.dir || outDir).getFileHandle(out.name)).getFile() : await outputFile(job, out, true);
+    // (in the folder it was written to, or saved handle after OPFS reclaim, even if another folder was picked since)
+    file = out.kind === 'disk' ? await (await (out.dir || outDir).getFileHandle(out.name)).getFile()
+      : out.savedHandle && typeof out.savedHandle.getFile === 'function' ? await out.savedHandle.getFile()
+      : await outputFile(job, out, true);
     if (job.verify !== v) return;
     var vArgs = ['verify', '-i', '/in/' + out.name].concat(/^(cd|gdrom|dvd)$/.test(job.disc || '') ? ['--redump'] : []);
     v.run = Engine.run({
@@ -3855,8 +4159,8 @@ function renderEarlier() {
   var box = $('#earlier');
   if (!box) return;
   box.replaceChildren();
-  var items = Recovery.earlier, stopped = Recovery.stopped, lost = Recovery.lost;
-  box.hidden = !items.length && !stopped.length && !lost.length;
+  var items = Recovery.earlier, resumable = Recovery.resumable, stopped = Recovery.stopped, lost = Recovery.lost;
+  box.hidden = !items.length && !resumable.length && !stopped.length && !lost.length;
   if (box.hidden) return;
   var card = el('div', { class: 'card earlier' });
   if (lost.length) {
@@ -3870,6 +4174,24 @@ function renderEarlier() {
     card.append(el('div', { class: 'note warn' }, el('b', null, (stopped.length > 1 ? 'Conversions that didn\u2019t finish: ' : 'A conversion didn\u2019t finish: ') + stopped.map(function (t) { return '\u201c' + t + '\u201d'; }).join(', ') + '. '),
       'The page was closed or reloaded while it ran.' + why + ' Add its files again to start over.',
       el('button', { class: 'btn sm', style: 'margin-left:8px', onclick: function () { Recovery.stopped = []; renderEarlier(); } }, 'OK')));
+  }
+  if (resumable.length) {
+    card.append(el('h2', null, 'Resume interrupted conversion'));
+    card.append(el('p', { class: 'small muted', style: 'margin:0 0 8px' }, 'Progress was saved before the page closed or reloaded. Add the original source files again to continue where it left off.'));
+    resumable.forEach(function (ck) {
+      var btns = el('div', { class: 'row' });
+      btns.append(el('button', { class: 'btn sm primary', onclick: function () { pickFiles('fileInput', function (l) { addEntries(filesFromList(l)); }); } }, icon('i-upload'), 'Choose files to resume'));
+      btns.append(el('button', { class: 'btn sm', onclick: async function () {
+        Recovery.resumable = Recovery.resumable.filter(function (x) { return x !== ck; });
+        await Store.removeJob(ck.jobId, ck.session);
+        renderEarlier();
+        refreshStorageInfo();
+      } }, 'Discard'));
+      var filesStr = (ck.inputs || []).map(function (x) { return x.name; }).slice(0, 3).join(', ') + ((ck.inputs || []).length > 3 ? '\u2026' : '');
+      card.append(el('div', { class: 'out resume-item' },
+        el('div', { class: 'nm' }, ck.outName || ck.title, el('small', null, ck.pct.toFixed(1) + '% saved \u00b7 ' + (filesStr || ck.title))),
+        btns));
+    });
   }
   if (items.length) {
     card.append(el('h2', null, 'From your last visit'));
@@ -3906,9 +4228,23 @@ function markSaved(job, out) {
   syncUnloadGuard();
 }
 async function outputFile(job, out, raw) {
+  if (out.savedHandle && typeof out.savedHandle.getFile === 'function') {
+    var sf = await out.savedHandle.getFile();
+    return raw ? sf : new File([sf], out.name, { type: 'application/octet-stream' });
+  }
   if (out.kind === 'blob') return raw ? out.blob : new File([out.blob], out.name, { type: 'application/octet-stream' });
-  var f = await Store.file(job.id, out.slot, out.session);
+  var f = await Store.file(out.storeJobId || job.storeId || job.id, out.slot, out.session);
   return raw ? f : new File([f], out.name, { type: 'application/octet-stream' });
+}
+function tryFreeSavedOpfs(job, out, handle) {
+  if (handle && typeof handle.getFile === 'function') out.savedHandle = handle;
+  if (out.kind !== 'opfs' || !out.savedHandle) return;
+  var allDone = (job.outputs || []).every(function (o) { return o.kind !== 'opfs' || (o.downloaded && o.savedHandle); });
+  if (!allDone) return;
+  var id = out.storeJobId || job.storeId || job.id;
+  var sess = out.session || (job.storeSession && job.storeSession !== Store.session ? job.storeSession : undefined);
+  (job.outputs || []).forEach(function (o) { if (o.kind === 'opfs') o.kind = 'saved'; });
+  Store.removeJob(id, sess).then(refreshStorageInfo);
 }
 // Results of 1 GB or more are saved through the browser's save dialog where it has one (Chrome and Edge
 // on desktop and Android 132+): the page then knows the file was saved, and a dialog closed without saving
@@ -3928,6 +4264,7 @@ async function savePicked(job, out) {
     var f = await outputFile(job, out, true), w = await handle.createWritable();
     await f.stream().pipeTo(w);
     markSaved(job, out);
+    tryFreeSavedOpfs(job, out, handle);
     toast('Saved \u201c' + handle.name + '\u201d.');
   } catch (e) {
     toast('Could not save the result: ' + (e && e.message || e), 'err');
@@ -3941,7 +4278,7 @@ async function downloadOutput(job, out, plain) {
   try {
     var f = await outputFile(job, out);
     var url = URL.createObjectURL(f);
-    var a = el('a', { href: url, download: out.name, style: 'display:none' });
+    var a = el('a', { href: url, download: out.name, target: iosHomeApp ? 'dl-sink' : null, style: 'display:none' });
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -3958,8 +4295,8 @@ async function downloadOutput(job, out, plain) {
 var useShareSheet = isIOS && !!navigator.canShare;
 // but not for large files: WebKit's share sheet reads each file whole into memory and hands it to the
 // app showing the page, and iOS closes that app when memory runs out (a 1 GB PSP CHD did, in Sitecase).
-// Those are downloaded instead, which Safari streams from disk to Downloads in Files.
-var SHARE_MAX = DEBUG.shareMax || 512 * 1048576;
+// Home Screen web apps have tighter Jetsam budgets (256 MiB); Safari streams larger downloads to Files.
+var SHARE_MAX = DEBUG.shareMax || (iosHomeApp ? 256 : 512) * 1048576;
 function viaShare(outs) {
   return useShareSheet && outs.reduce(function (n, o) { return n + (o.size || 0); }, 0) <= SHARE_MAX;
 }
@@ -4068,6 +4405,7 @@ async function saveToFolder(list) {
         await f.stream().pipeTo(w);
         w = null;
         markSaved(job, out);
+        tryFreeSavedOpfs(job, out, fh);
         n++;
       } catch (e) {
         if (w) try { await w.abort(); } catch (x) { /* ignore */ }
@@ -4731,6 +5069,7 @@ function fillDiag() {
   var vv = window.visualViewport;
   var mm = function (q) { return window.matchMedia && matchMedia(q).matches; };
   var lines = [
+    'Discpress ' + APP_VERSION + ' (engine ' + ENGINE_SHA + ')',
     'Discpress layout: ' + scrollMode() + ' (auto: ' + rootEl.getAttribute('data-auto-mode') + ', setting: ' + settings.scroll + ')',
     'window inner: ' + innerWidth + ' x ' + innerHeight + '   outer: ' + outerWidth + ' x ' + outerHeight,
     'screen: ' + screen.width + ' x ' + screen.height + '   dpr: ' + (window.devicePixelRatio || 1),
@@ -4773,11 +5112,26 @@ function fitChips() {
 }
 
 async function refreshStorageInfo() {
-  var est = await Store.estimate(), s = $('#storageInfo');
+  var est = await Store.estimate(), s = $('#storageInfo'), pb = $('#persistStorage');
   if (!s) return;
-  if (!Store.available) s.textContent = 'Private storage is not available in this browser; results are kept in memory.';
-  else if (est && est.quota) s.textContent = 'Available to this page: about ' + fmtBytes(Math.max(0, est.quota - est.usage)) + ' free.';
-  else s.textContent = '';
+  var persisted = false;
+  if (navigator.storage && navigator.storage.persisted) {
+    try { persisted = await navigator.storage.persisted(); } catch (e) { /* ignore */ }
+  }
+  if (!Store.available) {
+    s.textContent = 'Private storage is not available in this browser; results are kept in memory.';
+    if (pb) pb.hidden = true;
+  } else if (est && est.quota) {
+    var free = Math.max(0, est.quota - est.usage);
+    var cap10g = est.quota <= 10.5 * 1073741824 && est.quota >= 8 * 1073741824;
+    s.textContent = 'Available to this page: about ' + fmtBytes(free) + ' free' +
+      (persisted ? ' (protected).' : '.') +
+      (cap10g ? ' Browser storage is capped around 10 GB here; use “Straight into a folder” for large batches or DVD-9 libraries.' : '');
+    if (pb) pb.hidden = !navigator.storage || !navigator.storage.persist || persisted;
+  } else {
+    s.textContent = '';
+    if (pb) pb.hidden = true;
+  }
 }
 
 function init() {
@@ -4803,11 +5157,11 @@ function init() {
   // pickers
   var fi = $('#fileInput'), di = $('#dirInput');
   $('#addFiles').addEventListener('click', function () { pickFiles('fileInput', function (l) { addEntries(filesFromList(l)); }); });
-  var canPickFolder = ('webkitdirectory' in di && !isMobile) || (typeof window.showDirectoryPicker === 'function' && !isIOS);
+  var canPickFolder = ('webkitdirectory' in di && !isTouchOS) || (typeof window.showDirectoryPicker === 'function' && !isIOS);
   if (canPickFolder) {
     $('#addFolder').hidden = false;
     $('#addFolder').addEventListener('click', async function () {
-      if (isMobile && typeof window.showDirectoryPicker === 'function') {
+      if (isTouchOS && typeof window.showDirectoryPicker === 'function') {
         try {
           var root = await window.showDirectoryPicker({ mode: 'read' });
           var list = [];
@@ -4879,6 +5233,24 @@ function init() {
   }
   $('#setStorage').value = settings.storage;
   $('#folderRow').hidden = settings.storage !== 'folder';
+  if ($('#safHint') && /Android/i.test(navigator.userAgent)) $('#safHint').hidden = false;
+  if (window.showDirectoryPicker) {
+    HandleStore.get('outDir').then(async function (h) {
+      if (!h || outDir) return;
+      try {
+        var perm = typeof h.queryPermission === 'function' ? await h.queryPermission({ mode: 'readwrite' }) : 'prompt';
+        if (perm === 'granted') {
+          outDir = h;
+          if ($('#folderName')) $('#folderName').textContent = outDir.name;
+          updateChips();
+        } else {
+          savedOutDir = h;
+          if ($('#folderName')) $('#folderName').textContent = h.name + ' (click Choose folder or Start to reconnect)';
+          updateChips();
+        }
+      } catch (e) { /* ignore */ }
+    });
+  }
   $('#setStorage').addEventListener('change', function (e) {
     settings.storage = e.target.value;
     saveSettings();
@@ -4954,15 +5326,28 @@ function init() {
   $('#settingsBtn').addEventListener('click', function () { refreshStorageInfo(); if (dlg.showModal) dlg.showModal(); else dlg.setAttribute('open', ''); });
   $('#settingsClose').addEventListener('click', function () { if (dlg.close) dlg.close(); else dlg.removeAttribute('open'); });
   dlg.addEventListener('click', function (e) { if (e.target === dlg && dlg.close) dlg.close(); });
+  var persistBtn = $('#persistStorage');
+  if (persistBtn && navigator.storage && navigator.storage.persist) {
+    persistBtn.addEventListener('click', async function () {
+      try {
+        var ok = await navigator.storage.persist();
+        toast(ok ? 'Temporary storage is now protected from automatic eviction.' : 'The browser kept temporary storage as best-effort.');
+      } catch (e) { toast('Could not protect storage in this browser.', 'err'); }
+      refreshStorageInfo();
+    });
+  }
   $('#clearStorage').addEventListener('click', async function () {
     var busy = jobs.some(function (j) { return j.state === 'running'; });
     if (busy) { toast('Wait for the running job to finish first.', 'err'); return; }
     if (!confirm('Delete all finished results from browser storage? Download anything you need first.')) return;
-    for (var i = 0; i < jobs.length; i++) if (jobs[i].state === 'done') { stopVerify(jobs[i]); await Store.removeJob(jobs[i].id); jobs[i].outputs = []; jobs[i].state = 'ready'; refreshJob(jobs[i], true); }
+    for (var i = 0; i < jobs.length; i++) if (jobs[i].state === 'done') { stopVerify(jobs[i]); await Store.removeJob(jobs[i].storeId || jobs[i].id, jobs[i].storeSession && jobs[i].storeSession !== Store.session ? jobs[i].storeSession : undefined); jobs[i].outputs = []; jobs[i].state = 'ready'; refreshJob(jobs[i], true); }
     if (cli.last && !cli.run) { await Store.removeJob(cli.last.id); cli.last = null; $('#cliOuts').replaceChildren(); }
     var earlier = Recovery.earlier;
     Recovery.earlier = [];
     for (var j = 0; j < earlier.length; j++) await Store.removeJob(earlier[j].jobId, earlier[j].session);
+    var res = Recovery.resumable;
+    Recovery.resumable = [];
+    for (var r = 0; r < res.length; r++) await Store.removeJob(res[r].jobId, res[r].session);
     renderEarlier();
     try {
       var root = await navigator.storage.getDirectory();
@@ -4976,11 +5361,43 @@ function init() {
     toast('Temporary storage cleared.');
   });
 
+  // Flush active OPFS buffers and request an urgent checkpoint on pagehide
+  window.addEventListener('pagehide', function () {
+    if (current && current.run && current.run.postVisibility) current.run.postVisibility(true);
+  });
+  // Thermal/CPU pressure throttling (Chromium PressureObserver): scale active helpers gracefully
+  if (typeof window.PressureObserver === 'function') {
+    try {
+      var po = new window.PressureObserver(function (records) {
+        var last = records && records[records.length - 1];
+        if (!last) return;
+        var st = last.state, nt = threadCount();
+        cpuThrottle = st === 'critical' ? 1 : st === 'serious' ? Math.max(1, Math.floor(nt / 2)) : nt;
+        if (current && current.run && current.run.setThrottle) current.run.setThrottle(cpuThrottle);
+      });
+      po.observe('cpu', { sampleInterval: 5000 }).catch(function () {});
+    } catch (e) { /* unsupported */ }
+  }
+  // Shorten checkpoint interval when running unplugged on low battery (<25%)
+  if (navigator.getBattery) {
+    navigator.getBattery().then(function (bat) {
+      var upd = function () { lowBattery = !bat.charging && bat.level < 0.25; };
+      upd();
+      bat.addEventListener('chargingchange', upd);
+      bat.addEventListener('levelchange', upd);
+    }).catch(function () {});
+  }
+
   cliInit();
   updateDock();
   updateChips();
 
-  Store.init().then(function () { updateChips(); renderEarlier(); DatStore.load(); });
+  Store.init().then(function () {
+    updateChips();
+    renderEarlier();
+    jobs.forEach(function (j) { matchResumable(j); });
+    DatStore.load();
+  });
   $('#datAdd').addEventListener('click', function () { pickFiles('datInput', function (l) { addEntries(filesFromList(l)); }); });
   initHosted();
   initIosTip();
@@ -5002,7 +5419,7 @@ function updateChips() {
       : 'Discpress measures this device the first time it creates a CHD (a few seconds, once).';
     rr.hidden = !auto;
   }
-  if (settings.storage === 'folder') setChip('chipStore', outDir ? 'Saving to “' + outDir.name + '”' : 'Output folder not chosen', outDir ? 'ok' : 'warn');
+  if (settings.storage === 'folder') setChip('chipStore', outDir ? 'Saving to \u201c' + outDir.name + '\u201d' : savedOutDir ? 'Folder \u201c' + savedOutDir.name + '\u201d (reconnect)' : 'Output folder not chosen', outDir ? 'ok' : 'warn');
   else {
     var mem = settings.storage === 'memory' || !Store.available;
     setChip('chipStore', mem ? 'Results in memory' : 'Large files OK', mem ? 'warn' : 'ok');

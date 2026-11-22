@@ -34,4 +34,21 @@ addToLibrary({
   wasm_rd_close: function (chd) {
     if (Module['rdClose']) Module['rdClose'](chd >>> 0);
   },
+  // crash-resumable checkpoints (OPFS-backed compressed non-parent conversions)
+  wasm_ckpt_enabled: function (hunkbytes, hunkcount) {
+    return Module['ckptEnabled'] ? (Module['ckptEnabled'](hunkbytes >>> 0, hunkcount >>> 0) >>> 0) : 0;
+  },
+  wasm_ckpt_requested: function () {
+    return Module['ckptRequested'] && Module['ckptRequested']() ? 1 : 0;
+  },
+  wasm_ckpt_save: function (next_hunk, hunk_count, write_offset, total_out, sha1_ptr, delta_ptr, delta_count) {
+    if (!Module['ckptSave']) return 0;
+    return Module['ckptSave'](next_hunk >>> 0, hunk_count >>> 0, write_offset, total_out, sha1_ptr >>> 0, delta_ptr >>> 0, delta_count >>> 0) ? 1 : 0;
+  },
+  wasm_ckpt_try_resume: function (comp, hunk_bytes, hunk_count, unit_bytes, comps_ptr, logical_bytes, meta_end, out_state_ptr) {
+    if (!Module['ckptTryResume']) return 0;
+    var p = comps_ptr >>> 2;
+    var comps = [HEAPU32[p], HEAPU32[p + 1], HEAPU32[p + 2], HEAPU32[p + 3]];
+    return Module['ckptTryResume'](comp >>> 0, hunk_bytes >>> 0, hunk_count >>> 0, unit_bytes >>> 0, comps, logical_bytes, meta_end, out_state_ptr >>> 0) ? 1 : 0;
+  },
 });

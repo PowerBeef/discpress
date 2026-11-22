@@ -38,6 +38,11 @@ extern "C" {
 	int wasm_rd_enabled(const void *chd, uint32_t hunkbytes, uint32_t unitbytes, const uint32_t *compression);
 	void wasm_rd_submit(const void *chd, uint32_t hunknum, uint32_t codec, const uint8_t *data, uint32_t length);
 	void wasm_rd_close(const void *chd);
+	// crash-resumable checkpoints (browser build, OPFS-backed compressed non-parent runs)
+	uint32_t wasm_ckpt_enabled(uint32_t hunkbytes, uint32_t hunkcount);
+	int wasm_ckpt_requested();
+	int wasm_ckpt_save(uint32_t next_hunk, uint32_t hunk_count, double write_offset, double total_out, const uint8_t *sha1_state92, const uint8_t *delta32, uint32_t delta_count);
+	int wasm_ckpt_try_resume(void *compressor, uint32_t hunk_bytes, uint32_t hunk_count, uint32_t unit_bytes, const uint32_t *comps4, double logical_bytes, double meta_end, uint8_t *out_state112);
 }
 static int s_wasm_par = 0;
 #endif
@@ -3303,9 +3308,25 @@ void chd_file_compressor::compress_begin()
 	// reset work item state (Discpress: target 8 MiB per buffer -> 4 MiB half-reads for DVD throughput;
 	// keep 256 hunks when walking a parent; always a multiple of 256 for stateless Tier-R tail padding)
 	uint32_t target_hunks = m_parent ? 256u : std::clamp<uint32_t>((8u << 20) / hunk_bytes(), 256u, 4096u);
+#ifdef __EMSCRIPTEN__
+	m_ckpt_stride = (!m_parent && compressed()) ? wasm_ckpt_enabled(hunk_bytes(), hunk_count()) : 0u;
+	m_ckpt_snap_wr = 0;
+	m_ckpt_delta.clear();
+	for (auto &s : m_ckpt_snaps)
+		s.hunk = ~uint32_t(0);
+	if (m_ckpt_stride > 0u && m_ckpt_stride < target_hunks / 2u)
+		target_hunks = std::max<uint32_t>(256u, m_ckpt_stride);
+#endif
 	m_work_buffer_hunks = (target_hunks / 256u) * 256u;
 	if (m_work_buffer_hunks < 256u)
 		m_work_buffer_hunks = 256u;
+#ifdef __EMSCRIPTEN__
+	if (m_ckpt_stride > 0u)
+	{
+		uint32_t const step = std::max<uint32_t>(256u, m_work_buffer_hunks / 2u);
+		m_ckpt_stride = ((m_ckpt_stride + step - 1u) / step) * step;
+	}
+#endif
 	m_work_buffer.resize(size_t(hunk_bytes()) * (m_work_buffer_hunks + 1));
 	memset(m_work_buffer.data(), 0, m_work_buffer.size());
 	m_compressed_buffer.resize(size_t(hunk_bytes()) * m_work_buffer_hunks);
@@ -3340,6 +3361,47 @@ void chd_file_compressor::compress_begin()
 	m_write_hunk = 0;
 
 #ifdef __EMSCRIPTEN__
+	// Discpress: restore from OPFS checkpoint if one matches this job & parameters
+	if (m_ckpt_stride > 0u && !m_parent && compressed() && m_file)
+	{
+		uint64_t meta_end = 0;
+		if (!m_file->length(meta_end))
+		{
+			uint8_t out_state[112] = { 0 };
+			int const resumed = wasm_ckpt_try_resume(this, hunk_bytes(), hunk_count(), unit_bytes(), m_compression, double(logical_bytes()), double(meta_end), out_state);
+			bool ok = false;
+			if (resumed == 1)
+			{
+				uint32_t const next_hunk = get_u32le(&out_state[0]);
+				uint64_t const write_offset = get_u64le(&out_state[4]);
+				uint64_t const total_out = get_u64le(&out_state[12]);
+				util::sha1_creator::state_t st{};
+				st.cnt = get_u64le(&out_state[20]);
+				for (int i = 0; i < 5; i++)
+					st.st[i] = get_u32le(&out_state[28 + i * 4]);
+				for (int i = 0; i < 16; i++)
+					st.buf[i] = get_u32le(&out_state[48 + i * 4]);
+				auto *cf = dynamic_cast<util::core_file *>(m_file.get());
+				if (cf && next_hunk > 0u && (next_hunk % 256u) == 0u && next_hunk + 256u < m_hunkcount &&
+						write_offset >= meta_end && !cf->truncate(write_offset))
+				{
+					uint64_t const byte_pos = uint64_t(next_hunk) * hunk_bytes();
+					m_write_hunk = next_hunk;
+					m_read_queue_offset = byte_pos;
+					m_read_done_offset.store(byte_pos, std::memory_order_relaxed);
+					m_total_in.store(byte_pos, std::memory_order_relaxed);
+					m_total_out = total_out;
+					m_compsha1.load_state(st);
+					ok = true;
+				}
+			}
+			if (!ok)
+			{
+				memset(m_rawmap.data(), 0xff, m_rawmap.size());
+				m_current_map.reset();
+			}
+		}
+	}
 	uint32_t const par_flags = (m_libdeflate ? 1u : 0u) | (m_ultra ? 2u : 0u) | (uint32_t(m_zstd_level) << 8);
 	s_wasm_par = compressed() ? wasm_par_enabled(hunk_bytes(), unit_bytes(), m_compression, par_flags) : 0;
 #else
@@ -3499,9 +3561,61 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 			}
 		}
 
+#ifdef __EMSCRIPTEN__
+		// Discpress: record 32B/hunk delta (12B rawmap + 20B sha1 for unique hunks) for crash-resumable checkpoints
+		if (m_ckpt_stride > 0u && !m_walking_parent && compressed())
+		{
+			uint8_t const *const raw = &m_rawmap[size_t(item.m_hunknum) * 12];
+			size_t const off = m_ckpt_delta.size();
+			m_ckpt_delta.resize(off + 32);
+			memcpy(&m_ckpt_delta[off], raw, 12);
+			if (raw[0] <= COMPRESSION_NONE)
+				memcpy(&m_ckpt_delta[off + 12], item.m_hash[0].m_sha1.m_raw, 20);
+			else
+				memset(&m_ckpt_delta[off + 12], 0, 20);
+		}
+#endif
+
 		// reset the item and advance
 		item.m_status.store(WS_READY, std::memory_order_release);
 		m_write_hunk++;
+
+#ifdef __EMSCRIPTEN__
+		if (m_ckpt_stride > 0u && !m_walking_parent && compressed() && m_write_hunk + 256u < m_hunkcount)
+		{
+			bool const due = (m_write_hunk % m_ckpt_stride == 0u) || ((m_write_hunk % 256u == 0u) && wasm_ckpt_requested());
+			if (due && !m_ckpt_delta.empty())
+			{
+				ckpt_snap_t const *snap = nullptr;
+				for (auto const &s : m_ckpt_snaps)
+				{
+					if (s.hunk == m_write_hunk)
+					{
+						snap = &s;
+						break;
+					}
+				}
+				uint64_t file_len = 0;
+				if (snap && m_file && !m_file->length(file_len))
+				{
+					uint8_t sha92[92];
+					put_u64le(&sha92[0], snap->sha1.cnt);
+					for (int i = 0; i < 5; i++)
+						put_u32le(&sha92[8 + i * 4], snap->sha1.st[i]);
+					for (int i = 0; i < 16; i++)
+						put_u32le(&sha92[28 + i * 4], snap->sha1.buf[i]);
+					int const ok = wasm_ckpt_save(m_write_hunk, m_hunkcount, double(file_len), double(m_total_out), sha92, m_ckpt_delta.data(), uint32_t(m_ckpt_delta.size() / 32));
+					if (ok)
+						m_ckpt_delta.clear();
+					else
+					{
+						m_ckpt_stride = 0u;
+						std::vector<uint8_t>().swap(m_ckpt_delta);
+					}
+				}
+			}
+		}
+#endif
 
 		// if we hit the end, finalize
 		if (m_write_hunk == m_hunkcount)
@@ -3537,6 +3651,9 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 				m_work_item.reset();
 				m_codecs.clear();
 				m_codecs.shrink_to_fit();
+#ifdef __EMSCRIPTEN__
+				std::vector<uint8_t>().swap(m_ckpt_delta);
+#endif
 				if (!compressed())
 					return std::error_condition();
 				std::error_condition err = set_raw_sha1(m_compsha1.finish());
@@ -3739,7 +3856,21 @@ void chd_file_compressor::async_read()
 		if (!walking_parent)
 		{
 			if (compressed())
+			{
 				m_compsha1.append(dest, numbytes);
+#ifdef __EMSCRIPTEN__
+				if (m_ckpt_stride > 0u && end_offset < logical_bytes())
+				{
+					uint32_t const end_hunk = uint32_t(end_offset / hunk_bytes());
+					if ((end_hunk % 256u) == 0u && end_hunk + 256u < m_hunkcount)
+					{
+						ckpt_snap_t &slot = m_ckpt_snaps[m_ckpt_snap_wr++ & 3u];
+						slot.hunk = end_hunk;
+						slot.sha1 = m_compsha1.save_state();
+					}
+				}
+#endif
+			}
 			m_total_in.fetch_add(numbytes, std::memory_order_relaxed);
 		}
 		m_read_done_offset.store(end_offset, std::memory_order_relaxed);
@@ -4033,6 +4164,32 @@ extern "C" EMSCRIPTEN_KEEPALIVE uint8_t *wasm_par_item_compbuf(void *item)
 extern "C" EMSCRIPTEN_KEEPALIVE void wasm_par_complete_inplace(void *item, uint32_t crc16, const uint8_t *sha1, int compression, uint32_t complen)
 {
 	chd_file_compressor::wasm_par_complete_item_inplace(item, crc16, sha1, compression, complen);
+}
+
+bool chd_file_compressor::wasm_ckpt_restore_chunk(uint32_t start_hunk, const uint8_t *entries32, uint32_t count)
+{
+	if (!entries32 || start_hunk > m_hunkcount || count > m_hunkcount - start_hunk)
+		return false;
+	for (uint32_t i = 0; i < count; i++)
+	{
+		uint32_t const hunknum = start_hunk + i;
+		uint8_t const *const src = entries32 + size_t(i) * 32;
+		uint8_t *const rawmap = &m_rawmap[size_t(hunknum) * 12];
+		memcpy(rawmap, src, 12);
+		if (rawmap[0] <= COMPRESSION_NONE)
+		{
+			util::crc16_t const crc16 = get_u16be(&rawmap[10]);
+			util::sha1_t sha1;
+			memcpy(sha1.m_raw, src + 12, 20);
+			m_current_map.add(hunknum, crc16, sha1);
+		}
+	}
+	return true;
+}
+
+extern "C" EMSCRIPTEN_KEEPALIVE int wasm_ckpt_restore_chunk(chd_file_compressor *comp, uint32_t start_hunk, const uint8_t *entries32, uint32_t count)
+{
+	return comp && comp->wasm_ckpt_restore_chunk(start_hunk, entries32, count) ? 1 : 0;
 }
 
 bool chd_file::wasm_read_ahead(uint32_t first, uint32_t count)

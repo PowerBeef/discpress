@@ -59,6 +59,30 @@ public:
 	// finalize and compute the final digest
 	sha1_t finish() noexcept;
 
+	// Discpress: snapshot/restore mid-stream SHA-1 state for crash-resumable checkpoints
+	struct state_t
+	{
+		uint64_t cnt;
+		uint32_t st[5];
+		uint32_t buf[16];
+	};
+	state_t save_state() const noexcept
+	{
+		state_t s;
+		s.cnt = m_cnt;
+		for (int i = 0; i < 5; i++)
+			s.st[i] = m_st[i];
+		memcpy(s.buf, m_buf, sizeof(s.buf));
+		return s;
+	}
+	void load_state(const state_t &s) noexcept
+	{
+		m_cnt = s.cnt;
+		for (int i = 0; i < 5; i++)
+			m_st[i] = s.st[i];
+		memcpy(m_buf, s.buf, sizeof(m_buf));
+	}
+
 	// static wrapper to just get the digest from a block
 	static sha1_t simple(const void *data, uint32_t length) noexcept
 	{
