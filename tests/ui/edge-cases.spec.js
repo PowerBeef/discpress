@@ -197,14 +197,14 @@ test('a TOC with one file per track, as chdman writes it, keeps every track', as
   if (sameVersion()) expect(sha1File(out.path)).toBe(sha1File(reference('createcd', refToc)));
 });
 
-test('an ISO can be switched between DVD and CD', async ({ app }) => {
+test('an ISO can be switched between CD and DVD', async ({ app }) => {
   await app.open();
   await app.add(fixture('homebrew-iso').add);
   const card = app.jobs().first();
   await app.settled(card);
-  await expect(card.locator('code.cmd')).toContainText('chdman createdvd');
-  await card.locator('.seg button', { hasText: 'CD CHD' }).click();
   await expect(card.locator('code.cmd')).toContainText('chdman createcd');
+  await card.locator('.seg button', { hasText: 'DVD CHD' }).click();
+  await expect(card.locator('code.cmd')).toContainText('chdman createdvd');
   await app.run(card);
 });
 
@@ -781,7 +781,7 @@ test('the compression picked stays when the type of CHD changes', async ({ app }
   await app.settled(card);
   await card.locator('details.opts summary').click();
   await card.locator('label.field', { hasText: 'Compression' }).locator('select').selectOption({ label: 'Faster to create' });
-  await expect(card.locator('code.cmd')).toContainText('-c zlib,huff');
+  await expect(card.locator('code.cmd')).toContainText('-c zlib --libdeflate');
   await card.locator('.row', { hasText: 'Create as' }).locator('button', { hasText: 'CD CHD' }).click();
   await expect(card.locator('code.cmd')).toContainText('chdman createcd');
   await expect(card.locator('code.cmd')).toContainText('-c cdzl,cdfl');

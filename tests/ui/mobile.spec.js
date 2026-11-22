@@ -2,9 +2,12 @@
 import { test, expect, fixture, App } from '../support/app.js';
 import { overflowReport } from '../support/layout.js';
 
-test('the phone layout fits the screen before and after converting', async ({ app, page }) => {
+test('the phone layout fits the screen before and after converting', async ({ app, page }, testInfo) => {
   await app.open();
-  await expect(page.locator('#addFolder')).toBeHidden(); // no folder picking on phones
+  // iPhone lacks showDirectoryPicker (no folder picking); Android Chrome 132+ exposes showDirectoryPicker
+  const hasDirPicker = await page.evaluate(() => typeof window.showDirectoryPicker === 'function');
+  if (/iphone/.test(testInfo.project.name) || !hasDirPicker) await expect(page.locator('#addFolder')).toBeHidden();
+  else await expect(page.locator('#addFolder')).toBeVisible();
   expect((await overflowReport(page)).offenders).toEqual([]);
   await app.add(fixture('ps1-multitrack').add);
   const card = app.job('mgs disc1');

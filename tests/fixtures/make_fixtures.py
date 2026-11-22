@@ -218,7 +218,7 @@ fixture('ps1-lone-bin', {
 fixture('ps1-slash-serial', {
     'allstar.iso': lambda: ps1_iso('SLES_041.07', 'ALLSTAR', 1, 40),
 }, add=['allstar.iso'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLES-04107',
-   ident='serial', name='All Star Action (Europe) (Disc 1)', quirks=['ps1-cooked'])
+   ident='serial', name='All Star Action (Europe) (Disc 1)', quirks=['ps1-cooked', 'missing-audio-tracks'])
 
 # a PlayStation CD game stored as a plain 2048-byte .iso: must become a CD CHD, not a DVD one
 # SYSTEM.CNF boots a generic PSX.EXE: the serial is the name of a file in the root (SLUS_009.75)
@@ -374,7 +374,7 @@ fixture('saturn', {
         {'0.BIN': g.filler(1 << 20, 41), 'ABS.TXT': b'fixture'}, 'ALBERT', 'SEGA SEGASATURN',
         ipbin(b'SEGA SEGASATURN ', 0x20, b'T-12705H  ', 0x60, b'ALBERT ODYSSEY', {0x10: b'SEGA TP T-127   ', 0x38: b'CD-1/1  ', 0x40: b'U         '}))), 1),
 }, add=['albert odyssey.cue', 'albert odyssey.bin'], job='create', disc='cd', command='createcd', sys='saturn', serial='T-12705H',
-   ident='serial', name='Albert Odyssey - Legend of Eldean (USA)')
+   ident='serial', name='Albert Odyssey - Legend of Eldean (USA)', quirks=['missing-audio-tracks'])
 
 # a USA disc whose serial (T-8113H) also prefixes European/German releases (T-8113H-50, T-8113H-18):
 # the exact match must win
@@ -384,7 +384,7 @@ fixture('saturn-region', {
         {'0.BIN': g.filler(256 << 10, 42)}, 'ALIEN', 'SEGA SEGASATURN',
         ipbin(b'SEGA SEGASATURN ', 0x20, b'T-8113H   ', 0x60, b'ALIEN TRILOGY', {0x10: b'SEGA TP T-81    ', 0x38: b'CD-1/1  ', 0x40: b'U         '}))), 1),
 }, add=['alien trilogy.cue', 'alien trilogy.bin'], job='create', disc='cd', command='createcd', sys='saturn', serial='T-8113H',
-   ident='serial', name='Alien Trilogy (USA)')
+   ident='serial', name='Alien Trilogy (USA)', quirks=['missing-audio-tracks'])
 
 fixture('segacd', {
     'ax101.cue': lambda: cue([('ax101.bin', 'MODE1/2352', 0), ('ax101 audio.bin', 'AUDIO', 150)]),
@@ -427,7 +427,7 @@ fixture('dreamcast-cdr', {
    serial='T0000', ident='none', name='dc cdr', quirks=['dc-cd-gaps'])
 
 # a NAOMI GD-ROM whose serial the database lists under NAOMI 2: the two share one header layout. Its CHD
-# keeps its file's name (out), which MAME and Flycast look for in the game's romset
+# is named after its lowercase disc serial (`gds-0014.chd`), which MAME and Flycast look for in the romset
 fixture('naomi2-gdi', {
     'spikers.gdi': lambda: b'3\r\n1 0 4 2352 spikers01.bin 0\r\n2 450 0 2352 spikers02.raw 0\r\n3 45000 4 2352 spikers03.bin 0\r\n',
     'spikers01.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660({'README.TXT': b'fixture'}, 'SPIKERS')), 1, 0),
@@ -436,7 +436,7 @@ fixture('naomi2-gdi', {
         {'1ST_READ.BIN': g.filler(1 << 20, 66)}, 'SPIKERS', '',
         ipbin(b'SEGA SEGAKATANA ', 0x40, b'GDS-0014  ', 0x80, b'BEACH SPIKERS', {0x10: b'SEGA ENTERPRISES', 0x20: b'0000 GD-ROM1/1  ', 0x30: b'JUE     ', 0x38: b'NAOMI   '}))), 1, 45000),
 }, add=['spikers.gdi', 'spikers01.bin', 'spikers02.raw', 'spikers03.bin'], job='create', disc='gdrom', command='createcd', sys='naomi2',
-   serial='GDS-0014', ident='serial', name='Beach Spikers - Virtua Beach Volleyball (World) (En,Ja)', out='spikers', quirks=['naomi-name'])
+   serial='GDS-0014', ident='serial', name='Beach Spikers - Virtua Beach Volleyball (World) (En,Ja)', out='gds-0014', quirks=['naomi-name'])
 
 # The Redump layout of a GD-ROM: one .bin per track, track 2's 2-second pregap stored at the start of
 # its file (INDEX 00), and REM lines marking the high-density area, which chdman places at LBA 45000.
@@ -482,20 +482,20 @@ def saturn_fixture(key, stem, serial, title, device, area, seed, **info):
 
 gd_fixture('dc-firstparty', 'wheeler', b'MK-51064', b'18 WHEELER', b'0000 GD-ROM1/1', b'U', 131,
            ident='serial', name='18 Wheeler - American Pro Trucker (USA)')
-saturn_fixture('saturn-firstparty', 'amok', b'MK-81064', b'AMOK', b'CD-1/1', b'U', 133, ident='serial', name='Amok (USA)')
+saturn_fixture('saturn-firstparty', 'amok', b'MK-81064', b'AMOK', b'CD-1/1', b'U', 133, ident='serial', name='Amok (USA)', quirks=['missing-audio-tracks'])
 fixture('segacd-firstparty', {
     'batman cd.cue': lambda: cue([('batman cd.bin', 'MODE1/2352', 0)]),
     'batman cd.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660(
         {'MAIN.PRG': g.filler(256 << 10, 135)}, 'BATMAN', '',
         ipbin(b'SEGADISCSYSTEM  ', 0x180, b'GM MK-4432 -00', 0x150, b'THE ADVENTURES OF BATMAN & ROBIN', {0x1F0: b'U  '}))), 1),
 }, add=['batman cd.cue', 'batman cd.bin'], job='create', disc='cd', command='createcd', sys='segacd', serial='MK-4432',
-   ident='serial', name='Adventures of Batman and Robin, The (USA)')
+   ident='serial', name='Adventures of Batman and Robin, The (USA)', quirks=['missing-audio-tracks'])
 
 # discs of a set share their serial (T-21301G is 3x3 Eyes' three discs): the disc's header says which it is
 saturn_fixture('saturn-disc1', '3x3 eyes 1', b'T-21301G', b'3X3 EYES', b'CD-1/3', b'J', 137,
-               ident='serial', name='3x3 Eyes - Kyuusei Koushu S (Japan) (Disc 1)')
+               ident='serial', name='3x3 Eyes - Kyuusei Koushu S (Japan) (Disc 1)', quirks=['missing-audio-tracks'])
 saturn_fixture('saturn-disc2', '3x3 eyes 2', b'T-21301G', b'3X3 EYES', b'CD-2/3', b'J', 139,
-               ident='serial', name='3x3 Eyes - Kyuusei Koushu S (Japan) (Disc 2)')
+               ident='serial', name='3x3 Eyes - Kyuusei Koushu S (Japan) (Disc 2)', quirks=['missing-audio-tracks'])
 gd_fixture('dc-disc2', 'nightmare', b'T-15117N', b'ALONE IN THE DARK', b'0000 GD-ROM2/2', b'U', 141,
            ident='serial', name='Alone in the Dark - The New Nightmare (USA) (Disc 2)')
 
@@ -506,7 +506,7 @@ saturn_fixture('saturn-other-region', 'other region', b'T-99990', b'OTHER REGION
 # Sega's publishers gave other games a serial with another suffix: T-25406H is Hexen (USA), T-25406H-50
 # Doom (Europe). A Doom disc with a suffix Redump doesn't list: for Europe, named after Doom (Europe);
 # for the USA, not after Hexen, only offered
-saturn_fixture('saturn-suffix', 'doom eu', b'T-25406H-9', b'DOOM', b'CD-1/1', b'E', 147, ident='serial', name='Doom (Europe) (R)')
+saturn_fixture('saturn-suffix', 'doom eu', b'T-25406H-9', b'DOOM', b'CD-1/1', b'E', 147, ident='serial', name='Doom (Europe) (R)', quirks=['missing-audio-tracks'])
 saturn_fixture('saturn-related', 'doom us', b'T-25406H-1', b'DOOM', b'CD-1/1', b'U', 149, ident='none', name='doom us')
 
 # a PS1 disc whose serial (SLES-99980) names one release exactly and, as a base serial, another
@@ -660,7 +660,7 @@ fixture('cd-extra', {
     'cd extra (Track 1).bin': lambda: g.audio(300, 204),
     'cd extra (Track 2).bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660({'README.TXT': b'extra', 'VIDEO.MOV': g.filler(64 << 10, 205)}, 'CDEXTRA')), 1),
 }, add=['cd extra.cue', 'cd extra (Track 1).bin', 'cd extra (Track 2).bin'], job='create', disc='cd', command='createcd',
-   ident='none', name='cd extra', warning='so emulators read the data after the first session from the wrong place. Keep', quirks=['multisession'])
+   ident='none', name='cd extra', warning='so emulators read the data after the first session from the wrong place. Keep', quirks=['multisession', 'dosbox-x-padding'])
 
 # a PC Engine CD whose data track also has an ISO 9660 volume: its boot sector (sector 1) says so first
 data_fixture('pcecd-iso', 'pce iso', lambda: g.pad_sectors(g.iso9660({'GAME.DAT': g.filler(128 << 10, 171)}, 'PCEGAME', '',
@@ -728,12 +728,12 @@ fixture('ps1-libcrypt-missing', {
     'anstoss.bin': lambda: g.raw_sectors(ps1_iso('SLES_025.63', 'ANSTOSS', 1, 191), 2),
     'anstoss lc.sbi': lambda: b'SBI\x00' + bytes([0x00, 0x04, 0x00, 1]) + bytes(10),
 }, add=['anstoss.cue', 'anstoss.bin'], job='create', disc='cd', command='createcd', sys='ps1', serial='SLES-02563',
-   ident='serial', name='Anstoss - Premier Manager (Germany)', warning='This game is protected by LibCrypt', quirks=['libcrypt-missing'])
+   ident='serial', name='Anstoss - Premier Manager (Germany)', warning='This game is protected by LibCrypt', quirks=['libcrypt-missing', 'missing-audio-tracks'])
 
 # ---------------------------------------------------------------- unrecognized / other types
 fixture('homebrew-iso', {
     'homebrew.iso': lambda: g.pad_sectors(g.iso9660({'README.TXT': b'hello', 'GAME.DAT': g.filler(3 << 20, 71)}, 'HOMEBREW')),
-}, add=['homebrew.iso'], job='create', disc='dvd', command='createdvd', sys=None, ident='none', name='homebrew')
+}, add=['homebrew.iso'], job='create', disc='cd', command='createcd', sys=None, ident='none', name='homebrew')
 
 fixture('hard-disk', {
     'arcade.img': lambda: bytes(446) + bytes([0x80, 1, 1, 0, 0x06, 0x0F, 0x3F, 0x20, 0x3F, 0, 0, 0, 0xC1, 0x3F, 0, 0]) + bytes(48) + b'\x55\xaa' + g.filler((8 << 20) - 512, 81),
@@ -800,7 +800,7 @@ fixture('cue-motorola', {
     'moto (Track 2).bin': cue_t2, 'moto (Track 3).bin': cue_t3,
     'moto-ref.cue': lambda: twin('moto', 'bin', 'bin', 'BINARY', 'BINARY'),
 }, add=['moto.cue', 'moto (Track 1).bin', 'moto (Track 2).be', 'moto (Track 3).be', 'moto (Track 4).bin'], ref='moto-ref.cue',
-   job='create', disc='cd', command='createcd', sys=None, ident='none', name='moto')
+   job='create', disc='cd', command='createcd', sys=None, ident='none', name='moto', quirks=['dosbox-x-padding'])
 
 # a file with several tracks after another file: 0.289 went on from the first file's offsets
 fixture('cue-shared-file', {
@@ -812,7 +812,7 @@ fixture('cue-shared-file', {
     'shared (Track 2).bin': cue_t2, 'shared (Track 3).bin': cue_t3, 'shared (Track 4).bin': cue_t4,
     'shared-ref.cue': lambda: twin('shared', 'bin', 'bin', 'BINARY', 'BINARY'),
 }, add=['shared.cue', 'shared (Track 1).bin', 'shared rest.bin'], ref='shared-ref.cue',
-   job='create', disc='cd', command='createcd', sys=None, ident='none', name='shared')
+   job='create', disc='cd', command='createcd', sys=None, ident='none', name='shared', quirks=['dosbox-x-padding'])
 
 # two tracks in one .wav: 0.289 gave the first track all of it
 fixture('cue-wave-tracks', {
@@ -824,7 +824,7 @@ fixture('cue-wave-tracks', {
     'wavs (Track 2).wav': lambda: wav(cue_t2()), 'wavs (Track 3).wav': lambda: wav(cue_t3()),
     'wavs-ref.cue': lambda: twin('wavs', 'wav', 'wav', 'WAVE', 'WAVE'),
 }, add=['wavs.cue', 'wavs (Track 1).bin', 'wavs audio.wav', 'wavs (Track 4).bin'], ref='wavs-ref.cue',
-   job='create', disc='cd', command='createcd', sys=None, ident='none', name='wavs')
+   job='create', disc='cd', command='createcd', sys=None, ident='none', name='wavs', quirks=['dosbox-x-padding'])
 
 # ---------------------------------------------------------------- cue sheets with more than a CHD's tracks hold
 # Redump's cue sheets for many systems carry what chdman doesn't store: CATALOG, FLAGS, ISRC, INDEX
@@ -839,7 +839,7 @@ fixture('cue-fidelity', {
                              '    INDEX 00 00:00:00\r\n    INDEX 01 00:01:00\r\n').encode(),
     'fidelity (Track 1).bin': lambda: cue_data(126), 'fidelity (Track 2).bin': cue_t2, 'fidelity (Track 3).bin': cue_t3,
 }, add=['fidelity.cue', 'fidelity (Track 1).bin', 'fidelity (Track 2).bin', 'fidelity (Track 3).bin'],
-   job='create', disc='cd', command='createcd', sys=None, ident='none', name='fidelity')
+   job='create', disc='cd', command='createcd', sys=None, ident='none', name='fidelity', quirks=['dosbox-x-padding'])
 fixture('cue-cdi', {
     'cdi disc.cue': lambda: b'FILE "cdi disc.bin" BINARY\r\n  TRACK 01 CDI/2352\r\n    INDEX 01 00:00:00\r\n',
     'cdi disc.bin': lambda: g.raw_sectors(g.pad_sectors(g.iso9660({'README.TXT': b'cd-i test', 'DATA.BIN': g.filler(300 << 10, 127)}, 'CDITEST')), 2),

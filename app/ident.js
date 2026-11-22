@@ -7,7 +7,8 @@ var SYSTEMS = {
   pcecd: ['PCE', 'PC Engine CD / TurboGrafx-CD'], pcfx: ['PC-FX', 'NEC PC-FX'], ngcd: ['NGCD', 'Neo Geo CD'],
   '3do': ['3DO', '3DO Interactive Multiplayer'], cdi: ['CD-i', 'Philips CD-i'], cd32: ['CD32', 'Amiga CD32'],
   cdtv: ['CDTV', 'Commodore CDTV'], jagcd: ['JAG', 'Atari Jaguar CD'], naomi: ['NAOMI', 'Sega NAOMI (GD-ROM)'],
-  naomi2: ['NAOMI2', 'Sega NAOMI 2 (GD-ROM)'], pc98: ['PC-98', 'NEC PC-98'], gc: ['GC', 'Nintendo GameCube'],
+  naomi2: ['NAOMI2', 'Sega NAOMI 2 (GD-ROM)'], triforce: ['TRI', 'Triforce (GD-ROM)'], chihiro: ['CHIH', 'Sega Chihiro (GD-ROM)'],
+  pc98: ['PC-98', 'NEC PC-98'], gc: ['GC', 'Nintendo GameCube'],
   wii: ['Wii', 'Nintendo Wii'], xbox: ['XBOX', 'Microsoft Xbox or Xbox 360'], ps3: ['PS3', 'Sony PlayStation 3'],
   vcd: ['VCD', 'Video CD'], video: ['VIDEO', 'Video disc (DVD-Video, Blu-ray, Photo CD)'],
   pc: ['DATA', 'Data disc (PC or unknown system)']
@@ -17,6 +18,7 @@ var SYS_COLORS = {
   segacd: ['#1f4ea8', '#ffffff'], dc: ['#ff7a1a', '#1c1733'], pcecd: ['#f1ead6', '#1c1733'], pcfx: ['#3a3a44', '#ffffff'],
   ngcd: ['#d9b23a', '#1c1733'], '3do': ['#b01e2f', '#ffffff'], cdi: ['#1c6fb8', '#ffffff'], cd32: ['#e11d48', '#ffffff'],
   cdtv: ['#33333d', '#ffffff'], jagcd: ['#d62828', '#ffffff'], naomi: ['#6a4fb8', '#ffffff'], naomi2: ['#6a4fb8', '#ffffff'],
+  triforce: ['#6a4fb8', '#ffffff'], chihiro: ['#6a4fb8', '#ffffff'],
   pc98: ['#5b6b7a', '#ffffff'], gc: ['#6a4fb8', '#ffffff'], wii: ['#dfe6ea', '#1c1733'], xbox: ['#107c10', '#ffffff'],
   ps3: ['#26262e', '#ffffff']
 };
@@ -26,7 +28,7 @@ function sysName(s) { return SYSTEMS[s] ? SYSTEMS[s][1] : ''; }
 function normSerial(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
 // a serial's key in the database. Sega's first-party discs say MK-51064 (Dreamcast), MK-81064 (Saturn)
 // or MK-4432 (Sega CD) where Redump lists the US release as 51064 and the others as MK-51064-50: one key
-var SEGA_SYS = /^(saturn|segacd|dc|naomi2?)$/;
+var SEGA_SYS = /^(saturn|segacd|dc|naomi2?|triforce|chihiro)$/;
 function canonKey(sys, s) {
   var k = normSerial(s);
   return SEGA_SYS.test(sys) && /^MK\d/.test(k) ? k.slice(2) : k;
@@ -504,14 +506,18 @@ async function detectTrack(rd) {
   }
   if (h === 'SEGA SEGAKATANA ') {
     var serial = clean(asc(s0, 0x40, 10));
-    // NAOMI GD-ROMs carry NAOMI in their header, and serials of their own (GDL-0001, GDS-0014)
+    // NAOMI, Triforce and Chihiro GD-ROMs share SEGA SEGAKATANA with Dreamcast, distinguished by header and serial
     var arcade = clean(asc(s0, 0x10, 0x50));
-    var naomi = /NAOMI/i.test(arcade) || /^GD[LS]-?\d{4}/.test(serial);
-    return sega({ sys: /NAOMI\s*2/i.test(arcade) ? 'naomi2' : naomi ? 'naomi' : 'dc', serial: serial, title: clean(asc(s0, 0x80, 128)) }, asc(s0, 0x20, 16), asc(s0, 0x30, 8));
+    var katSys = /TRIFORCE/i.test(arcade) || /^GDT-?\d{4}/i.test(serial) ? 'triforce'
+      : /CHIHIRO/i.test(arcade) || /^GDX-?\d{4}/i.test(serial) ? 'chihiro'
+      : /NAOMI\s*2/i.test(arcade) ? 'naomi2'
+      : (/NAOMI/i.test(arcade) || /^GD[LS]-?\d{4}/i.test(serial)) ? 'naomi' : 'dc';
+    return sega({ sys: katSys, serial: serial, title: clean(asc(s0, 0x80, 128)) }, asc(s0, 0x20, 16), asc(s0, 0x30, 8));
   }
   if (/^SEGADISCSYSTEM|^SEGABOOTDISC|^SEGA-CD|^SEGA_CD/.test(h)) {
     var m = /^\s*(?:GM|AI|OS|BR)?\s*([A-Z0-9][A-Z0-9-]*)/.exec(asc(s0, 0x180, 14));
-    return sega({ sys: 'segacd', serial: m ? m[1] : '', title: clean(asc(s0, 0x150, 48)) || clean(asc(s0, 0x120, 48)) }, '', asc(s0, 0x1F0, 3));
+    return sega({ sys: 'segacd', serial: m ? m[1] : '', title: clean(asc(s0, 0x150, 48)) || clean(asc(s0, 0x120, 48)),
+      cd32x: /^SEGA 32X/.test(asc(s0, 0x100, 8)) || undefined }, '', asc(s0, 0x1F0, 3));
   }
   if (s0[0] === 1 && asc(s0, 1, 5) === 'ZZZZZ' && s0[6] === 1) return { sys: '3do', title: clean(asc(s0, 0x28, 32)) };
   if (u32be(s0, 0x1C) === 0xC2339F3D) return { sys: 'gc', serial: clean(asc(s0, 0, 6)), title: clean(asc(s0, 0x20, 64)) };
@@ -543,8 +549,8 @@ async function detectTrack(rd) {
     var files = new Map();
     try { files = await isoDir(rd, u32le(pvd, 158), u32le(pvd, 166)); } catch (e) { /* ignore */ }
     if (files.has('UMD_DATA.BIN') || /^PSP GAME/.test(sysId)) {
-      // a UMD Video (a film) has UMD_DATA.BIN too, but a UMD_VIDEO folder instead of PSP_GAME
-      var r = { sys: 'psp', title: volId, video: files.has('UMD_VIDEO') && !files.has('PSP_GAME') };
+      // UMD Video and UMD Audio discs carry UMD_DATA.BIN too, but without PSP_GAME
+      var r = { sys: 'psp', title: volId, video: files.has('UMD_VIDEO') && !files.has('PSP_GAME'), umdAudio: files.has('UMD_AUDIO') && !files.has('PSP_GAME') };
       try {
         if (files.has('UMD_DATA.BIN')) r.serial = new TextDecoder().decode(await isoFile(rd, files.get('UMD_DATA.BIN'), 64)).split('|')[0].trim();
         var pg = files.get('PSP_GAME');
@@ -610,7 +616,7 @@ async function detectTrack(rd) {
     // data tracks are looked at too, and a checksum may still name it)
     var mediaDirs = /^(VIDEO_TS|AUDIO_TS|JACKET_P|BDMV|CERTIFICATE|HVDVD_TS|ADV_OBJ|PHOTO_CD)$/;
     if (video) return { sys: 'video', title: volId, video: video, weak: Array.from(files.keys()).some(function (n) { return !mediaDirs.test(n); }) || undefined };
-    return { sys: 'pc', title: volId, weak: true };
+    return { sys: 'pc', title: volId, udf: (await hasUdf(rd)) || undefined, weak: true };
   }
   return detectXbox(rd);
 }
@@ -1084,9 +1090,10 @@ async function identifyJob(job, onStatus, onProvisional) {
     // the disc's: not this disc (filtered before disc-number matching so wrong-region sets don't hide it)
     hits = hits.filter(function (h) { return h.size || !h.kind || h.region; });
     if (!hits.length) return [];
-    if (det.disc) {
-      var same = det.disc.of > 1
-        ? hits.filter(function (h) { return discNo(h.e.name) === det.disc.n; })
+    var discInfo = det.disc || job.pbpDisc;
+    if (discInfo) {
+      var same = discInfo.of > 1
+        ? hits.filter(function (h) { return discNo(h.e.name) === discInfo.n; })
         : hits.filter(function (h) { return discNo(h.e.name) === null; });
       if (same.length) hits = same;
     }

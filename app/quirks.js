@@ -8,6 +8,10 @@
    src: where the fact comes from (docs/chd, or an emulator's source).
    Compression never changes by itself: those warnings are in PROFILES (noZstd, noMister).
    ============================================================ */
+function naomiSerial(s) {
+  var m = /^(GD[LSTX])-?(\d{4}[A-Z]*)$/i.exec(String(s || '').trim());
+  return m ? (m[1] + '-' + m[2]).toLowerCase() : '';
+}
 var QUIRKS = [
   {
     id: 'keepcue-strict', sys: ['saturn', 'segacd', 'pcecd'], act: 'nokeepcue',
@@ -18,10 +22,17 @@ var QUIRKS = [
     src: 'docs/chd/ecosystem-other.md §0 finding 4, §2.5, §3.2, §3.3: readers that fail on any metadata tag but a track\u2019s'
   },
   {
-    id: 'naomi-name', sys: ['naomi', 'naomi2'], act: 'norename', chd: true,
+    id: 'naomi-name', sys: ['naomi', 'naomi2', 'triforce', 'chihiro'],
+    act: function (c) { return naomiSerial(c.id.serial) ? 'serialname' : 'norename'; },
+    chd: true,
     when: function () { return settings.rename; },
-    text: 'MAME and Flycast find a NAOMI GD-ROM by its file name in the game\u2019s romset (such as gds-0014.chd), so this CHD keeps its file\u2019s name.',
-    src: 'docs/chd/ecosystem-sony-dreamcast.md §5.1 (Flycast gdcartridge.cpp: <romset>/<gdrom>.chd), §5.4'
+    text: function (c) {
+      var sn = naomiSerial(c.id.serial);
+      return sn
+        ? 'MAME and Flycast find this arcade GD-ROM by its disc serial in the game\u2019s romset folder, so this CHD is named ' + sn + '.chd (place it next to the romset\u2019s .zip).'
+        : 'MAME and Flycast find a NAOMI GD-ROM by its file name in the game\u2019s romset (such as gds-0014.chd), so this CHD keeps its file\u2019s name.';
+    },
+    src: 'docs/chd/ecosystem-sony-dreamcast.md §5.1 (Flycast gdcartridge.cpp: <romset>/<serial>.chd), §5.4'
   },
   {
     // PCSX2's CHD reader (ChdFileReader) reads a CD's first track only
@@ -47,17 +58,21 @@ var QUIRKS = [
     src: 'db/facts/libcrypt.tsv'
   },
   {
-    // a UMD Video (UMD_DATA.BIN and a UMD_VIDEO folder, no PSP_GAME): a film, which PPSSPP doesn't play
+    // a UMD Video or UMD Audio disc (UMD_DATA.BIN with UMD_VIDEO or UMD_AUDIO, no PSP_GAME): PPSSPP plays games only
     id: 'umd-video', sys: ['psp'], warn: true,
-    when: function (c) { return !!c.det.video; },
-    text: 'This is a UMD Video (a film), not a game: PPSSPP doesn\u2019t play UMD Video discs.',
+    when: function (c) { return !!(c.det.video || c.det.umdAudio); },
+    text: function (c) {
+      return c.det.video
+        ? 'This is a UMD Video (a film), not a game: PPSSPP doesn\u2019t play UMD Video discs.'
+        : 'This is a UMD Audio (music) disc, not a game: PPSSPP doesn\u2019t play UMD Audio discs.';
+    },
     src: 'PPSSPP plays PSP games only (UMD_DATA.BIN with PSP_GAME)'
   },
   {
     // every Jaguar CD is multi-session (Redump: 38 of 38); 0.289 writes no session data
     id: 'jagcd-sessions', sys: ['jagcd'], warn: true,
     when: function () { return true; },
-    text: 'Jaguar CD emulators may not load this CHD: BigPEmu doesn\u2019t take CHDs, and Virtual Jaguar (RetroArch) needs session data that chdman 0.289 doesn\u2019t write. Keep the original files too.',
+    text: 'Jaguar CD emulators may not load this CHD: BigPEmu doesn\u2019t take CHDs, MiSTer\u2019s Jaguar core loads .cdi only, and Virtual Jaguar (RetroArch) needs session data that chdman 0.289 doesn\u2019t write. Keep the original files too.',
     src: 'docs/chd/optical-media.md §3.5; docs/chd/ecosystem-other.md §0 findings 4 and 12'
   },
   {
@@ -66,13 +81,13 @@ var QUIRKS = [
     when: function (c) { return c.sys !== 'jagcd' && c.disc && c.disc.sessions > 1; },
     text: function (c) {
       return 'This disc has ' + c.disc.sessions + ' sessions. Its CHD doesn\u2019t keep where each starts, so emulators read the data after the first session from the wrong place' +
-        (/^(dc|naomi2?)$/.test(c.sys) ? ', except Flycast builds from September 2026 on, which guess it for MIL-CDs.' : '.') + ' Keep the original files too.';
+        (/^(dc|naomi2?|triforce|chihiro)$/.test(c.sys) ? ', except Flycast builds from September 2026 on, which guess it for MIL-CDs.' : '.') + ' Keep the original files too.';
     },
     src: 'docs/chd/optical-media.md §3.2, §3.5; docs/chd/ecosystem-sony-dreamcast.md §5.1 (Flycast 0abac34)'
   },
   {
     // chdman stores MODE2/2048, MODE2/2324 and MODE2_FORM_MIX tracks as Mode 2 Form 1/2/Mix, which Flycast refuses
-    id: 'dc-mode2-form', sys: ['dc', 'naomi', 'naomi2'], warn: true,
+    id: 'dc-mode2-form', sys: ['dc', 'naomi', 'naomi2', 'triforce', 'chihiro'], warn: true,
     when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return /^MODE2\/(2048|2324)$|^MODE2_FORM_MIX$/.test(t.mode); }); },
     text: 'Flycast can\u2019t load CHDs with MODE2/2048, MODE2/2324 or MODE2_FORM_MIX tracks, as this disc has (chdman stores them as Mode 2 Form 1/2/Mix). Keep the original files for Flycast.',
     src: 'docs/chd/ecosystem-sony-dreamcast.md §5.1 (core/imgread/chd.cpp: track types)'
@@ -91,6 +106,39 @@ var QUIRKS = [
     },
     text: 'This is a 2,048-byte copy of a PlayStation disc, without its raw sectors: the videos and sound stored in them may be missing, and Beetle PSX can\u2019t load its CHD (it takes only raw Mode 2 tracks). Convert the .bin and .cue dump instead, if you have it.',
     src: 'docs/chd/ecosystem-sony-dreamcast.md §2.3 (Beetle PSX accepts MODE2_RAW and AUDIO only)'
+  },
+  {
+    // a Philips CD-i Green Book disc interleaves Mode 2 Form 1/2 sectors with subheaders
+    id: 'cdi-cooked', sys: ['cdi'], warn: true,
+    when: function (c) {
+      var j = c.job;
+      return j.src === 'cso' ||
+        (j.src === 'iso' && !j.autoCue && !j.files.some(function (f) { return f.ecm; })) ||
+        (j.src === 'img' && !j.syncMode) ||
+        j.autoCue === 'MODE1/2048' ||
+        (c.disc && c.disc.tracks.some(function (t) { return /\/2048$/.test(t.mode) || t.mode === 'MODE1'; }));
+    },
+    text: 'This is a 2,048-byte copy of a Philips CD-i disc, without its raw Mode 2 sectors: real-time audio, video and CD-RTOS subheaders are lost, and MAME, SAME_CDI and MiSTer CD-i can\u2019t boot it. Convert a raw 2,352-byte .bin and .cue dump instead.',
+    src: 'docs/chd/optical-media.md (CDI/2352 Green Book Mode 2 subheaders)'
+  },
+  {
+    // Sega CD 32X requires combined Mega-CD + 32X hardware: Genesis Plus GX and DE10-Nano MiSTer cannot run it
+    id: 'segacd-32x', sys: ['segacd'], warn: true,
+    when: function (c) { return !!(c.det.cd32x || /\b32X\b/i.test(c.id.name || '')); },
+    text: 'This is a Sega CD 32X game: Genesis Plus GX and MiSTer FPGA can\u2019t play it. Use PicoDrive, jgenesis or ares.',
+    src: 'Sega CD 32X ("SEGA 32X" at sector 0 offset 0x100)'
+  },
+  {
+    // Redump lists a track number (> 0) only for multi-track releases: a single-track image is missing its other tracks
+    id: 'missing-audio-tracks', warn: true,
+    when: function (c) {
+      if (!c.id.entry || !(c.id.entry.track > 0) || c.job.disc === 'dvd') return false;
+      if (c.disc) return c.disc.tracks.length === 1;
+      if (c.job.src === 'pbp') return c.job.pbpTracks === 1;
+      return c.job.files.length === 1;
+    },
+    text: 'Redump\u2019s release of this game has multiple tracks (including music/CD-DA audio), but this image has only one track. Its music will be missing, and some Sega CD and PC Engine CD games freeze without audio tracks. Convert the full multi-track .cue/.bin dump if you have it.',
+    src: 'db/db.json.gz track number metadata (e.track > 0 for multi-track Redump releases)'
   },
   {
     // Genesis Plus GX stops its track list at the first data track after track 1
@@ -119,11 +167,11 @@ var QUIRKS = [
     src: 'docs/chd/ecosystem-other.md §0 finding 3, §2.3 (chdimage.c: fake_pregap when PGTYPE starts with V)'
   },
   {
-    // Beetle Saturn, Kronos and Yabause take every pregap as stored and leave postgaps out of the image
+    // Beetle Saturn, Kronos and Yabause take every pregap as stored and leave postgaps out of the image; ares drops virtual PREGAP
     id: 'saturn-gapcmd', sys: ['saturn'], warn: true,
     when: function (c) { return c.disc && c.disc.tracks.some(function (t) { return (t.pregapCmd && t.pregap > 0) || t.postgap > 0; }); },
-    text: 'Beetle Saturn, Kronos and Yabause read the tracks after a PREGAP or POSTGAP line from the wrong place, and this cue sheet has one. A Redump dump (with INDEX 00 lines instead) doesn\u2019t have this problem.',
-    src: 'docs/chd/ecosystem-other.md §3.1 to §3.3 (PGTYPE ignored, postgap ignored)'
+    text: 'Beetle Saturn, Kronos and Yabause read the tracks after a PREGAP or POSTGAP line from the wrong place, and this cue sheet has one (ares also drops virtual PREGAP lines from its track list). A Redump dump (with INDEX 00 lines instead) doesn\u2019t have this problem.',
+    src: 'docs/chd/ecosystem-other.md §3.1 to §3.3, §11.2 (PGTYPE ignored, postgap ignored)'
   },
   {
     // the Beetle PCE family, Beetle PC-FX, Geargrafx and Beetle PSX count a postgap into the file offset;
@@ -159,14 +207,34 @@ var QUIRKS = [
         : 'NeoCD reads the tracks after a PREGAP line from track 3 on from the wrong place, and this cue sheet has one.';
     },
     src: 'docs/chd/ecosystem-other.md §5.1 (cdromtoc.cpp: track types, pregap heuristic)'
+  },
+  {
+    // DOSBox Pure loads .zip directly (smaller than uncompressed -c none CHD)
+    id: 'pc-zip-dosboxpure', sys: ['pc'],
+    when: function (c) { return c.job.files.some(function (f) { return !!(f.file && f.file.fromZip); }); },
+    text: 'DOSBox Pure loads .zip files like this one directly (often smaller than an uncompressed CHD); convert to CHD only for DOSBox-X, 86Box or MiSTer ao486.',
+    src: 'DOSBox Pure recommends .zip/.dosz; CHD requires -c none'
+  },
+  {
+    // DOSBox-X omits 4-frame CHD track padding on multi-track CDs
+    id: 'dosbox-x-padding', sys: ['pc'],
+    when: function (c) { return !!(c.disc && c.disc.tracks.length > 1 && c.disc.audio); },
+    text: 'DOSBox-X omits CHD track padding, so music tracks on multi-track PC CDs can start a few frames early in DOSBox-X. 86Box and MiSTer ao486 read them accurately.',
+    src: 'DOSBox-X src/dos/cdrom_image.cpp (omits 4-frame track padding)'
   }
 ];
 // what the rules look at: the job's system and identification, its cue sheet or TOC, the settings
 function quirkCtx(job) {
   var id = job.ident || {};
   var det = id.detected || {};
+  var entrySerials = (id.entry && id.entry.serials) || [];
+  // When a Sega disc has its own header serial and it matches one of the release's serials, don't pull
+  // in shared box-set compilation serials (e.g. Saturn KOF '95+'96 Twin Pack T-3110G) for hardware facts
+  var factSerials = det.serial && SEGA_SYS.test(id.sys || '') && entrySerials.some(function (s) { return sameSerial(id.sys, s, det.serial); })
+    ? [det.serial]
+    : [det.serial, id.serial].concat(entrySerials);
   return { job: job, id: id, sys: id.sys || '', det: det, disc: discModel(job), keepCue: keepCueWanted(job),
-    facts: id.sys ? GameFacts.of(id.sys, [det.serial, id.serial].concat(id.entry && id.entry.serials || [])) : {} };
+    facts: id.sys ? GameFacts.of(id.sys, factSerials) : {} };
 }
 // the rules that apply to a job: [{id, act, warn, text}]
 function quirks(job) {
@@ -175,7 +243,8 @@ function quirks(job) {
     if (job.kind !== 'create' && !r.chd) return false;
     return (!r.sys || r.sys.indexOf(ctx.sys) >= 0) && r.when(ctx);
   }).map(function (r) {
-    return { id: r.id, act: r.act || '', warn: !!r.warn, text: typeof r.text === 'function' ? r.text(ctx) : r.text || '' };
+    var act = typeof r.act === 'function' ? r.act(ctx) : r.act || '';
+    return { id: r.id, act: act, warn: !!r.warn, text: typeof r.text === 'function' ? r.text(ctx) : r.text || '' };
   });
 }
 function quirkAct(job, act) { return quirks(job).some(function (q) { return q.act === act; }); }

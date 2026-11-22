@@ -101,13 +101,14 @@ test('renaming can be turned off in settings', async ({ app }) => {
 
 // [label, codec options, the engine's own options (not chdman 0.289's; its checksums, the native engine's bytes)]
 const PRESETS = [
-  ['Nearly as small, faster', { cd: [], dvd: [] }, ['--codecplan', '--libdeflate']],
-  ['Faster to create', { cd: ['-c', 'cdzl,cdfl'], dvd: ['-c', 'zlib,huff'] }, ['--libdeflate']],
-  ['Faster to load (Zstd)', { cd: ['-c', 'cdzs,cdfl'], dvd: ['-c', 'zstd'] }, []],
-  ['No compression', { cd: ['-c', 'none'], dvd: ['-c', 'none'] }, []],
+  ['Nearly as small, faster', { cd: [], dvd: [] }, { cd: ['--codecplan', '--libdeflate'], dvd: ['--codecplan', '--libdeflate'] }],
+  ['Faster to create', { cd: ['-c', 'cdzl,cdfl'], dvd: ['-c', 'zlib'] }, { cd: ['--codecplan', '--libdeflate'], dvd: ['--libdeflate'] }],
+  ['Faster to load (Zstd)', { cd: ['-c', 'cdzs,cdfl'], dvd: ['-c', 'zstd'] }, { cd: ['--codecplan'], dvd: [] }],
+  ['No compression', { cd: ['-c', 'none'], dvd: ['-c', 'none'] }, { cd: [], dvd: [] }],
 ];
-for (const [label, codecs, own] of PRESETS) {
+for (const [label, codecs, ownByDisc] of PRESETS) {
   for (const [key, disc] of [['ps1-multitrack', 'cd'], ['ps2-dvd', 'dvd']]) {
+    const own = ownByDisc[disc];
     // with the engine's options, at 1 and 4 threads: they must reach the helper workers too
     for (const threads of own.length ? [1, 4] : [null]) {
       test(`compression "${label}" on ${disc.toUpperCase()}${threads ? `, ${threads} thread(s)` : ''}`, async ({ app }) => {

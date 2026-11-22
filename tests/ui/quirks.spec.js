@@ -42,17 +42,17 @@ test('other games keep the cue sheet with the setting, and Saturn games get no n
   await expect(sat.locator('[data-quirk="keepcue-strict"]')).toHaveCount(0);
 });
 
-// MAME and Flycast look a NAOMI GD-ROM up by its file name in the romset: renaming it after the game breaks that
-test('a NAOMI GD-ROM keeps its file’s name, and the card says why', async ({ app }) => {
+// MAME and Flycast look a NAOMI GD-ROM up by its lowercase disc serial in the romset folder
+test('a NAOMI GD-ROM is named after its disc serial, and the card says why', async ({ app }) => {
   const fx = fixture('naomi2-gdi');
   await app.open();
   const c = await card(app, 'naomi2-gdi', 'spikers');
   await expect(c.locator('.ident-name')).toHaveText(fx.name);
-  await expect(c.locator('[data-quirk="naomi-name"]')).toContainText('MAME and Flycast find a NAOMI GD-ROM by its file name');
-  await expect(c.locator('code.cmd')).toContainText('-o spikers.chd');
+  await expect(c.locator('[data-quirk="naomi-name"]')).toContainText('MAME and Flycast find this arcade GD-ROM by its disc serial');
+  await expect(c.locator('code.cmd')).toContainText('-o gds-0014.chd');
   await app.run(c);
   const [out] = await app.downloads(c);
-  expect(out.name).toBe('spikers.chd');
+  expect(out.name).toBe('gds-0014.chd');
 });
 
 test('the Zstd preset warns for PS2, Dreamcast, NAOMI and PC-FX games too', async ({ app }) => {
@@ -66,7 +66,7 @@ test('the Zstd preset warns for PS2, Dreamcast, NAOMI and PC-FX games too', asyn
   await dc.locator('details.opts summary').click();
   const dfield = dc.locator('label.field', { hasText: 'Compression' });
   await dfield.locator('select').selectOption('zstd');
-  await expect(dfield).toContainText('Flycast before 2.3 (and probably Redream) can’t read Zstd CHDs of Sega Dreamcast games.');
+  await expect(dfield).toContainText('Redream and Flycast before 2.3 can’t read Zstd CHDs of Sega Dreamcast games.');
 });
 
 // older emulators can't open a Zstd CHD of any console: the compatibility mode says so, even for a
@@ -96,7 +96,7 @@ test('the MiSTer preset warns as the Zstd one does, and where MiSTer has no core
   await sat.locator('details.opts summary').click();
   const field = sat.locator('label.field', { hasText: 'Compression' });
   await field.locator('select').selectOption('mister');
-  await expect(field).toContainText('Kronos and Yabause can’t read Zstd CHDs of Sega Saturn games.');
+  await expect(field).toContainText('Kronos, Yabause and Yaba Sanshiro 2 can’t read Zstd CHDs of Sega Saturn games.');
   await expect(field).not.toContainText('no core');
   const dc = await card(app, 'dreamcast-cdr', 'dc cdr');
   await dc.locator('details.opts summary').click();
@@ -199,4 +199,85 @@ test('a disc of a set says how many discs the set has until all are converted', 
   await app.run(two);
   await expect(one.locator('[data-quirk="set-incomplete"]')).toHaveText('The playlist has 2 of this game’s 3 discs: convert the others to add them.');
   await expect(two.locator('[data-quirk="set-incomplete"]')).toHaveCount(0);
+});
+
+test('post-identification .sbi pairs by Redump name or PS1 serial, and redumper .subcode pairs with .cue', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'sbi-postid');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const n of ['anstoss.cue', 'anstoss.bin']) fs.copyFileSync(path.join(FIXTURES, n), path.join(dir, n));
+  // serial-named .sbi (like MiSTer sbi.zip) paired after PS1 serial identification
+  fs.copyFileSync(path.join(FIXTURES, 'anstoss lc.sbi'), path.join(dir, 'SLES-02563.sbi'));
+  await app.open();
+  await app.add(['gen/sbi-postid/SLES-02563.sbi', 'gen/sbi-postid/anstoss.cue', 'gen/sbi-postid/anstoss.bin']);
+  const c = app.job('anstoss');
+  await app.settled(c);
+  await expect(c.locator('[data-quirk="libcrypt-missing"]')).toHaveCount(0);
+  await expect(c.locator('.sbi-note')).toContainText('SLES-02563.sbi');
+
+  // redumper interleaved bit-6 Q .subcode paired with a .cue/.bin job generates byte-exact .sbi
+  const sdir = path.join(FIXTURES, 'gen', 'subcode-cue');
+  fs.mkdirSync(sdir, { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'lc.img'), path.join(sdir, 'lc.bin'));
+  fs.writeFileSync(path.join(sdir, 'lc.cue'), 'FILE "lc.bin" BINARY\r\n  TRACK 01 MODE2/2352\r\n    INDEX 01 00:00:00\r\n');
+  const planar = fs.readFileSync(path.join(FIXTURES, 'lc.sub'));
+  const inter = Buffer.alloc(planar.length);
+  for (let off = 0; off + 96 <= planar.length; off += 96) {
+    for (let bi = 0; bi < 12; bi++) {
+      const qByte = planar[off + 12 + bi];
+      for (let bit = 0; bit < 8; bit++) {
+        if ((qByte >> (7 - bit)) & 1) inter[off + bi * 8 + bit] |= 0x40;
+      }
+    }
+  }
+  fs.writeFileSync(path.join(sdir, 'lc.subcode'), inter);
+  await app.open();
+  await app.add(['gen/subcode-cue/lc.cue', 'gen/subcode-cue/lc.bin', 'gen/subcode-cue/lc.subcode']);
+  const sc = app.job('lc');
+  await app.settled(sc);
+  await expect(sc.locator('.sbi-note')).toContainText('4 protected sectors');
+  await app.run(sc);
+  const outs = await app.downloads(sc);
+  expect(outs.map(o => o.name)).toEqual(['lc.chd', 'lc.sbi']);
+  expect(fs.readFileSync(outs[1].path).equals(fs.readFileSync(path.join(FIXTURES, 'lc-expected.sbi')))).toBe(true);
+});
+
+test('CloneCD v2 [Entry N] files parse into cues, ImgBurn .mds sidecars are skipped, and .hdi headers are refused', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'p1-compat');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(FIXTURES, 'lc.img'), path.join(dir, 'v2.img'));
+  fs.writeFileSync(path.join(dir, 'v2.ccd'),
+    '[CloneCD]\r\nVersion=2\r\n[Disc]\r\nTocEntries=4\r\nSessions=1\r\nDataTracksScrambled=0\r\n' +
+    '[Session 1]\r\nPreGapMode=2\r\n' +
+    '[Entry 0]\r\nSession=1\r\nPoint=0xa0\r\nADR=0x01\r\nControl=0x04\r\nPLBA=0\r\n' +
+    '[Entry 1]\r\nSession=1\r\nPoint=0x01\r\nADR=0x01\r\nControl=0x04\r\nPLBA=0\r\n');
+  // ImgBurn 4 KB .mds sidecar next to PS2 .iso
+  fs.copyFileSync(path.join(FIXTURES, 'agent.iso'), path.join(dir, 'agent.iso'));
+  fs.writeFileSync(path.join(dir, 'agent.mds'), Buffer.alloc(4096, 0x4D));
+  // Anex86 .hdi with 4,096-byte header
+  fs.writeFileSync(path.join(dir, 'pc98.hdi'), Buffer.alloc(8192, 0));
+
+  await app.open();
+  await app.add(['gen/p1-compat/v2.ccd', 'gen/p1-compat/v2.img', 'gen/p1-compat/agent.iso', 'gen/p1-compat/agent.mds', 'gen/p1-compat/pc98.hdi']);
+  await expect(app.jobs()).toHaveCount(3); // agent.mds ignored cleanly!
+  const v2 = app.job('v2');
+  await app.settled(v2);
+  await expect(v2.locator('.sysbadge')).toHaveText('PS1');
+  await expect(v2.locator('code.cmd')).toContainText('chdman createcd');
+  const hdi = app.job('pc98');
+  await expect(hdi.locator('.note.err')).toContainText('4,096-byte header');
+});
+
+test('multi-disc PS2 and PSP games show emulator disc-swap guidance instead of .m3u playlists', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'no-m3u');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const n of [1, 2]) fs.copyFileSync(path.join(FIXTURES, 'umd.iso'), path.join(dir, `Hero (USA) (Disc ${n}).iso`));
+  await app.open({ settings: { rename: false } });
+  await app.add(['gen/no-m3u/Hero (USA) (Disc 1).iso', 'gen/no-m3u/Hero (USA) (Disc 2).iso']);
+  const d1 = app.job('Hero (USA) (Disc 1)'), d2 = app.job('Hero (USA) (Disc 2)');
+  await app.settled(d1);
+  await app.settled(d2);
+  await app.run(d1);
+  await app.run(d2);
+  await expect(d1.locator('.playlist')).toHaveCount(0);
+  await expect(d1.locator('.set-note')).toContainText('PPSSPP does not use .m3u playlists');
 });

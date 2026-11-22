@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { test, expect, fixture } from '../support/app.js';
 import { FIXTURES } from '../support/paths.js';
-import { nativeChdman, reference, sameVersion, sha1File } from '../support/native.js';
+import { nativeChdman, engineReference, info, reference, sameVersion, sha1File } from '../support/native.js';
 import { makeZip } from '../support/zip.js';
 
 test('an Xbox 360 dump is recognized behind its video partition, with a note that emulators need the ISO', async ({ app }) => {
@@ -49,7 +49,7 @@ test('the Zstd preset warns where the system’s emulators can’t read it', asy
   const field = card.locator('label.field', { hasText: 'Compression' });
   await expect(field).not.toContainText('Kronos');
   await field.locator('select').selectOption('zstd');
-  await expect(field).toContainText('Kronos and Yabause can’t read Zstd CHDs of Sega Saturn games.');
+  await expect(field).toContainText('Kronos, Yabause and Yaba Sanshiro 2 can’t read Zstd CHDs of Sega Saturn games.');
 });
 
 test('the compatibility mode makes PS2 DVD games CD CHDs for older emulators, and cards follow a change', async ({ app, page }) => {
@@ -213,13 +213,18 @@ test('the MiSTer preset makes Zstd + FLAC CD CHDs with 4-sector hunks, as chdman
   const field = card.locator('label.field', { hasText: 'Compression' });
   await field.locator('select').selectOption('mister');
   await expect(field).toContainText('MiSTer');
-  await expect(card.locator('code.cmd')).toContainText('-c cdzs,cdfl -hs 9792');
+  await expect(card.locator('code.cmd')).toContainText('-c cdzs,cdfl --codecplan -hs 9792');
   await app.run(card);
   const [out] = await app.downloads(card);
-  if (nativeChdman() && sameVersion()) expect(sha1File(out.path)).toBe(sha1File(reference('createcd', fx.add[0], ['-c', 'cdzs,cdfl', '-hs', '9792'])));
+  if (nativeChdman()) {
+    const ref = info(reference('createcd', fx.add[0], ['-c', 'cdzs,cdfl', '-hs', '9792'])), mine = info(out.path);
+    expect([mine.sha1, mine.dataSha1]).toEqual([ref.sha1, ref.dataSha1]);
+    const eng = engineReference('createcd', fx.add[0], ['-c', 'cdzs,cdfl', '--codecplan', '-hs', '9792']);
+    if (eng) expect(sha1File(out.path)).toBe(sha1File(eng));
+  }
 });
 
-test('PS1 games warn that older SwanStation can’t read the Zstd preset', async ({ app }) => {
+test('PS1 games warn that Gamma and older SwanStation can’t read the Zstd preset', async ({ app }) => {
   await app.open();
   await app.add(fixture('ps1-single').add);
   const card = app.jobs().first();
@@ -227,7 +232,7 @@ test('PS1 games warn that older SwanStation can’t read the Zstd preset', async
   await card.locator('details.opts summary').click();
   const field = card.locator('label.field', { hasText: 'Compression' });
   await field.locator('select').selectOption('zstd');
-  await expect(field).toContainText('SwanStation builds from before April 2026 can’t read Zstd CHDs of Sony PlayStation games.');
+  await expect(field).toContainText('Gamma (iOS) and SwanStation builds from before April 2026 can’t read Zstd CHDs of Sony PlayStation games.');
 });
 
 test('a PS1 CloneCD image: LibCrypt sectors in its .sub become an .sbi saved with the CHD', async ({ app }) => {
