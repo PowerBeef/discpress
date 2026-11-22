@@ -455,24 +455,64 @@ var Engine = {
     try { msg.wasmModule = this.module; w.postMessage(msg, transfer || []); }
     catch (e) { delete msg.wasmModule; msg.wasmBytes = this.bytes; w.postMessage(msg, transfer || []); }
   },
+  poolIdleMs: function () {
+    return typeof DEBUG.poolIdleMs === 'number' && DEBUG.poolIdleMs >= 0 ? DEBUG.poolIdleMs : (isMobile ? 20000 : 60000);
+  },
+  poolMemCap: function (isHelper) {
+    if (typeof DEBUG.poolMemCap === 'number' && DEBUG.poolMemCap > 0) return DEBUG.poolMemCap;
+    return isHelper ? (64 << 20) : (96 << 20);
+  },
+  _cancelPoolTimer: function (w) {
+    if (w && w._poolTimer) { clearTimeout(w._poolTimer); w._poolTimer = null; }
+  },
+  _parkWorker: function (pool, w) {
+    var self = this;
+    self._cancelPoolTimer(w);
+    pool.push(w);
+    var ms = self.poolIdleMs();
+    if (ms > 0) {
+      w._poolTimer = setTimeout(function () {
+        w._poolTimer = null;
+        var idx = pool.indexOf(w);
+        if (idx >= 0) pool.splice(idx, 1);
+        w.onmessage = null; w.onerror = null;
+        try { w.terminate(); } catch (e) { /* ignore */ }
+      }, ms);
+    }
+  },
+  reapPools: function () {
+    var self = this;
+    [this.coordPool, this.helperPool].forEach(function (pool) {
+      while (pool.length) {
+        var w = pool.pop();
+        self._cancelPoolTimer(w);
+        w.onmessage = null; w.onerror = null;
+        try { w.terminate(); } catch (e) { /* ignore */ }
+      }
+    });
+  },
   borrowCoord: function () {
-    return this.coordPool.length ? this.coordPool.pop() : new Worker(this.workerUrl());
+    var w = this.coordPool.length ? this.coordPool.pop() : null;
+    if (w) { this._cancelPoolTimer(w); return w; }
+    return new Worker(this.workerUrl());
   },
   returnCoord: function (w, memBytes, aborted) {
     if (!w) return;
+    this._cancelPoolTimer(w);
     w.onmessage = null;
     w.onerror = null;
-    if (aborted || (memBytes && memBytes > (96 << 20)) || this.coordPool.length >= 2) {
+    if (aborted || (memBytes && memBytes > this.poolMemCap(false)) || this.coordPool.length >= 2) {
       w.terminate();
       return;
     }
-    this.coordPool.push(w);
+    this._parkWorker(this.coordPool, w);
   },
   borrowHelpers: function (n, debugFail, onFatal) {
     var list = [], ports = [], self = this;
     for (var i = 0; i < n; i++) {
       try {
         var pooled = !debugFail && self.helperPool.length ? self.helperPool.pop() : null;
+        if (pooled) self._cancelPoolTimer(pooled);
         var hw = pooled || new Worker(self.workerUrl());
         var ch = new MessageChannel();
         var rec = { w: hw, pooled: !debugFail, dead: false };
@@ -497,6 +537,7 @@ var Engine = {
     list.forEach(function (rec) {
       var hw = rec.w;
       if (!hw) return;
+      self._cancelPoolTimer(hw);
       if (terminateAll || !rec.pooled || rec.dead) {
         hw.onmessage = null; hw.onerror = null;
         hw.terminate();
@@ -514,10 +555,10 @@ var Engine = {
         settled = true;
         clearTimeout(timer);
         hw.onmessage = null; hw.onerror = null;
-        if ((e.data.memBytes && e.data.memBytes > (64 << 20)) || self.helperPool.length >= Tuning.cap) {
+        if ((e.data.memBytes && e.data.memBytes > self.poolMemCap(true)) || self.helperPool.length >= Tuning.cap) {
           hw.terminate();
         } else {
-          self.helperPool.push(hw);
+          self._parkWorker(self.helperPool, hw);
         }
       };
       hw.onerror = function () {
@@ -6546,9 +6587,10 @@ function init() {
     toast('Temporary storage cleared.');
   });
 
-  // Flush active OPFS buffers and request an urgent checkpoint on pagehide
+  // Flush active OPFS buffers, request an urgent checkpoint, and reap idle pooled workers on pagehide
   window.addEventListener('pagehide', function () {
     if (current && current.run && current.run.postVisibility) current.run.postVisibility(true);
+    Engine.reapPools();
   });
   // Thermal/CPU pressure throttling (Chromium PressureObserver): scale active helpers gracefully
   if (typeof window.PressureObserver === 'function') {
