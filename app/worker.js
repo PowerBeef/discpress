@@ -1536,8 +1536,10 @@ function setupParallel(M, ports) {
     if (comps.indexOf(0x61766875) >= 0) return false;
     hunkbytes = hb;
     parComps = comps.slice();
-    // dynamic work buffer reads up to 4 MiB (up to 2048 hunks for DVDs), so scale batches accordingly
-    var halfHunks = Math.max(128, Math.min(2048, Math.floor((4 << 20) / hb)));
+    // match chd.cpp's 256-hunk work-buffer rounding (8 MiB target clamped to 256..4096 hunks)
+    // so each half-buffer splits cleanly into >= 2 balanced batches per helper without tail stalls
+    var targetHunks = Math.max(256, Math.min(4096, Math.floor((8 << 20) / hb)));
+    var halfHunks = Math.max(128, Math.floor(targetHunks / 256) * 128);
     batchSize = Math.max(1, Math.min(64, Math.floor((512 * 1024) / hb), Math.floor(halfHunks / (2 * live.length))));
     if (scratch) { M._free(scratch); scratch = 0; }
     scratch = M._malloc(32);
