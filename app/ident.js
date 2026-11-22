@@ -6,10 +6,14 @@ var SYSTEMS = {
   saturn: ['SAT', 'Sega Saturn'], segacd: ['SCD', 'Sega CD / Mega-CD'], dc: ['DC', 'Sega Dreamcast'],
   pcecd: ['PCE', 'PC Engine CD / TurboGrafx-CD'], pcfx: ['PC-FX', 'NEC PC-FX'], ngcd: ['NGCD', 'Neo Geo CD'],
   '3do': ['3DO', '3DO Interactive Multiplayer'], cdi: ['CD-i', 'Philips CD-i'], cd32: ['CD32', 'Amiga CD32'],
-  cdtv: ['CDTV', 'Commodore CDTV'], jagcd: ['JAG', 'Atari Jaguar CD'], naomi: ['NAOMI', 'Sega NAOMI (GD-ROM)'],
-  naomi2: ['NAOMI2', 'Sega NAOMI 2 (GD-ROM)'], triforce: ['TRI', 'Triforce (GD-ROM)'], chihiro: ['CHIH', 'Sega Chihiro (GD-ROM)'],
-  pc98: ['PC-98', 'NEC PC-98'], gc: ['GC', 'Nintendo GameCube'],
-  wii: ['Wii', 'Nintendo Wii'], xbox: ['XBOX', 'Microsoft Xbox or Xbox 360'], ps3: ['PS3', 'Sony PlayStation 3'],
+  cdtv: ['CDTV', 'Commodore CDTV'], amigacd: ['AMCD', 'Commodore Amiga CD'], jagcd: ['JAG', 'Atari Jaguar CD'],
+  naomi: ['NAOMI', 'Sega NAOMI (GD-ROM)'], naomi2: ['NAOMI2', 'Sega NAOMI 2 (GD-ROM)'],
+  triforce: ['TRI', 'Triforce (GD-ROM)'], chihiro: ['CHIH', 'Sega Chihiro (GD-ROM)'],
+  ks573: ['S573', 'Konami System 573'], ns246: ['S246', 'Namco System 246 / 256'],
+  pc98: ['PC-98', 'NEC PC-98'], fmtowns: ['FM-T', 'Fujitsu FM Towns'], x68k: ['X68K', 'Sharp X68000'],
+  pippin: ['PIP', 'Bandai Pippin'], playdia: ['PLD', 'Bandai Playdia'], nuon: ['NUON', 'VM Labs Nuon'],
+  gc: ['GC', 'Nintendo GameCube'], wii: ['Wii', 'Nintendo Wii'],
+  xbox: ['XBOX', 'Microsoft Xbox'], xbox360: ['X360', 'Microsoft Xbox 360'], ps3: ['PS3', 'Sony PlayStation 3'],
   vcd: ['VCD', 'Video CD'], video: ['VIDEO', 'Video disc (DVD-Video, Blu-ray, Photo CD)'],
   pc: ['DATA', 'Data disc (PC or unknown system)']
 };
@@ -17,9 +21,12 @@ var SYS_COLORS = {
   ps1: ['#c8c8d4', '#1c1733'], ps2: ['#2f5bd3', '#ffffff'], psp: ['#26262e', '#ffffff'], saturn: ['#4a4f63', '#ffffff'],
   segacd: ['#1f4ea8', '#ffffff'], dc: ['#ff7a1a', '#1c1733'], pcecd: ['#f1ead6', '#1c1733'], pcfx: ['#3a3a44', '#ffffff'],
   ngcd: ['#d9b23a', '#1c1733'], '3do': ['#b01e2f', '#ffffff'], cdi: ['#1c6fb8', '#ffffff'], cd32: ['#e11d48', '#ffffff'],
-  cdtv: ['#33333d', '#ffffff'], jagcd: ['#d62828', '#ffffff'], naomi: ['#6a4fb8', '#ffffff'], naomi2: ['#6a4fb8', '#ffffff'],
-  triforce: ['#6a4fb8', '#ffffff'], chihiro: ['#6a4fb8', '#ffffff'],
-  pc98: ['#5b6b7a', '#ffffff'], gc: ['#6a4fb8', '#ffffff'], wii: ['#dfe6ea', '#1c1733'], xbox: ['#107c10', '#ffffff'],
+  cdtv: ['#33333d', '#ffffff'], amigacd: ['#c4264f', '#ffffff'], jagcd: ['#d62828', '#ffffff'],
+  naomi: ['#6a4fb8', '#ffffff'], naomi2: ['#6a4fb8', '#ffffff'], triforce: ['#6a4fb8', '#ffffff'], chihiro: ['#6a4fb8', '#ffffff'],
+  ks573: ['#b01e2f', '#ffffff'], ns246: ['#2f5bd3', '#ffffff'],
+  pc98: ['#5b6b7a', '#ffffff'], fmtowns: ['#4e5d6c', '#ffffff'], x68k: ['#384552', '#ffffff'],
+  pippin: ['#5f4b8b', '#ffffff'], playdia: ['#d97706', '#ffffff'], nuon: ['#0e7490', '#ffffff'],
+  gc: ['#6a4fb8', '#ffffff'], wii: ['#dfe6ea', '#1c1733'], xbox: ['#107c10', '#ffffff'], xbox360: ['#107c10', '#ffffff'],
   ps3: ['#26262e', '#ffffff']
 };
 function sysColor(s) { return SYS_COLORS[s] || null; }
@@ -119,6 +126,23 @@ var GameFacts = {
   }
 };
 
+// non-commutative 32-bit digest over ordered track (size, crc32) pairs (matches db/mkdb.py disc_digest)
+function discDigest(tracks) {
+  var h = (0x811C9DC5 ^ tracks.length) >>> 0;
+  for (var i = 0; i < tracks.length; i++) {
+    var sz = tracks[i].size, lo = sz >>> 0, hi = Math.floor(sz / 4294967296) >>> 0;
+    var c = (typeof tracks[i].crc === 'number' ? tracks[i].crc : parseInt(tracks[i].crc, 16)) >>> 0;
+    h = Math.imul(h ^ lo, 0x01000193) >>> 0;
+    h = Math.imul(h ^ hi, 0x01000193) >>> 0;
+    h = Math.imul(h ^ c, 0x01000193) >>> 0;
+    h = Math.imul((h >>> 16) ^ h, 0x85EBCA6B) >>> 0;
+  }
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xC2B2AE35) >>> 0;
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
 var GameDB = {
   // bySerial: exact serials; bySerialBase: serials with a suffix (T-8113H-50) under their base (T-8113H).
   // Keys are 'sys:' + canonKey
@@ -127,48 +151,97 @@ var GameDB = {
     if (!this.loading) this.loading = this._load();
     return this.loading;
   },
+  _addRow: function (sys, e) {
+    var self = this;
+    if (self.systems.indexOf(sys) < 0) self.systems.push(sys);
+    self.count++;
+    var key = function (s) { var k = canonKey(sys, s); return k ? sys + ':' + k : ''; };
+    var add = function (map, k) {
+      if (!k) return;
+      var l = map.get(k);
+      if (!l) map.set(k, l = []);
+      if (l.indexOf(e) < 0) l.push(e);
+    };
+    e.serials.forEach(function (serial) {
+      add(self.bySerial, key(serial));
+      // (empty parts aside: SLES--51117 has no base serial SLES)
+      var parts = serial.split(/[-\s]+/);
+      if (parts.length > 2) add(self.bySerialBase, key(parts[0] + parts[1]));
+      // Redump's release suffixes (SCES-53449/ANZ, UCES-00786/E): the disc itself says SCES-53449
+      if (serial.indexOf('/') > 0) add(self.bySerialBase, key(serial.split('/')[0]));
+      // Sega's region and disc suffixes on two-part serials (4432-50, MK81064-50)
+      var sg = SEGA_SYS.test(sys) && /^(.+)[-\s]\d{1,2}$/.exec(serial);
+      if (sg) add(self.bySerialBase, key(sg[1]));
+      // Sony serials with letters or a digit after the number (SLUS-01272GH, SLES-017482): the disc says SLUS-01272
+      var sn = /^([A-Z]{4}\d{5})[A-Z0-9]+$/.exec(normSerial(serial));
+      if (sn) add(self.bySerialBase, key(sn[1]));
+    });
+    var s = self.bySize.get(e.size);
+    if (!s) self.bySize.set(e.size, s = []);
+    s.push(e);
+  },
+  _addTsvLines: function (sys, lines) {
+    var self = this;
+    lines.forEach(function (line) {
+      if (!line) return;
+      var f = line.split('\t');
+      var ss = f[1] ? f[1].split('|') : [];
+      var ntrk = f[6] ? +f[6] : 0;
+      var dig = f[7] ? (parseInt(f[7], 16) >>> 0) : 0;
+      self._addRow(sys, { sys: sys, name: f[0], serial: ss[0] || '', serials: ss, size: +f[2], crc: f[3],
+        track: f[4] ? +f[4] : 0, ext: f[5] || '', ntrk: ntrk, digest: dig });
+    });
+  },
   _load: async function () {
     var node = document.getElementById('gamedb');
     var bytes = await gunzip(b64bytes(node.textContent), +node.getAttribute('data-size'));
     node.textContent = '';
-    var data = JSON.parse(new TextDecoder().decode(bytes));
-    this.version = data.version;
     var self = this;
-    this.systems = Object.keys(data.systems);
-    this.systems.forEach(function (sys) {
-      var key = function (s) { var k = canonKey(sys, s); return k ? sys + ':' + k : ''; };
-      data.systems[sys].split('\n').forEach(function (line) {
-        if (!line) return;
-        var f = line.split('\t');
-        // serials: the release's, joined with | when Redump lists it under several (db/mkdb.py); serial: the first
-        var ss = f[1] ? f[1].split('|') : [];
-        var e = { sys: sys, name: f[0], serial: ss[0] || '', serials: ss, size: +f[2], crc: f[3], track: f[4] ? +f[4] : 0, ext: f[5] };
-        self.count++;
-        var add = function (map, k) {
-          if (!k) return;
-          var l = map.get(k);
-          if (!l) map.set(k, l = []);
-          if (l.indexOf(e) < 0) l.push(e);
-        };
-        ss.forEach(function (serial) {
-          add(self.bySerial, key(serial));
-          // (empty parts aside: SLES--51117 has no base serial SLES)
-          var parts = serial.split(/[-\s]+/);
-          if (parts.length > 2) add(self.bySerialBase, key(parts[0] + parts[1]));
-          // Redump's release suffixes (SCES-53449/ANZ, UCES-00786/E): the disc itself says SCES-53449
-          if (serial.indexOf('/') > 0) add(self.bySerialBase, key(serial.split('/')[0]));
-          // Sega's region and disc suffixes on two-part serials (4432-50, MK81064-50)
-          var sg = SEGA_SYS.test(sys) && /^(.+)[-\s]\d{1,2}$/.exec(serial);
-          if (sg) add(self.bySerialBase, key(sg[1]));
-          // Sony serials with letters or a digit after the number (SLUS-01272GH, SLES-017482): the disc says SLUS-01272
-          var sn = /^([A-Z]{4}\d{5})[A-Z0-9]+$/.exec(normSerial(serial));
-          if (sn) add(self.bySerialBase, key(sn[1]));
-        });
-        var s = self.bySize.get(e.size);
-        if (!s) self.bySize.set(e.size, s = []);
-        s.push(e);
+    if (bytes.length >= 9 && bytes[0] === 68 && bytes[1] === 80 && bytes[2] === 68 && bytes[3] === 66 && bytes[4] === 2) {
+      // DPDB\x02 columnar binary format (scripts/assemble.py)
+      var dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      var jlen = dv.getUint32(5, true);
+      var meta = JSON.parse(new TextDecoder().decode(bytes.subarray(9, 9 + jlen)));
+      this.version = meta.v;
+      var crcOfs = 9 + jlen, tot = 0;
+      meta.s.forEach(function (sd) { tot += sd[1]; });
+      var digOfs = crcOfs + tot * 4;
+      meta.s.forEach(function (sd) {
+        var sys = sd[0], cnt = sd[1], extEnc = sd[2];
+        var names = sd[3] ? sd[3].split('\n') : [], sers = sd[4] ? sd[4].split('\n') : [];
+        var szs = sd[5] ? sd[5].split(',') : [], trks = sd[6] ? sd[6].split(',') : [], ntrks = sd[7] ? sd[7].split(',') : [];
+        var extArr = extEnc.charAt(0) === '\t' ? extEnc.slice(1).split('\t') : null;
+        var extBits = extEnc.charAt(0) === ':' ? extEnc : '';
+        var prev = '';
+        for (var i = 0; i < cnt; i++) {
+          var nl = names[i] || '', tab = nl.indexOf('\t');
+          var p = tab > 0 ? parseInt(nl.slice(0, tab), 16) : 0;
+          var nm = prev.slice(0, p) + (tab >= 0 ? nl.slice(tab + 1) : nl);
+          prev = nm;
+          var ex = extBits ? (extBits.charAt(i + 1) === 'b' ? 'bin' : 'iso') : extArr ? extArr[i] : extEnc;
+          var sv = szs[i] || '0';
+          var sz = sv.charAt(0) === '-' ? +sv.slice(1) : (+sv) * (ex === 'bin' ? 2352 : 2048);
+          var crc = ('00000000' + dv.getUint32(crcOfs, true).toString(16)).slice(-8).toUpperCase();
+          crcOfs += 4;
+          var ntrk = ntrks[i] ? +ntrks[i] : 0;
+          var dig = 0;
+          if (ntrk >= 2) { dig = dv.getUint32(digOfs, true) >>> 0; digOfs += 4; }
+          var ss = sers[i] ? sers[i].split('|') : [];
+          self._addRow(sys, { sys: sys, name: nm, serial: ss[0] || '', serials: ss, size: sz, crc: crc,
+            track: trks[i] ? +trks[i] : 0, ext: ex, ntrk: ntrk, digest: dig });
+        }
       });
-    });
+    } else {
+      var data = JSON.parse(new TextDecoder().decode(bytes));
+      this.version = data.version;
+      Object.keys(data.systems).forEach(function (sys) { self._addTsvLines(sys, data.systems[sys].split('\n')); });
+    }
+    var tb = document.getElementById('testdb');
+    if (tb && tb.textContent) {
+      var extra = JSON.parse(tb.textContent);
+      tb.textContent = '';
+      Object.keys(extra).forEach(function (sys) { self._addTsvLines(sys, extra[sys]); });
+    }
     return this;
   },
   // the releases listed under this serial (base: those under it as a base serial), on one system, or
@@ -450,21 +523,131 @@ function psSerial(path) {
   return m ? m[1] + '-' + m[2] + m[3] : '';
 }
 
-// the database lists NAOMI and NAOMI 2 GD-ROMs apart, and their headers look alike: one family
-function sameSys(a, b) { return a === b || (/^naomi2?$/.test(a) && /^naomi2?$/.test(b)); }
+// systems whose disc formats share headers or family boundaries in Redump
+function sameSys(a, b) {
+  return a === b
+    || (/^naomi2?$/.test(a) && /^naomi2?$/.test(b))
+    || (/^(cd32|cdtv|amigacd)$/.test(a) && /^(cd32|cdtv|amigacd)$/.test(b))
+    || (/^(ps2|ns246)$/.test(a) && /^(ps2|ns246)$/.test(b))
+    || (/^(ps1|ks573)$/.test(a) && /^(ps1|ks573)$/.test(b));
+}
 
 /* ---------- console detection from the first sectors of a data track ---------- */
 // Xbox and Xbox 360 game partitions (XDVDFS): the volume descriptor is sector 32 of the partition,
-// which starts at the image's beginning (an extracted "XISO") or, in a full dump, after the
-// disc's video partition: at 0x18300000 (XGD1, Xbox), 0xFD90000 (XGD2) or 0x2080000 (XGD3)
-var XDVDFS_AT = [0, 0x18300000 / 2048, 0xFD90000 / 2048, 0x2080000 / 2048];
+// which starts at 0 (extracted XISO) or after the video partition: 0x18300000 (XGD1 OG Xbox),
+// 0x0FD90000 (XGD2 Xbox 360), or 0x02080000 (XGD3 Xbox 360). Walking the XDVDFS root BST also
+// separates extracted XISOs (DEFAULT.XBE vs DEFAULT.XEX) and extracts Title ID, title, and disc N/M.
+var XDVDFS_AT = [[0, ''], [0x18300000 / 2048, 'xbox'], [0x0FD90000 / 2048, 'xbox360'], [0x02080000 / 2048, 'xbox360']];
+function formatXboxTid(tid) {
+  var c1 = (tid >>> 24) & 0xFF, c2 = (tid >>> 16) & 0xFF, num = tid & 0xFFFF;
+  if (((c1 >= 65 && c1 <= 90) || (c1 >= 48 && c1 <= 57)) && ((c2 >= 65 && c2 <= 90) || (c2 >= 48 && c2 <= 57))) {
+    return String.fromCharCode(c1, c2) + '-' + ('000' + num).slice(-3);
+  }
+  return ('00000000' + (tid >>> 0).toString(16)).slice(-8).toUpperCase();
+}
 async function detectXbox(rd) {
   for (var i = 0; i < XDVDFS_AT.length; i++) {
-    var b = null;
-    try { b = await rd.read(XDVDFS_AT[i] + 32); } catch (e) { /* past the end */ }
-    if (b && asc(b, 0, 20) === 'MICROSOFT*XBOX*MEDIA' && asc(b, 0x7EC, 20) === 'MICROSOFT*XBOX*MEDIA') return { sys: 'xbox' };
+    var partLba = XDVDFS_AT[i][0], hintSys = XDVDFS_AT[i][1], vd = null;
+    try { vd = await rd.read(partLba + 32); } catch (e) { /* past the end */ }
+    if (!vd || asc(vd, 0, 20) !== 'MICROSOFT*XBOX*MEDIA' || asc(vd, 0x7EC, 20) !== 'MICROSOFT*XBOX*MEDIA') continue;
+    var rootSec = u32le(vd, 0x14), rootSize = u32le(vd, 0x18);
+    var res = { sys: hintSys || 'xbox', partLba: partLba };
+    if (rootSec && rootSize && rootSize < (1 << 20)) {
+      try {
+        var nsec = Math.min(Math.ceil(rootSize / 2048), 8), dir = new Uint8Array(nsec * 2048);
+        for (var s = 0; s < nsec; s++) {
+          var sb = await rd.read(partLba + rootSec + s);
+          if (!sb) break;
+          dir.set(sb, s * 2048);
+        }
+        var dv = new DataView(dir.buffer), stack = [0], seenOff = new Set(), found = null;
+        while (stack.length && seenOff.size < 256) {
+          var off = stack.pop();
+          if (seenOff.has(off) || off + 14 > Math.min(rootSize, dir.length)) continue;
+          seenOff.add(off);
+          var left = dv.getUint16(off, true), right = dv.getUint16(off + 2, true);
+          var fsec = dv.getUint32(off + 4, true), fsize = dv.getUint32(off + 8, true), nlen = dir[off + 13];
+          if (left && left !== 0xFFFF) stack.push(left * 4);
+          if (right && right !== 0xFFFF) stack.push(right * 4);
+          if (nlen > 0 && off + 14 + nlen <= dir.length) {
+            var fn = asc(dir, off + 14, nlen).toUpperCase();
+            if (fn === 'DEFAULT.XBE' || fn === 'DEFAULT.XEX') { found = { name: fn, sec: fsec, size: fsize }; break; }
+          }
+        }
+        if (found && found.sec) {
+          var hdr = await rd.read(partLba + found.sec);
+          if (hdr && found.name === 'DEFAULT.XBE' && asc(hdr, 0, 4) === 'XBEH') {
+            res.sys = 'xbox';
+            var baseA = u32le(hdr, 0x104), certA = u32le(hdr, 0x118), certOff = certA - baseA;
+            if (certOff >= 0 && certOff + 0x5C <= hdr.length) {
+              var tid = u32le(hdr, certOff + 0x08);
+              if (tid) res.serial = formatXboxTid(tid);
+              var tbuf = hdr.subarray(certOff + 0x0C, certOff + 0x5C);
+              var tstr = new TextDecoder('utf-16le').decode(tbuf).replace(/\0.*$/, '').trim();
+              if (tstr) res.title = clean(tstr);
+            }
+          } else if (hdr && found.name === 'DEFAULT.XEX' && asc(hdr, 0, 4) === 'XEX2') {
+            res.sys = 'xbox360';
+            var optCnt = Math.min(u32be(hdr, 0x14), 64);
+            for (var k = 0; k < optCnt && 0x18 + k * 8 + 8 <= hdr.length; k++) {
+              if (u32be(hdr, 0x18 + k * 8) === 0x00040006) {
+                var eoff = u32be(hdr, 0x18 + k * 8 + 4);
+                if (eoff > 0 && eoff + 20 <= hdr.length) {
+                  var xtid = u32be(hdr, eoff + 0x0C);
+                  if (xtid) res.serial = formatXboxTid(xtid);
+                  var dn = hdr[eoff + 0x12], dof = hdr[eoff + 0x13];
+                  if (dof > 1 && dn >= 1 && dn <= dof) res.disc = { n: dn, of: dof };
+                }
+                break;
+              }
+            }
+          }
+        }
+      } catch (e) { /* unreadable root dir: partition offset still identifies console */ }
+    }
+    return res;
   }
   return null;
+}
+function sonyRegion(serial) {
+  var k = normSerial(serial);
+  if (/^(S[LC]P[SM]|PAPX|PCPX|PBPX|PDBX|UCJM|UCJS|ULJM|ULJS|BCJS|BLJM|BLJS)/.test(k)) return 'J';
+  if (/^(S[LC]US|LSP|PAPU|UCUS|ULUS|BCUS|BLUS)/.test(k)) return 'U';
+  if (/^(S[LC]ES|S[LC]ED|UCES|ULES|BCES|BLES)/.test(k)) return 'E';
+  if (/^(S[LC]KA|UCKS|ULKS|BCKS|BLKS)/.test(k)) return 'K';
+  if (/^(S[LC]AJ|SCCS|UCAS|ULAS|BCAS|BLAS)/.test(k)) return 'A';
+  return '';
+}
+async function detectPippin(rd, s0) {
+  if (s0[0] !== 0x45 || s0[1] !== 0x52 || ((s0[2] << 8) | s0[3]) !== 512) return null;
+  if (asc(s0, 0x200, 2) !== 'PM') return null;
+  var mapCnt = Math.min(u32be(s0, 0x204) || 1, 12), hfsBlk = 0, isPippin = false;
+  var readBlk = async function (blk) {
+    var sec = await rd.read(blk >>> 2);
+    return sec ? sec.subarray((blk & 3) * 512, ((blk & 3) + 1) * 512) : null;
+  };
+  for (var blk = 1; blk <= mapCnt; blk++) {
+    var p = blk < 4 ? s0.subarray(blk * 512, (blk + 1) * 512) : await readBlk(blk);
+    if (!p || asc(p, 0, 2) !== 'PM') break;
+    var pname = clean(asc(p, 16, 32)), ptype = clean(asc(p, 48, 32));
+    if (/Pippin/i.test(pname + ' ' + ptype)) isPippin = true;
+    if (!hfsBlk && /^Apple_HFS$/i.test(ptype)) hfsBlk = u32be(p, 8);
+  }
+  var title = '';
+  if (hfsBlk) {
+    try {
+      var bb = await readBlk(hfsBlk);
+      if (bb && asc(bb, 0, 2) === 'LK' && /Pippin/i.test(asc(bb, 0, 512))) isPippin = true;
+      var mdb = await readBlk(hfsBlk + 2);
+      if (mdb && asc(mdb, 0, 2) === 'BD') {
+        var vlen = Math.min(mdb[0x24], 27);
+        if (vlen > 0) title = clean(asc(mdb, 0x25, vlen));
+        // Pippin authentication pointer in MDB tail (+0x1F8..0x1FF)
+        if (!isPippin && (u32be(mdb, 0x1F8) || u32be(mdb, 0x1FC))) isPippin = true;
+      }
+    } catch (e) { /* ignore */ }
+  }
+  return isPippin ? { sys: 'pippin', title: title } : null;
 }
 function sega(r, device, area) {
   // (CD-10/12; CD-0/3 is a set's opening disc 0)
@@ -502,7 +685,8 @@ async function detectTrack(rd) {
   // set this is (CD-2/3, GD-ROM1/2) and where it may be sold (area symbols: J, U, E, and the Saturn's
   // T, B, K, A, L)
   if (h === 'SEGA SEGASATURN ') {
-    return sega({ sys: 'saturn', serial: clean(asc(s0, 0x20, 10)), title: clean(asc(s0, 0x60, 112)) }, asc(s0, 0x38, 8), asc(s0, 0x40, 10));
+    return sega({ sys: 'saturn', serial: clean(asc(s0, 0x20, 10)), title: clean(asc(s0, 0x60, 112)),
+      satCart: asc(s0, 0x50, 16).indexOf('W') >= 0 ? 'W' : undefined }, asc(s0, 0x38, 8), asc(s0, 0x40, 10));
   }
   if (h === 'SEGA SEGAKATANA ') {
     var serial = clean(asc(s0, 0x40, 10));
@@ -512,24 +696,31 @@ async function detectTrack(rd) {
       : /CHIHIRO/i.test(arcade) || /^GDX-?\d{4}/i.test(serial) ? 'chihiro'
       : /NAOMI\s*2/i.test(arcade) ? 'naomi2'
       : (/NAOMI/i.test(arcade) || /^GD[LS]-?\d{4}/i.test(serial)) ? 'naomi' : 'dc';
-    return sega({ sys: katSys, serial: serial, title: clean(asc(s0, 0x80, 128)) }, asc(s0, 0x20, 16), asc(s0, 0x30, 8));
+    var wince = katSys === 'dc' && (/^0WINCEOS\.BIN/i.test(clean(asc(s0, 0x60, 16))) || s0[0x38] === 0x31);
+    return sega({ sys: katSys, serial: serial, title: clean(asc(s0, 0x80, 128)), wince: wince || undefined }, asc(s0, 0x20, 16), asc(s0, 0x30, 8));
   }
   if (/^SEGADISCSYSTEM|^SEGABOOTDISC|^SEGA-CD|^SEGA_CD/.test(h)) {
     var m = /^\s*(?:GM|AI|OS|BR)?\s*([A-Z0-9][A-Z0-9-]*)/.exec(asc(s0, 0x180, 14));
     return sega({ sys: 'segacd', serial: m ? m[1] : '', title: clean(asc(s0, 0x150, 48)) || clean(asc(s0, 0x120, 48)),
       cd32x: /^SEGA 32X/.test(asc(s0, 0x100, 8)) || undefined }, '', asc(s0, 0x1F0, 3));
   }
-  if (s0[0] === 1 && asc(s0, 1, 5) === 'ZZZZZ' && s0[6] === 1) return { sys: '3do', title: clean(asc(s0, 0x28, 32)) };
+  if (s0[0] === 1 && asc(s0, 1, 5) === 'ZZZZZ' && (s0[6] === 1 || s0[6] === 2)) return { sys: '3do', title: clean(asc(s0, 0x28, 32)) };
   if (u32be(s0, 0x1C) === 0xC2339F3D) return { sys: 'gc', serial: clean(asc(s0, 0, 6)), title: clean(asc(s0, 0x20, 64)) };
   if (u32be(s0, 0x18) === 0x5D1C9EA3) return { sys: 'wii', serial: clean(asc(s0, 0, 6)), title: clean(asc(s0, 0x20, 64)) };
+  if (asc(s0, 0, 4) === 'IPL4') return { sys: 'fmtowns' };
+  if (asc(s0, 4, 4) === 'IPL1') return { sys: 'pc98' };
+  if (asc(s0, 0, 8) === 'X68SCSI1') return { sys: 'x68k' };
+  var pip = await detectPippin(rd, s0);
+  if (pip) return pip;
 
-  // PC Engine / PC-FX boot sectors: before the ISO 9660 volume some of these discs also have
+  // PC Engine / PC-FX / backup 3DO OperaFS boot sectors: before the ISO 9660 volume some of these discs also have
   for (var l = 0; l < 16; l++) {
     var b = null;
     try { b = l === 0 ? s0 : await rd.read(l); } catch (e) { /* a short or damaged image: the volume below decides */ }
     if (!b) break;
     if (asc(b, 0x20, 23) === 'PC Engine CD-ROM SYSTEM') return { sys: 'pcecd' };
     if (asc(b, 0, 15) === 'PC-FX:Hu_CD-ROM') return { sys: 'pcfx' };
+    if (l > 0 && b[0] === 1 && asc(b, 1, 5) === 'ZZZZZ' && (b[6] === 1 || b[6] === 2) && asc(b, 8, 6) === 'CD-ROM') return { sys: '3do', title: clean(asc(b, 0x28, 32)) };
   }
   var pvd = null, cdiPvd = null;
   for (var vd = 16; vd < 32; vd++) {
@@ -546,11 +737,13 @@ async function detectTrack(rd) {
   if (cdiPvd) return { sys: 'cdi', title: clean(asc(cdiPvd, 40, 32)) };
   if (pvd) {
     var sysId = clean(asc(pvd, 8, 32)), volId = clean(asc(pvd, 40, 32));
+    var volSet = pvd[120] | (pvd[121] << 8), volSeq = pvd[124] | (pvd[125] << 8);
+    var pvdDisc = volSet > 1 && volSeq >= 1 && volSeq <= volSet ? { n: volSeq, of: volSet } : undefined;
     var files = new Map();
     try { files = await isoDir(rd, u32le(pvd, 158), u32le(pvd, 166)); } catch (e) { /* ignore */ }
     if (files.has('UMD_DATA.BIN') || /^PSP GAME/.test(sysId)) {
       // UMD Video and UMD Audio discs carry UMD_DATA.BIN too, but without PSP_GAME
-      var r = { sys: 'psp', title: volId, video: files.has('UMD_VIDEO') && !files.has('PSP_GAME'), umdAudio: files.has('UMD_AUDIO') && !files.has('PSP_GAME') };
+      var r = { sys: 'psp', title: volId, video: files.has('UMD_VIDEO') && !files.has('PSP_GAME'), umdAudio: files.has('UMD_AUDIO') && !files.has('PSP_GAME'), disc: pvdDisc };
       try {
         if (files.has('UMD_DATA.BIN')) r.serial = new TextDecoder().decode(await isoFile(rd, files.get('UMD_DATA.BIN'), 64)).split('|')[0].trim();
         var pg = files.get('PSP_GAME');
@@ -563,26 +756,70 @@ async function detectTrack(rd) {
           }
         }
       } catch (e) { /* ignore */ }
+      var pa = sonyRegion(r.serial);
+      if (pa) r.area = pa;
       return r;
     }
     // a boot file named after the serial (SLUS_005.94) in the root: for discs whose SYSTEM.CNF boots
     // a generic PSX.EXE, and those without one
     var exe = null;
     files.forEach(function (v, k) { if (!exe && /^[A-Z]{4}_\d{3}\.\d{2}(;1)?$/.test(k)) exe = k; });
+    var ps1Area = async function (ser) {
+      try {
+        var s4 = await rd.read(4), lic = s4 ? asc(s4, 0, 96) : '';
+        if (/America/i.test(lic)) return 'U';
+        if (/Europe/i.test(lic)) return 'E';
+        if (/Entertainment Inc/i.test(lic)) return 'J';
+      } catch (e) { /* ignore */ }
+      return sonyRegion(ser);
+    };
     if (files.has('SYSTEM.CNF')) {
       var cnf = '';
       try { cnf = new TextDecoder().decode(await isoFile(rd, files.get('SYSTEM.CNF'), 2048)); } catch (e) { /* unreadable */ }
       var b2 = /BOOT2\s*=\s*([^\r\n]+)/i.exec(cnf), b1 = /BOOT\s*=\s*([^\r\n]+)/i.exec(cnf);
-      if (b2) return { sys: 'ps2', serial: psSerial(b2[1].trim()) || (exe ? psSerial(exe) : ''), boot: bootName(b2[1]), title: volId, udf: await hasUdf(rd) };
-      if (b1) return { sys: 'ps1', serial: psSerial(b1[1].trim()) || (exe ? psSerial(exe) : ''), boot: bootName(b1[1]), title: volId };
+      if (b2) {
+        var ser2 = psSerial(b2[1].trim()) || (exe ? psSerial(exe) : ''), udf2 = await hasUdf(rd);
+        var dvd9 = false, layerBreak = 0;
+        if (udf2) {
+          var volSpace0 = u32le(pvd, 80);
+          if (volSpace0 > 16) {
+            try {
+              var pvd1 = await rd.read(volSpace0 + 16);
+              if (pvd1 && pvd1[0] === 1 && asc(pvd1, 1, 5) === 'CD001') { dvd9 = true; layerBreak = volSpace0; }
+            } catch (e) { /* single-layer or truncated */ }
+          }
+        }
+        return { sys: 'ps2', serial: ser2, boot: bootName(b2[1]), title: volId, udf: udf2, area: sonyRegion(ser2) || undefined,
+          disc: pvdDisc, dvd9: dvd9 || undefined, layerBreak: layerBreak || undefined };
+      }
+      if (b1) {
+        var ser1 = psSerial(b1[1].trim()) || (exe ? psSerial(exe) : '');
+        return { sys: 'ps1', serial: ser1, boot: bootName(b1[1]), title: volId, area: (await ps1Area(ser1)) || undefined, disc: pvdDisc };
+      }
+    }
+    // Konami System 573 (PS1-based arcade CDs without consumer SLxx serial)
+    var pvdMeta = sysId + ' ' + clean(asc(pvd, 318, 256));
+    if (!exe && /KONAMI/i.test(pvdMeta) && (files.has('GAME.DAT') || files.has('GSE.NXX') || files.has('NSE.GXX') || files.has('OSE.FXX') || files.has('QSU.DXH') || files.has('RSU.CXH') || files.has('KONAMI573'))) {
+      return { sys: 'ks573', title: volId };
     }
     // no boot line: a PS2 DVD still has its UDF volume (a PS1 disc never has one)
     if (/PLAYSTATION/i.test(sysId)) {
-      var udf = await hasUdf(rd);
-      return { sys: udf ? 'ps2' : 'ps1', serial: exe ? psSerial(exe) : '', title: volId, udf: udf || undefined };
+      var udf = await hasUdf(rd), serP = exe ? psSerial(exe) : '';
+      return { sys: udf ? 'ps2' : 'ps1', serial: serP, title: volId, udf: udf || undefined,
+        area: (udf ? sonyRegion(serP) : await ps1Area(serP)) || undefined, disc: pvdDisc };
+    }
+    // SYSTEM.CNF-less PS1 discs (early launch titles, Net Yaroze, prototypes booting PSX.EXE)
+    if (files.has('PSX.EXE')) {
+      try {
+        var px = await isoFile(rd, files.get('PSX.EXE'), 8);
+        if (asc(px, 0, 8) === 'PS-X EXE') {
+          var serX = exe ? psSerial(exe) : '';
+          return { sys: 'ps1', serial: serX, title: volId, area: (await ps1Area(serX)) || undefined, disc: pvdDisc };
+        }
+      } catch (e) { /* ignore */ }
     }
     if (files.has('PS3_DISC.SFB') || files.has('PS3_GAME')) {
-      var r3 = { sys: 'ps3', title: volId };
+      var r3 = { sys: 'ps3', title: volId, disc: pvdDisc };
       try {
         var g3 = files.get('PS3_GAME'), sub3 = g3 ? await isoDir(rd, g3.lba, g3.size) : new Map();
         if (sub3.has('PARAM.SFO')) {
@@ -591,6 +828,8 @@ async function detectTrack(rd) {
           if (sfo3.TITLE_ID) r3.serial = sfo3.TITLE_ID.slice(0, 4) + '-' + sfo3.TITLE_ID.slice(4);
         }
       } catch (e) { /* ignore */ }
+      var a3 = sonyRegion(r3.serial);
+      if (a3) r3.area = a3;
       return r3;
     }
     // Video CDs (a VCD folder: MPF) and CD-i Bridge discs, which Video CDs are too (CD-RTOS CD-BRIDGE, a CDI folder)
@@ -598,7 +837,16 @@ async function detectTrack(rd) {
     if (/CD-RTOS CD-BRIDGE/i.test(sysId) && files.has('CDI') && !files.has('PHOTO_CD')) return { sys: 'cdi', title: volId };
     // Neo Geo CD: IPL.TXT, or (MPF) the disc's text files
     if (files.has('IPL.TXT') || ['ABS.TXT', 'BIB.TXT', 'CPY.TXT'].filter(function (n) { return files.has(n); }).length >= 2) return { sys: 'ngcd', title: volId };
-    // CDTV and CD32 share the Amiga's S/STARTUP-SEQUENCE; a CDTV disc has CDTV.TM (MPF)
+    // Bandai Playdia (Asahi Kasei AK8000 / .AJS + .GLB pairs)
+    var fkeys = Array.from(files.keys());
+    if (/^(ASAHI-CD|PLAYDIA)/i.test(sysId) || (fkeys.some(function (k) { return /\.AJS$/.test(k); }) && fkeys.some(function (k) { return /\.GLB$/.test(k); }))) {
+      return { sys: 'playdia', title: volId };
+    }
+    // Fujitsu FM Towns, NEC PC-98, and Sharp X68000 ISO 9660 discs without boot sector magic
+    if (/FM[\s_-]?TOWNS/i.test(sysId) || (files.has('TBIOS.SYS') && files.has('IO.SYS'))) return { sys: 'fmtowns', title: volId };
+    if (/PC-?98/i.test(sysId) || files.has('NEC_CD.SYS')) return { sys: 'pc98', title: volId };
+    if (/X68000/i.test(sysId) || files.has('HUMAN.SYS') || files.has('SUSIE.X')) return { sys: 'x68k', title: volId };
+    // CDTV, CD32, and Amiga CD share Amiga files; CDTV has CDTV.TM, CD32 has CD32.TM or S/STARTUP-SEQUENCE
     if (files.has('CDTV.TM')) return { sys: 'cdtv', title: volId };
     if (files.has('CD32.TM') || /CD32/i.test(sysId)) return { sys: 'cd32', title: volId };
     if (/CDTV/i.test(sysId)) return { sys: 'cdtv', title: volId };
@@ -607,16 +855,30 @@ async function detectTrack(rd) {
       try { sdir = await isoDir(rd, files.get('S').lba, files.get('S').size); } catch (e) { /* ignore */ }
       if (sdir.has('STARTUP-SEQUENCE')) return { sys: 'cd32', title: volId };
     }
+    if (files.has('DISK.INFO')) {
+      try {
+        var di = await isoFile(rd, files.get('DISK.INFO'), 2);
+        if (di.length >= 2 && di[0] === 0xE3 && di[1] === 0x10) return { sys: 'amigacd', title: volId };
+      } catch (e) { /* ignore */ }
+    }
     // a full Xbox dump starts with a video partition, which reads as ISO 9660
     var xbox = await detectXbox(rd);
     if (xbox) return xbox;
+    // VM Labs Nuon: MUST run before VIDEO_TS because hybrid Nuon discs also carry DVD-Video VIDEO_TS!
+    if (files.has('NUON.CD') || files.has('NUON.RUN')) return { sys: 'nuon', title: volId };
+    if (files.has('NUON') && files.get('NUON').dir) {
+      try {
+        var ndir = await isoDir(rd, files.get('NUON').lba, files.get('NUON').size);
+        if (ndir.has('NUON.CD') || ndir.has('NUON.RUN')) return { sys: 'nuon', title: volId };
+      } catch (e) { /* ignore */ }
+    }
     // video discs (MPF): not games
     var video = files.has('BDMV') ? 'Blu-ray' : files.has('HVDVD_TS') ? 'HD DVD' : files.has('AUDIO_TS') && files.get('AUDIO_TS').size && !files.has('VIDEO_TS') ? 'DVD-Audio' : files.has('VIDEO_TS') ? 'DVD-Video' : files.has('PHOTO_CD') ? 'Photo CD' : '';
     // (with other files and folders too, a disc of PC software that comes with a film: weak, so other
     // data tracks are looked at too, and a checksum may still name it)
     var mediaDirs = /^(VIDEO_TS|AUDIO_TS|JACKET_P|BDMV|CERTIFICATE|HVDVD_TS|ADV_OBJ|PHOTO_CD)$/;
-    if (video) return { sys: 'video', title: volId, video: video, weak: Array.from(files.keys()).some(function (n) { return !mediaDirs.test(n); }) || undefined };
-    return { sys: 'pc', title: volId, udf: (await hasUdf(rd)) || undefined, weak: true };
+    if (video) return { sys: 'video', title: volId, video: video, weak: fkeys.some(function (n) { return !mediaDirs.test(n); }) || undefined };
+    return { sys: 'pc', title: volId, udf: (await hasUdf(rd)) || undefined, disc: pvdDisc, weak: true };
   }
   return detectXbox(rd);
 }
@@ -769,7 +1031,9 @@ function probePlan(job, images, nrg) {
       else if ((m = /^\s*REM\s+SESSION\s+0*(\d+)/i.exec(ln))) session = +m[1];
       else if ((m = /^\s*TRACK\s+(\d+)\s+(\S+)/i.exec(ln))) {
         if (curTrack) attach(curTrack, curTrack.file);
-        curTrack = { no: +m[1], mode: m[2].toUpperCase(), index: 0, session: session, file: curFile, attached: false };
+        curTrack = { no: +m[1], mode: m[2].toUpperCase(), index: 0, index0: null, session: session, file: curFile, attached: false };
+      } else if (curTrack && (m = /^\s*INDEX\s+0*0\s+(\S+)/i.exec(ln))) {
+        curTrack.index0 = msfFrames(m[1]);
       } else if (curTrack && (m = /^\s*INDEX\s+0*1\s+(\S+)/i.exec(ln))) {
         curTrack.index = msfFrames(m[1]);
         attach(curTrack, curFile);
@@ -778,10 +1042,24 @@ function probePlan(job, images, nrg) {
     if (curTrack) attach(curTrack, curTrack.file);
     fileTracks.forEach(function (ft) {
       if (!ft.file) return;
-      hashes.push({ file: ft.file, track: ft.tracks.length === 1 ? ft.tracks[0].no : 0 });
+      var trackSs = function (m) { return /2048/.test(m) ? 2048 : /2324/.test(m) ? 2324 : /2336/.test(m) ? 2336 : 2352; };
+      if (ft.tracks.length === 1) {
+        hashes.push({ file: ft.file, track: ft.tracks[0].no });
+      } else {
+        // single-bin multi-track .cue/.ccd: slice each track's Redump [start, end) range (plus whole-file fallback)
+        var starts = ft.tracks.map(function (t, idx) {
+          var fr = idx === 0 ? 0 : (t.index0 != null ? t.index0 : t.index);
+          return fr * trackSs(t.mode);
+        });
+        ft.tracks.forEach(function (t, idx) {
+          var st = starts[idx], en = idx + 1 < starts.length ? starts[idx + 1] : ft.file.size;
+          if (en > st) hashes.push({ file: ft.file, start: st, end: en, size: en - st, track: t.no });
+        });
+        hashes.push({ file: ft.file, track: 0 });
+      }
       ft.tracks.forEach(function (t) {
         if (t.mode === 'AUDIO') return;
-        var ss = /2048/.test(t.mode) ? 2048 : /2324/.test(t.mode) ? 2324 : /2336/.test(t.mode) ? 2336 : 2352;
+        var ss = trackSs(t.mode);
         readers.push(fileReader(ft.file, t.index * ss, ss));
       });
     });
@@ -836,7 +1114,18 @@ function probePlan(job, images, nrg) {
     });
     var tracksOf = new Map();
     tt.forEach(function (t) { t.runs.forEach(function (r) { if (r.file) (tracksOf.get(r.file) || tracksOf.set(r.file, new Set()).get(r.file)).add(t.no); }); });
-    tracksOf.forEach(function (nos, f) { hashes.push({ file: f, track: nos.size === 1 ? nos.values().next().value : 0 }); });
+    tracksOf.forEach(function (nos, f) {
+      if (nos.size === 1) hashes.push({ file: f, track: nos.values().next().value });
+      else {
+        tt.forEach(function (t) {
+          var fRuns = t.runs.filter(function (r) { return r.file === f && r.bytes > 0; });
+          if (fRuns.length === 1 && t.runs.length === 1 && t.stride === (t.size || 2352)) {
+            hashes.push({ file: f, start: fRuns[0].offset, end: fRuns[0].offset + fRuns[0].bytes, size: fRuns[0].bytes, track: t.no });
+          }
+        });
+        hashes.push({ file: f, track: 0 });
+      }
+    });
     tt.forEach(function (t) {
       if (!t.size) return; // audio
       // INDEX 01: the byte `start` of the track's runs; from zeros, the next file's first byte
@@ -860,22 +1149,41 @@ function probePlan(job, images, nrg) {
       if (t.mode === 0 || t.mode === 0x600) readers.push(fileReader(nf, t.index1, t.size));
     });
   } else if (job.src === 'gdi' && job.descText) {
+    var gdiRows = [];
     job.descText.replace(/\r/g, '').split('\n').slice(1).forEach(function (ln) {
       var t = tokenize(ln);
       if (t.length < 5) return;
       var f = byName(t[4]);
       if (!f) return;
+      gdiRows.push({ no: +t[0], type: t[2], ss: +t[3] || 2352, file: f });
       hashes.push({ file: f, track: +t[0] });
       if (t[2] === '4') readers.push(fileReader(f, 0, +t[3] || 2352));
     });
+    // Multi-track 2352-byte TOSEC .gdi: track03.bin appends the next track's pregap (150 or 225 frames);
+    // also offer the Redump-trimmed slice so raw .gdi dumps hash-match GameDB before conversion
+    if (gdiRows.length > 3 && gdiRows[2].type === '4' && gdiRows[2].ss === 2352) {
+      var pad = (gdiRows.length === 4 && gdiRows[3].type === '4') ? 225 : 150;
+      var trim = gdiRows[2].file.size - pad * 2352;
+      if (trim > 0) hashes.push({ file: gdiRows[2].file, start: 0, end: trim, size: trim, track: gdiRows[2].no });
+    }
     readers.reverse(); // the high-density data track carries the IP.BIN header
   } else if (job.src === 'pbp') {
-    // a PS1 PBP's disc: read through a worker (ecmImages); the whole image is the Redump file only for a
-    // single-track disc
-    var pv = fileOf(job.files[0]);
+    // a PS1 PBP's disc: read through a worker (ecmImages); slice multi-track PBPs by their TOC
+    var pv = fileOf(job.files[0]), pbpMeta = job.files[0] && job.files[0].pbp;
     if (pv) {
       readers.push(fileReader(pv, 0, 2352));
       if (job.pbpTracks === 1) hashes.push({ file: pv, track: 0 });
+      else if (pbpMeta && pbpMeta.list && pbpMeta.list.length > 1) {
+        var pl = pbpMeta.list, base0 = pbpMeta.base || 0, totB = pbpMeta.sectors * 2352;
+        var pstarts = pl.map(function (t, idx) {
+          var fr = idx === 0 ? 0 : Math.max(0, (t.pregap < t.start ? t.pregap : t.start) - base0);
+          return fr * 2352;
+        });
+        pl.forEach(function (t, idx) {
+          var st = pstarts[idx], en = idx + 1 < pstarts.length ? pstarts[idx + 1] : totB;
+          if (en > st) hashes.push({ file: pv, start: st, end: en, size: en - st, track: t.no });
+        });
+      }
     }
   } else if (job.src === 'cso') {
     // a compressed ISO: identifyJob reads it through a worker; the checksum is the ISO's

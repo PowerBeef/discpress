@@ -1295,3 +1295,116 @@ test('malformed WAV, CUE, and GDI inputs fail cleanly without crashing', () => {
     expect({ code: r.code, signal: r.signal }, name).toEqual({ code: 1, signal: null });
   }
 });
+
+test('verify --redump produces exact Redump sizes and CRC-32s in one pass for CD, multi-track CD, GD-ROM, and DVD', () => {
+  const crc32Buf = buf => {
+    let c = 0xffffffff;
+    for (let i = 0; i < buf.length; i++) {
+      c ^= buf[i];
+      for (let b = 0; b < 8; b++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+    }
+    return ((c ^ 0xffffffff) >>> 0).toString(16).padStart(8, '0');
+  };
+  const parseRedump = out => out.toString().split(/\r?\n/)
+    .map(l => /^Redump:\s+(\d+)\s+([0-9a-f]{8})\s+(.+)$/.exec(l))
+    .filter(Boolean)
+    .map(m => ({ size: +m[1], crc: m[2], name: m[3] }));
+
+  // 1) Multi-track CD with audio tracks + single-track CD
+  for (const cue of ['twine.cue', 'mgs disc1.cue']) {
+    const chd = makeChd('createcd', cue);
+    const vr = run(ENGINE, ['verify', '-i', chd, '--redump']);
+    expect({ code: vr.code, signal: vr.signal }, cue).toEqual({ code: 0, signal: null });
+    const got = parseRedump(vr.out);
+    const dir = tmp('vrd-' + cue);
+    fs.mkdirSync(dir, { recursive: true });
+    expect(run(ENGINE, ['extractcd', '-i', chd, '-o', path.join(dir, 'check.cue'), '--redump']).code).toBe(0);
+    const expected = fs.readdirSync(dir).sort().map(nm => {
+      const b = fs.readFileSync(path.join(dir, nm));
+      return { size: b.length, crc: crc32Buf(b), name: nm };
+    });
+    expect(got.slice().sort((a, b) => a.name.localeCompare(b.name)), cue).toEqual(expected);
+  }
+  // 2) GD-ROM (type 3 split: data, audio, data)
+  const gd = gdDisc('vrdgd', [true, false, true]);
+  const gdChd = tmp('vrdgd.chd');
+  expect(run(ENGINE, ['createcd', '-i', gd.gdi, '-o', gdChd, '-f']).code).toBe(0);
+  const gvr = run(ENGINE, ['verify', '-i', gdChd, '--redump']);
+  expect({ code: gvr.code, signal: gvr.signal }, 'gdrom').toEqual({ code: 0, signal: null });
+  const gdDir = tmp('vrd-gd');
+  fs.mkdirSync(gdDir, { recursive: true });
+  expect(run(ENGINE, ['extractcd', '-i', gdChd, '-o', path.join(gdDir, 'check.cue'), '--redump']).code).toBe(0);
+  const gdExpected = fs.readdirSync(gdDir).sort().map(nm => {
+    const b = fs.readFileSync(path.join(gdDir, nm));
+    return { size: b.length, crc: crc32Buf(b), name: nm };
+  });
+  expect(parseRedump(gvr.out).slice().sort((a, b) => a.name.localeCompare(b.name)), 'gdrom').toEqual(gdExpected);
+
+  // 3) DVD
+  const dvdChd = makeChd('createdvd', 'agent.iso');
+  const dvr = run(ENGINE, ['verify', '-i', dvdChd, '--redump']);
+  expect({ code: dvr.code, signal: dvr.signal }, 'dvd').toEqual({ code: 0, signal: null });
+  const isoBuf = fs.readFileSync(path.join(FIXTURES, 'agent.iso'));
+  expect(parseRedump(dvr.out)).toEqual([{ size: isoBuf.length, crc: crc32Buf(isoBuf), name: 'check.iso' }]);
+});
+
+test('hostile CD metadata, truncated CDROM_OLD metadata, oversubscribed Huffman, and malformed AVHUFF fail cleanly without UB/OOB', () => {
+  const mkChdWithMeta = (name, tagStr, metaBuf, codecs = ['none', '\0\0\0\0', '\0\0\0\0', '\0\0\0\0'], hunkPayload = null) => {
+    const H = 2448 * 8;
+    const head = Buffer.alloc(124);
+    head.write('MComprHD', 0, 'latin1');
+    head.writeUInt32BE(124, 8);
+    head.writeUInt32BE(5, 12);
+    for (let i = 0; i < 4; i++) head.write(codecs[i], 16 + i * 4, 4, 'latin1');
+    head.writeBigUInt64BE(BigInt(H), 32);
+    const metaOff = 124n + 16n;
+    const metaHdr = Buffer.alloc(16);
+    metaHdr.write(tagStr, 0, 4, 'latin1');
+    metaHdr.writeUInt32BE(metaBuf.length & 0x00ffffff, 4);
+    metaHdr.writeBigUInt64BE(0n, 8);
+    const rawHunk = hunkPayload || Buffer.alloc(H);
+    const dataOff = metaOff + 16n + BigInt(metaBuf.length);
+    if (codecs[0] === 'none') {
+      head.writeBigUInt64BE(124n, 40); // map offset
+      head.writeBigUInt64BE(metaOff, 48); // meta offset
+      head.writeUInt32BE(H, 56);
+      head.writeUInt32BE(2448, 60);
+      const map = Buffer.alloc(16);
+      map.writeUInt32BE(0, 0);
+      const p = tmp(name);
+      fs.writeFileSync(p, Buffer.concat([head, map, metaHdr, metaBuf, rawHunk]));
+      return p;
+    }
+    // compressed v5 CHD with 1 hunk compressed by codec 0
+    const mapOff = dataOff + BigInt(rawHunk.length);
+    head.writeBigUInt64BE(mapOff, 40);
+    head.writeBigUInt64BE(metaOff, 48);
+    head.writeUInt32BE(H, 56);
+    head.writeUInt32BE(2448, 60);
+    // craft via craftChd for compressed hunk codecs
+    return null;
+  };
+
+  // 1) Oversized TYPE string (>15 chars) in CHT2 metadata (stack buffer overflow in upstream cdrom.cpp)
+  const longType = mkChdWithMeta('long-type.chd', 'CHT2', Buffer.from('TRACK:1 TYPE:' + 'A'.repeat(64) + ' SUBTYPE:NONE FRAMES:8 PREGAP:0 PGTYPE:MODE1 PGSUB:NONE POSTGAP:0\0'));
+  // 2) Negative track number / negative frames in CHT2 metadata
+  const negTrack = mkChdWithMeta('neg-track.chd', 'CHT2', Buffer.from('TRACK:-5 TYPE:MODE1_RAW SUBTYPE:NONE FRAMES:-10 PREGAP:0 PGTYPE:MODE1 PGSUB:NONE POSTGAP:0\0'));
+  // 3) Truncated legacy CHCD metadata (< 2380 bytes)
+  const shortOld = mkChdWithMeta('short-old.chd', 'CHCD', Buffer.alloc(32, 1));
+  for (const p of [longType, negTrack, shortOld]) {
+    const r = run(ENGINE, ['extractcd', '-i', p, '-o', tmp(path.basename(p) + '.cue'), '-f']);
+    expect(r.signal, p).toBeNull();
+    expect(r.code, p).toBe(1);
+  }
+
+  // 4) Oversubscribed Huffman tree & malformed AVHUFF hunk via craftChd
+  const badHuff = Buffer.from([0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11]); // RLE / oversubscribed bits
+  const badAvhuff = Buffer.from([0x80, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00]); // channels=255, metasize=128
+  for (const [nm, codec, payload] of [['bad-huff.chd', 'huff', badHuff], ['bad-avhuff.chd', 'avhu', badAvhuff]]) {
+    const p = tmp(nm);
+    fs.writeFileSync(p, craftChd([{ raw: payload }], 4096, codec));
+    const r = run(ENGINE, ['extractraw', '-i', p, '-o', tmp(nm + '.raw'), '-f']);
+    expect(r.signal, nm).toBeNull();
+    expect(r.code, nm).toBe(1);
+  }
+});

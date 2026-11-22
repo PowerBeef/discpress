@@ -35,6 +35,54 @@ var QUIRKS = [
     src: 'docs/chd/ecosystem-sony-dreamcast.md §5.1 (Flycast gdcartridge.cpp: <romset>/<serial>.chd), §5.4'
   },
   {
+    // Konami System 573 & Namco System 246/256 arcade CHDs must keep their MAME/Play! romset filename
+    id: 'arcade-norename', sys: ['ks573', 'ns246'], act: 'norename', chd: true,
+    when: function () { return settings.rename; },
+    text: 'MAME and Play! look up this arcade CHD by its romset file name, so it keeps its file\u2019s name.',
+    src: 'MAME ksys573 / namcos246 and Play! Arcade Wiki (romset filenames)'
+  },
+  {
+    // Dreamcast Windows CE (0WINCEOS.BIN at IP.BIN 0x60): Redream 1.5.0 stable cannot boot WinCE titles
+    id: 'dc-wince', sys: ['dc'],
+    when: function (c) { return !!c.det.wince; },
+    text: 'This Dreamcast game uses Windows CE (0WINCEOS.BIN): Redream 1.5.0 stable can\u2019t boot Windows CE titles. Use Flycast or a newer Redream dev build.',
+    src: 'Marcus Comstedt IP0000.BIN spec (0x60 = 0WINCEOS.BIN); Redream 1.5.0 compatibility'
+  },
+  {
+    // PS2 DVD-9 dual-layer image truncated to single layer (<= 4.70 GB while Redump entry > 4.70 GB)
+    id: 'ps2-dvd9-truncated', sys: ['ps2'], warn: true,
+    when: function (c) {
+      return !!(c.id.entry && c.id.entry.size > 4700372992 && c.job.kind === 'create' && jobImageBytes(c.job) > 0 && jobImageBytes(c.job) <= 4700372992);
+    },
+    text: 'This is a dual-layer DVD-9 game, and this image appears to be ripped or truncated to a single layer (missing Layer 1 data).',
+    src: 'PS2 DVD-5 2,295,104-sector ceiling (4,700,372,992 bytes) vs Redump DVD-9 entry size'
+  },
+  {
+    // Sega Saturn mandatory expansion cartridges (db/facts/saturn-cart.tsv)
+    id: 'saturn-rom-cart', sys: ['saturn'], warn: true, chd: true,
+    when: function (c) { return !!c.facts.sat_rom_cart; },
+    text: 'This Saturn game requires its dedicated 2 MB ROM cartridge image alongside the CHD in Beetle Saturn, Mednafen, Kronos or Ymir.',
+    src: 'db/facts/saturn-cart.tsv (sat_rom_cart)'
+  },
+  {
+    id: 'saturn-mpeg-card', sys: ['saturn'], warn: true, chd: true,
+    when: function (c) { return !!c.facts.sat_mpeg_card; },
+    text: 'This Saturn edition requires the Sega Saturn Video CD / MPEG Card (HSS-0119) enabled in the emulator.',
+    src: 'db/facts/saturn-cart.tsv (sat_mpeg_card)'
+  },
+  {
+    id: 'saturn-ram-4m', sys: ['saturn'], chd: true,
+    when: function (c) { return !!c.facts.sat_ram_4m; },
+    text: 'This Saturn game requires the 4 MB Extended RAM cartridge (HSS-0151). If it stops at a Japanese boot screen, enable the 4 MB RAM cart in your emulator.',
+    src: 'db/facts/saturn-cart.tsv (sat_ram_4m)'
+  },
+  {
+    id: 'saturn-ram-1m', sys: ['saturn'], chd: true,
+    when: function (c) { return !!c.facts.sat_ram_1m; },
+    text: 'This Saturn game requires the 1 MB Extended RAM cartridge (HSS-0150). Forcing a 4 MB cart can cause sprite corruption in SNK games; leave auto-detection on or select 1 MB.',
+    src: 'db/facts/saturn-cart.tsv (sat_ram_1m)'
+  },
+  {
     // PCSX2's CHD reader (ChdFileReader) reads a CD's first track only
     id: 'ps2-cd-audio', sys: ['ps2'],
     when: function (c) { return c.disc && c.disc.audio; },
@@ -129,16 +177,35 @@ var QUIRKS = [
     src: 'Sega CD 32X ("SEGA 32X" at sector 0 offset 0x100)'
   },
   {
-    // Redump lists a track number (> 0) only for multi-track releases: a single-track image is missing its other tracks
+    // Redump lists ntrk (> 1) or a track number (> 0) for multi-track releases: warn if tracks are missing
     id: 'missing-audio-tracks', warn: true,
     when: function (c) {
-      if (!c.id.entry || !(c.id.entry.track > 0) || c.job.disc === 'dvd') return false;
-      if (c.disc) return c.disc.tracks.length === 1;
-      if (c.job.src === 'pbp') return c.job.pbpTracks === 1;
-      return c.job.files.length === 1;
+      var e = c.id.entry;
+      if (!e || c.job.disc === 'dvd') return false;
+      var have = c.disc ? c.disc.tracks.length : (c.job.src === 'pbp' ? (c.job.pbpTracks || 1) : c.job.files.length);
+      if (e.ntrk > 1) return have < e.ntrk;
+      if (!(e.track > 0)) return false;
+      return have === 1;
     },
-    text: 'Redump\u2019s release of this game has multiple tracks (including music/CD-DA audio), but this image has only one track. Its music will be missing, and some Sega CD and PC Engine CD games freeze without audio tracks. Convert the full multi-track .cue/.bin dump if you have it.',
-    src: 'db/db.json.gz track number metadata (e.track > 0 for multi-track Redump releases)'
+    text: function (c) {
+      var e = c.id.entry, have = c.disc ? c.disc.tracks.length : (c.job.src === 'pbp' ? (c.job.pbpTracks || 1) : c.job.files.length);
+      if (e && e.ntrk > 1) {
+        return 'Redump\u2019s release of this game has ' + e.ntrk + ' tracks (including music/CD-DA audio), but this image only has ' + have + '. Music may be missing, and some Sega CD and PC Engine CD games freeze without audio tracks. Convert the full multi-track .cue/.bin dump if you have it.';
+      }
+      return 'Redump\u2019s release of this game has multiple tracks (including music/CD-DA audio), but this image has only one track. Its music will be missing, and some Sega CD and PC Engine CD games freeze without audio tracks. Convert the full multi-track .cue/.bin dump if you have it.';
+    },
+    src: 'db/db.json.gz track count & track number metadata (e.ntrk > 1 or e.track > 0)'
+  },
+  {
+    // Single-bin cue where Track 1 is data, Track 2 is AUDIO, and Track 2 omits both INDEX 00 and PREGAP (missing 2 s Yellow/Red Book pause)
+    id: 'cue-missing-t2-pregap', sys: ['ps1', 'saturn', 'segacd', 'pcecd', 'ngcd'],
+    when: function (c) {
+      if (c.job.src !== 'cue' || c.job.fromCcd || c.job.files.length !== 1 || !c.disc || c.disc.tracks.length < 2) return false;
+      var t1 = c.disc.tracks[0], t2 = c.disc.tracks[1];
+      return t1.mode !== 'AUDIO' && t2.mode === 'AUDIO' && !(0 in t2.index) && !t2.pregap && !t1.postgap;
+    },
+    text: 'Track 2 (the first music track after data) has no INDEX 00 or PREGAP 2-second pause in this single-file .cue sheet, which can shift audio tracks 2 seconds early in emulators.',
+    src: 'Yellow/Red Book mandatory 2-second data-to-audio transition pregap'
   },
   {
     // Genesis Plus GX stops its track list at the first data track after track 1

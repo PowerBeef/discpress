@@ -13,10 +13,11 @@ A new kind of fact also needs its name in `FACTS` in `scripts/assemble.py`, and 
 | File | Fact | What the page does with it |
 |---|---|---|
 | `libcrypt.tsv` | `libcrypt`: a PAL PlayStation disc protected by LibCrypt | warns when no `.sbi`, `.lsd` or CloneCD `.sub` came with it (rule `libcrypt-missing` in `app/quirks.js`) |
+| `saturn-cart.tsv` | `sat_rom_cart`, `sat_mpeg_card`, `sat_ram_4m`, `sat_ram_1m`: mandatory Sega Saturn expansion cartridges | shows emulator cartridge notes (`saturn-rom-cart`, `saturn-mpeg-card`, `saturn-ram-4m`, `saturn-ram-1m` in `app/quirks.js`) |
 
 ## Sourcing and licensing
 
 Facts are kept by hand, each with where it comes from: a primary source (the disc, its packaging or manual, Redump's disc page) or a list built from them. Never copy from DuckStation's game database (CC BY-NC-ND), and use GPL or CC BY-SA sources only as checklists to look things up elsewhere.
 
 - `libcrypt.tsv` comes from psxdatacenter's SBI list (2026-10-02), all 197 serials matched in the database (including the French and German Hogs of War, `SLES-02766` and `SLES-02767`, which Redump lists under `SLES-027662` and `SLES-027672`).
-- Saturn games that need a RAM cartridge are not listed yet: no primary source checked so far.
+- `saturn-cart.tsv` lists mandatory Sega Saturn expansion-cartridge releases verified against Sega Saturn packaging/peripheral specifications and Satakore hardware records.

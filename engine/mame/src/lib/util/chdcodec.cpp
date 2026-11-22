@@ -2048,8 +2048,8 @@ void chd_avhuff_decompressor::process(const uint8_t *src, uint32_t complen)
 
 void chd_avhuff_decompressor::decompress(const uint8_t *src, uint32_t complen, uint8_t *dest, uint32_t destlen)
 {
-	// decode the audio and video
-	avhuff_error averr = m_decoder.decode_data(src, complen, dest);
+	// decode the audio and video (Discpress: pass destlen so decode_data validates output bounds)
+	avhuff_error averr = m_decoder.decode_data(src, complen, dest, destlen);
 	if (averr != AVHERR_NONE)
 		throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
 

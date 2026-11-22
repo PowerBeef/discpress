@@ -13,7 +13,7 @@ function crc16(buf) {
   return crc;
 }
 
-export function craftChd(hunks, hunkbytes = 4096) {
+export function craftChd(hunks, hunkbytes = 4096, codec = 'zlib') {
   const bits = [];
   const put = (v, n) => { for (let i = n - 1; i >= 0; i--) bits.push(Math.floor(v / 2 ** i) & 1); };
   // the map's Huffman tree (16 code lengths of 4 bits): 2-bit codes for the types 0 (first codec), 1,
@@ -31,7 +31,7 @@ export function craftChd(hunks, hunkbytes = 4096) {
       put(h.self, selfbits);
       return;
     }
-    const packed = zlib.deflateRawSync(h.data, { level: 9 }), length = h.length ?? packed.length, crc = crc16(h.data);
+    const packed = h.raw || zlib.deflateRawSync(h.data, { level: 9 }), length = h.length ?? packed.length, crc = h.raw ? 0 : crc16(h.data);
     e[0] = 0; e.writeUIntBE(length, 1, 3); e.writeUIntBE(offset, 4, 6); e.writeUInt16BE(crc, 10);
     put(length, lengthbits); put(crc, 16);
     blobs.push(packed, Buffer.alloc(Math.max(0, length - packed.length)));
@@ -45,7 +45,7 @@ export function craftChd(hunks, hunkbytes = 4096) {
   mapHead[12] = lengthbits; mapHead[13] = selfbits;
   const head = Buffer.alloc(124);
   head.write('MComprHD', 0, 'latin1'); head.writeUInt32BE(124, 8); head.writeUInt32BE(5, 12);
-  head.write('zlib', 16, 'latin1');
+  head.write(codec, 16, 'latin1');
   head.writeBigUInt64BE(BigInt(hunks.length * hunkbytes), 32); head.writeBigUInt64BE(BigInt(offset), 40);
   head.writeUInt32BE(hunkbytes, 56); head.writeUInt32BE(512, 60);
   return Buffer.concat([head, ...blobs, mapHead, map]);

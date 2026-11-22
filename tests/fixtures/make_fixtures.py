@@ -323,8 +323,8 @@ def xgd3_iso():
     return video.ljust(0x2080000, b'\x00') + bytes(32 * 2048) + bytes(vd) + g.filler(1 << 20, 72)
 
 
-fixture('xbox-xgd3', {'xgd3.iso': xgd3_iso}, add=['xgd3.iso'], job='create', disc='dvd', command='createdvd', sys='xbox',
-        ident='none', name='xgd3', note='Xbox emulators (xemu, Xenia) do not load CHDs.')
+fixture('xbox-xgd3', {'xgd3.iso': xgd3_iso}, add=['xgd3.iso'], job='create', disc='dvd', command='createdvd', sys='xbox360',
+        ident='none', name='xgd3', note='Xenia does not load CHDs. It uses ISO or ZAR (ZArchive) images.')
 
 # GameCube and Wii discs: their magic numbers (0xC2339F3D at 0x1C, 0x5D1C9EA3 at 0x18) after the game id and
 # before the title. No database rows for them (Dolphin doesn't load CHDs): the console and its note only

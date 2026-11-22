@@ -519,11 +519,24 @@ bool flac_decoder::decode_interleaved(int16_t *samples, uint32_t num_samples, bo
 	m_uncompressed_swap = swap_endian;
 
 	// loop until we get everything we want (Discpress: damaged data can end the stream first, after
-	// which process_single keeps returning true without producing samples, so this looped forever)
+	// which process_single keeps returning true without producing samples, so this looped forever;
+	// legacy unpadded final cdfl hunks (#16644) decode valid samples before END_OF_STREAM, so zero-fill
+	// the remainder when samples decoded and let read_hunk's CRC-16 verify integrity)
 	while (m_uncompressed_offset < m_uncompressed_length)
-		if (!FLAC__stream_decoder_process_single(m_decoder) ||
-			(m_uncompressed_offset < m_uncompressed_length && FLAC__stream_decoder_get_state(m_decoder) == FLAC__STREAM_DECODER_END_OF_STREAM))
+	{
+		if (!FLAC__stream_decoder_process_single(m_decoder))
 			return false;
+		if (m_uncompressed_offset < m_uncompressed_length && FLAC__stream_decoder_get_state(m_decoder) == FLAC__STREAM_DECODER_END_OF_STREAM)
+		{
+			if (m_uncompressed_offset == 0)
+				return false;
+			uint32_t const chans = channels();
+			if (chans == 0)
+				return false;
+			memset(samples + size_t(m_uncompressed_offset) * chans, 0, size_t(m_uncompressed_length - m_uncompressed_offset) * chans * sizeof(int16_t));
+			return true;
+		}
+	}
 	return true;
 }
 
@@ -549,11 +562,23 @@ bool flac_decoder::decode(int16_t **samples, uint32_t num_samples, bool swap_end
 	m_uncompressed_swap = swap_endian;
 
 	// loop until we get everything we want (Discpress: damaged data can end the stream first, after
-	// which process_single keeps returning true without producing samples, so this looped forever)
+	// which process_single keeps returning true without producing samples, so this looped forever;
+	// legacy unpadded final hunks (#16644) decode valid samples before END_OF_STREAM, so zero-fill
+	// the remainder when samples decoded and let read_hunk's CRC-16 verify integrity)
 	while (m_uncompressed_offset < m_uncompressed_length)
-		if (!FLAC__stream_decoder_process_single(m_decoder) ||
-			(m_uncompressed_offset < m_uncompressed_length && FLAC__stream_decoder_get_state(m_decoder) == FLAC__STREAM_DECODER_END_OF_STREAM))
+	{
+		if (!FLAC__stream_decoder_process_single(m_decoder))
 			return false;
+		if (m_uncompressed_offset < m_uncompressed_length && FLAC__stream_decoder_get_state(m_decoder) == FLAC__STREAM_DECODER_END_OF_STREAM)
+		{
+			if (m_uncompressed_offset == 0 || chans <= 0)
+				return false;
+			for (int curchan = 0; curchan < chans; curchan++)
+				if (samples[curchan])
+					memset(samples[curchan] + m_uncompressed_offset, 0, size_t(m_uncompressed_length - m_uncompressed_offset) * sizeof(int16_t));
+			return true;
+		}
+	}
 	return true;
 }
 

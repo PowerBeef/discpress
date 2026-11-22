@@ -2207,7 +2207,7 @@ std::error_condition chd_file::compress_v5_map()
 	try
 	{
 		// first get a CRC-16 of the original rawmap
-		util::crc16_t mapcrc = util::crc16_creator::simple(&m_rawmap[0], m_hunkcount * 12);
+		util::crc16_t mapcrc = util::crc16_creator::simple(&m_rawmap[0], size_t(m_hunkcount) * 12);
 
 		// create a buffer to hold the RLE data
 		std::vector<uint8_t> compression_rle(m_hunkcount);
@@ -2227,12 +2227,12 @@ std::error_condition chd_file::compress_v5_map()
 		int count = 0;
 		for (uint32_t hunknum = 0; hunknum < m_hunkcount; hunknum++)
 		{
-			uint8_t curcomp = m_rawmap[hunknum * 12 + 0];
+			uint8_t curcomp = m_rawmap[size_t(hunknum) * 12 + 0];
 
 			if (curcomp == COMPRESSION_SELF)
 			{
 				// promote self block references to more compact forms
-				uint32_t refhunk = get_u48be(&m_rawmap[hunknum * 12 + 4]);
+				uint32_t refhunk = get_u48be(&m_rawmap[size_t(hunknum) * 12 + 4]);
 				if (refhunk == last_self)
 					curcomp = COMPRESSION_SELF_0;
 				else if (refhunk == last_self + 1)
@@ -2244,7 +2244,7 @@ std::error_condition chd_file::compress_v5_map()
 			else if (curcomp == COMPRESSION_PARENT)
 			{
 				// promote parent block references to more compact forms
-				uint32_t refunit = get_u48be(&m_rawmap[hunknum * 12 + 4]);
+				uint32_t refunit = get_u48be(&m_rawmap[size_t(hunknum) * 12 + 4]);
 				if (refunit == mulu_32x32(hunknum, m_hunkbytes) / m_unitbytes)
 					curcomp = COMPRESSION_PARENT_SELF;
 				else if (refunit == last_parent)
@@ -2258,7 +2258,7 @@ std::error_condition chd_file::compress_v5_map()
 
 			// track maximum compressed length
 			else //if (curcomp >= COMPRESSION_TYPE_0 && curcomp <= COMPRESSION_TYPE_3)
-				max_complen = std::max<uint32_t>(max_complen, get_u24be(&m_rawmap[hunknum * 12 + 1]));
+				max_complen = std::max<uint32_t>(max_complen, get_u24be(&m_rawmap[size_t(hunknum) * 12 + 1]));
 
 			// track repeats
 			if (curcomp == lastcomp)
@@ -2336,7 +2336,7 @@ std::error_condition chd_file::compress_v5_map()
 		uint64_t firstoffs = 0;
 		for (uint32_t hunknum = 0; hunknum < m_hunkcount; hunknum++)
 		{
-			uint8_t *rawmap = &m_rawmap[hunknum * 12];
+			uint8_t *rawmap = &m_rawmap[size_t(hunknum) * 12];
 			uint32_t length = get_u24be(&rawmap[1]);
 			uint64_t offset = get_u48be(&rawmap[4]);
 			uint16_t crc = get_u16be(&rawmap[10]);
@@ -2559,7 +2559,7 @@ void chd_file::decompress_v5_map()
 	}
 
 	// verify the final CRC
-	if (UNEXPECTED(util::crc16_creator::simple(&m_rawmap[0], m_hunkcount * 12) != mapcrc))
+	if (UNEXPECTED(util::crc16_creator::simple(&m_rawmap[0], size_t(m_hunkcount) * 12) != mapcrc))
 		throw std::error_condition(error::DECOMPRESSION_ERROR);
 }
 
@@ -2847,7 +2847,7 @@ std::error_condition chd_file::verify_proper_compression_append(uint32_t hunknum
 		return std::error_condition(error::FILE_NOT_WRITEABLE);
 
 	// only permitted to write new blocks
-	uint8_t const *const rawmap = &m_rawmap[hunknum * 12];
+	uint8_t const *const rawmap = &m_rawmap[size_t(hunknum) * 12];
 	if (UNEXPECTED(rawmap[0] != 0xff))
 		return std::error_condition(error::COMPRESSION_ERROR);
 
@@ -2884,7 +2884,7 @@ void chd_file::hunk_write_compressed(uint32_t hunknum, int8_t compression, const
 	uint64_t offset = file_append(compressed, complength);
 
 	// update the map entry
-	uint8_t *rawmap = &m_rawmap[hunknum * 12];
+	uint8_t *rawmap = &m_rawmap[size_t(hunknum) * 12];
 	rawmap[0] = (compression == -1) ? COMPRESSION_NONE : compression;
 	put_u24be(&rawmap[1], complength);
 	put_u48be(&rawmap[4], offset);
@@ -2917,7 +2917,7 @@ void chd_file::hunk_copy_from_self(uint32_t hunknum, uint32_t otherhunk)
 		throw std::error_condition(error::HUNK_OUT_OF_RANGE);
 
 	// update the map entry
-	uint8_t *rawmap = &m_rawmap[hunknum * 12];
+	uint8_t *rawmap = &m_rawmap[size_t(hunknum) * 12];
 	rawmap[0] = COMPRESSION_SELF;
 	put_u24be(&rawmap[1], 0);
 	put_u48be(&rawmap[4], otherhunk);
@@ -2943,7 +2943,7 @@ void chd_file::hunk_copy_from_parent(uint32_t hunknum, uint64_t parentunit)
 		throw err;
 
 	// update the map entry
-	uint8_t *const rawmap = &m_rawmap[hunknum * 12];
+	uint8_t *const rawmap = &m_rawmap[size_t(hunknum) * 12];
 	rawmap[0] = COMPRESSION_PARENT;
 	put_u24be(&rawmap[1], 0);
 	put_u48be(&rawmap[4], parentunit);
@@ -3521,6 +3521,14 @@ std::error_condition chd_file_compressor::compress_continue(double &progress, do
 			{
 				// stop threads and if we're compressed, write the final SHA1 and map
 				compress_abort();
+				// Discpress: release compression hash maps, buffers and codecs before compress_v5_map()
+				// allocates its RLE/compressed map buffers (~80-110+ MiB lower DVD-9 peak RAM)
+				m_current_map.reset();
+				m_parent_map.reset();
+				std::vector<uint8_t>().swap(m_work_buffer);
+				std::vector<uint8_t>().swap(m_compressed_buffer);
+				m_codecs.clear();
+				m_codecs.shrink_to_fit();
 				if (!compressed())
 					return std::error_condition();
 				std::error_condition err = set_raw_sha1(m_compsha1.finish());
@@ -3879,7 +3887,7 @@ uint64_t chd_file_compressor::hashmap::find(util::crc16_t crc16, util::sha1_t sh
 	// look up the entry in the map
 	for (entry_t *entry = m_map[crc16].load(std::memory_order_acquire); entry; entry = entry->m_next)
 		if (entry->m_sha1 == sha1)
-			return entry->m_itemnum;
+			return uint64_t(entry->m_itemnum_lo) | (uint64_t(entry->m_itemnum_hi) << 32);
 	return NOT_FOUND;
 }
 
@@ -3901,7 +3909,8 @@ void chd_file_compressor::hashmap::add(uint64_t itemnum, util::crc16_t crc16, ut
 	if (m_block_list->m_nextalloc == std::size(m_block_list->m_array))
 		m_block_list = new entry_block(m_block_list);
 	entry_t *entry = &m_block_list->m_array[m_block_list->m_nextalloc++];
-	entry->m_itemnum = itemnum;
+	entry->m_itemnum_lo = uint32_t(itemnum);
+	entry->m_itemnum_hi = uint32_t(itemnum >> 32);
 	entry->m_sha1 = sha1;
 	entry->m_next = m_map[crc16].load(std::memory_order_relaxed);
 	m_map[crc16].store(entry, std::memory_order_release);

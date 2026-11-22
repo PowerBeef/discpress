@@ -1450,13 +1450,22 @@ var PROFILES = {
   '3do': { noZstd: 'Opera (builds before October 2026)' },
   cd32: { noZstd: 'WinUAE' },
   cdtv: { noZstd: 'WinUAE' },
+  amigacd: { noZstd: 'WinUAE' },
   jagcd: { noMister: true },
+  fmtowns: { noMister: true, note: 'Tsugaru doesn\u2019t load CHDs (use .cue/.bin or .iso); MAME (fmtowns) reads CHDs.' },
+  x68k: { noMister: true, note: 'XM6 and PX68k don\u2019t load CHDs; MAME (x68000) does.' },
+  pippin: { noMister: true },
+  playdia: { noMister: true },
+  ks573: { noMister: true },
+  ns246: { noMister: true, note: 'Namco System 246 / 256 CHDs load in Play! (arcade mode) and MAME.' },
+  nuon: { keep: true, note: 'Nuance does not load CHDs. Keep the original ISO.' },
   vcd: { keep: true, note: 'This is a Video CD, not a game: video players don\u2019t open CHDs, so keep the original files to watch it.' },
   video: { keep: true, note: 'This is a video disc, not a game: video players don\u2019t open CHDs, so keep the original files to watch it.' },
   pc: { keep: true, hint: 'DOSBox Pure opens .zip files directly, or uncompressed CD CHDs (choose No compression). DOSBox-X, 86Box and MiSTer ao486 open compressed CD CHDs; DOSBox Staging needs .cue/.bin or .iso.' },
   gc: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },
   wii: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },
-  xbox: { keep: true, note: 'Xbox emulators (xemu, Xenia) do not load CHDs. They use the ISO itself.' },
+  xbox: { keep: true, note: 'xemu does not load CHDs. It uses scrubbed XISO (.iso) images.' },
+  xbox360: { keep: true, note: 'Xenia does not load CHDs. It uses ISO or ZAR (ZArchive) images.' },
   ps3: { keep: true, note: 'RPCS3 does not load CHDs. It uses the ISO or the game\u2019s folder.' }
 };
 function profile(sys) { return PROFILES[sys] || {}; }
@@ -2308,7 +2317,8 @@ function buildJob(job) {
       if (o.verbose) { args.push('-v'); display.push('-v'); }
       slots = 0;
     } else if (job.action === 'verify') {
-      args = ['verify', '-i', '/in/' + name].concat(parentArgs);
+      var wantRedump = /^(cd|gdrom|dvd)$/.test(info.type || '');
+      args = ['verify', '-i', '/in/' + name].concat(wantRedump ? ['--redump'] : [], parentArgs);
       display = ['verify', '-i', name].concat(parentDisp);
       slots = 0;
       helpers = readHelpers();
@@ -2633,8 +2643,19 @@ function renderResult(job) {
   if (job.kind === 'chd' && job.action === 'verify') {
     box.append(el('div', { class: 'note ok' }, el('b', null, 'Verified. '), 'The data matches the SHA-1 checksums stored in the CHD.'));
     var rd = job.redump, what = rd && (rd.track ? 'Track ' + rd.track : 'The disc');
-    if (rd && rd.match) box.append(el('div', { class: 'note ok' }, el('b', null, '\u2713 The Redump dump. '), what + ' has the size and CRC-32 that Redump lists for ' + rd.entry.name + (rd.track ? ', the track the built-in database has' : '') + '.'));
-    else if (rd) box.append(el('div', { class: 'note warn' }, el('b', null, 'Not the Redump dump. '), what + (rd.otherSize ? ' has another size than' : ' differs from') + ' what Redump lists for ' + rd.entry.name + '. It may be another release or a modified copy.'));
+    if (rd && rd.match) {
+      var okMsg = rd.fullDisc
+        ? 'All ' + rd.total + ' tracks match the sizes and CRC-32s that Redump lists for ' + rd.entry.name + '.'
+        : what + ' has the size and CRC-32 that Redump lists for ' + rd.entry.name + (rd.track ? ', the track the built-in database has' : '') + '.';
+      box.append(el('div', { class: 'note ok' }, el('b', null, '\u2713 The Redump dump. '), okMsg));
+    } else if (rd) {
+      var badMsg = rd.trackMismatch
+        ? what + ' matches, but this CHD has ' + rd.haveTracks + ' tracks instead of the ' + rd.wantTracks + ' Redump lists for ' + rd.entry.name + '.'
+        : rd.audioMismatch
+          ? what + ' matches ' + rd.entry.name + ', but one or more other tracks differ from Redump.'
+          : what + (rd.otherSize ? ' has another size than' : ' differs from') + ' what Redump lists for ' + rd.entry.name + '. It may be another release or a modified copy.';
+      box.append(el('div', { class: 'note warn' }, el('b', null, 'Not the Redump dump. '), badMsg));
+    }
   } else if (job.kind === 'chd' && job.action === 'info' && job.lastInfo) {
     var kv = el('dl', { class: 'kv' });
     var skip = { 'Input file': 1 };
@@ -3098,12 +3119,15 @@ async function runJobNow(job) {
   }
   document.addEventListener('visibilitychange', onRunVis);
   job.storageRefused = false;
+  var verifyRedump = [];
   job.run = Engine.run({
     jobId: job.id, dirPath: Store.claim(job.id), args: spec.args, inputs: spec.inputs, writable: spec.writable,
     slots: spec.slots, helpers: spec.helpers, outMode: spec.outMode, outDir: runDir, agreed: main ? [main] : [],
     // tests: 'one' or 'all' helpers fail on the first run, 'always' (all) on every run
     debugFail: DEBUG.failHelpers === 'always' ? 'all' : job.engineRetried ? null : DEBUG.failHelpers,
     onLine: function (s, t) {
+      var rm = job.kind === 'chd' && job.action === 'verify' && /^Redump:\s+(\d+)\s+([0-9a-fA-F]{8})\s+(.+)$/.exec(t);
+      if (rm) { verifyRedump.push({ size: +rm[1], crc: rm[2].toUpperCase(), name: rm[3].trim() }); return; }
       appendLog(job, t);
       var fm = /final ratio = ([\d.]+)%/.exec(t);
       if (fm) setProgress(job, 100, 'Finishing…', [fm[1] + '% of the original']);
@@ -3146,7 +3170,10 @@ async function runJobNow(job) {
     job.elapsed = performance.now() - t0;
     if (res.error) appendLog(job, res.error);
     if (res.code === 0) {
-      if (job.kind === 'chd' && job.action === 'verify') await redumpCheck(job);
+      if (job.kind === 'chd' && job.action === 'verify') {
+        if (verifyRedump.length) await applyRedumpOutputs(job, verifyRedump);
+        else await redumpCheck(job);
+      }
       if (job.aborted || jobs.indexOf(job) < 0) { Recovery.running(null); job.state = 'canceled'; if (jobs.indexOf(job) >= 0) refreshJob(job, true); return; }
       job.state = 'done';
       job.folderName = spec.outMode === 'stream' && runDir ? runDir.name : '';
@@ -3238,15 +3265,20 @@ async function verifyResult(job) {
   // (the job may be reset, removed or run again meanwhile: the verdict is then this one's no more)
   var v = job.verify = { state: 'running', pct: 0 }, verdict;
   refreshJob(job, true);
-  var lines = [], file;
+  var lines = [], vRedump = [], file;
   try {
     // (in the folder it was written to, even if another one was picked since)
     file = out.kind === 'disk' ? await (await (out.dir || outDir).getFileHandle(out.name)).getFile() : await outputFile(job, out, true);
     if (job.verify !== v) return;
+    var vArgs = ['verify', '-i', '/in/' + out.name].concat(/^(cd|gdrom|dvd)$/.test(job.disc || '') ? ['--redump'] : []);
     v.run = Engine.run({
-      jobId: job.id + '-verify', args: ['verify', '-i', '/in/' + out.name], inputs: [{ name: out.name, blob: file }], writable: [],
+      jobId: job.id + '-verify', args: vArgs, inputs: [{ name: out.name, blob: file }], writable: [],
       slots: 0, helpers: readHelpers(), outMode: 'mem',
-      onLine: function (s, t) { lines.push(t); },
+      onLine: function (s, t) {
+        var rm = /^Redump:\s+(\d+)\s+([0-9a-fA-F]{8})\s+(.+)$/.exec(t);
+        if (rm) { vRedump.push({ size: +rm[1], crc: rm[2].toUpperCase(), name: rm[3].trim() }); return; }
+        lines.push(t);
+      },
       onProgress: function (t) {
         var m = /([\d.]+)% complete/.exec(t);
         if (!m || job.verify !== v) return;
@@ -3259,6 +3291,7 @@ async function verifyResult(job) {
     var res = await v.run.promise;
     var why = lines.filter(function (l) { return /error|failed|mismatch|invalid|incorrect/i.test(l); }).slice(-2).join(' ');
     verdict = res.code === 0 ? { state: 'ok' } : { state: 'failed', text: why || res.error || 'chdman exited with code ' + res.code };
+    if (res.code === 0 && vRedump.length && job.verify === v) await applyRedumpOutputs(job, vRedump);
   } catch (e) {
     verdict = e.canceled ? null : { state: 'failed', text: readFailHint(e.message) };
   }
@@ -3446,16 +3479,40 @@ var DatStore = {
     if (Dats.list.length) datRecheck();
   }
 };
-// a job's files with what to checksum: [{file, size, how}]
+// a job's files with what to checksum: [{file, start, end, size, how}]
 function datItems(job) {
   var items = [];
+  if (job.src === 'cue' && job.descText && job.files.length === 1 && !job.files[0].ecm) {
+    var m = discModel(job), f0 = job.files[0].file;
+    if (m && m.tracks.length > 1) {
+      var trackSs = function (md) { return /2048/.test(md) ? 2048 : /2324/.test(md) ? 2324 : /2336/.test(md) ? 2336 : 2352; };
+      var starts = m.tracks.map(function (t, idx) {
+        var fr = idx === 0 ? 0 : (0 in t.index ? t.index[0] : (t.index[1] || 0));
+        return fr * trackSs(t.mode);
+      });
+      m.tracks.forEach(function (t, idx) {
+        var st = starts[idx], en = idx + 1 < starts.length ? starts[idx + 1] : f0.size;
+        if (en > st) items.push({ file: f0, start: st, end: en, size: en - st, how: '' });
+      });
+    }
+  } else if (job.src === 'pbp' && job.files[0] && job.files[0].pbp && job.files[0].pbp.list && job.files[0].pbp.list.length > 1) {
+    var pf = job.files[0], pm = pf.pbp, pl = pm.list, base0 = pm.base || 0, totB = pm.sectors * 2352;
+    var pstarts = pl.map(function (t, idx) {
+      var fr = idx === 0 ? 0 : Math.max(0, (t.pregap < t.start ? t.pregap : t.start) - base0);
+      return fr * 2352;
+    });
+    pl.forEach(function (t, idx) {
+      var st = pstarts[idx], en = idx + 1 < pstarts.length ? pstarts[idx + 1] : totB;
+      if (en > st) items.push({ file: pf.file, start: st, end: en, size: en - st, how: 'pbp@' + pm.at + ':' + pm.sectors });
+    });
+  }
   job.files.forEach(function (f) {
-    if (f.ecm) { if (f.imageSize) items.push({ file: f.file, size: f.imageSize, how: 'ecm' }); }
-    else if (f.pbp) items.push({ file: f.file, size: f.pbp.sectors * 2352, how: 'pbp@' + f.pbp.at + ':' + f.pbp.sectors });
-    else if (job.src === 'cso') { if (job.isoSize) items.push({ file: f.file, size: job.isoSize, how: 'ciso' }); }
-    else items.push({ file: f.file, size: f.file.size, how: '' });
+    if (f.ecm) { if (f.imageSize) items.push({ file: f.file, start: 0, end: f.imageSize, size: f.imageSize, how: 'ecm' }); }
+    else if (f.pbp) items.push({ file: f.file, start: 0, end: f.pbp.sectors * 2352, size: f.pbp.sectors * 2352, how: 'pbp@' + f.pbp.at + ':' + f.pbp.sectors });
+    else if (job.src === 'cso') { if (job.isoSize) items.push({ file: f.file, start: 0, end: job.isoSize, size: job.isoSize, how: 'ciso' }); }
+    else items.push({ file: f.file, start: 0, end: f.file.size, size: f.file.size, how: '' });
   });
-  if (job.descFile) items.push({ file: job.descFile, size: job.descFile.size, how: '' });
+  if (job.descFile) items.push({ file: job.descFile, start: 0, end: job.descFile.size, size: job.descFile.size, how: '' });
   return items;
 }
 async function datCheck(job) {
@@ -3471,7 +3528,7 @@ async function datCheck(job) {
   try {
     for (var i = 0; i < items.length; i++) {
       var it = items[i];
-      it.crc = await crcCached(it.file, 0, it.size, function (p) {
+      it.crc = await crcCached(it.file, it.start || 0, it.end != null ? it.end : it.size, function (p) {
         var n = job.ui && job.ui.datLine;
         if (n) n.textContent = 'Checking against your DAT files\u2026 ' + Math.round(100 * (before + p * it.size) / total) + '%';
       }, it.how);
@@ -3554,6 +3611,14 @@ function renderDatList() {
 // After a successful verify: extract with Redump's layout into checksums only (the worker's 'crc'
 // output, no files), and look the files up in the database by size and CRC-32. The database lists
 // one file per disc: the ISO, the only .bin, or the main data track's.
+async function applyRedumpOutputs(job, outputs) {
+  await GameDB.ready();
+  if (job.aborted || jobs.indexOf(job) < 0) return;
+  job.redumpFiles = (outputs || []).filter(function (o) { return o.crc; }).map(function (o) { return { name: o.name, size: o.size, crc: o.crc }; });
+  var files = job.redumpFiles.filter(function (o) { return !/\.cue$/i.test(o.name); });
+  redumpMatch(job, files);
+  if (Dats.list.length) datApply(job, datMatch(job.redumpFiles));
+}
 async function redumpCheck(job) {
   job.redump = null;
   var type = job.info && job.info.type;
@@ -3580,22 +3645,33 @@ async function redumpCheck(job) {
   }
   if (job.aborted || jobs.indexOf(job) < 0) return;
   if (res.code !== 0) { appendLog(job, 'Could not compare with Redump (chdman exited with code ' + res.code + ').'); return; }
-  job.redumpFiles = (res.outputs || []).filter(function (o) { return o.crc; }).map(function (o) { return { name: o.name, size: o.size, crc: o.crc }; });
-  var files = (res.outputs || []).filter(function (o) { return o.crc && !/\.cue$/i.test(o.name); });
-  redumpMatch(job, files);
-  // the user's DAT files, every track: a full match names the CHD after its game
-  if (Dats.list.length) datApply(job, datMatch(job.redumpFiles));
+  await applyRedumpOutputs(job, res.outputs || []);
 }
-// the files Redump's layout gave back, looked up in the built-in database
+// the files Redump's layout gave back, looked up in the built-in database (including full-disc discDigest when available)
 function redumpMatch(job, files) {
   var whole = files.length === 1, id = job.ident || {};
   var trackOf = function (n) { var m = /\(Track 0*(\d+)\)\.\w+$/.exec(n); return m ? m[1] : ''; };
   var hits = [];
   files.forEach(function (f) { GameDB.size(f.size).forEach(function (e) { if (e.crc === f.crc) hits.push({ e: e, f: f }); }); });
   if (hits.length) {
-    var hit = hits.find(function (h) { return id.serial && hasSerial(h.e, id.serial); }) || hits[0];
-    var names = hits.map(function (h) { return h.e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
-    job.redump = { match: true, entry: hit.e, track: whole ? '' : trackOf(hit.f.name) };
+    var dig = files.length >= 2 ? discDigest(files) : 0;
+    // Prefer candidates whose full multi-track count + discDigest match (disambiguating audio-only revisions!)
+    var fullHits = dig ? hits.filter(function (h) { return h.e.ntrk === files.length && h.e.digest && h.e.digest === dig; }) : [];
+    var pool = fullHits.length ? fullHits : hits;
+    var hit = pool.find(function (h) { return id.serial && hasSerial(h.e, id.serial); }) || pool[0];
+    var names = pool.map(function (h) { return h.e.name; }).filter(function (n, i, a) { return a.indexOf(n) === i; });
+    var trkStr = whole ? '' : trackOf(hit.f.name);
+    if (hit.e.ntrk >= 2 && hit.e.digest) {
+      if (files.length !== hit.e.ntrk) {
+        job.redump = { match: false, entry: hit.e, track: trkStr, trackMismatch: true, haveTracks: files.length, wantTracks: hit.e.ntrk };
+      } else if (dig !== hit.e.digest) {
+        job.redump = { match: false, entry: hit.e, track: trkStr, audioMismatch: true };
+      } else {
+        job.redump = { match: true, entry: hit.e, track: trkStr, fullDisc: true, total: hit.e.ntrk };
+      }
+    } else {
+      job.redump = { match: true, entry: hit.e, track: trkStr };
+    }
     // the checksum settles which release it is
     var entry = names.length > 1 ? Object.assign({}, hit.e, { alternatives: names }) : hit.e;
     job.ident = Object.assign({}, id, { sys: hit.e.sys, entry: entry, name: hit.e.name, method: 'hash', serial: id.serial || hit.e.serial });

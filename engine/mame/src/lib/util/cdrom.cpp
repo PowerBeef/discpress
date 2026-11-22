@@ -945,15 +945,15 @@ std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
 		std::fill(std::begin(pgtype), std::end(pgtype), 0);
 		std::fill(std::begin(pgsub), std::end(pgsub), 0);
 
-		// fetch the metadata for this track
+		// fetch the metadata for this track (Discpress: bounded %15s prevents stack overflow on hostile metadata)
 		if (!chd->read_metadata(CDROM_TRACK_METADATA_TAG, toc.numtrks, metadata))
 		{
-			if (sscanf(metadata.c_str(), CDROM_TRACK_METADATA_FORMAT, &tracknum, type, subtype, &frames) != 4)
+			if (sscanf(metadata.c_str(), "TRACK:%d TYPE:%15s SUBTYPE:%15s FRAMES:%d", &tracknum, type, subtype, &frames) != 4)
 				return chd_file::error::INVALID_DATA;
 		}
 		else if (!chd->read_metadata(CDROM_TRACK_METADATA2_TAG, toc.numtrks, metadata))
 		{
-			if (sscanf(metadata.c_str(), CDROM_TRACK_METADATA2_FORMAT, &tracknum, type, subtype, &frames, &pregap, pgtype, pgsub, &postgap) != 8)
+			if (sscanf(metadata.c_str(), "TRACK:%d TYPE:%15s SUBTYPE:%15s FRAMES:%d PREGAP:%d PGTYPE:%15s PGSUB:%15s POSTGAP:%d", &tracknum, type, subtype, &frames, &pregap, pgtype, pgsub, &postgap) != 8)
 				return chd_file::error::INVALID_DATA;
 		}
 		else
@@ -968,13 +968,15 @@ std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
 			if (err)
 				break;
 
-			if (sscanf(metadata.c_str(), GDROM_TRACK_METADATA_FORMAT, &tracknum, type, subtype, &frames, &padframes, &pregap, pgtype, pgsub, &postgap) != 9)
+			if (sscanf(metadata.c_str(), "TRACK:%d TYPE:%15s SUBTYPE:%15s FRAMES:%d PAD:%d PREGAP:%d PGTYPE:%15s PGSUB:%15s POSTGAP:%d", &tracknum, type, subtype, &frames, &padframes, &pregap, pgtype, pgsub, &postgap) != 9)
 				return chd_file::error::INVALID_DATA;
 
 			toc.flags |= CD_FLAG_GDROM;
 		}
 
-		if (tracknum == 0 || tracknum > MAX_TRACKS)
+		if (tracknum <= 0 || tracknum > MAX_TRACKS)
+			return chd_file::error::INVALID_DATA;
+		if (frames < 0 || pregap < 0 || postgap < 0 || padframes < 0)
 			return chd_file::error::INVALID_DATA;
 
 		track = &toc.tracks[tracknum - 1];
@@ -991,11 +993,13 @@ std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
 		track->subsize = 0;
 		convert_subtype_string_to_track_info(subtype, track);
 
-		// set the frames and extra frames data
+		// set the frames and extra frames data (Discpress: uint64_t prevents signed overflow on huge frames)
 		track->frames = frames;
 		track->padframes = padframes;
-		int padded = (frames + TRACK_PADDING - 1) / TRACK_PADDING;
-		track->extraframes = padded * TRACK_PADDING - frames;
+		uint64_t const padded = (uint64_t(frames) + TRACK_PADDING - 1) / TRACK_PADDING;
+		if (padded * TRACK_PADDING > uint64_t(UINT32_MAX))
+			return chd_file::error::INVALID_DATA;
+		track->extraframes = uint32_t(padded * TRACK_PADDING - uint64_t(frames));
 
 		// set the pregap info
 		track->pregap = pregap;
@@ -1029,21 +1033,26 @@ std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
 	if (err)
 		return err;
 
+	/* Discpress: validate size and read without unaligned uint32_t* casts */
+	if (oldmetadata.size() < 4 + MAX_TRACKS * 24)
+		return chd_file::error::INVALID_DATA;
+
 	/* reconstruct the TOC from it */
-	auto *mrp = reinterpret_cast<uint32_t *>(&oldmetadata[0]);
-	toc.numtrks = *mrp++;
+	size_t ofs = 0;
+	toc.numtrks = get_u32le(&oldmetadata[ofs]);
+	ofs += 4;
 
 	toc.numsessions = 1;
 
 	for (int i = 0; i < MAX_TRACKS; i++)
 	{
 		toc.tracks[i].session = 0;
-		toc.tracks[i].trktype = *mrp++;
-		toc.tracks[i].subtype = *mrp++;
-		toc.tracks[i].datasize = *mrp++;
-		toc.tracks[i].subsize = *mrp++;
-		toc.tracks[i].frames = *mrp++;
-		toc.tracks[i].extraframes = *mrp++;
+		toc.tracks[i].trktype = get_u32le(&oldmetadata[ofs]); ofs += 4;
+		toc.tracks[i].subtype = get_u32le(&oldmetadata[ofs]); ofs += 4;
+		toc.tracks[i].datasize = get_u32le(&oldmetadata[ofs]); ofs += 4;
+		toc.tracks[i].subsize = get_u32le(&oldmetadata[ofs]); ofs += 4;
+		toc.tracks[i].frames = get_u32le(&oldmetadata[ofs]); ofs += 4;
+		toc.tracks[i].extraframes = get_u32le(&oldmetadata[ofs]); ofs += 4;
 		toc.tracks[i].pregap = 0;
 		toc.tracks[i].postgap = 0;
 		toc.tracks[i].pgtype = 0;
@@ -1056,6 +1065,8 @@ std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
 	if (toc.numtrks > MAX_TRACKS)
 	{
 		toc.numtrks = swapendian_int32(toc.numtrks);
+		if (toc.numtrks > MAX_TRACKS)
+			return chd_file::error::INVALID_DATA;
 		for (int i = 0; i < MAX_TRACKS; i++)
 		{
 			toc.tracks[i].trktype = swapendian_int32(toc.tracks[i].trktype);

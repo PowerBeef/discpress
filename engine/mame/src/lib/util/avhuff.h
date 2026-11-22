@@ -142,7 +142,7 @@ public:
 	void configure(const config &cfg);
 
 	// encode/decode
-	avhuff_error decode_data(const uint8_t *source, uint32_t complength, uint8_t *dest);
+	avhuff_error decode_data(const uint8_t *source, uint32_t complength, uint8_t *dest, uint32_t destlen = 0);
 
 private:
 	// delta-RLE Huffman decoder

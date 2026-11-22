@@ -1622,12 +1622,13 @@ async function runReader(msg) {
   var ppar = 0; // a child CHD's parent (msg.parent), mounted as parent.chd
   if (msg.parent) { var encp = new TextEncoder().encode('/in/parent.chd\0'); ppar = wasmAlloc(M, encp.length); M.HEAPU8.set(encp, ppar); }
   var kind = M._wasm_probe_open(pp, ppar);
-  var tracks = [], info = wasmAlloc(M, 32), buf = wasmAlloc(M, 2048);
+  var tracks = [], info = wasmAlloc(M, 40), buf = wasmAlloc(M, 2048);
   var n = kind === 1 ? M._wasm_probe_tracks() : 0;
   for (var t = 0; t < n; t++) {
     M._wasm_probe_track_info(t, info);
     var q = info >>> 2, h = M.HEAPU32;
-    tracks.push({ type: h[q], frames: h[q + 1], pregap: h[q + 2], datasize: h[q + 3], gdrom: !!h[q + 4] });
+    tracks.push({ type: h[q], frames: h[q + 1], pregap: h[q + 2], datasize: h[q + 3], gdrom: !!h[q + 4],
+      subtype: h[q + 5], postgap: h[q + 6], padframes: h[q + 7], pgdatasize: h[q + 8], logframeofs: h[q + 9] });
   }
   postMessage({ type: 'reader-ready', kind: kind, tracks: tracks, logical: M._wasm_probe_logical() });
   self.onmessage = function (e) {

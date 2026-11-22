@@ -530,11 +530,12 @@ private:
 		static constexpr uint64_t NOT_FOUND = ~uint64_t(0);
 
 	private:
-		// internal entry
+		// internal entry (Discpress: split 64-bit itemnum into two uint32_t so 32-bit WASM packs entry_t to 32 bytes instead of 40)
 		struct entry_t
 		{
 			entry_t *           m_next;             // next entry in list
-			uint64_t            m_itemnum;          // item number
+			uint32_t            m_itemnum_lo;       // item number (low 32 bits)
+			uint32_t            m_itemnum_hi;       // item number (high 32 bits)
 			util::sha1_t        m_sha1;             // SHA-1 of the block
 		};
 

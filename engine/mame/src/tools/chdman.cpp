@@ -923,7 +923,8 @@ static const command_description s_commands[] =
 		{
 			REQUIRED OPTION_INPUT,
 			OPTION_INPUT_PARENT,
-			OPTION_FIX
+			OPTION_FIX,
+			OPTION_REDUMP
 		}
 	},
 
@@ -1763,9 +1764,13 @@ static chdman_task compress_common(chd_file_compressor &chd)
 
 struct toc_writer
 {
-	util::core_file &file;
+	util::core_file *file;
 	bool crlf;
+	std::string *out_buf = nullptr;
 	bool failed = false; // Discpress: a write failed (the caller reports it rather than leave a cut-short file)
+
+	toc_writer(util::core_file &f, bool c) : file(&f), crlf(c) { }
+	toc_writer(std::string &buf, bool c) : file(nullptr), crlf(c), out_buf(&buf) { }
 
 	template <typename Format, typename... Params> void printf(Format &&fmt, Params &&...args)
 	{
@@ -1775,9 +1780,14 @@ struct toc_writer
 			for (size_t pos = 0; (pos = text.find('\n', pos)) != std::string::npos; pos += 2)
 				text.insert(pos, 1, '\r');
 		}
+		if (out_buf)
+		{
+			out_buf->append(text);
+			return;
+		}
 		// Discpress: written as it is, as puts writes it where a line ends with LF (the file has no BOM),
 		// but with the error puts doesn't give
-		auto const [err, written] = write(file, text.data(), text.size());
+		auto const [err, written] = write(*file, text.data(), text.size());
 		if (err || (written != text.size()))
 			failed = true;
 	}
@@ -2047,6 +2057,78 @@ static void do_info(parameters_map &params)
 }
 
 
+static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::vector<std::string> &track_filenames, const std::vector<std::string> &track_types, const cdrom_file::toc *gd_toc = nullptr);
+
+// Discpress: shared GD-ROM -> Redump cue/bin TOC adjustment (used by both do_extract_cd and do_verify --redump)
+static void adjust_gdrom_toc_for_cue(cdrom_file::toc &toc, bool redump)
+{
+	// TOSEC GDI-based CHDs have the padframes field set to non-0 where the pregaps for the next track would be
+	// Discpress: --redump writes Redump's layout, each track's pregap in its own file, whatever the CHD was made
+	// from; the CHD made from it then holds the same data, the gaps of a GDI as data of the tracks before them
+	const bool has_physical_pregap = toc.tracks[0].padframes == 0 || redump;
+
+	for (int tracknum = 1; tracknum < toc.numtrks; tracknum++)
+	{
+		// pgdatasize should never be set in GD-ROMs currently, so if it is set then assume the TOC has proper pregap values
+		if (toc.tracks[tracknum].pgdatasize != 0)
+			break;
+
+		// don't adjust the first track of the single-density and high-density areas
+		if (toc.tracks[tracknum].physframeofs == 45000)
+			continue;
+
+		// Discpress: never split physical pregap frames across tracks with different sector sizes (e.g. TOSEC MODE1/2048 + AUDIO/2352)
+		const bool same_sector_size = toc.tracks[tracknum-1].datasize == toc.tracks[tracknum].datasize;
+		if (!has_physical_pregap || !same_sector_size)
+		{
+			// NOTE: This will generate a cue with PREGAP commands instead of INDEX 00 because the pregap data isn't baked into the bins
+			toc.tracks[tracknum].pregap += toc.tracks[tracknum-1].padframes;
+
+			// "type 1" (only one data track in high-density area) and "type 2" (1 data and then the rest of the tracks being audio tracks in high-density area) don't require any adjustments
+			if (tracknum + 1 >= toc.numtrks && toc.tracks[tracknum].trktype != cdrom_file::CD_TRACK_AUDIO)
+			{
+				if (toc.tracks[tracknum-1].trktype != cdrom_file::CD_TRACK_AUDIO && same_sector_size)
+				{
+					// "type 3" where the high-density area is just two data tracks
+					// there shouldn't be any pregap in the padframes from the previous track in this case, and the full 3s pregap is baked into the previous track
+					// Only known to be used by Shenmue II JP's discs 2, 3, 4 and Virtua Fighter History & VF4
+					// Discpress: only then; otherwise the padding is the pregap, as for other tracks (0.289 put
+					// INDEX 01 the padding's length past the frames it wrote before it)
+					if (toc.tracks[tracknum-1].padframes != 0 || toc.tracks[tracknum-1].frames < 225)
+						continue;
+					toc.tracks[tracknum-1].padframes += 225;
+
+					toc.tracks[tracknum].pregap += 225;
+					toc.tracks[tracknum].splitframes = 225;
+					toc.tracks[tracknum].pgdatasize = toc.tracks[tracknum].datasize;
+					toc.tracks[tracknum].pgtype = toc.tracks[tracknum].trktype;
+				}
+			}
+		}
+		else
+		{
+			int curextra = 150; // 00:02:00
+			if (tracknum + 1 >= toc.numtrks && toc.tracks[tracknum].trktype != cdrom_file::CD_TRACK_AUDIO)
+				curextra += 75; // 00:01:00, special case when last track is data
+
+			// Discpress: a previous track too short to hold the pregap keeps its frames, padding and all, in its
+			// own file (0.289 read the pregap from before the track's start)
+			if (toc.tracks[tracknum-1].frames < uint32_t(curextra))
+			{
+				toc.tracks[tracknum-1].padframes = 0;
+				continue;
+			}
+
+			toc.tracks[tracknum-1].padframes = curextra;
+
+			toc.tracks[tracknum].pregap += curextra;
+			toc.tracks[tracknum].splitframes = curextra;
+			toc.tracks[tracknum].pgdatasize = toc.tracks[tracknum].datasize;
+			toc.tracks[tracknum].pgtype = toc.tracks[tracknum].trktype;
+		}
+	}
+}
+
 //-------------------------------------------------
 //  do_verify - validate the SHA-1 on a CHD
 //-------------------------------------------------
@@ -2054,6 +2136,7 @@ static void do_info(parameters_map &params)
 static chdman_task do_verify(parameters_map &params)
 {
 	bool fix_sha1 = params.find(OPTION_FIX) != params.end();
+	bool redump = params.find(OPTION_REDUMP) != params.end();
 	// parse out input files
 	chd_file input_parent_chd;
 	chd_file input_chd;
@@ -2079,6 +2162,104 @@ static chdman_task do_verify(parameters_map &params)
 	if (raw_sha1 == util::sha1_t::null)
 		report_error(0, "No verification to be done; CHD has no checksum");
 
+	// Discpress: single-pass Redump CRC-32 state (--redump computes Redump track/.cue or DVD .iso CRCs during verify)
+	struct redump_seg
+	{
+		uint32_t chd_start;
+		uint32_t chd_end;
+		int out_trk;
+		uint32_t datasize;
+		bool swap_audio;
+	};
+	bool redump_cd = false, redump_dvd = false;
+	std::vector<redump_seg> segs;
+	std::vector<std::string> track_filenames;
+	std::vector<util::crc32_creator> trk_crc;
+	std::vector<uint64_t> trk_bytes;
+	std::string cue_buf;
+	util::crc32_creator dvd_crc;
+	size_t seg_idx = 0;
+
+	if (redump)
+	{
+		if ((!input_chd.check_is_cd() || !input_chd.check_is_gd()) &&
+			input_chd.unit_bytes() == cdrom_file::FRAME_SIZE &&
+			(input_chd.hunk_bytes() % cdrom_file::FRAME_SIZE) == 0 &&
+			(input_chd.logical_bytes() % cdrom_file::FRAME_SIZE) == 0)
+		{
+			auto cdrom = std::make_unique<cdrom_file>(&input_chd);
+			cdrom_file::toc toc = cdrom->get_toc();
+			if (toc.numtrks > 0)
+			{
+				redump_cd = true;
+				if (cdrom->is_gdrom())
+					adjust_gdrom_toc_for_cue(toc, true);
+				for (int t = 0; t < toc.numtrks; t++)
+				{
+					if (toc.numtrks == 1)
+						track_filenames.push_back("check.bin");
+					else if (toc.numtrks >= 10)
+						track_filenames.push_back(util::string_format("check (Track %02d).bin", t + 1));
+					else
+						track_filenames.push_back(util::string_format("check (Track %d).bin", t + 1));
+				}
+				std::string kept_cue;
+				std::vector<uint8_t> sheet;
+				if (!input_chd.read_metadata(CUE_SHEET_METADATA_TAG, 0, sheet))
+				{
+					std::vector<std::string> track_types;
+					for (int t = 0; t < toc.numtrks; t++)
+						track_types.push_back(cue_track_type(toc.tracks[t]));
+					kept_cue = kept_cue_sheet(sheet, track_filenames, track_types, cdrom->is_gdrom() ? &toc : nullptr);
+				}
+				toc_writer toc_out(cue_buf, true);
+				if (!kept_cue.empty())
+					toc_out.printf("%s", kept_cue);
+				else
+				{
+					for (int t = 0; t < toc.numtrks; t++)
+					{
+						if (cdrom->is_gdrom())
+						{
+							if (t == 0)
+								toc_out.printf("REM SINGLE-DENSITY AREA\n");
+							else if (toc.tracks[t].physframeofs == 45000)
+								toc_out.printf("REM HIGH-DENSITY AREA\n");
+						}
+						output_track_metadata(MODE_CUEBIN, toc_out, t, toc.tracks[t], track_filenames[t], 0, 0);
+					}
+				}
+				trk_crc.resize(toc.numtrks);
+				trk_bytes.assign(toc.numtrks, 0);
+				for (int t = 0; t < toc.numtrks; t++)
+				{
+					if (t > 0 && toc.tracks[t].splitframes > 0)
+					{
+						const auto &prev = toc.tracks[t - 1];
+						uint32_t const sf = toc.tracks[t].splitframes;
+						if (prev.frames >= sf && prev.datasize > 0 && prev.datasize <= cdrom_file::MAX_SECTOR_DATA)
+						{
+							uint32_t const st = prev.chdframeofs + prev.frames - sf;
+							segs.push_back({ st, st + sf, t, prev.datasize,
+								prev.trktype == cdrom_file::CD_TRACK_AUDIO && !(toc.flags & cdrom_file::CD_FLAG_GDROMLE) });
+						}
+					}
+					const auto &cur = toc.tracks[t];
+					uint32_t const own = cur.frames > cur.padframes ? cur.frames - cur.padframes : 0;
+					if (own > 0 && cur.datasize > 0 && cur.datasize <= cdrom_file::MAX_SECTOR_DATA)
+					{
+						segs.push_back({ cur.chdframeofs, cur.chdframeofs + own, t, cur.datasize,
+							cur.trktype == cdrom_file::CD_TRACK_AUDIO && !(toc.flags & cdrom_file::CD_FLAG_GDROMLE) });
+					}
+				}
+			}
+		}
+		else if (input_chd.check_is_cd() && input_chd.check_is_gd())
+		{
+			redump_dvd = true;
+		}
+	}
+
 	// create an array to read into (Discpress: at least one hunk when hunk_bytes > TEMP_BUFFER_SIZE)
 	std::vector<uint8_t> buffer(size_t(std::max<uint32_t>(1, TEMP_BUFFER_SIZE / input_chd.hunk_bytes())) * input_chd.hunk_bytes());
 
@@ -2097,6 +2278,34 @@ static chdman_task do_verify(parameters_map &params)
 
 		// add to the checksum
 		rawsha1.append(&buffer[0], bytes_to_read);
+		if (redump_cd)
+		{
+			uint32_t const first_frame = uint32_t(offset / cdrom_file::FRAME_SIZE);
+			uint32_t const end_frame = first_frame + (bytes_to_read / cdrom_file::FRAME_SIZE);
+			while (seg_idx < segs.size() && segs[seg_idx].chd_end <= first_frame)
+				seg_idx++;
+			for (size_t si = seg_idx; si < segs.size() && segs[si].chd_start < end_frame; si++)
+			{
+				auto const &sg = segs[si];
+				uint32_t const lo = std::max(first_frame, sg.chd_start);
+				uint32_t const hi = std::min(end_frame, sg.chd_end);
+				for (uint32_t f = lo; f < hi; f++)
+				{
+					uint8_t *fp = &buffer[size_t(f - first_frame) * cdrom_file::FRAME_SIZE];
+					if (sg.swap_audio)
+					{
+						for (uint32_t k = 0; k + 1 < sg.datasize; k += 2)
+							std::swap(fp[k], fp[k + 1]);
+					}
+					trk_crc[sg.out_trk].append(fp, sg.datasize);
+					trk_bytes[sg.out_trk] += sg.datasize;
+				}
+			}
+		}
+		else if (redump_dvd)
+		{
+			dvd_crc.append(&buffer[0], bytes_to_read);
+		}
 		offset += bytes_to_read;
 	}
 	util::sha1_t computed_sha1 = rawsha1.finish();
@@ -2149,6 +2358,21 @@ static chdman_task do_verify(parameters_map &params)
 	}
 	if (mismatch)
 		report_error(1, "Verification failed");
+	if (redump_cd)
+	{
+		util::crc32_t const cue_crc = util::crc32_creator::simple(cue_buf.data(), cue_buf.size());
+		util::stream_format(std::cout, "Redump: %u %08x check.cue\n", uint64_t(cue_buf.size()), uint32_t(cue_crc));
+		for (size_t t = 0; t < track_filenames.size(); t++)
+		{
+			util::crc32_t const tc = trk_crc[t].finish();
+			util::stream_format(std::cout, "Redump: %u %08x %s\n", trk_bytes[t], uint32_t(tc), track_filenames[t]);
+		}
+	}
+	else if (redump_dvd)
+	{
+		util::crc32_t const dc = dvd_crc.finish();
+		util::stream_format(std::cout, "Redump: %u %08x check.iso\n", input_chd.logical_bytes(), uint32_t(dc));
+	}
 }
 
 
@@ -2981,7 +3205,7 @@ static chdman_task do_extract_raw(parameters_map &params)
 //  track's (track_types: cue_track_type of each).
 //-------------------------------------------------
 
-static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::vector<std::string> &track_filenames, const std::vector<std::string> &track_types, const cdrom_file::toc *gd_toc = nullptr)
+static std::string kept_cue_sheet(const std::vector<uint8_t> &sheet, const std::vector<std::string> &track_filenames, const std::vector<std::string> &track_types, const cdrom_file::toc *gd_toc)
 {
 	std::vector<std::string> files;
 	for (size_t i = 0; i < track_filenames.size(); i++)
@@ -3366,84 +3590,7 @@ static chdman_task do_extract_cd(parameters_map &params)
 		if (cdrom->is_gdrom() && mode == MODE_CUEBIN)
 		{
 			// modify TOC to match Redump cue/bin format as best as possible (Discpress: run before kept_cue_sheet so kept GD-ROM cues are validated against splitframes/pregap)
-			cdrom_file::toc *trackinfo = (cdrom_file::toc*)&toc;
-
-			// TOSEC GDI-based CHDs have the padframes field set to non-0 where the pregaps for the next track would be
-			// Discpress: --redump writes Redump's layout, each track's pregap in its own file, whatever the CHD was made
-			// from; the CHD made from it then holds the same data, the gaps of a GDI as data of the tracks before them
-			const bool has_physical_pregap = trackinfo->tracks[0].padframes == 0 || redump;
-
-			for (int tracknum = 1; tracknum < toc.numtrks; tracknum++)
-			{
-				// pgdatasize should never be set in GD-ROMs currently, so if it is set then assume the TOC has proper pregap values
-				if (trackinfo->tracks[tracknum].pgdatasize != 0)
-					break;
-
-				// don't adjust the first track of the single-density and high-density areas
-				if (toc.tracks[tracknum].physframeofs == 45000)
-					continue;
-
-				// Discpress: never split physical pregap frames across tracks with different sector sizes (e.g. TOSEC MODE1/2048 + AUDIO/2352)
-				const bool same_sector_size = toc.tracks[tracknum-1].datasize == toc.tracks[tracknum].datasize;
-				if (!has_physical_pregap || !same_sector_size)
-				{
-					// NOTE: This will generate a cue with PREGAP commands instead of INDEX 00 because the pregap data isn't baked into the bins
-					trackinfo->tracks[tracknum].pregap += trackinfo->tracks[tracknum-1].padframes;
-
-					// "type 1" (only one data track in high-density area) and "type 2" (1 data and then the rest of the tracks being audio tracks in high-density area) don't require any adjustments
-					if (tracknum + 1 >= toc.numtrks && toc.tracks[tracknum].trktype != cdrom_file::CD_TRACK_AUDIO)
-					{
-						if (toc.tracks[tracknum-1].trktype != cdrom_file::CD_TRACK_AUDIO && same_sector_size)
-						{
-							// "type 3" where the high-density area is just two data tracks
-							// there shouldn't be any pregap in the padframes from the previous track in this case, and the full 3s pregap is baked into the previous track
-							// Only known to be used by Shenmue II JP's discs 2, 3, 4 and Virtua Fighter History & VF4
-							// Discpress: only then; otherwise the padding is the pregap, as for other tracks (0.289 put
-							// INDEX 01 the padding's length past the frames it wrote before it)
-							if (toc.tracks[tracknum-1].padframes != 0 || toc.tracks[tracknum-1].frames < 225)
-								continue;
-							trackinfo->tracks[tracknum-1].padframes += 225;
-
-							trackinfo->tracks[tracknum].pregap += 225;
-							trackinfo->tracks[tracknum].splitframes = 225;
-							trackinfo->tracks[tracknum].pgdatasize = trackinfo->tracks[tracknum].datasize;
-							trackinfo->tracks[tracknum].pgtype = trackinfo->tracks[tracknum].trktype;
-						}
-						else
-						{
-							// "type 3 split" where the first track and last of the high-density area are data tracks and in between is audio tracks
-							// TODO: These 75 frames are actually included at the end of the previous track so should be written
-							// It's currently not possible to format it as expected without hacky code because the 150 pregap for the last track
-							// is sandwiched between these 75 frames and the actual track data.
-							// The 75 frames seems to normally be 0s so this should be ok for now until a use case is found.
-							// Discpress: they stay at the end of the previous track's file, and the pregap is the padding
-							// after them, so createcd makes the same CHD again. 0.289 left them out of every file, and
-							// read them back as padding.
-						}
-					}
-				}
-				else
-				{
-					int curextra = 150; // 00:02:00
-					if (tracknum + 1 >= toc.numtrks && toc.tracks[tracknum].trktype != cdrom_file::CD_TRACK_AUDIO)
-						curextra += 75; // 00:01:00, special case when last track is data
-
-					// Discpress: a previous track too short to hold the pregap keeps its frames, padding and all, in its
-					// own file (0.289 read the pregap from before the track's start)
-					if (toc.tracks[tracknum-1].frames < uint32_t(curextra))
-					{
-						trackinfo->tracks[tracknum-1].padframes = 0;
-						continue;
-					}
-
-					trackinfo->tracks[tracknum-1].padframes = curextra;
-
-					trackinfo->tracks[tracknum].pregap += curextra;
-					trackinfo->tracks[tracknum].splitframes = curextra;
-					trackinfo->tracks[tracknum].pgdatasize = trackinfo->tracks[tracknum].datasize;
-					trackinfo->tracks[tracknum].pgtype = trackinfo->tracks[tracknum].trktype;
-				}
-			}
+			adjust_gdrom_toc_for_cue(*const_cast<cdrom_file::toc *>(&toc), redump);
 		}
 
 		// Discpress: with --redump, the cue sheet createcd --keepcue stored, if it fits these files

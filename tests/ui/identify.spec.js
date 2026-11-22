@@ -392,3 +392,91 @@ test('the discs of a Saturn set are told apart by their headers and get a playli
   await dl.saveAs(p);
   expect(fs.readFileSync(p, 'utf8')).toBe(`${d1.name}.chd\n${d2.name}.chd\n`);
 });
+
+test('Phase 2 detection: FM Towns, PC-98 IPL1, Nuon over VIDEO_TS, Dreamcast WinCE, Saturn 4MB RAM cart, and single-bin CUE track slicing', async ({ app }) => {
+  const dir = path.join(FIXTURES, 'gen', 'p2');
+  fs.mkdirSync(dir, { recursive: true });
+  const pad2048 = b => Buffer.concat([b, Buffer.alloc((2048 - (b.length % 2048)) % 2048)]);
+
+  // 1) FM Towns IPL4
+  const fmt = Buffer.alloc(64 * 2048);
+  fmt.write('IPL4', 0, 'latin1');
+  fs.writeFileSync(path.join(dir, 'towns.iso'), fmt);
+
+  // 2) PC-98 IPL1
+  const p98 = Buffer.alloc(64 * 2048);
+  p98.write('IPL1', 4, 'latin1');
+  fs.writeFileSync(path.join(dir, 'pc98boot.iso'), p98);
+
+  // 3) Nuon hybrid DVD with both NUON.CD and VIDEO_TS (must detect NUON, not DVD-Video)
+  const makeIso = (entries, sysId = '', volId = 'TEST') => {
+    const dirRec = (name, lba, size, isDir) => {
+      const nb = Buffer.from(name, 'latin1');
+      const len = 33 + nb.length + (nb.length % 2 === 0 ? 1 : 0);
+      const r = Buffer.alloc(len);
+      r[0] = len; r.writeUInt32LE(lba, 2); r.writeUInt32BE(lba, 6);
+      r.writeUInt32LE(size, 10); r.writeUInt32BE(size, 14);
+      r[25] = isDir ? 2 : 0; r.writeUInt16LE(1, 28); r.writeUInt16BE(1, 30);
+      r[32] = nb.length; nb.copy(r, 33);
+      return r;
+    };
+    const rootSec = Buffer.concat([dirRec('\x00', 18, 2048, true), dirRec('\x01', 18, 2048, true),
+      ...entries.map((e, i) => dirRec(e.name, 19 + i, e.data.length, !!e.dir))]);
+    const pvd = Buffer.alloc(2048);
+    pvd[0] = 1; pvd.write('CD001', 1, 'latin1'); pvd[6] = 1;
+    pvd.write(sysId.padEnd(32, ' ').slice(0, 32), 8, 'latin1');
+    pvd.write(volId.padEnd(32, ' ').slice(0, 32), 40, 'latin1');
+    dirRec('\x00', 18, 2048, true).copy(pvd, 156);
+    const term = Buffer.alloc(2048); term[0] = 255; term.write('CD001', 1, 'latin1'); term[6] = 1;
+    return Buffer.concat([Buffer.alloc(16 * 2048), pvd, term, pad2048(rootSec), ...entries.map(e => pad2048(e.data))]);
+  };
+  fs.writeFileSync(path.join(dir, 'tempest.iso'), makeIso([
+    { name: 'VIDEO_TS', data: Buffer.alloc(2048), dir: true },
+    { name: 'NUON.CD;1', data: Buffer.from('NUON') },
+  ], '', 'TEMPEST3000'));
+
+  // 4) Dreamcast Windows CE (0WINCEOS.BIN at IP.BIN 0x60)
+  const dcWince = Buffer.alloc(64 * 2048);
+  dcWince.write('SEGA SEGAKATANA SEGA ENTERPRISES', 0, 'latin1');
+  dcWince.write('GD-ROM1/1       JUE     ', 0x20, 'latin1');
+  dcWince.write('MK-51000  V1.000', 0x40, 'latin1');
+  dcWince.write('0WINCEOS.BIN    ', 0x60, 'latin1');
+  dcWince.write('WINCE TEST', 0x80, 'latin1');
+  fs.writeFileSync(path.join(dir, 'wince.iso'), dcWince);
+
+  // 5) Saturn 4 MB RAM cart title (T-1227G = X-Men vs. Street Fighter, in db/facts/saturn-cart.tsv)
+  const sat4m = Buffer.alloc(64 * 2048);
+  sat4m.write('SEGA SEGASATURN ', 0, 'latin1');
+  sat4m.write('T-1227G   ', 0x20, 'latin1');
+  sat4m.write('CD-1/1  J         ', 0x38, 'latin1');
+  sat4m.write('W               ', 0x50, 'latin1');
+  sat4m.write('X-MEN VS. STREET FIGHTER', 0x60, 'latin1');
+  fs.writeFileSync(path.join(dir, 'xmvsf.iso'), sat4m);
+
+  // 6) Single-bin multi-track .cue whose Track 1 matches verified.bin in testdb.json
+  const verBin = fs.readFileSync(path.join(FIXTURES, 'verified.bin'));
+  const audioTail = Buffer.alloc(150 * 2352, 0x11);
+  fs.writeFileSync(path.join(dir, 'singlebin.bin'), Buffer.concat([verBin, audioTail]));
+  const verFrames = verBin.length / 2352;
+  const msf = f => [Math.floor(f / 4500), Math.floor(f / 75) % 60, f % 75].map(v => String(v).padStart(2, '0')).join(':');
+  fs.writeFileSync(path.join(dir, 'singlebin.cue'),
+    `FILE "singlebin.bin" BINARY\r\n  TRACK 01 MODE2/2352\r\n    INDEX 01 00:00:00\r\n  TRACK 02 AUDIO\r\n    INDEX 00 ${msf(verFrames)}\r\n    INDEX 01 ${msf(verFrames + 75)}\r\n`);
+
+  await app.open({ testdb: true });
+  await app.add([
+    'gen/p2/towns.iso', 'gen/p2/pc98boot.iso', 'gen/p2/tempest.iso',
+    'gen/p2/wince.iso', 'gen/p2/xmvsf.iso',
+    'gen/p2/singlebin.cue', 'gen/p2/singlebin.bin',
+  ]);
+  for (const [title, badge] of [['towns', 'FM-T'], ['pc98boot', 'PC-98'], ['tempest', 'NUON'], ['wince', 'DC'], ['xmvsf', 'SAT']]) {
+    const c = app.job(title);
+    await app.settled(c);
+    await expect(c.locator('.sysbadge'), title).toHaveText(badge);
+  }
+  await expect(app.job('wince').locator('[data-quirk="dc-wince"]')).toBeVisible();
+  await expect(app.job('xmvsf').locator('[data-quirk="saturn-ram-4m"]')).toBeVisible();
+  const sb = app.job('singlebin');
+  await app.settled(sb);
+  await expect(sb.locator('.note.ident')).toHaveAttribute('data-method', 'hash');
+  await expect(sb.locator('.ident-name')).toHaveText(fixture('ps1-verified').name);
+});

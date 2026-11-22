@@ -13,8 +13,8 @@ test('an Xbox 360 dump is recognized behind its video partition, with a note tha
   await app.add(['xgd3.iso']);
   const card = app.job('xgd3');
   await app.settled(card);
-  await expect(card.locator('.sysbadge')).toHaveText('XBOX');
-  await expect(card.locator('.ident-note')).toHaveText('Xbox emulators (xemu, Xenia) do not load CHDs. They use the ISO itself.');
+  await expect(card.locator('.sysbadge')).toHaveText('X360');
+  await expect(card.locator('.ident-note')).toHaveText('Xenia does not load CHDs. It uses ISO or ZAR (ZArchive) images.');
   // not settled by the system: the type stays a choice up front
   await expect(card.locator('.row', { hasText: 'Create as' })).toBeVisible();
   await expect(card.locator('code.cmd')).toContainText('chdman createdvd');

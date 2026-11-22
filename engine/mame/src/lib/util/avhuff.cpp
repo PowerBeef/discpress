@@ -712,7 +712,7 @@ void avhuff_decoder::configure(const config &cfg)
  * @return  An avhuff_error.
  */
 
-avhuff_error avhuff_decoder::decode_data(const uint8_t *source, uint32_t complength, uint8_t *dest)
+avhuff_error avhuff_decoder::decode_data(const uint8_t *source, uint32_t complength, uint8_t *dest, uint32_t destlen)
 {
 	// extract info from the header
 	if (complength < 8)
@@ -723,16 +723,21 @@ avhuff_error avhuff_decoder::decode_data(const uint8_t *source, uint32_t complen
 	uint32_t width = get_u16be(&source[4]);
 	uint32_t height = get_u16be(&source[6]);
 
-	// validate that the sizes make sense
+	// validate that the sizes make sense (Discpress: bound channels <= 16, include metasize, validate destlen)
+	if (channels > std::size(m_config.audio))
+		return AVHERR_INVALID_DATA;
 	if (complength < 10 + 2 * channels)
 		return AVHERR_INVALID_DATA;
-	uint32_t totalsize = 10 + 2 * channels;
+	uint64_t totalsize = 10 + 2 * channels + metasize;
 	uint32_t treesize = get_u16be(&source[8]);
-	if (treesize != 0xffff)
-		totalsize += treesize;
-	for (int chnum = 0; chnum < channels; chnum++)
-		totalsize += get_u16be(&source[10 + 2 * chnum]);
-	if (totalsize >= complength)
+	if (channels > 0)
+	{
+		if (treesize != 0xffff)
+			totalsize += treesize;
+		for (uint32_t chnum = 0; chnum < channels; chnum++)
+			totalsize += get_u16be(&source[10 + 2 * chnum]);
+	}
+	if ((width > 0 && height > 0) ? (totalsize >= complength) : (totalsize > complength))
 		return AVHERR_INVALID_DATA;
 
 	// starting offsets
@@ -743,6 +748,9 @@ avhuff_error avhuff_decoder::decode_data(const uint8_t *source, uint32_t complen
 	uint32_t audioxor, videoxor, videostride;
 	if (dest != nullptr)
 	{
+		uint64_t const need = 12 + uint64_t(metasize) + uint64_t(channels) * samples * 2 + uint64_t(width) * height * 2;
+		if (destlen > 0 && need > destlen)
+			return AVHERR_INVALID_DATA;
 		// create a header
 		dest[0] = 'c';
 		dest[1] = 'h';
@@ -932,6 +940,8 @@ avhuff_error avhuff_decoder::decode_audio(int channels, int samples, const uint8
 			// if no huffman length, just copy the data
 			if (treesize == 0)
 			{
+				if (uint32_t(size) < uint32_t(samples) * 2) // Discpress: reject truncated raw PCM channel
+					return AVHERR_INVALID_DATA;
 				const uint8_t *cursource = source;
 				for (int sampnum = 0; sampnum < samples; sampnum++)
 				{

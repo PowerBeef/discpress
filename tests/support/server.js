@@ -14,14 +14,10 @@ const WEB = path.join(ROOT, 'web');
 
 function withTestDb(html) {
   const extra = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'testdb.json'), 'utf8'));
-  const re = /(<script type="application\/octet-stream" id="gamedb" data-size=")(\d+)(">)([^<]*)(<\/script>)/;
-  const m = re.exec(html);
-  if (!m) throw new Error('no game database in the page');
-  const db = JSON.parse(zlib.gunzipSync(Buffer.from(m[4], 'base64')).toString('utf8'));
-  for (const [sys, rows] of Object.entries(extra)) db.systems[sys] = (db.systems[sys] ? db.systems[sys] + '\n' : '') + rows.join('\n');
-  const json = Buffer.from(JSON.stringify(db), 'utf8');
-  const b64 = zlib.gzipSync(json).toString('base64');
-  return html.replace(re, () => m[1] + json.length + m[3] + b64 + m[5]);
+  const re = /(<script type="application\/octet-stream" id="gamedb" data-size="\d+">[^<]*<\/script>)/;
+  if (!re.test(html)) throw new Error('no game database in the page');
+  const payload = JSON.stringify(extra).replace(/</g, '\\u003c');
+  return html.replace(re, '$1\n<script type="application/json" id="testdb">' + payload + '</script>');
 }
 
 // For tests of the online version's service worker, whose requests the browser's routing can't see:

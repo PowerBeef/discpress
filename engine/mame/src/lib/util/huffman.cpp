@@ -174,6 +174,8 @@ huffman_error huffman_context_base::import_tree_rle(bitstream_in &bitbuf)
 			else
 			{
 				int repcount = bitbuf.read(numbits) + 3;
+				if (repcount > m_numcodes - curnode) // Discpress: reject RLE run overflowing m_huffnode
+					return HUFFERR_INVALID_DATA;
 				while (repcount--)
 					m_huffnode[curnode++].m_numbits = nodebits;
 			}
@@ -631,6 +633,8 @@ huffman_error huffman_context_base::assign_canonical_codes()
 		uint32_t nextstart = (curstart + bithisto[codelen]) >> 1;
 		if (codelen != 1 && nextstart * 2 != (curstart + bithisto[codelen]))
 			return HUFFERR_INTERNAL_INCONSISTENCY;
+		if (codelen == 1 && (curstart + bithisto[codelen]) > 2) // Discpress: reject oversubscribed tree before build_lookup_table overflows m_lookup
+			return HUFFERR_INTERNAL_INCONSISTENCY;
 		bithisto[codelen] = curstart;
 		curstart = nextstart;
 	}
@@ -653,6 +657,10 @@ huffman_error huffman_context_base::assign_canonical_codes()
 
 void huffman_context_base::build_lookup_table()
 {
+	// Discpress: clear lookup table so degenerate/incomplete trees never expose uninitialized stack memory
+	uint32_t const lutsize = 1u << m_maxbits;
+	memset(m_lookup, 0, sizeof(lookup_value) * lutsize);
+
 	// iterate over all codes
 	for (int curcode = 0; curcode < m_numcodes; curcode++)
 	{
@@ -665,10 +673,10 @@ void huffman_context_base::build_lookup_table()
 
 			// fill all matching entries
 			int shift = m_maxbits - node.m_numbits;
-			lookup_value *dest = &m_lookup[node.m_bits << shift];
-			lookup_value *destend = &m_lookup[((node.m_bits + 1) << shift) - 1];
-			while (dest <= destend)
-				*dest++ = value;
+			uint32_t const start = node.m_bits << shift;
+			uint32_t const end = (node.m_bits + 1) << shift;
+			if (start < lutsize && end <= lutsize)
+				std::fill(&m_lookup[start], &m_lookup[end], value);
 		}
 	}
 }

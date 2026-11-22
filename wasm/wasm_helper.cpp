@@ -291,7 +291,7 @@ extern "C" EMSCRIPTEN_KEEPALIVE int wasm_probe_tracks()
 	return p_cd ? p_cd->get_last_track() : 0;
 }
 
-// out[0]=type, out[1]=frames, out[2]=pregap, out[3]=datasize, out[4]=gdrom flag
+// out[0..9]: type, frames, pregap, datasize, gdrom, subtype, postgap, padframes, pgdatasize, logframeofs
 extern "C" EMSCRIPTEN_KEEPALIVE int wasm_probe_track_info(int track, uint32_t *out)
 {
 	if (!p_cd || track < 0 || track >= p_cd->get_last_track())
@@ -302,6 +302,11 @@ extern "C" EMSCRIPTEN_KEEPALIVE int wasm_probe_track_info(int track, uint32_t *o
 	out[2] = t.pregap;
 	out[3] = t.datasize;
 	out[4] = p_cd->is_gdrom() ? 1 : 0;
+	out[5] = t.subtype;
+	out[6] = t.postgap;
+	out[7] = t.padframes;
+	out[8] = t.pgdatasize;
+	out[9] = t.logframeofs;
 	return 0;
 }
 
