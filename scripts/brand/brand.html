@@ -225,31 +225,31 @@ body { font-family: var(--display); color: var(--text); -webkit-font-smoothing: 
   <div class="f"><div class="top"><div class="icon" style="background:#b69cff"><svg><use href="#i-stack"/></svg></div><h3>Big discs welcome</h3></div><p>Results stream to disk, not memory, so multi-gigabyte DVD images work too.</p></div>
   <div class="f"><div class="top"><div class="icon" style="background:#7be3a3"><svg><use href="#i-lock"/></svg></div><h3>Totally private</h3></div><p>Nothing leaves your device, and it works offline: downloaded, or installed from the web.</p></div>
   <div class="f"><div class="top"><div class="icon" style="background:#7be3a3"><svg><use href="#i-shield"/></svg></div><h3>Checks your dumps</h3></div><p>Add Redump or No-Intro DAT files and every track is checked, before converting and after.</p></div>
-  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-2)"><svg><use href="#i-box"/></svg></div><h3>Opens what you have</h3></div><p>Zips, PS1 EBOOT.PBP, ECM, CSO and ZSO, CloneCD and Nero images, unpacked as they’re read.</p></div>
-  <div class="f"><div class="top"><div class="icon" style="background:var(--accent)"><svg><use href="#i-pad"/></svg></div><h3>Ready to play</h3></div><p>LibCrypt .sbi and .m3u playlists made for you, a MiSTer preset, and a warning when an emulator can’t load it.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-2)"><svg><use href="#i-box"/></svg></div><h3>Opens what you have</h3></div><p>Zips, .7z, .mds/.mdf, .cdi, audio cues, EBOOT.PBP, ECM, CSO/ZSO, CloneCD and Nero, unpacked as they’re read.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent)"><svg><use href="#i-pad"/></svg></div><h3>Ready to play</h3></div><p>Target profiles, CHD health auditor, LibCrypt .sbi, .m3u playlists, CSO/ZSO and scrubbed Xbox XISOs.</p></div>
 </div></div>
 
 <!-- FORMATS -->
 <div class="scene feat" id="formats"><div class="grid">
   <div class="f"><div class="top"><div class="icon" style="background:var(--cyan)"><svg><use href="#i-disc"/></svg></div><h3>Disc images</h3></div><p>Every common kind, read as it is.</p>
-    <div class="exts"><span class="x">.cue + .bin</span><span class="x">.gdi</span><span class="x">.iso</span><span class="x">.ccd + .img</span><span class="x">.nrg</span><span class="x">.toc</span><span class="x">.chd</span></div></div>
-  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-2)"><svg><use href="#i-box"/></svg></div><h3>Packed and zipped</h3></div><p>Unpacked as they’re read, and checked.</p>
-    <div class="exts"><span class="x">.zip</span><span class="x">.bin.ecm</span><span class="x">.cso</span><span class="x">.zso</span><span class="x">EBOOT.PBP</span></div></div>
+    <div class="exts"><span class="x">.cue + .bin</span><span class="x">.gdi</span><span class="x">.iso</span><span class="x">.ccd + .img</span><span class="x">.mds / .mdf</span><span class="x">.cdi</span><span class="x">.nrg</span><span class="x">.toc</span><span class="x">.chd</span></div></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-2)"><svg><use href="#i-box"/></svg></div><h3>Packed &amp; audio</h3></div><p>Unpacked or decoded as they’re read.</p>
+    <div class="exts"><span class="x">.zip</span><span class="x">.7z</span><span class="x">.bin.ecm</span><span class="x">.cso</span><span class="x">.zso</span><span class="x">EBOOT.PBP</span><span class="x">.flac / .ogg / .mp3</span></div></div>
   <div class="f"><div class="top"><div class="icon" style="background:var(--surface-2)"><svg style="color:var(--text)"><use href="#i-x"/></svg></div><h3>Not these</h3></div><p>The card says why, and what to do instead.</p>
-    <div class="exts"><span class="x no">.cdi</span><span class="x no">.mds / .mdf</span><span class="x no">.isz</span><span class="x no">.7z</span><span class="x no">.rar</span></div></div>
+    <div class="exts"><span class="x no">.mdx (v2)</span><span class="x no">.isz</span><span class="x no">.rar</span><span class="x no">PSN PBP</span></div></div>
 </div></div>
 
 <!-- EMULATORS -->
 <div class="scene feat" id="emulators"><div class="grid">
   <div class="f"><div class="top"><div class="icon" style="background:var(--cyan)"><svg><use href="#i-disc"/></svg></div><h3>The right CHD</h3></div><p>CD or DVD, and the hunk size each console’s emulators want, set when the game is recognized.</p></div>
-  <div class="f"><div class="top"><div class="icon" style="background:#7be3a3"><svg><use href="#i-check"/></svg></div><h3>Boots as it should</h3></div><p>Saturn and Sega CD CHDs skip the cue sheet their emulators reject; NAOMI GD-ROMs keep their romset name.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:#7be3a3"><svg><use href="#i-check"/></svg></div><h3>Boots as it should</h3></div><p>Saturn, Sega CD and PCE-CD skip the cue tag their emulators reject; NAOMI GD-ROMs keep their romset name.</p></div>
   <div class="f"><div class="top"><div class="icon" style="background:var(--accent-3)"><svg><use href="#i-alert"/></svg></div><h3>Warns in time</h3></div><p>Says when an emulator can’t read Zstd, or misreads a disc’s sessions, gaps or tracks, before you convert.</p></div>
-  <div class="f"><div class="top"><div class="icon" style="background:#b69cff"><svg><use href="#i-key"/></svg></div><h3>LibCrypt .sbi</h3></div><p>Saved next to a PAL PlayStation CHD, made from a CloneCD .sub, and asked for when a protected game has none.</p></div>
-  <div class="f"><div class="top"><div class="icon" style="background:var(--cyan)"><svg><use href="#i-list"/></svg></div><h3>Whole sets</h3></div><p>An .m3u playlist for games on several discs, and a note of the discs a set still needs.</p></div>
-  <div class="f"><div class="top"><div class="icon" style="background:var(--accent)"><svg><use href="#i-chip"/></svg></div><h3>MiSTer preset</h3></div><p>Zstd and FLAC in small hunks, fast enough for MiSTer’s CD cores, and a warning where it has none.</p></div>
-  <div class="f"><div class="top"><div class="icon" style="background:#7be3a3"><svg><use href="#i-phone"/></svg></div><h3>Older emulators</h3></div><p>CD CHDs of PS2 DVD games, the only kind AetherSX2, NetherSX2 and older PCSX2 read.</p></div>
-  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-2)"><svg><use href="#i-info"/></svg></div><h3>Says what won’t</h3></div><p>GameCube, Wii, Xbox, PS3 and video discs are recognized, with a note that their players skip CHDs.</p></div>
-  <div class="f"><div class="top"><div class="icon" style="background:var(--surface-2)"><svg style="color:var(--text)"><use href="#i-x"/></svg></div><h3>Refuses what breaks</h3></div><p>Discs chdman 0.289 can’t convert, such as CD+G tracks, get a card that says why and what to do instead.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:#b69cff"><svg><use href="#i-key"/></svg></div><h3>LibCrypt .sbi</h3></div><p>Saved next to a PAL PlayStation CHD, extracted from CloneCD .sub or .mdf, and asked for when missing.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--cyan)"><svg><use href="#i-list"/></svg></div><h3>Whole sets</h3></div><p>ES-DE, Handheld, MinUI and flat .m3u playlists for multi-disc sets, plus folder organization.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent)"><svg><use href="#i-chip"/></svg></div><h3>Target profiles</h3></div><p>Universal, Fast Universal, ES-DE/PC, Handheld, MiSTer FPGA and Legacy profiles — tuned per device.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:#7be3a3"><svg><use href="#i-phone"/></svg></div><h3>Hardware outputs</h3></div><p>Writes --block=2048 CSO/ZSO for real PSP, Vita and PS2 OPL, plus scrubbed Xbox XISOs for xemu.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--accent-2)"><svg><use href="#i-info"/></svg></div><h3>Health auditor</h3></div><p>12-check CHD auditor spots broken hunks, wrong CD/DVD modes or v3/v4 files with 1-click fixes.</p></div>
+  <div class="f"><div class="top"><div class="icon" style="background:var(--surface-2)"><svg style="color:var(--text)"><use href="#i-shield"/></svg></div><h3>Safe repairs</h3></div><p>Reversible layout fixes (--sessions, --trailer), guarded CD+G RW_RAW, and clear guidance on non-CHD discs.</p></div>
 </div></div>
 
 <!-- SYSTEMS -->
