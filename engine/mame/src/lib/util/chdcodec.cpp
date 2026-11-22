@@ -815,24 +815,50 @@ int8_t chd_compressor_group::find_best_compressor(const uint8_t *src, uint8_t *c
 	uint32_t active_mask = codecs & 0x0fu;
 	if (probe_pcm && m_hunkbytes >= 256)
 	{
-		// ~200ns 64-sample PCM autocorrelation probe for DVD/raw flac gating
-		uint64_t mag = 0, diff = 0;
-		int32_t prev = 0;
-		uint32_t const step = m_hunkbytes / 128; // 64 16-bit samples across the hunk
-		for (uint32_t i = 0; i < 64; i++)
+		// ~200ns stereo consecutive-pair PCM probe (LE & BE) for DVD/raw flac gating.
+		// Samples 8 regions x 4 stereo pairs (64 16-bit samples) and requires zero-centered
+		// signed variation (rejecting ASCII text, constant fills, and 8-bit monotonic gradients).
+		uint32_t const stride = m_hunkbytes / 8;
+		bool is_pcm = false;
+		for (int be = 0; be < 2 && !is_pcm; be++)
 		{
-			uint32_t const off = (i * step) & ~1u;
-			int16_t const s = int16_t(uint16_t(src[off]) | (uint16_t(src[off + 1]) << 8));
-			int32_t const v = s;
-			mag += uint32_t(v < 0 ? -v : v);
-			if (i > 0)
+			uint64_t mag = 0, diff = 0;
+			uint32_t pos = 0, neg = 0, nonzero = 0, same_b = 0;
+			for (uint32_t r = 0; r < 8; r++)
 			{
-				int32_t const d = v - prev;
-				diff += uint32_t(d < 0 ? -d : d);
+				uint32_t const base = (r * stride) & ~3u;
+				auto rd16 = [&](uint32_t o) -> int32_t
+				{
+					uint16_t const u = be
+						? uint16_t((uint16_t(src[o]) << 8) | uint16_t(src[o + 1]))
+						: uint16_t(uint16_t(src[o]) | (uint16_t(src[o + 1]) << 8));
+					return int32_t(int16_t(u));
+				};
+				int32_t prev_l = rd16(base);
+				int32_t prev_r = rd16(base + 2);
+				for (uint32_t k = 1; k <= 4; k++)
+				{
+					uint32_t const o = base + k * 4;
+					if (src[o] == src[o + 1]) same_b++;
+					if (src[o + 2] == src[o + 3]) same_b++;
+					int32_t const s_l = rd16(o);
+					int32_t const s_r = rd16(o + 2);
+					int32_t const dl = s_l - prev_l;
+					int32_t const dr = s_r - prev_r;
+					mag += uint32_t(s_l < 0 ? -s_l : s_l) + uint32_t(s_r < 0 ? -s_r : s_r);
+					diff += uint32_t(dl < 0 ? -dl : dl) + uint32_t(dr < 0 ? -dr : dr);
+					if (dl != 0) nonzero++;
+					if (dr != 0) nonzero++;
+					if (s_l > 64) pos++; else if (s_l < -64) neg++;
+					if (s_r > 64) pos++; else if (s_r < -64) neg++;
+					prev_l = s_l;
+					prev_r = s_r;
+				}
 			}
-			prev = v;
+			if (mag > 64 * 128 && nonzero >= 32 && same_b < 16 && diff * 2 < mag && pos >= 8 && neg >= 8)
+				is_pcm = true;
 		}
-		if (mag > 64 * 128 && diff * 2 < mag)
+		if (is_pcm)
 		{
 			for (int slot = 0; slot < 4; slot++)
 				if (m_codec_types[slot] == CHD_CODEC_FLAC)

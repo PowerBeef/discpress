@@ -50,6 +50,10 @@
 /* @(#) $Id$ */
 
 #include "deflate.h"
+#ifdef __wasm__
+#include <stdint.h>
+#include <string.h>
+#endif
 #ifdef __wasm_simd128__
 #include <wasm_simd128.h>
 #endif
@@ -1522,18 +1526,19 @@ local uInt longest_match(deflate_state *s, IPos cur_match) {
         scan += 2, match++;
         Assert(*scan == *match, "match[2]?");
 
-#ifdef __wasm_simd128__
-        /* Discpress: 16-byte SIMD128 match extension; MAX_MATCH-2 == 256 (16*16), bit-exact */
+#ifdef __wasm__
+        /* Discpress: 8-byte little-endian i64 XOR+ctz match extension; MAX_MATCH-2 == 256 (32*8), bit-exact */
         while (scan < strend) {
-            v128_t va = wasm_v128_load(scan);
-            v128_t vb = wasm_v128_load(match);
-            unsigned mask = (unsigned)wasm_i8x16_bitmask(wasm_i8x16_eq(va, vb)) ^ 0xffffu;
-            if (mask) {
-                scan += __builtin_ctz(mask);
+            uint64_t va, vb, diff;
+            memcpy(&va, scan, 8);
+            memcpy(&vb, match, 8);
+            diff = va ^ vb;
+            if (diff) {
+                scan += (unsigned)(__builtin_ctzll(diff) >> 3);
                 break;
             }
-            scan += 16;
-            match += 16;
+            scan += 8;
+            match += 8;
         }
 #else
         /* We check for insufficient lookahead only every 8th comparison;

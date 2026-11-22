@@ -803,7 +803,7 @@
      #else
        _mm_set_epi32((Int32)subValue, (Int32)subValue, (Int32)subValue, (Int32)subValue);
      #endif
-@@ -980,9 +1020,24 @@
+@@ -980,9 +1020,25 @@
        if (pb[len] == cur[len])
        {
          if (++len != lenLimit && pb[len] == cur[len])
@@ -812,26 +812,27 @@
 -              break;
 +        {
 +          ++len;
-+#ifdef __wasm_simd128__
-+          while (len + 16 <= lenLimit)
++#ifdef __wasm__
++          while (len + 8 <= lenLimit)
 +          {
-+            const v128_t va = wasm_v128_load(pb + len);
-+            const v128_t vb = wasm_v128_load(cur + len);
-+            const int32_t diff = (~wasm_i8x16_bitmask(wasm_i8x16_eq(va, vb))) & 0xFFFF;
-+            if (diff) { len += (unsigned)__builtin_ctz((unsigned)diff); goto gm_done; }
-+            len += 16;
++            UInt64 va, vb, diff;
++            memcpy(&va, pb + len, 8);
++            memcpy(&vb, cur + len, 8);
++            diff = va ^ vb;
++            if (diff) { len += (unsigned)(__builtin_ctzll(diff) >> 3); goto gm_done; }
++            len += 8;
 +          }
 +#endif
 +          while (len != lenLimit && pb[len] == cur[len])
 +            ++len;
-+#ifdef __wasm_simd128__
++#ifdef __wasm__
 +          gm_done: ;
 +#endif
 +        }
          if (maxLen < len)
          {
            maxLen = (UInt32)len;
-@@ -1046,9 +1101,22 @@
+@@ -1046,9 +1102,23 @@
        unsigned len = (len0 < len1 ? len0 : len1);
        if (pb[len] == cur[len])
        {
@@ -839,19 +840,20 @@
 -          if (pb[len] != cur[len])
 -            break;
 +        ++len;
-+#ifdef __wasm_simd128__
-+        while (len + 16 <= lenLimit)
++#ifdef __wasm__
++        while (len + 8 <= lenLimit)
 +        {
-+          const v128_t va = wasm_v128_load(pb + len);
-+          const v128_t vb = wasm_v128_load(cur + len);
-+          const int32_t diff = (~wasm_i8x16_bitmask(wasm_i8x16_eq(va, vb))) & 0xFFFF;
-+          if (diff) { len += (unsigned)__builtin_ctz((unsigned)diff); goto sk_done; }
-+          len += 16;
++          UInt64 va, vb, diff;
++          memcpy(&va, pb + len, 8);
++          memcpy(&vb, cur + len, 8);
++          diff = va ^ vb;
++          if (diff) { len += (unsigned)(__builtin_ctzll(diff) >> 3); goto sk_done; }
++          len += 8;
 +        }
 +#endif
 +        while (len != lenLimit && pb[len] == cur[len])
 +          ++len;
-+#ifdef __wasm_simd128__
++#ifdef __wasm__
 +        sk_done: ;
 +#endif
          {
@@ -952,17 +954,21 @@
  #      define W 4
 --- a/3rdparty/zlib/deflate.c
 +++ b/3rdparty/zlib/deflate.c
-@@ -50,6 +50,9 @@
+@@ -50,6 +50,13 @@
  /* @(#) $Id$ */
  
  #include "deflate.h"
++#ifdef __wasm__
++#include <stdint.h>
++#include <string.h>
++#endif
 +#ifdef __wasm_simd128__
 +#include <wasm_simd128.h>
 +#endif
  
  const char deflate_copyright[] =
     " deflate 1.3.2 Copyright 1995-2026 Jean-loup Gailly and Mark Adler ";
-@@ -189,6 +192,32 @@
+@@ -189,6 +196,32 @@
      Posf *p;
      uInt wsize = s->w_size;
  
@@ -995,28 +1001,29 @@
      n = s->hash_size;
      p = &s->head[n];
      do {
-@@ -1493,6 +1522,20 @@
+@@ -1493,6 +1526,21 @@
          scan += 2, match++;
          Assert(*scan == *match, "match[2]?");
  
-+#ifdef __wasm_simd128__
-+        /* Discpress: 16-byte SIMD128 match extension; MAX_MATCH-2 == 256 (16*16), bit-exact */
++#ifdef __wasm__
++        /* Discpress: 8-byte little-endian i64 XOR+ctz match extension; MAX_MATCH-2 == 256 (32*8), bit-exact */
 +        while (scan < strend) {
-+            v128_t va = wasm_v128_load(scan);
-+            v128_t vb = wasm_v128_load(match);
-+            unsigned mask = (unsigned)wasm_i8x16_bitmask(wasm_i8x16_eq(va, vb)) ^ 0xffffu;
-+            if (mask) {
-+                scan += __builtin_ctz(mask);
++            uint64_t va, vb, diff;
++            memcpy(&va, scan, 8);
++            memcpy(&vb, match, 8);
++            diff = va ^ vb;
++            if (diff) {
++                scan += (unsigned)(__builtin_ctzll(diff) >> 3);
 +                break;
 +            }
-+            scan += 16;
-+            match += 16;
++            scan += 8;
++            match += 8;
 +        }
 +#else
          /* We check for insufficient lookahead only every 8th comparison;
           * the 256th check will be made at strstart + 258.
           */
-@@ -1502,6 +1545,7 @@
+@@ -1502,6 +1550,7 @@
                   *++scan == *++match && *++scan == *++match &&
                   *++scan == *++match && *++scan == *++match &&
                   scan < strend);
@@ -6217,7 +6224,7 @@
  		if (compressor_list[codecnum] != CHD_CODEC_NONE)
  		{
  			m_compressor[codecnum] = chd_codec_list::new_compressor(compressor_list[codecnum], chd);
-@@ -735,58 +802,116 @@
+@@ -735,58 +802,142 @@
  //  compression for this hunk
  //-------------------------------------------------
  
@@ -6235,24 +6242,50 @@
 +	uint32_t active_mask = codecs & 0x0fu;
 +	if (probe_pcm && m_hunkbytes >= 256)
 +	{
-+		// ~200ns 64-sample PCM autocorrelation probe for DVD/raw flac gating
-+		uint64_t mag = 0, diff = 0;
-+		int32_t prev = 0;
-+		uint32_t const step = m_hunkbytes / 128; // 64 16-bit samples across the hunk
-+		for (uint32_t i = 0; i < 64; i++)
++		// ~200ns stereo consecutive-pair PCM probe (LE & BE) for DVD/raw flac gating.
++		// Samples 8 regions x 4 stereo pairs (64 16-bit samples) and requires zero-centered
++		// signed variation (rejecting ASCII text, constant fills, and 8-bit monotonic gradients).
++		uint32_t const stride = m_hunkbytes / 8;
++		bool is_pcm = false;
++		for (int be = 0; be < 2 && !is_pcm; be++)
 +		{
-+			uint32_t const off = (i * step) & ~1u;
-+			int16_t const s = int16_t(uint16_t(src[off]) | (uint16_t(src[off + 1]) << 8));
-+			int32_t const v = s;
-+			mag += uint32_t(v < 0 ? -v : v);
-+			if (i > 0)
++			uint64_t mag = 0, diff = 0;
++			uint32_t pos = 0, neg = 0, nonzero = 0, same_b = 0;
++			for (uint32_t r = 0; r < 8; r++)
 +			{
-+				int32_t const d = v - prev;
-+				diff += uint32_t(d < 0 ? -d : d);
++				uint32_t const base = (r * stride) & ~3u;
++				auto rd16 = [&](uint32_t o) -> int32_t
++				{
++					uint16_t const u = be
++						? uint16_t((uint16_t(src[o]) << 8) | uint16_t(src[o + 1]))
++						: uint16_t(uint16_t(src[o]) | (uint16_t(src[o + 1]) << 8));
++					return int32_t(int16_t(u));
++				};
++				int32_t prev_l = rd16(base);
++				int32_t prev_r = rd16(base + 2);
++				for (uint32_t k = 1; k <= 4; k++)
++				{
++					uint32_t const o = base + k * 4;
++					if (src[o] == src[o + 1]) same_b++;
++					if (src[o + 2] == src[o + 3]) same_b++;
++					int32_t const s_l = rd16(o);
++					int32_t const s_r = rd16(o + 2);
++					int32_t const dl = s_l - prev_l;
++					int32_t const dr = s_r - prev_r;
++					mag += uint32_t(s_l < 0 ? -s_l : s_l) + uint32_t(s_r < 0 ? -s_r : s_r);
++					diff += uint32_t(dl < 0 ? -dl : dl) + uint32_t(dr < 0 ? -dr : dr);
++					if (dl != 0) nonzero++;
++					if (dr != 0) nonzero++;
++					if (s_l > 64) pos++; else if (s_l < -64) neg++;
++					if (s_r > 64) pos++; else if (s_r < -64) neg++;
++					prev_l = s_l;
++					prev_r = s_r;
++				}
 +			}
-+			prev = v;
++			if (mag > 64 * 128 && nonzero >= 32 && same_b < 16 && diff * 2 < mag && pos >= 8 && neg >= 8)
++				is_pcm = true;
 +		}
-+		if (mag > 64 * 128 && diff * 2 < mag)
++		if (is_pcm)
 +		{
 +			for (int slot = 0; slot < 4; slot++)
 +				if (m_codec_types[slot] == CHD_CODEC_FLAC)
@@ -6362,7 +6395,7 @@
  	return compression;
  }
  
-@@ -847,27 +972,32 @@
+@@ -847,27 +998,32 @@
  	// reuse a hunk if we can
  	for (int scan = 0; scan < MAX_ZLIB_ALLOCS; scan++)
  	{
@@ -6403,7 +6436,7 @@
  }
  
  
-@@ -881,12 +1011,12 @@
+@@ -881,12 +1037,12 @@
  	auto *codec = reinterpret_cast<chd_zlib_allocator *>(opaque);
  
  	// find the hunk
@@ -6419,7 +6452,7 @@
  			return;
  		}
  }
-@@ -904,6 +1034,15 @@
+@@ -904,6 +1060,15 @@
  chd_zlib_compressor::chd_zlib_compressor(chd_file &chd, uint32_t hunkbytes, bool lossy)
  	: chd_compressor(chd, hunkbytes, lossy)
  {
@@ -6435,7 +6468,7 @@
  	// initialize the deflater
  	m_deflater.next_in = (Bytef *)this; // bogus, but that's ok
  	m_deflater.avail_in = 0;
-@@ -924,7 +1063,10 @@
+@@ -924,7 +1089,10 @@
  
  chd_zlib_compressor::~chd_zlib_compressor()
  {
@@ -6447,7 +6480,7 @@
  }
  
  
-@@ -934,12 +1076,24 @@
+@@ -934,12 +1102,24 @@
  
  uint32_t chd_zlib_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
@@ -6473,7 +6506,7 @@
  	m_deflater.total_out = 0;
  	int zerr = deflateReset(&m_deflater);
  	if (zerr != Z_OK)
-@@ -949,7 +1103,7 @@
+@@ -949,7 +1129,7 @@
  	zerr = deflate(&m_deflater, Z_FINISH);
  
  	// if we ended up with more data than we started with, return an error
@@ -6482,7 +6515,7 @@
  		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  
  	// otherwise, return the length
-@@ -1059,14 +1213,14 @@
+@@ -1059,14 +1239,14 @@
  
  uint32_t chd_zstd_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
@@ -6500,7 +6533,7 @@
  	while (output.pos < output.size)
  	{
  		result = ZSTD_compressStream2(m_stream, &output, &input, ZSTD_e_end);
-@@ -1192,27 +1346,32 @@
+@@ -1192,27 +1372,32 @@
  	// reuse a hunk if we can
  	for (int scan = 0; scan < MAX_LZMA_ALLOCS; scan++)
  	{
@@ -6541,7 +6574,7 @@
  }
  
  
-@@ -1229,12 +1388,12 @@
+@@ -1229,12 +1414,12 @@
  	auto *const codec = static_cast<chd_lzma_allocator *>(const_cast<ISzAlloc *>(p));
  
  	// find the hunk
@@ -6557,7 +6590,7 @@
  			return;
  		}
  }
-@@ -1252,8 +1411,17 @@
+@@ -1252,8 +1437,17 @@
  chd_lzma_compressor::chd_lzma_compressor(chd_file &chd, uint32_t hunkbytes, bool lossy)
  	: chd_compressor(chd, hunkbytes, lossy)
  {
@@ -6577,7 +6610,7 @@
  }
  
  
-@@ -1263,6 +1431,8 @@
+@@ -1263,6 +1457,8 @@
  
  chd_lzma_compressor::~chd_lzma_compressor()
  {
@@ -6586,7 +6619,7 @@
  }
  
  
-@@ -1272,34 +1442,12 @@
+@@ -1272,34 +1468,12 @@
  
  uint32_t chd_lzma_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
@@ -6626,7 +6659,7 @@
  }
  
  
-@@ -1308,10 +1456,19 @@
+@@ -1308,10 +1482,19 @@
  //  codec
  //-------------------------------------------------
  
@@ -6648,7 +6681,7 @@
  	props.reduceSize = hunkbytes;
  	LzmaEncProps_Normalize(&props);
  }
-@@ -1419,7 +1576,7 @@
+@@ -1419,7 +1602,7 @@
  uint32_t chd_huffman_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
  	uint32_t complen;
@@ -6657,7 +6690,7 @@
  		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  	return complen;
  }
-@@ -1474,6 +1631,8 @@
+@@ -1474,6 +1657,8 @@
  	m_encoder.set_num_channels(2);
  	m_encoder.set_block_size(blocksize(hunkbytes));
  	m_encoder.set_strip_metadata(true);
@@ -6666,7 +6699,7 @@
  }
  
  
-@@ -1483,32 +1642,47 @@
+@@ -1483,32 +1668,47 @@
  
  uint32_t chd_flac_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
@@ -6727,7 +6760,7 @@
  	}
  	return complen + 1;
  }
-@@ -1555,6 +1729,9 @@
+@@ -1555,6 +1755,9 @@
  
  void chd_flac_decompressor::decompress(const uint8_t *src, uint32_t complen, uint8_t *dest, uint32_t destlen)
  {
@@ -6737,7 +6770,7 @@
  	// determine the endianness
  	bool swap_endian;
  	if (src[0] == 'L')
-@@ -1602,6 +1779,16 @@
+@@ -1602,6 +1805,16 @@
  	m_encoder.set_num_channels(2);
  	m_encoder.set_block_size(blocksize((hunkbytes / cdrom_file::FRAME_SIZE) * cdrom_file::MAX_SECTOR_DATA));
  	m_encoder.set_strip_metadata(true);
@@ -6754,7 +6787,7 @@
  
  	// initialize the deflater
  	m_deflater.next_in = (Bytef *)this; // bogus, but that's ok
-@@ -1623,7 +1810,10 @@
+@@ -1623,7 +1836,10 @@
  
  chd_cd_flac_compressor::~chd_cd_flac_compressor()
  {
@@ -6766,7 +6799,7 @@
  }
  
  
-@@ -1642,16 +1832,30 @@
+@@ -1642,16 +1858,30 @@
  		memcpy(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA + framenum * cdrom_file::MAX_SUBCODE_DATA], &src[framenum * cdrom_file::FRAME_SIZE + cdrom_file::MAX_SECTOR_DATA], cdrom_file::MAX_SUBCODE_DATA);
  	}
  
@@ -6800,7 +6833,7 @@
  	m_deflater.next_in = const_cast<Bytef *>(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA]);
  	m_deflater.avail_in = frames * cdrom_file::MAX_SUBCODE_DATA;
  	m_deflater.total_in = 0;
-@@ -1771,6 +1975,8 @@
+@@ -1771,6 +2001,8 @@
  void chd_cd_flac_decompressor::decompress(const uint8_t *src, uint32_t complen, uint8_t *dest, uint32_t destlen)
  {
  	// reset and decode
@@ -6809,7 +6842,7 @@
  	uint32_t frames = destlen / cdrom_file::FRAME_SIZE;
  	if (!m_decoder.reset(44100, 2, chd_cd_flac_compressor::blocksize(frames * cdrom_file::MAX_SECTOR_DATA), src, complen))
  		throw std::error_condition(chd_file::error::DECOMPRESSION_ERROR);
-@@ -1780,6 +1986,8 @@
+@@ -1780,6 +2012,8 @@
  
  	// inflate the subcode data
  	uint32_t offset = m_decoder.finish();
@@ -6818,7 +6851,7 @@
  	m_inflater.next_in = const_cast<Bytef *>(src + offset);
  	m_inflater.avail_in = complen - offset;
  	m_inflater.total_in = 0;
-@@ -1950,8 +2158,8 @@
+@@ -1950,8 +2184,8 @@
  
  void chd_avhuff_decompressor::decompress(const uint8_t *src, uint32_t complen, uint8_t *dest, uint32_t destlen)
  {

@@ -1022,19 +1022,20 @@ UInt32 * GetMatchesSpec1(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const Byt
         if (++len != lenLimit && pb[len] == cur[len])
         {
           ++len;
-#ifdef __wasm_simd128__
-          while (len + 16 <= lenLimit)
+#ifdef __wasm__
+          while (len + 8 <= lenLimit)
           {
-            const v128_t va = wasm_v128_load(pb + len);
-            const v128_t vb = wasm_v128_load(cur + len);
-            const int32_t diff = (~wasm_i8x16_bitmask(wasm_i8x16_eq(va, vb))) & 0xFFFF;
-            if (diff) { len += (unsigned)__builtin_ctz((unsigned)diff); goto gm_done; }
-            len += 16;
+            UInt64 va, vb, diff;
+            memcpy(&va, pb + len, 8);
+            memcpy(&vb, cur + len, 8);
+            diff = va ^ vb;
+            if (diff) { len += (unsigned)(__builtin_ctzll(diff) >> 3); goto gm_done; }
+            len += 8;
           }
 #endif
           while (len != lenLimit && pb[len] == cur[len])
             ++len;
-#ifdef __wasm_simd128__
+#ifdef __wasm__
           gm_done: ;
 #endif
         }
@@ -1102,19 +1103,20 @@ static void SkipMatchesSpec(UInt32 lenLimit, UInt32 curMatch, UInt32 pos, const 
       if (pb[len] == cur[len])
       {
         ++len;
-#ifdef __wasm_simd128__
-        while (len + 16 <= lenLimit)
+#ifdef __wasm__
+        while (len + 8 <= lenLimit)
         {
-          const v128_t va = wasm_v128_load(pb + len);
-          const v128_t vb = wasm_v128_load(cur + len);
-          const int32_t diff = (~wasm_i8x16_bitmask(wasm_i8x16_eq(va, vb))) & 0xFFFF;
-          if (diff) { len += (unsigned)__builtin_ctz((unsigned)diff); goto sk_done; }
-          len += 16;
+          UInt64 va, vb, diff;
+          memcpy(&va, pb + len, 8);
+          memcpy(&vb, cur + len, 8);
+          diff = va ^ vb;
+          if (diff) { len += (unsigned)(__builtin_ctzll(diff) >> 3); goto sk_done; }
+          len += 8;
         }
 #endif
         while (len != lenLimit && pb[len] == cur[len])
           ++len;
-#ifdef __wasm_simd128__
+#ifdef __wasm__
         sk_done: ;
 #endif
         {
