@@ -204,3 +204,117 @@ test('extract and verify go on when helpers fail: the others, or the job worker,
     await expect(card.locator('pre.logtext')).toContainText('A helper thread stopped');
   }
 });
+
+test('SIMD and non-SIMD builds produce byte-identical CD-audio FLAC CHDs', async ({ app, page }) => {
+  const fx = fixture('music-cd');
+  await app.open({ settings: { threads: 2, rename: false } });
+  await expect(page.locator('#wasm-simd[data-used]')).toHaveCount(1);
+  await app.add(fx.add);
+  const simdCard = app.jobs().first();
+  await app.settled(simdCard);
+  await app.run(simdCard);
+  const [simdOut] = await app.downloads(simdCard);
+
+  await app.open({ noSimd: true, settings: { threads: 2, rename: false } });
+  await expect(page.locator('#wasm-base[data-used]')).toHaveCount(1);
+  await app.add(fx.add);
+  const baseCard = app.jobs().first();
+  await app.settled(baseCard);
+  await app.run(baseCard);
+  const [baseOut] = await app.downloads(baseCard);
+
+  expect(sha1File(simdOut.path), 'SIMD vs non-SIMD CD-audio FLAC output').toBe(sha1File(baseOut.path));
+  if (nativeChdman()) {
+    const eng = engineReference('createcd', 'piano.cue', []);
+    if (eng) expect(sha1File(simdOut.path), 'matches native engine').toBe(sha1File(eng));
+    if (sameVersion() && process.platform === 'linux') {
+      expect(sha1File(simdOut.path), 'matches upstream chdman 0.289').toBe(sha1File(reference('createcd', 'piano.cue')));
+    }
+  }
+});
+
+function installWorkerTracker(page) {
+  return page.addInitScript(() => {
+    const W = window.Worker;
+    const stats = { helperInits: 0, helperAttaches: 0, runCount: 0, jobWorkers: 0, jobWorkersAlive: 0, helperWorkersAlive: 0 };
+    window.__w = stats;
+    window.Worker = class extends W {
+      constructor(...a) {
+        super(...a);
+        this.__role = null;
+        this.__dead = false;
+        const origPost = this.postMessage.bind(this);
+        this.postMessage = (msg, transfer) => {
+          if (msg && msg.type === 'helper') {
+            stats.helperInits++;
+            if (!this.__role) { this.__role = 'helper'; stats.jobWorkers++; stats.jobWorkersAlive++; stats.helperWorkersAlive++; }
+          } else if (msg && msg.type === 'attach') {
+            stats.helperAttaches++;
+          } else if (msg && msg.type === 'run') {
+            stats.runCount++;
+            if (!this.__role) { this.__role = 'coord'; stats.jobWorkers++; stats.jobWorkersAlive++; }
+          }
+          return origPost(msg, transfer);
+        };
+      }
+      terminate() {
+        if (!this.__dead && this.__role) {
+          this.__dead = true;
+          stats.jobWorkersAlive--;
+          if (this.__role === 'helper') stats.helperWorkersAlive--;
+        }
+        return super.terminate();
+      }
+    };
+  });
+}
+
+test('warm worker pool reuses coordinator and helper workers across sequential jobs with byte-identical output', async ({ app, page }) => {
+  await installWorkerTracker(page);
+  await app.open({ settings: { threads: 2, rename: false }, debug: { poolIdleMs: 60_000 } });
+
+  await app.add(fixture('ps1-single').add);
+  const first = app.job('twine');
+  await app.settled(first);
+  await app.run(first);
+  const [out1] = await app.downloads(first);
+  if (nativeChdman() && sameVersion()) expect(sha1File(out1.path)).toBe(sha1File(reference('createcd', 'twine.cue')));
+
+  // wait briefly for detach/park handshake on helpers
+  await page.waitForTimeout(100);
+  const afterFirst = await page.evaluate(() => ({ ...window.__w }));
+  expect(afterFirst.helperInits).toBeGreaterThanOrEqual(2);
+  expect(afterFirst.jobWorkersAlive).toBeGreaterThanOrEqual(3);
+
+  await app.add(fixture('ps2-dvd').add);
+  const second = app.job('agent');
+  await app.settled(second);
+  await app.run(second);
+  const [out2] = await app.downloads(second);
+  if (nativeChdman() && sameVersion()) expect(sha1File(out2.path)).toBe(sha1File(reference('createdvd', 'agent.iso')));
+
+  const afterSecond = await page.evaluate(() => ({ ...window.__w }));
+  expect(afterSecond.runCount).toBe(2);
+  expect(afterSecond.helperAttaches).toBeGreaterThanOrEqual(2);
+  expect(afterSecond.helperInits).toBe(afterFirst.helperInits);
+  expect(afterSecond.jobWorkers).toBe(afterFirst.jobWorkers);
+});
+
+test('warm worker pool reaps idle workers after timeout and evicts oversized workers immediately', async ({ app, page }) => {
+  // 1) Idle reap after poolIdleMs
+  await installWorkerTracker(page);
+  await app.open({ settings: { threads: 2, rename: false }, debug: { poolIdleMs: 250 } });
+  await app.add(fixture('ps1-single').add);
+  const c1 = app.job('twine');
+  await app.settled(c1);
+  await app.run(c1);
+  await expect.poll(() => page.evaluate(() => window.__w.jobWorkersAlive), { timeout: 5_000 }).toBe(0);
+
+  // 2) Immediate memory-cap eviction (poolMemCap: 1 byte, long 60s idle timer)
+  await app.open({ settings: { threads: 2, rename: false }, debug: { poolIdleMs: 60_000, poolMemCap: 1 } });
+  await app.add(fixture('ps1-single').add);
+  const c2 = app.job('twine');
+  await app.settled(c2);
+  await app.run(c2);
+  await expect.poll(() => page.evaluate(() => window.__w.jobWorkersAlive), { timeout: 3_000 }).toBe(0);
+});
