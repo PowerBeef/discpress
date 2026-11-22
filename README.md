@@ -39,7 +39,7 @@
 </p>
 
 > [!TIP]
-> **New in 1.9: hardened from the engine up.** Smaller single-file download, ~30 MB less memory per worker, protection against crafted or damaged CHDs and disc descriptors, better emulator warnings (PC Engine CD, jgenesis, Flycast, PCSX ReARMed), and a steadier offline web app. [See what's new](https://github.com/PowerBeef/discpress/releases/latest).
+> **New in 2.0: complete reliability, speed, and format overhaul.** Target Environment selector (Universal, Fast Universal, ES-DE/PC, Handheld, MiSTer FPGA, Legacy), crash-resumable OPFS checkpoints, 12-check CHD Library Health Auditor with 1-click fixes, reversible Tier X layout repairs (`--sessions`, `--trailer`, `--stripmeta`), streaming `.7z` archives, Alcohol 120% `.mds`/`.mdf`, DiscJuggler `.cdi`, audio track cues (FLAC, extended WAV/RF64, AIFF, Ogg Vorbis, MP3, GOG `.ins`), `--block=2048` CSO/ZSO output for real PSP/Vita/PS2 OPL hardware, and scrubbed Original Xbox XISOs (`.xiso.iso`) for `xemu`. [See what's new](https://github.com/PowerBeef/discpress/releases/latest).
 
 <img src="docs/brand/divider.png" width="100%" alt="">
 
@@ -52,8 +52,9 @@ The standard tool for making CHDs is **chdman**, a command-line program from the
 - makes **the very same CHD files** as chdman 0.289;
 - **names each game** after its official title, from the Redump database;
 - **checks your dumps** against Redump and your DAT files;
-- **opens the files your games come in**: cue sheets, `.gdi`, `.iso`, `.zip`, ECM, CSO, `EBOOT.PBP` and more;
-- **warns you** before you make a CHD your emulator can't play.
+- **opens the files your games come in**: cue sheets (including `.flac`/`.wav`/`.aiff`/`.ogg`/`.mp3` audio tracks and GOG `.ins`), `.gdi`, `.iso`, `.zip`, `.7z`, Alcohol `.mds`/`.mdf`, DiscJuggler `.cdi`, CloneCD `.ccd`/`.sub`, ECM, CSO/ZSO, `EBOOT.PBP`, and more;
+- **ships hardware-ready outputs** when CHD isn't supported: `--block=2048` CSO/ZSO for real PSP, PS Vita Adrenaline, and PS2 OPL hardware, and scrubbed Original Xbox XISOs (`.xiso.iso`) for `xemu`;
+- **warns you and fixes broken CHDs** before you hit emulator headaches (Target profiles, reversible Tier X layout repairs, and a 12-check CHD Library Health Auditor).
 
 There is nothing to install, and your files never leave your device. **Download it** as one HTML file that works anywhere, even offline, or **use it online** with nothing to download (the way to convert big games on iPhone and iPad).
 
@@ -107,9 +108,10 @@ There is nothing to install, and your files never leave your device. **Download 
 
 **Reading what you have**
 
-- **Archives and packed images are opened as they are read:** `.zip` archives (zip64 included), ECM images (`.bin.ecm`), CSO and ZSO compressed ISOs, and PlayStation `EBOOT.PBP` files made with popstation, one card per disc. Each is checked as it is unpacked.
-- **Disc images of every common kind:** cue sheets and their tracks, Dreamcast `.gdi` sets, `.iso` images (2,048- or 2,352-byte sectors), CloneCD (`.ccd` + `.img` + `.sub`), Nero (`.nrg`) and cdrdao (`.toc`). Cue sheets in odd encodings, with lower-case keywords or Windows line ends, are read correctly.
-- **Clear refusals.** Formats chdman can't take (DiscJuggler `.cdi`, Alcohol 120% `.mds`/`.mdf`, `.isz`, `.7z`, `.rar`), and discs chdman 0.289 can't convert (CD+G tracks), get a card that says why and what to do instead.
+- **Archives and packed images are opened as they are read:** `.zip` (zip64 included) and streaming `.7z` archives (LZMA/LZMA2/Deflate/BCJ/Delta), ECM images (`.bin.ecm`), CSO and ZSO compressed ISOs, Alcohol 120% v1.x (`.mds` + `.mdf`), DiscJuggler (`.cdi` v2/v3/v3.5), and PlayStation `EBOOT.PBP` files made with popstation, one card per disc. Each is checked as it is unpacked.
+- **Disc images and audio cues of every common kind:** cue sheets with `.bin` or `.flac`/extended `.wav`/`.aiff`/`.ogg`/`.mp3` tracks (plus GOG `.ins`), Dreamcast `.gdi` sets, `.iso` images (2,048- or 2,352-byte sectors), CloneCD (`.ccd` + `.img` + `.sub`, including opt-in CD+G `RW_RAW`), Nero (`.nrg`), and cdrdao (`.toc`). Cue sheets in odd encodings, with lower-case keywords or Windows line ends, are read correctly.
+- **Adjacent hardware formats:** write `--block=2048` CSO v1, CSO v2, or ZSO from PSP/PS2 ISOs or DVD CHDs for real PSP CFW, PS Vita Adrenaline, and PS2 OPL; scrub 7.28 GB Redump Original Xbox `.iso` dumps directly into `xemu`-bootable `.xiso.iso` images in seconds.
+- **Clear refusals.** Formats that still require external tools (Daemon Tools v2 `.mdx`, UltraISO `.isz`, `.rar`, encrypted PlayStation Store PBPs, PC-98 `.hdi`/`.nhd`, `.vhd`) get a card that says why and what to do instead.
 
 **Ready for your emulator** (see [below](#ready-for-your-emulator))
 
@@ -171,12 +173,11 @@ GameCube, Wii, Xbox and PS3 discs, Video CDs, DVD-Video, Blu-ray and UMD Video d
 
 | Format | Instead |
 |---|---|
-| DiscJuggler `.cdi` | Keep it: Flycast and Redream load it directly (most are multi-session discs, which chdman 0.289 can't store so they boot) |
-| Alcohol 120% `.mds`/`.mdf` | Convert it to `.cue`/`.bin` with another tool first |
+| Daemon Tools v2 `.mdx` / `.mds` v2 | Convert it to `.cue`/`.bin` or `.iso` first (Alcohol 120% v1.x `.mds`/`.mdf` is supported directly) |
 | UltraISO `.isz` | Convert it to `.iso` with UltraISO first |
-| `.7z`, `.rar` | Unpack them, or zip the files instead |
+| `.rar` (and password-encrypted `.zip`/`.7z`) | Unpack them first (standard `.zip` and `.7z` archives are supported directly) |
 | Encrypted `EBOOT.PBP` (PlayStation Store) | Use a dump of the disc |
-| A cue sheet with CD+G tracks (karaoke discs) | Keep the original files: chdman 0.289 can't store CD+G tracks |
+| GameCube / Wii `.iso` (for Dolphin RVZ) | In Dolphin, right-click the game → Convert File → RVZ |
 
 A lone `.bin` or raw `.iso` without its cue sheet works for single-track data discs: one is generated.
 

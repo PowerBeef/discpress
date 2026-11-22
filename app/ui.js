@@ -562,7 +562,33 @@ var Engine = {
       w.postMessage(Object.assign({ type: 'unzip', reqId: reqId }, opts));
     });
   },
-  // runs one chdman command; returns {promise, cancel}
+  un7z: function (opts, onProgress) {
+    var self = this;
+    return self.ready().then(function () {
+      return new Promise(function (resolve, reject) {
+        var w;
+        try { w = self.borrowCoord(); }
+        catch (e) { reject(new Error('Could not start a background worker (' + e.message + ').')); return; }
+        var reqId = ++self.unzipSeq;
+        w.onmessage = function (e) {
+          var m = e.data;
+          if (!m || m.reqId !== reqId) return;
+          if (m.type === 'un7z-progress') { onProgress && onProgress(m.done, m.total); return; }
+          if (m.type === 'un7z-done') {
+            self.returnCoord(w, 0, false);
+            if (m.error) reject(new Error(m.error));
+            else resolve(m);
+          }
+        };
+        w.onerror = function (e) {
+          w.terminate();
+          reject(new Error(e.message || 'Unpacking 7z archive failed.'));
+        };
+        self.post(w, Object.assign({ type: 'un7z', reqId: reqId }, opts));
+      });
+    });
+  },
+  // runs one chdman command (or sibling format writer); returns {promise, cancel}
   run: function (o) {
     var self = this, worker = null, helpers = [], finished = false, saving = false, rejectFn;
     var sink = o.outMode === 'stream' ? makeSink(o.outDir, {
@@ -659,12 +685,12 @@ var Engine = {
         reject(new Error(e.message || 'The background worker failed to start.'));
       };
       try {
-        self.post(worker, {
-          type: 'run', jobId: o.jobId, dirPath: o.dirPath, args: o.args, inputs: o.inputs || [],
+        self.post(worker, Object.assign({
+          type: o.workerType || 'run', jobId: o.jobId, dirPath: o.dirPath, args: o.args, inputs: o.inputs || [],
           writable: o.writable || [], slots: o.slots || 0, outMode: o.outMode || 'mem', ports: ports,
           ckpt: o.ckpt || null, resume: !!o.resume,
           debugStage: DEBUG.stage, debugSinkMax: DEBUG.sinkMax, debugStorage: DEBUG.failStorage
-        }, ports);
+        }, o.extraMsg || {}), ports);
       } catch (e) {
         cleanup(true);
         if (sink) sink.abort();
@@ -1310,7 +1336,7 @@ function fixDescriptor(kind, text) {
       if (k === 'FILE') {
         // a name with spaces or an apostrophe, not in quotes (FILE Tony's Game.bin BINARY): chdman would
         // split it into words, so its copy gets the name in double quotes
-        var uq = /^(\s+)([^"]+?)(\s+)(BINARY|MOTOROLA|WAVE|MP3|AIFF)(\s*)$/i.exec(rest);
+        var uq = /^(\s+)([^"]+?)(\s+)(BINARY|MOTOROLA|WAVE|MP3|AIFF|FLAC|OGG|OPUS|WV|APE)(\s*)$/i.exec(rest);
         if (uq && /[\s']/.test(uq[2]) && !/^'[^']*'$/.test(uq[2])) rest = uq[1] + '"' + uq[2] + '"' + uq[3] + uq[4] + uq[5];
         rest = rest.replace(/^(\s+(?:"[^"]*"|'[^']*'|\S+)\s+)(\S+)/, function (a, pre, type) { return pre + type.toUpperCase(); });
       }
@@ -1319,8 +1345,8 @@ function fixDescriptor(kind, text) {
         tracks++;
         var n = parseInt(rest, 10);
         if (!(n >= 1 && n <= 99) && !problem) problem = 'Track numbers go from 01 to 99, but this CUE file has \u201c' + ln.trim() + '\u201d.';
-        // CD+G (karaoke graphics in the subchannel): chdman 0.289 refuses the cue sheet ("Unsupported format")
-        else if (/^\s+\d+\s+CDG\b/.test(rest) && !problem) problem = 'Track ' + n + ' is a CD+G track (karaoke graphics), which chdman 0.289 can\u2019t convert.';
+        // CD+G (karaoke graphics in the subchannel): rewrite to AUDIO RW_RAW, which chdman 0.289 parses natively
+        else if (/^\s+\d+\s+CDG\b/.test(rest)) rest = rest.replace(/^(\s+\d+\s+)CDG\b/, '$1AUDIO RW_RAW');
       } else if (k === 'FLAGS') rest = rest.toUpperCase();
       else if (k === 'REM') rest = rest.replace(/^(\s+)(SESSION|PREGAP|LEAD-OUT|LEAD-IN|SINGLE-DENSITY AREA|HIGH-DENSITY AREA)\b/i, function (a, sp, w) { return sp + w.toUpperCase(); });
       else if (!/^(INDEX|PREGAP|POSTGAP)$/.test(k)) return ln;
@@ -1581,6 +1607,10 @@ function applyIdent(job, starting) {
       var pcSize = job.isoSize || (job.files[0] && job.files[0].file.size) || 0;
       job.disc = (id.detected && id.detected.udf) || pcSize > 900 * 1048576 ? 'dvd' : 'cd';
       bySystem = false;
+    } else if (id.sys === 'xbox' && job.src === 'iso') {
+      job.disc = 'dvd';
+      if (!job.outFmtEdited) job.opts.outFmt = 'xiso';
+      bySystem = true;
     } else if (pf.keep) bySystem = false;
     else {
       job.disc = pf.disc || 'cd';
@@ -1797,9 +1827,9 @@ var PROFILES = {
   vcd: { keep: true, note: 'This is a Video CD, not a game: video players don\u2019t open CHDs, so keep the original files to watch it.' },
   video: { keep: true, note: 'This is a video disc, not a game: video players don\u2019t open CHDs, so keep the original files to watch it.' },
   pc: { keep: true, hint: 'DOSBox Pure opens .zip files directly, or uncompressed CD CHDs (choose No compression). DOSBox-X, 86Box and MiSTer ao486 open compressed CD CHDs; DOSBox Staging needs .cue/.bin or .iso.' },
-  gc: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },
-  wii: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. Dolphin uses RVZ instead.' },
-  xbox: { keep: true, note: 'xemu does not load CHDs. It uses scrubbed XISO (.iso) images.' },
+  gc: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. In Dolphin, right-click the game \u2192 Convert File \u2192 RVZ.' },
+  wii: { keep: true, note: 'Emulators do not load GameCube/Wii games from CHD. In Dolphin, right-click the game \u2192 Convert File \u2192 RVZ.' },
+  xbox: { keep: true, xiso: true, note: 'xemu does not load CHDs or raw 7.28 GB Redump Xbox ISOs. Create a scrubbed XISO (.xiso.iso) below to play in xemu.' },
   xbox360: { keep: true, note: 'Xenia does not load CHDs. It uses ISO or ZAR (ZArchive) images.' },
   ps3: { keep: true, note: 'RPCS3 does not load CHDs. It uses the ISO or the game\u2019s folder.' }
 };
@@ -1823,20 +1853,54 @@ function newJob(props) {
   jobs.push(job);
   return job;
 }
-function jobInputBytes(job) { return job.files.reduce(function (s, f) { return s + f.file.size; }, 0); }
-// the size of the image a job's files hold: an ECM image's or a PBP disc's unpacked (the ECM one once
-// identification has scanned it), a compressed ISO's ISO
+function jobInputBytes(job) {
+  var seenBlobs = new Set(), sum = 0;
+  job.files.forEach(function (f) {
+    if (f.stride) {
+      if (!seenBlobs.has(f.file)) { seenBlobs.add(f.file); sum += f.file.size; }
+    } else sum += f.file.size;
+  });
+  return sum;
+}
+// the size of the image a job's files hold: an ECM/audio/strided/PBP disc's unpacked size, a compressed ISO's ISO
 function jobImageBytes(job) {
   if (job.src === 'cso' && job.isoSize) return job.isoSize;
-  return job.files.reduce(function (s, f) { return s + (f.ecm && f.imageSize ? f.imageSize : f.pbp ? f.pbp.sectors * 2352 : f.file.size); }, 0);
+  return job.files.reduce(function (s, f) {
+    if (f.stride) return s + (f.imageSize || f.stride.count * f.stride.dataSize);
+    return s + ((f.ecm || f.audio) && f.imageSize ? f.imageSize : f.pbp ? f.pbp.sectors * 2352 : f.file.size);
+  }, 0);
+}
+var AUDIO_EXT = /^(flac|aif|aiff|aifc|ogg|mp3)$/i;
+async function wavNeedsAudioStore(file) {
+  try {
+    var b = new Uint8Array(await file.slice(0, Math.min(file.size, 4096)).arrayBuffer());
+    if (b.length < 36) return true;
+    var tag = String.fromCharCode(b[0], b[1], b[2], b[3]);
+    if (tag !== 'RIFF' || String.fromCharCode(b[8], b[9], b[10], b[11]) !== 'WAVE') return true;
+    for (var pos = 12; pos + 8 <= b.length;) {
+      var id = String.fromCharCode(b[pos], b[pos + 1], b[pos + 2], b[pos + 3]);
+      var sz = le32(b, pos + 4);
+      if (id === 'fmt ' && pos + 24 <= b.length) {
+        var fmt = le16(b, pos + 8), ch = le16(b, pos + 10), rate = le32(b, pos + 12), bits = le16(b, pos + 22);
+        return !(fmt === 1 && ch === 2 && rate === 44100 && bits === 16);
+      }
+      pos += 8 + sz + (sz & 1);
+    }
+    return true;
+  } catch (e) { return false; }
 }
 // a job's file for a descriptor's reference: an ECM image stands for the file it holds (Game.bin.ecm
-// for Game.bin), and chdman reads that under the referenced name
+// for Game.bin), and audio tracks (FLAC/AIFF/OGG/MP3 or extended WAV) decode on demand via AudioStore
 function trackFile(file, path, ref) {
   var name = base(path);
-  if (!/\.ecm$/i.test(file.name || name)) return { file: file, name: name, ref: ref };
-  if (/\.ecm$/i.test(name) && !/\.ecm$/i.test(ref)) name = name.slice(0, -4);
-  return { file: file, name: name, ref: ref, ecm: true };
+  if (/\.ecm$/i.test(file.name || name)) {
+    if (/\.ecm$/i.test(name) && !/\.ecm$/i.test(ref)) name = name.slice(0, -4);
+    return { file: file, name: name, ref: ref, ecm: true };
+  }
+  var x = ext(name);
+  if (AUDIO_EXT.test(x)) return { file: file, name: name, ref: ref, audio: true };
+  if (x === 'wav') return { file: file, name: name, ref: ref, maybeWav: true };
+  return { file: file, name: name, ref: ref };
 }
 // the file a descriptor in folder `dir` names as `ref`, among candidates in order of preference: one in
 // the same folder, or in the subfolder the reference names, or picked on its own (no folder); never a
@@ -1858,7 +1922,7 @@ function pickTrack(cands, dir, ref, claimed, descDirs) {
 // the folders that hold a descriptor: their files belong to it, not to a descriptor picked on its own
 function descriptorDirs(entries) {
   var dirs = new Set();
-  entries.forEach(function (e) { if (/^(cue|gdi|toc|ccd)$/.test(ext(e.path))) dirs.add(dirOf(e.path)); });
+  entries.forEach(function (e) { if (/^(cue|gdi|toc|ccd|ins|mds)$/.test(ext(e.path))) dirs.add(dirOf(e.path)); });
   jobs.forEach(function (j) { if (j.descDir) dirs.add(j.descDir); });
   return dirs;
 }
@@ -1882,16 +1946,13 @@ function fileKind(f) { return f.ecm ? (ext(f.name) ? ext(f.name) + '.' : '') + '
 var IGNORE = /^(txt|nfo|sub|subcode|m3u|dat|md5|sfv|sha1|jpg|jpeg|png|gif|webp|pdf|url|ini|cfg|xml|json|html|htm|db|ds_store)$/;
 // disc images and archives Discpress can't read: a card says why and what to do, rather than ignoring them
 var UNSUPPORTED = {
-  cdi: 'DiscJuggler (.cdi) images can\u2019t become CHDs that emulators load: most hold two sessions, which a CHD made by chdman 0.289 can\u2019t place. Flycast and Redream load .cdi files as they are (and BigPEmu and MiSTer\u2019s Jaguar core load Jaguar CD .cdi files directly), so keep this one.',
-  mds: 'Alcohol 120% images (.mds with .mdf) can\u2019t be read here yet. Convert CD images to .cue/.bin (or DVD images to .iso) with another tool first.',
+  mdx: 'Daemon Tools v2 (.mdx) images can\u2019t be read here. Convert them to .cue/.bin or .iso first.',
   isz: 'UltraISO compressed images (.isz) can\u2019t be read here. Convert them to .iso with UltraISO first.',
   hdi: 'Anex86 PC-98 hard disk images (.hdi) have a 4,096-byte header before the disk data, so chdman createhd would misalign the disk. Use .hdi directly in Neko Project II (NP2kai / NP21/W), or strip the 4,096-byte header into a raw .img first.',
   nhd: 'T98-Next PC-98 hard disk images (.nhd) have a 512-byte header before the disk data, so chdman createhd would misalign the disk. Use .nhd directly in Neko Project II, or strip the 512-byte header into a raw .img first.',
   vhd: 'Virtual hard disk images (.vhd) carry metadata headers or footers that chdman createhd doesn\u2019t strip. Use .vhd directly in MiSTer ao486 or 86Box, or convert it to a raw .img first.',
-  '7z': '7-Zip archives can\u2019t be opened here. Extract the files from it first.',
   rar: 'RAR archives can\u2019t be opened here. Extract the files from it first.'
 };
-UNSUPPORTED.mdf = UNSUPPORTED.mds;
 
 // adds run one after another: a second pick or drop while the first still reads its files (slow
 // cloud files) would otherwise work from a list of jobs that is about to change
@@ -2067,6 +2128,194 @@ async function zipEntries(e) {
   return { entries: out, problems: problems, skipped: skipped };
 }
 
+// Streaming .7z archive unpacker via worker + LZMA SDK 23.01 (OPFS-backed, pre-seeds crcCache)
+async function un7zEntries(e) {
+  var out = [], problems = [], skipped = [];
+  var idBase = Unzip.seq;
+  try {
+    var res = await Engine.un7z({
+      blob: e.file, name: base(e.path), session: Store.session,
+      useOpfs: Store.available, memMax: UNZIP_MEM_MAX,
+      maxDicBytes: isIOS ? (128 << 20) : (256 << 20), idBase: idBase
+    }, function (done, total) {
+      setChip('chipUnzip', 'Unpacking ' + base(e.path) + ', ' + (total ? Math.floor(100 * done / total) : 100) + '%', '');
+    });
+    var list = res.entries || [];
+    Unzip.seq += list.length + 1;
+    var descStems = new Set(list.filter(function (ent) { return /\.(ccd|cue|toc|ins)$/i.test(ent.name); }).map(function (ent) { return ent.name.replace(/\.(ccd|cue|toc|ins)$/i, '').toLowerCase(); }));
+    var sess = null;
+    for (var i = 0; i < list.length; i++) {
+      var ent = list[i], nm = ent.baseName, x = ext(nm), path = e.path + '/' + ent.name;
+      var subOfDesc = (x === 'sub' || x === 'subcode') && descStems.has(ent.name.replace(/\.(sub|subcode)$/i, '').toLowerCase());
+      if (IGNORE.test(x) && !/^(dat|xml)$/.test(x) && !subOfDesc) {
+        if (ent.usedOpfs) {
+          try { if (!sess) sess = await (await Unzip.root()).getDirectoryHandle(Store.session); await sess.removeEntry(ent.id, { recursive: true }); } catch (ex) {}
+        }
+        skipped.push(nm);
+        continue;
+      }
+      var f;
+      if (ent.usedOpfs) {
+        if (!sess) sess = await (await Unzip.root()).getDirectoryHandle(Store.session);
+        var dir = await sess.getDirectoryHandle(ent.id);
+        var fh = await dir.getFileHandle(nm);
+        f = await fh.getFile();
+        f.unzipDir = ent.id;
+      } else {
+        f = new File([ent.blob], nm);
+      }
+      if (ent.crc && typeof crcCache !== 'undefined') {
+        var cm = new Map();
+        cm.set('0:' + f.size + ':', Promise.resolve(ent.crc));
+        crcCache.set(f, cm);
+      }
+      out.push({ file: f, path: path });
+    }
+  } catch (err) {
+    problems.push(err && err.message || 'This 7z archive can\u2019t be unpacked.');
+  } finally {
+    var chip = document.getElementById('chipUnzip');
+    if (chip) chip.remove();
+  }
+  return { entries: out, problems: problems, skipped: skipped };
+}
+
+// Clean-room Alcohol 120% .mds/.mdf v1.x binary descriptor parser
+async function parseMds(mdsFile, mdfFile) {
+  if (mdsFile.size < 0x58 || mdsFile.size > (4 << 20)) return { problem: 'This .mds file is damaged or not an Alcohol 120% v1 descriptor.' };
+  var buf;
+  try { buf = new Uint8Array(await mdsFile.arrayBuffer()); }
+  catch (e) { return { problem: 'This .mds file could not be read.' }; }
+  if (asc(buf, 0, 16) !== 'MEDIA DESCRIPTOR') return { problem: 'This .mds file is not an Alcohol 120% image descriptor.' };
+  var verMajor = buf[0x10];
+  if (verMajor >= 2) return { problem: 'Alcohol 120% v2 (.mds/.mdx) is not supported here. Convert it to .cue/.bin or .iso first.' };
+  if (verMajor !== 1) return { problem: 'Unsupported Alcohol 120% .mds version ' + verMajor + '.' };
+  var mediaType = le16(buf, 0x12), numSessions = le16(buf, 0x14), sessOff = le32(buf, 0x50);
+  if (!numSessions || numSessions > 99 || sessOff + numSessions * 24 > buf.length) return { problem: 'This .mds file has a damaged session table.' };
+  var isDvd = mediaType >= 0x10;
+  var tracks = [];
+  for (var s = 0; s < numSessions; s++) {
+    var so = sessOff + s * 24;
+    var numAll = buf[so + 10], tracksOff = le32(buf, so + 20);
+    if (tracksOff + numAll * 80 > buf.length) return { problem: 'This .mds file has a damaged track table.' };
+    for (var b = 0; b < numAll; b++) {
+      var to = tracksOff + b * 80;
+      var point = buf[to + 4];
+      if (point < 1 || point > 99) continue;
+      var modeB = buf[to], subB = buf[to + 1], adrCtl = buf[to + 2];
+      var extraOff = le32(buf, to + 12), secSize = le16(buf, to + 16);
+      var startLba = le32(buf, to + 36), mdfOff = le64(buf, to + 40);
+      var hasSub = subB >= 8 || secSize === 2448 || secSize === 2432 || secSize === 2144;
+      var stride = secSize || (isDvd ? 2048 : 2352);
+      var dataSize = hasSub ? (stride - 96) : stride;
+      var pregap = 0, lenSec = 0;
+      if (isDvd) {
+        lenSec = extraOff || 0;
+      } else if (extraOff > 0 && extraOff + 8 <= buf.length) {
+        pregap = le32(buf, extraOff);
+        lenSec = le32(buf, extraOff + 4);
+      }
+      var modeStr = isDvd ? 'MODE1/2048'
+        : (modeB === 0xA9 || !(adrCtl & 0x40)) ? 'AUDIO'
+        : (modeB === 0xAB || modeB === 0xAC || modeB === 0xAD || modeB === 0xEC) ? ('MODE2/' + dataSize)
+        : ('MODE1/' + dataSize);
+      tracks.push({ no: point, session: s + 1, mode: modeStr, hasSub: hasSub, stride: stride, dataSize: dataSize, pregap: pregap, length: lenSec, startLba: startLba, offset: mdfOff });
+    }
+  }
+  if (!tracks.length) return { problem: 'This .mds file lists no tracks.' };
+  // Fill missing track lengths from adjacent offsets or .mdf file size
+  if (mdfFile) {
+    for (var i = 0; i < tracks.length; i++) {
+      var tr = tracks[i];
+      var nextOff = i + 1 < tracks.length ? tracks[i + 1].offset : mdfFile.size;
+      var avail = nextOff > tr.offset ? Math.floor((nextOff - tr.offset) / tr.stride) : 0;
+      if (!tr.length || tr.length > avail) tr.length = avail;
+    }
+  }
+  return { isDvd: isDvd, sessions: numSessions, tracks: tracks };
+}
+
+// Clean-room DiscJuggler .cdi (v2.0 / v3.0 / v3.5) binary header parser
+async function parseCdi(file) {
+  if (file.size < 64) return { problem: 'This file is too small to be a DiscJuggler (.cdi) image.' };
+  var tail;
+  try { tail = new Uint8Array(await file.slice(file.size - 8, file.size).arrayBuffer()); }
+  catch (e) { return { problem: 'This .cdi file could not be read.' }; }
+  var ver = le32(tail, 0), hdrOff = le32(tail, 4);
+  if (ver !== 0x80000004 && ver !== 0x80000005 && ver !== 0x80000006) {
+    return { problem: 'This file is not a valid DiscJuggler (.cdi) image.' };
+  }
+  var hdrPos = ver === 0x80000006 ? (file.size - hdrOff) : hdrOff;
+  if (!(hdrPos >= 0 && hdrPos < file.size - 8 && (file.size - hdrPos) <= (16 << 20))) {
+    return { problem: 'This .cdi file has an invalid header offset.' };
+  }
+  var buf = new Uint8Array(await file.slice(hdrPos, file.size - 8).arrayBuffer());
+  var p = 0;
+  var sessions = le16(buf, p); p += 2;
+  if (!sessions || sessions > 99) return { problem: 'This .cdi file lists no valid sessions.' };
+  var MARK = [0, 0, 1, 0, 0, 0, 255, 255, 255, 255];
+  function isMark(pos) {
+    if (pos + 20 > buf.length) return false;
+    for (var k = 0; k < 20; k++) if (buf[pos + k] !== MARK[k % 10]) return false;
+    return true;
+  }
+  var tracks = [], dataPos = 0, trackNo = 0;
+  var secSizes = [2048, 2336, 2352, 2368, 2448];
+  var dataSizes = [2048, 2336, 2352, 2352, 2352];
+  for (var s = 0; s < sessions; s++) {
+    if (p + 2 > buf.length) return { problem: 'This .cdi file is truncated in its session table.' };
+    var ntrks = le16(buf, p); p += 2;
+    for (var t = 0; t < ntrks; t++) {
+      if (p + 24 > buf.length) return { problem: 'This .cdi file is truncated in its track table.' };
+      if (!isMark(p)) {
+        if (p + 8 <= buf.length && le32(buf, p) !== 0 && isMark(p + 8)) p += 8;
+        else {
+          var found = -1;
+          for (var scan = p; scan < Math.min(buf.length - 20, p + 128); scan++) {
+            if (isMark(scan)) { found = scan; break; }
+          }
+          if (found < 0) return { problem: 'This .cdi file has an unrecognized track marker.' };
+          p = found;
+        }
+      }
+      p += 24; // 20-byte double marker + 4 unknown
+      if (p >= buf.length) return { problem: 'This .cdi file is truncated.' };
+      var fnLen = buf[p]; p += 1 + fnLen;
+      p += 19; // 11 pad + 4 + 4
+      if (p + 4 <= buf.length && le32(buf, p) === 0x80000000) p += 8;
+      p += 2;
+      if (p + 87 > buf.length) return { problem: 'This .cdi file is truncated in track metadata.' };
+      var pregap = le32(buf, p); p += 4;
+      var length = le32(buf, p); p += 4;
+      p += 6;
+      var modeCode = le32(buf, p); p += 4;
+      p += 12;
+      var startLba = le32(buf, p); p += 4;
+      var totalLen = le32(buf, p); p += 4;
+      p += 16;
+      var secCode = le32(buf, p); p += 4;
+      p += 29;
+      if (ver !== 0x80000004) {
+        var extraFlag = p + 5 <= buf.length ? le32(buf, p + 1) : 0;
+        p += 5;
+        if (ver === 0x80000006 && extraFlag === 0xFFFFFFFF) p += 78;
+      }
+      var stride = secSizes[secCode] || 2352;
+      var dataSize = dataSizes[secCode] || 2352;
+      var modeStr = modeCode === 0 ? 'AUDIO' : modeCode === 1 ? ('MODE1/' + dataSize) : ('MODE2/' + dataSize);
+      var stored = totalLen || (pregap + length);
+      var count = length || stored;
+      var off = dataPos + (stored > count ? (stored - count) * stride : 0);
+      if (off + count * stride > file.size) return { problem: 'This .cdi file ends before track ' + (trackNo + 1) + ' finishes.' };
+      tracks.push({ no: ++trackNo, session: s + 1, mode: modeStr, modeCode: modeCode, dataSize: dataSize, stride: stride, pregap: pregap, length: count, totalLen: stored, startLba: startLba, offset: off });
+      dataPos += stored * stride;
+    }
+    p += (ver === 0x80000004 ? 12 : 13);
+  }
+  if (!tracks.length) return { problem: 'This .cdi file lists no tracks.' };
+  return { version: ver, sessions: sessions, tracks: tracks };
+}
+
 function addEntries(entries) {
   var p = addChain.then(function () { return addEntriesNow(entries); }).catch(function (e) {
     toast('Could not add files: ' + (e && e.message || e), 'err');
@@ -2075,33 +2324,34 @@ function addEntries(entries) {
   return p;
 }
 async function addEntriesNow(entries) {
-  // zips: their files join the list, unpacked if they need it (once per zip)
-  var zipCards = [], zipSkipped = [], zipSeen = 0, addedZips = [];
-  if (entries.some(function (e) { return ext(e.path) === 'zip'; })) {
+  // zips & 7z archives: their files join the list, unpacked if they need it (once per archive)
+  var zipCards = [], zipSkipped = [], zipSeen = 0, zipSeen7z = 0, addedZips = [];
+  if (entries.some(function (e) { return /^(zip|7z)$/.test(ext(e.path)); })) {
     var flat = [];
     for (var zi = 0; zi < entries.length; zi++) {
-      var ze = entries[zi];
-      if (ext(ze.path) !== 'zip') { flat.push(ze); continue; }
+      var ze = entries[zi], zext = ext(ze.path);
+      if (zext !== 'zip' && zext !== '7z') { flat.push(ze); continue; }
       var zkey = fileKey(ze.file, ze.path);
-      if (seen.has(zkey)) { zipSeen++; continue; }
+      if (seen.has(zkey)) { zipSeen++; if (zext === '7z') zipSeen7z++; continue; }
       seen.add(zkey);
       seenKeys.set(ze.file, zkey);
       addedZips.push(ze.file);
-      var zr = await zipEntries(ze);
+      var zr = zext === '7z' ? await un7zEntries(ze) : await zipEntries(ze);
       zr.entries.forEach(function (x) { x.file.fromZip = ze.file; });
       flat = flat.concat(zr.entries);
       zipSkipped = zipSkipped.concat(zr.skipped);
       if (zr.problems.length) {
         // a card for what couldn't be read; the rest goes on
-        zipCards.push(newJob({ kind: 'create', src: 'zip', title: stem(ze.path), files: [{ file: ze.file, name: base(ze.path) }], disc: 'cd', state: 'error', invalid: true,
-          errorText: (zr.entries.length ? plural(zr.problems.length, 'file') + ' in this zip can\u2019t be converted. ' : '') + zr.problems.join(' ') }));
+        zipCards.push(newJob({ kind: 'create', src: zext, title: stem(ze.path), files: [{ file: ze.file, name: base(ze.path) }], disc: 'cd', state: 'error', invalid: true,
+          errorText: (zr.entries.length ? plural(zr.problems.length, 'file') + ' in this ' + (zext === '7z' ? '7z archive' : 'zip') + ' can\u2019t be converted. ' : '') + zr.problems.join(' ') }));
       }
     }
     entries = flat;
     if (!entries.length && !zipCards.length) {
       addedZips.forEach(forgetFile);
-      if (zipSeen && !zipSkipped.length) toast(zipSeen > 1 ? 'Those zips are already in the list.' : 'That zip is already in the list.');
-      else toast('Nothing to convert in ' + plural(zipSkipped.length, 'file') + ' of the zip.', 'err');
+      var seenWord = zipSeen7z ? (zipSeen > 1 ? 'archives' : 'archive') : (zipSeen > 1 ? 'zips' : 'zip');
+      if (zipSeen && !zipSkipped.length) toast((zipSeen > 1 ? 'Those ' : 'That ') + seenWord + (zipSeen > 1 ? ' are' : ' is') + ' already in the list.');
+      else toast('Nothing to convert in ' + plural(zipSkipped.length, 'file') + ' of the ' + (zipSeen7z ? 'archive' : 'zip') + '.', 'err');
       return;
     }
   }
@@ -2151,28 +2401,52 @@ async function addEntriesNow(entries) {
   var created = zipCards.slice(), ignored = junk.slice();
   var claimed = new Set(), descDirs = descriptorDirs(fresh.concat(looseFiles)), freshByName = nameIndex(fresh);
 
-  // 1) new files may complete jobs that were waiting for missing tracks
-  jobs.forEach(function (job) {
-    if (!job.missing.length || job.state !== 'blocked') return;
-    job.missing = job.missing.filter(function (ref) {
+  // 1) new files may complete jobs that were waiting for missing tracks (or .mdf for .mds)
+  for (var ji = 0; ji < jobs.length; ji++) {
+    var job = jobs[ji];
+    if (!job.missing.length || job.state !== 'blocked') continue;
+    var still = [];
+    for (var mi = 0; mi < job.missing.length; mi++) {
+      var ref = job.missing[mi];
       var want = nameKey(base(ref));
-      // (the file itself first, then an ECM image of it)
       var cands = (freshByName.get(want) || []).concat(freshByName.get(want + '.ecm') || []);
       var hit = pickTrack(cands, job.descDir || '', ref, claimed, descDirs);
-      if (!hit) return true;
+      if (!hit) { still.push(ref); continue; }
       claimed.add(hit);
-      job.files.push(trackFile(hit.file, hit.path, ref));
-      return false;
-    });
-    if (!job.missing.length) finalizeDescriptorJob(job);
-  });
+      if (job.mdsPending) {
+        await completeMdsJob(job, hit.file, base(hit.path));
+      } else {
+        var tf = trackFile(hit.file, hit.path, ref);
+        if (tf.maybeWav) { if (await wavNeedsAudioStore(tf.file)) tf.audio = true; delete tf.maybeWav; }
+        job.files.push(tf);
+      }
+    }
+    job.missing = still;
+    if (!job.missing.length && !job.invalid) finalizeDescriptorJob(job);
+  }
 
-  // 2) descriptor files (.cue/.gdi/.toc, and CloneCD .ccd) claim their tracks
+  // 2) descriptor files (.cue/.gdi/.toc/.ins, CloneCD .ccd, Alcohol .mds) claim their tracks
   var pool = looseFiles.concat(fresh), poolByName = nameIndex(pool);
-  var descs = fresh.filter(function (e) { return /^(cue|gdi|toc|ccd)$/.test(ext(e.path)); });
+  var descs = fresh.filter(function (e) { return /^(cue|gdi|toc|ccd|ins|mds)$/.test(ext(e.path)); });
   for (var i = 0; i < descs.length; i++) {
     if (i > 0 && i % 40 === 0) await yieldMain();
-    var d = descs[i];
+    var d = descs[i], dx = ext(d.path);
+    if (dx === 'mds') {
+      var mStem = stem(d.path).toLowerCase();
+      var hasMdf = pool.some(function (o) { return ext(o.path) === 'mdf' && stem(o.path).toLowerCase() === mStem; });
+      // ImgBurn DVD-9 layer-break sidecar (<stem>.mds next to <stem>.iso, no <stem>.mdf): skip cleanly
+      if (!hasMdf && d.file.size <= 65536 &&
+          (fresh.some(function (o) { return ext(o.path) === 'iso' && stem(o.path).toLowerCase() === mStem; }) ||
+           jobs.some(function (o) { return o.src === 'iso' && o.title.toLowerCase() === mStem; }))) {
+        claimed.add(d);
+        ignored.push(base(d.path));
+        continue;
+      }
+      claimed.add(d);
+      var mjob = await mdsJob(d, poolByName, claimed, descDirs);
+      if (mjob) created.push(mjob);
+      continue;
+    }
     claimed.add(d);
     var job = await descriptorJob(d, poolByName, claimed, descDirs);
     if (job) created.push(job);
@@ -2246,6 +2520,11 @@ async function addEntriesNow(entries) {
       }
     } else if (x === 'nrg') {
       job2 = newJob({ kind: 'create', src: 'nrg', title: t, files: [{ file: file, name: name }], disc: 'cd' });
+    } else if (x === 'cdi') {
+      job2 = await cdiJob(e);
+    } else if (x === 'mdf') {
+      job2 = newJob({ kind: 'create', src: 'mdf', title: t, files: [{ file: file, name: name }], disc: 'cd', state: 'blocked', missing: [t + '.mds'], descName: t + '.mds', descDir: dirOf(e.path) });
+      job2.warnings.push('Add the matching ' + t + '.mds file to read this Alcohol 120% .mdf image.');
     } else if (x === 'avi') {
       job2 = newJob({ kind: 'create', src: 'avi', title: t, files: [{ file: file, name: name }], disc: 'ld' });
     } else if (/^(bin|img|ima|hdd|hd|raw)$/.test(x)) {
@@ -2271,16 +2550,6 @@ async function addEntriesNow(entries) {
       looseSbi.push(e); // paired with its game below (an .lsd: the same data, DuckStation's other format)
       continue;
     } else if (UNSUPPORTED[x]) {
-      // an Alcohol 120% image is one card, for its .mds (its .mdf beside it says the same)
-      if (x === 'mdf' && fresh.some(function (o) { return ext(o.path) === 'mds' && stem(o.path).toLowerCase() === t.toLowerCase(); })) continue;
-      // an ImgBurn DVD-9 layer-break sidecar (<stem>.mds next to <stem>.iso, with no <stem>.mdf): PCSX2 reads DVD-9 directly from the ISO
-      if (x === 'mds' && file.size <= 65536 &&
-          !fresh.concat(looseFiles).some(function (o) { return ext(o.path) === 'mdf' && stem(o.path).toLowerCase() === t.toLowerCase(); }) &&
-          (fresh.some(function (o) { return ext(o.path) === 'iso' && stem(o.path).toLowerCase() === t.toLowerCase(); }) ||
-           jobs.some(function (o) { return o.src === 'iso' && o.title.toLowerCase() === t.toLowerCase(); }))) {
-        ignored.push(name);
-        continue;
-      }
       job2 = newJob({ kind: 'create', src: x, title: t, files: [{ file: file, name: name }], disc: 'cd', invalid: true, state: 'error', errorText: UNSUPPORTED[x] });
     } else if (IGNORE.test(x) || name.charAt(0) === '.') {
       ignored.push(name);
@@ -2381,22 +2650,152 @@ function sbiJob(e, list) {
   return (same.length ? same : cands)[0] || null;
 }
 
+// Alcohol 120% .mds + .mdf v1.x job builder (DVD direct pass-through; CD via StrideSliceStore + synthetic cue)
+async function completeMdsJob(job, mdfFile, mdfName) {
+  var parsed = await parseMds(job.descFile, mdfFile);
+  job.mdsPending = null;
+  if (parsed.problem) {
+    job.invalid = true; job.state = 'error'; job.errorText = parsed.problem;
+    return;
+  }
+  job.fromMds = true;
+  if (parsed.isDvd) {
+    var tr0 = parsed.tracks[0];
+    var cnt = tr0.length || Math.floor((mdfFile.size - tr0.offset) / tr0.stride);
+    job.src = 'iso';
+    job.disc = 'dvd';
+    job.choices = ['dvd', 'cd'];
+    job.descName = '';
+    job.descText = '';
+    job.descFile = null;
+    if (tr0.offset === 0 && tr0.stride === 2048) {
+      job.files = [{ name: mdfName, file: mdfFile }];
+    } else {
+      job.files = [{ name: stem(mdfName) + '.iso', file: mdfFile, stride: { offset: tr0.offset, count: cnt, dataSize: 2048, stride: tr0.stride }, imageSize: cnt * 2048 }];
+    }
+    return;
+  }
+  var lines = [], tfiles = [], lastSess = 0, subTrack = null;
+  parsed.tracks.forEach(function (tr, idx) {
+    if (parsed.sessions > 1 && tr.session !== lastSess) {
+      lines.push('REM SESSION ' + (tr.session < 10 ? '0' : '') + tr.session);
+      lastSess = tr.session;
+    }
+    var tn = ('0' + (idx + 1)).slice(-2), vname = 'track' + tn + '.bin';
+    lines.push('FILE "' + vname + '" BINARY');
+    lines.push('  TRACK ' + tn + ' ' + tr.mode);
+    if (idx > 0 && tr.pregap > 0) lines.push('    PREGAP ' + cueMsf(tr.pregap));
+    lines.push('    INDEX 01 00:00:00');
+    tfiles.push({
+      name: vname, ref: vname, file: mdfFile,
+      stride: { offset: tr.offset, count: tr.length, dataSize: tr.dataSize, stride: tr.stride },
+      imageSize: tr.length * tr.dataSize
+    });
+    if (!subTrack && tr.hasSub && tr.stride >= tr.dataSize + 96) subTrack = tr;
+  });
+  job.src = 'cue';
+  job.disc = 'cd';
+  job.descName = job.title + '.cue';
+  job.descText = lines.join('\n') + '\n';
+  job.descDirty = true;
+  job.files = tfiles;
+  if (subTrack) job.mdfSub = { file: mdfFile, offset: subTrack.offset, count: subTrack.length, dataSize: subTrack.dataSize, stride: subTrack.stride };
+}
+async function mdsJob(d, index, claimed, descDirs) {
+  var dir = dirOf(d.path), t = stem(d.path), mdfName = t + '.mdf';
+  var mdfHit = pickTrack((index.get(nameKey(mdfName)) || []).filter(function (e) { return e !== d; }), dir, mdfName, claimed, descDirs);
+  if (!mdfHit) {
+    // steal from a waiting lone .mdf job
+    var mdfJob = jobs.find(function (o) { return o.src === 'mdf' && o.state === 'blocked' && nameKey(o.files[0] && o.files[0].name) === nameKey(mdfName); });
+    if (mdfJob) { mdfHit = { file: mdfJob.files[0].file, path: mdfJob.files[0].path || mdfName, fromJob: mdfJob }; }
+  }
+  if (mdfHit) {
+    if (mdfHit.fromJob) removeJob(mdfHit.fromJob, true, true);
+    else claimed.add(mdfHit);
+  }
+  var parsed = await parseMds(d.file, mdfHit ? mdfHit.file : null);
+  if (parsed.problem) {
+    return newJob({ kind: 'create', src: 'mds', title: t, descFile: d.file, descName: base(d.path), descText: '', fromMds: true, files: [{ file: d.file, name: base(d.path) }], disc: 'cd', invalid: true, state: 'error', errorText: parsed.problem });
+  }
+  var job = newJob({ kind: 'create', src: 'cue', title: t, descFile: d.file, descName: base(d.path), descDir: dir, files: [], disc: parsed.isDvd ? 'dvd' : 'cd', fromMds: true });
+  if (!mdfHit) {
+    job.mdsPending = true;
+    job.missing = [mdfName];
+    job.state = 'blocked';
+    return job;
+  }
+  await completeMdsJob(job, mdfHit.file, base(mdfHit.path));
+  return job;
+}
+
+// DiscJuggler .cdi job builder (1-session -> CHD; multi-session -> Keep .cdi guidance + .cue/.bin extract + optional Flycast 2.8+ MIL-CD)
+async function cdiJob(e) {
+  var file = e.file, name = base(e.path), t = stem(e.path);
+  var parsed = await parseCdi(file);
+  if (parsed.problem) {
+    return newJob({ kind: 'create', src: 'cdi', title: t, files: [{ file: file, name: name }], disc: 'cd', invalid: true, state: 'error', errorText: parsed.problem });
+  }
+  var lines = [], tfiles = [], lastSess = 0;
+  parsed.tracks.forEach(function (tr, idx) {
+    if (parsed.sessions > 1 && tr.session !== lastSess) {
+      lines.push('REM SESSION ' + (tr.session < 10 ? '0' : '') + tr.session);
+      lastSess = tr.session;
+    }
+    var tn = ('0' + (idx + 1)).slice(-2), vname = t + ' (Track ' + tn + ').bin';
+    lines.push('FILE "' + vname + '" BINARY');
+    lines.push('  TRACK ' + tn + ' ' + tr.mode);
+    if (idx > 0 && tr.pregap > 0) lines.push('    PREGAP ' + cueMsf(tr.pregap));
+    lines.push('    INDEX 01 00:00:00');
+    tfiles.push({
+      name: vname, ref: vname, file: file,
+      stride: { offset: tr.offset, count: tr.length, dataSize: tr.dataSize, stride: tr.stride },
+      imageSize: tr.length * tr.dataSize
+    });
+  });
+  var multi = parsed.sessions > 1;
+  var flycastOk = false;
+  if (parsed.sessions === 2 && parsed.tracks.length >= 2) {
+    var tLast = parsed.tracks[parsed.tracks.length - 1], tPrev = parsed.tracks[parsed.tracks.length - 2];
+    if (tPrev.modeCode === 0 && tLast.modeCode !== 0 && tLast.session === 2) {
+      var s1Frames = parsed.tracks.filter(function (x) { return x.session === 1; }).reduce(function (a, x) { return a + x.totalLen; }, 0);
+      var wantLba = s1Frames + 11400 - Math.min(tLast.pregap, 150);
+      if (tLast.startLba < 40000 && Math.abs(tLast.startLba - wantLba) <= 450) flycastOk = true;
+    }
+  }
+  var job = newJob({
+    kind: 'create', src: 'cue', fromCdi: true, cdiMulti: multi, cdiFlycastOk: flycastOk, cdiParsed: parsed,
+    title: t, disc: 'cd', descName: t + '.cue', descText: lines.join('\n') + '\n', descDirty: true, files: tfiles
+  });
+  if (multi) {
+    job.opts.outFmt = 'cdi-extract';
+    job.warnings.push('This DiscJuggler (.cdi) image has ' + parsed.sessions + ' sessions. Flycast and Redream load .cdi files directly, so keeping the original .cdi is recommended; you can extract its tracks to .cue + .bin below' +
+      (flycastOk ? ', or switch to Create CHD (Flycast 2.8+ Tier X).' : '.'));
+  }
+  return job;
+}
+
 // index: the files to take tracks from, by name (nameIndex)
 async function descriptorJob(d, index, claimed, descDirs) {
   var kind = ext(d.path), dec = null;
   try { dec = decodeText(new Uint8Array(await d.file.slice(0, 1 << 20).arrayBuffer())); } catch (e) { /* unreadable */ }
   // not a text file, e.g. a drive's raw table of contents that some dumping tools save as .toc: not a job
   if (dec && (d.file.size > 1 << 20 || dec.text.indexOf('\0') >= 0)) return null;
+  // GOG .ins files are CUE sheets only when they contain FILE and TRACK lines (ignore InstallShield .ins)
+  var isIns = kind === 'ins';
+  if (isIns) {
+    if (!dec || !(/^\s*FILE\s+/im.test(dec.text) && /^\s*TRACK\s+/im.test(dec.text))) return null;
+    kind = 'cue';
+  }
   var fix = !dec ? { text: '', changed: false, problem: 'This file could not be read.' } : kind === 'ccd' ? ccdToCue(dec.text, stem(d.path) + '.img') : fixDescriptor(kind, dec.text);
   var ccd = kind === 'ccd';
   if (ccd) kind = 'cue'; // CloneCD: chdman gets a cue sheet for the .img instead
   var text = fix.text, refs = parseRefs(kind, text);
-  var job = newJob({ kind: 'create', src: kind, title: stem(d.path), disc: kind === 'gdi' ? 'gdrom' : 'cd', descFile: d.file, descName: ccd ? stem(d.path) + '.cue' : base(d.path), descText: text, descDirty: !!dec && (dec.recoded || fix.changed), files: [] });
+  var job = newJob({ kind: 'create', src: kind, title: stem(d.path), disc: kind === 'gdi' ? 'gdrom' : 'cd', descFile: d.file, descName: (ccd || isIns) ? stem(d.path) + '.cue' : base(d.path), descText: text, descDirty: isIns || (!!dec && (dec.recoded || fix.changed)), files: [] });
   var dir = job.descDir = dirOf(d.path);
   if (ccd) job.fromCcd = true;
   if (ccd || kind === 'cue' || kind === 'toc') {
     var subHit = null, subStem = stem(d.path);
-    var subExts = ccd ? ['.sub', '.subcode'] : ['.sub', '.subcode'];
+    var subExts = ['.sub', '.subcode'];
     for (var si = 0; si < subExts.length && !subHit; si++) {
       var subName = subStem + subExts[si];
       subHit = pickTrack((index.get(nameKey(subName)) || []).filter(function (e) { return e !== d; }), dir, subName, claimed, descDirs);
@@ -2405,7 +2804,7 @@ async function descriptorJob(d, index, claimed, descDirs) {
       claimed.add(subHit);
       // a PS1 disc's LibCrypt sectors are in it: once the console is known, they become an .sbi (sbiFromSub)
       job.subFile = subHit.file;
-      if (ccd && !fix.problem) job.warnings.push('The .sub file (subchannel data) isn\u2019t kept in the CHD: CHDs store the disc\u2019s data and audio.');
+      if (ccd && !fix.problem) job.warnings.push('The .sub file (subchannel data) isn\u2019t kept in the CHD by default: CHDs store the disc\u2019s data and audio (enable CD+G subchannels in Options only for CD+G discs).');
     }
   }
   if (fix.problem) {
@@ -2415,7 +2814,8 @@ async function descriptorJob(d, index, claimed, descDirs) {
     var next = fix.problem.indexOf(NO_TRACKS_NEXT) > 0 ? NO_TRACKS_NEXT : '', why = fix.problem.replace(NO_TRACKS_NEXT, '');
     job.errorText = (dec ? why + ' chdman can\u2019t convert it as it is.' : why) + next;
   }
-  refs.forEach(function (ref) {
+  for (var ri = 0; ri < refs.length; ri++) {
+    var ref = refs[ri];
     var want = nameKey(base(ref)), notD = function (e) { return e !== d; };
     var hit = pickTrack((index.get(want) || []).filter(notD), dir, ref, claimed, descDirs) ||
       pickTrack((index.get(want + '.ecm') || []).filter(notD), dir, ref, claimed, descDirs);
@@ -2429,7 +2829,7 @@ async function descriptorJob(d, index, claimed, descDirs) {
       });
       hit = pickTrack(loneCands, dir, ref, claimed, descDirs);
     }
-    if (!hit) { job.missing.push(ref); return; }
+    if (!hit) { job.missing.push(ref); continue; }
     if (hit.fromJob) {
       // the lone image's .sbi (paired with it by name) comes along, or waits for its job again
       var other = hit.fromJob;
@@ -2441,8 +2841,10 @@ async function descriptorJob(d, index, claimed, descDirs) {
       removeJob(other, true, true);
     }
     claimed.add(hit); // (taken out of looseFiles by the caller)
-    job.files.push(trackFile(hit.file, hit.path, ref));
-  });
+    var tf = trackFile(hit.file, hit.path, ref);
+    if (tf.maybeWav) { if (await wavNeedsAudioStore(tf.file)) tf.audio = true; delete tf.maybeWav; }
+    job.files.push(tf);
+  }
   if (!refs.length && !job.invalid) job.warnings.push('No track files are listed in this ' + kind.toUpperCase() + ' file.');
   if (job.missing.length && !job.invalid) job.state = 'blocked';
   return job;
@@ -2455,13 +2857,41 @@ function finalizeDescriptorJob(job) {
   scheduleIdentify(job);
 }
 
+function rewriteAudioDescriptor(kind, text, job) {
+  var audioNames = Object.create(null);
+  job.files.forEach(function (f) {
+    if (f.audio) audioNames[f.name.toLowerCase()] = f;
+  });
+  if (!Object.keys(audioNames).length) return text;
+  return text.split(/\r?\n/).map(function (ln) {
+    var w = refWord(kind, ln);
+    if (!w) return ln;
+    var af = audioNames[w.text.toLowerCase()];
+    if (!af) return ln;
+    if (kind === 'cue') {
+      // Rewrite FILE "track.flac" WAVE|FLAC|OGG|MP3|AIFF -> FILE "track.flac" BINARY so chdman reads raw LE PCM from AudioStore
+      return ln.slice(0, w.end) + ln.slice(w.end).replace(/^(\s+)(\S+)/, '$1BINARY');
+    }
+    if (kind === 'toc') {
+      var nm = /\.wav$/i.test(af.name) ? (af.name + '.pcm') : af.name;
+      var rest = ln.slice(w.end);
+      if (!/^\s+SWAP\b/i.test(rest)) rest = ' SWAP' + rest;
+      return ln.slice(0, w.start) + '"' + nm + '"' + rest;
+    }
+    return ln;
+  }).join('\n');
+}
+
 function finalizeCreateJob(job) {
-  if (job.descFile) {
+  if (job.descFile && job.descText && !job.fromMds && !job.fromCdi) {
     // make every track reference match the real file names exactly
     var map = {}, changed = false;
     job.files.forEach(function (f) { if (f.ref) map[refKey(f.ref)] = f.name; });
     parseRefs(job.src, job.descText, true).forEach(function (r) { var n = map[refKey(r)]; if (n && n !== r) changed = true; });
-    job.descBlob = changed || job.descDirty ? new Blob([rewriteRefs(job.src, job.descText, map)], { type: 'text/plain' }) : job.descFile;
+    var rewritten = rewriteRefs(job.src, job.descText, map);
+    var hasAudio = job.files.some(function (f) { return f.audio; });
+    if (hasAudio) { rewritten = rewriteAudioDescriptor(job.src, rewritten, job); changed = true; }
+    job.descBlob = changed || job.descDirty ? new Blob([rewritten], { type: 'text/plain' }) : job.descFile;
   }
   if (!job.action) job.action = KIND[job.disc].cmd;
   matchResumable(job);
@@ -2589,7 +3019,8 @@ function linkParents() {
 var FORMATS = {
   cd: [['redump', 'CUE + BIN, as Redump'], ['cue', 'CUE + BIN (one .bin)'], ['cue-split', 'CUE + BIN (one .bin per track)'], ['gdi', 'GDI + tracks'], ['toc', 'TOC + BIN (cdrdao)']],
   gdrom: [['gdi', 'GDI + tracks'], ['redump', 'CUE + BIN, as Redump']],
-  dvd: [['iso', 'ISO image']], hd: [['img', 'Raw disk image (.img)']], ld: [['avi', 'AVI video']], raw: [['raw', 'Raw data (.raw)']]
+  dvd: [['iso', 'ISO image'], ['zso', 'ZSO (--block=2048, PS2 OPL / PSP ARK-4)'], ['cso1', 'CSO v1 (--block=2048, PSP / Vita Adrenaline)'], ['cso2', 'CSO v2 (--block=2048, LZ4 + Deflate)']],
+  hd: [['img', 'Raw disk image (.img)']], ld: [['avi', 'AVI video']], raw: [['raw', 'Raw data (.raw)']]
 };
 function outBase(job) {
   var s = (job.opts.out || job.title || 'output').replace(/[\/\\:*?"<>|]+/g, '_').trim();
@@ -2615,15 +3046,86 @@ function buildJob(job) {
     return list.find(function (x) { return x[0] === o.preset; }) || list[0];
   }
   if (job.kind === 'create') {
+    var outMode0 = settings.storage === 'memory' || !Store.available ? 'mem' : 'opfs';
+    if (settings.storage === 'folder' && outDir) outMode0 = 'stream';
+    if (o.outFmt === 'xiso') {
+      var xName = ob + '.xiso.iso';
+      return {
+        args: ['-o', '/out/' + xName], inputs: [], writable: [], slots: outMode0 === 'stream' ? 0 : 2, helpers: 0, outMode: outMode0,
+        expected: jobImageBytes(job), xisoRepack: { outName: xName },
+        cmdline: '(scrub XDVDFS \u2192 ' + xName + ')'
+      };
+    }
+    if (o.outFmt === 'cso1' || o.outFmt === 'cso2' || o.outFmt === 'zso') {
+      var cExt = o.outFmt === 'zso' ? '.zso' : '.cso';
+      var cName = ob + cExt;
+      var ntC = threadCount();
+      return {
+        args: ['-o', '/out/' + cName], inputs: [], writable: [], slots: outMode0 === 'stream' ? 0 : 2, helpers: ntC > 1 ? ntC : 0, outMode: outMode0,
+        expected: jobImageBytes(job),
+        cisoWrite: { fmt: o.outFmt, sourceKind: job.src === 'cso' ? 'ciso' : 'iso', outName: cName, level: o.preset === 'fast' ? 6 : 9 },
+        cmdline: '(' + o.outFmt.toUpperCase() + ' --block=2048 \u2192 ' + cName + ')'
+      };
+    }
+    if (o.outFmt === 'cdi-extract' && job.fromCdi) {
+      var cueName = ob + '.cue';
+      var cdiTracks = job.files.map(function (f, i) {
+        var tn = ('0' + (i + 1)).slice(-2);
+        return { name: ob + ' (Track ' + tn + ').bin', offset: f.stride.offset, count: f.stride.count, dataSize: f.stride.dataSize, stride: f.stride.stride };
+      });
+      var cdiMap = {};
+      job.files.forEach(function (f, i) { cdiMap[refKey(f.ref || f.name)] = cdiTracks[i].name; });
+      var cdiCue = rewriteRefs('cue', job.descText, cdiMap);
+      return {
+        args: ['-o', '/out/' + cueName], inputs: [], writable: [], slots: outMode0 === 'stream' ? 0 : (cdiTracks.length + 2), helpers: 0, outMode: outMode0,
+        expected: jobImageBytes(job),
+        cdiExtract: { cueName: cueName, cueText: cdiCue, tracks: cdiTracks },
+        cmdline: '(extract .cdi \u2192 ' + cueName + ' + ' + plural(cdiTracks.length, 'track') + ')'
+      };
+    }
     var disc = job.disc, cmd = KIND[disc].cmd, inName;
     var rep = cmd === 'createcd' && typeof buildRepairedCueJob === 'function' ? buildRepairedCueJob(job) : null;
     if (rep && rep.inputs) {
       inName = job.descName;
       inputs = rep.inputs;
+    } else if (job.fromCcd && job.includeSub && job.subFile && job.files.length === 1 && cmd === 'createcd') {
+      // Guarded Tier-X CD+G: interleave planar CloneCD .sub into 2,448-byte RW_RAW sectors
+      inName = job.descName;
+      var subCue = job.descText.replace(/^(\s*TRACK\s+\d+\s+\S+)(\s*)$/gm, '$1 RW_RAW$2');
+      inputs.push({ name: job.descName, blob: new Blob([subCue], { type: 'text/plain' }) });
+      inputs.push({ name: '__ccd_img', blob: job.files[0].file, hidden: true });
+      inputs.push({ name: '__ccd_sub', blob: job.subFile, hidden: true });
+      inputs.push({ name: job.files[0].name, stride: { ref: '__ccd_img', offset: 0, count: Math.floor(job.files[0].file.size / 2352), dataSize: 2352, stride: 2352, subRef: '__ccd_sub', subOffset: 0 } });
+    } else if (job.files.some(function (f) { return !!f.stride; })) {
+      var strSources = new Map();
+      var addStrSrc = function (blob) {
+        var r = strSources.get(blob);
+        if (!r) { r = '__strsrc_' + strSources.size; strSources.set(blob, r); inputs.push({ name: r, blob: blob, hidden: true }); }
+        return r;
+      };
+      if (job.src === 'cue' && job.descText) {
+        inName = job.descName;
+        var sCue = job.descText;
+        if (job.fromCdi && job.cdiMulti && job.cdiFlycastOk) sCue = sCue.replace(/\bMODE2\/2048\b/g, 'MODE1/2048');
+        inputs.push({ name: job.descName, blob: new Blob([sCue], { type: 'text/plain' }) });
+      } else {
+        inName = job.files[0].name;
+      }
+      job.files.forEach(function (f) {
+        if (f.stride) {
+          var sref = addStrSrc(f.file);
+          inputs.push({ name: f.name, stride: { ref: sref, offset: f.stride.offset, count: f.stride.count, dataSize: f.stride.dataSize, stride: f.stride.stride } });
+        } else {
+          inputs.push({ name: f.name, blob: f.file, ecm: f.ecm, audio: f.audio });
+        }
+      });
     } else if (job.descFile) {
       inName = job.descName;
       inputs.push({ name: job.descName, blob: job.descBlob || job.descFile });
-      job.files.forEach(function (f) { inputs.push({ name: f.name, blob: f.file, ecm: f.ecm }); }); // ECM: the job worker rebuilds the image
+      job.files.forEach(function (f) {
+        var vname = (job.src === 'toc' && f.audio && /\.wav$/i.test(f.name)) ? (f.name + '.pcm') : f.name;
+        inputs.push({ name: vname, blob: f.file, ecm: f.ecm, audio: f.audio });
+      });
     } else if (job.src === 'pbp') {
       // a PS1 PBP's disc: the job worker unpacks its image as chdman reads it, with a cue sheet from its TOC
       inName = stem(job.files[0].name) + '.cue';
@@ -2695,6 +3197,19 @@ function buildJob(job) {
       helpers = readHelpers();
     } else {
       var fmt = o.format || defaultFormat(info.type), cmdx, oname, extra = [];
+      if (info.type === 'dvd' && (fmt === 'zso' || fmt === 'cso1' || fmt === 'cso2')) {
+        var outModeD = settings.storage === 'memory' || !Store.available ? 'mem' : 'opfs';
+        if (settings.storage === 'folder' && outDir) outModeD = 'stream';
+        var cExt2 = fmt === 'zso' ? '.zso' : '.cso';
+        var cName2 = ob + cExt2;
+        var ntD = threadCount();
+        return {
+          args: ['-o', '/out/' + cName2], inputs: [], writable: [], slots: outModeD === 'stream' ? 0 : 2, helpers: ntD > 1 ? ntD : 0, outMode: outModeD,
+          expected: info.logical || 0,
+          cisoWrite: { fmt: fmt, sourceKind: 'chd', outName: cName2, level: 6, parent: job.parentJob ? job.parentJob.files[0].file : null },
+          cmdline: '(DVD CHD \u2192 ' + fmt.toUpperCase() + ' --block=2048 \u2192 ' + cName2 + ')'
+        };
+      }
       if (info.type === 'cd' || info.type === 'gdrom') {
         cmdx = 'extractcd';
         oname = ob + (fmt === 'gdi' ? '.gdi' : fmt === 'toc' ? '.toc' : '.cue');
@@ -2819,8 +3334,16 @@ function subtitle(job) {
   }
   var what;
   var ecms = job.files.filter(function (f) { return f.ecm; }).length;
-  if (job.fromCcd) what = 'CloneCD image (.ccd + .' + (job.files[0] ? fileKind(job.files[0]) : 'img') + ')';
-  else if (job.descFile) what = job.src.toUpperCase() + ' + ' + plural(job.files.length, 'track file') + (!ecms ? '' : ecms === job.files.length ? ' (ECM)' : ' (' + ecms + ' ECM)');
+  var auds = job.files.filter(function (f) { return f.audio; }).length;
+  if (job.fromMds) what = 'Alcohol 120% image (.mds + .mdf \u00b7 ' + (job.disc === 'dvd' ? 'DVD' : plural(job.files.length, 'track')) + ')';
+  else if (job.fromCdi) what = 'DiscJuggler .cdi (' + plural(job.cdiParsed ? job.cdiParsed.sessions : 1, 'session') + ', ' + plural(job.files.length, 'track') + ')';
+  else if (job.fromCcd) what = 'CloneCD image (.ccd + .' + (job.files[0] ? fileKind(job.files[0]) : 'img') + ')';
+  else if (job.descFile) {
+    var tags = [];
+    if (ecms) tags.push(ecms === job.files.length ? 'ECM' : ecms + ' ECM');
+    if (auds) tags.push(auds + ' audio');
+    what = job.src.toUpperCase() + ' + ' + plural(job.files.length, 'track file') + (tags.length ? ' (' + tags.join(', ') + ')' : '');
+  }
   else if (job.autoCue && job.src !== 'iso') what = '.' + fileKind(job.files[0]) + ' image (no cue)';
   else what = '.' + fileKind(job.files[0]) + ' image';
   var total = n + (job.descFile ? job.descFile.size : 0);
@@ -2921,7 +3444,24 @@ function renderControls(job) {
         }
         job.disc = v; job.action = KIND[v].cmd; if (!keep) o.preset = 'default'; o.hunk = ''; job.discEdited = true; refresh();
       };
-      var discChoices = job.choices && job.choices.length > 1 ? job.choices.map(function (k) { return [k, KIND[k].label + ' CHD']; }) : null;
+      var pickOutFmt = function (v) {
+        if (job.state === 'done' || job.state === 'error' || job.state === 'canceled') {
+          var pending = job.outputs.some(function (x) { return !x.downloaded && x.kind !== 'disk'; });
+          if (pending && !confirm('Discard the results of the previous run? Download them first if you need them.')) return;
+          o.outFmt = v; job.outFmtEdited = true;
+          resetJob(job);
+          return;
+        }
+        o.outFmt = v; job.outFmtEdited = true; refresh();
+      };
+      var isXboxIso = job.ident && job.ident.sys === 'xbox' && job.src === 'iso';
+      if (isXboxIso) {
+        box.append(el('div', { class: 'row' }, el('span', { class: 'small muted', style: 'font-weight:600' }, 'Output'), seg([['xiso', 'Scrubbed XISO (.xiso.iso)'], ['', 'DVD CHD']], o.outFmt === 'xiso' ? 'xiso' : '', pickOutFmt, busy, 'Output format')));
+      } else if (job.fromCdi && job.cdiMulti && job.cdiFlycastOk) {
+        box.append(el('div', { class: 'row' }, el('span', { class: 'small muted', style: 'font-weight:600' }, 'Action'), seg([['cdi-extract', 'Extract .cue + .bin'], ['', 'Create CHD (Flycast 2.8+)']], o.outFmt === 'cdi-extract' ? 'cdi-extract' : '', pickOutFmt, busy, 'DiscJuggler action')));
+      }
+      var siblingFmt = o.outFmt === 'xiso' || o.outFmt === 'cso1' || o.outFmt === 'cso2' || o.outFmt === 'zso' || o.outFmt === 'cdi-extract';
+      var discChoices = !siblingFmt && !isXboxIso && job.choices && job.choices.length > 1 ? job.choices.map(function (k) { return [k, KIND[k].label + ' CHD']; }) : null;
       // an identified game's system settles the type: the choice is in Options instead of up front
       if (discChoices && !job.discBySystem) {
         box.append(el('div', { class: 'row' }, el('span', { class: 'small muted', style: 'font-weight:600' }, 'Create as'), seg(discChoices, job.disc, pickDisc, busy, 'Create as')));
@@ -2940,23 +3480,36 @@ function renderControls(job) {
         if (!(sys === 'ps2' && job.ps2dvd && job.disc === 'dvd')) why += ' Change this only if you know you need the other type.';
         fields.append(selectField('Create as', discChoices, job.disc, pickDisc, why, busy));
       }
-      var cur = presets.find(function (p) { return p[0] === o.preset; }) || presets[0];
-      var pfc = profile(job.ident && job.ident.sys), chint = cur[3];
-      // the presets that use Zstandard (Zstd, MiSTer): what can't read them; MiSTer's: where it has no core
-      var zwarn = /(^|,)(cdzs|zstd)(,|$)/.test(cur[2] || '') && pfc.noZstd;
-      if (zwarn) chint += ' ' + pfc.noZstd + ' can\u2019t read Zstd CHDs of ' + sysName(job.ident.sys) + ' games.';
-      // the compatibility mode: Zstd is what older emulators can't open, whatever the console
-      if (settings.compat && /(^|,)(cdzs|zstd)(,|$)/.test(cur[2] || '')) { chint += ' ' + ZSTD_OLD; zwarn = true; }
-      var is32x = job.ident && job.ident.sys === 'segacd' && ((job.ident.detected && job.ident.detected.cd32x) || /\b32X\b/i.test(job.ident.name || ''));
-      if (cur[0] === 'mister' && (pfc.noMister || is32x)) { chint += ' MiSTer has no core that plays ' + (is32x ? 'Sega CD 32X' : sysName(job.ident.sys)) + ' games from CHDs.'; zwarn = true; }
-      if (pfc.hint && cur[0] !== 'none') chint += ' ' + pfc.hint;
-      var cfield = selectField('Compression', presets.map(function (p) { return [p[0], p[1]]; }), o.preset, function (v) { o.preset = v; job.presetEdited = true; refresh(); }, chint, busy);
-      if (zwarn) cfield.lastChild.style.color = 'var(--warn)';
-      fields.append(cfield);
-      var hunks = HUNKS[disc] || [['', 'Automatic']];
-      if (hunks.length > 1) fields.append(selectField('Hunk size', hunks, o.hunk || hunks[0][0], function (v) { o.hunk = v; job.hunkEdited = true; soft(); }, disc === 'dvd' ? 'Use 2,048 for PSP and MAME arcade DVDs.' : null, busy));
-      if (disc === 'raw') fields.append(textField('Unit size (bytes)', o.unit, function (v) { o.unit = v.replace(/[^0-9]/g, ''); soft(); }, { inputmode: 'numeric', disabled: busy }));
-      fields.append(textField('Output name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { hint: function () { return 'Saved as ' + outBase(job) + '.chd'; }, disabled: busy, wide: true }));
+      if (!isXboxIso && disc === 'dvd' && (job.src === 'iso' || job.src === 'cso')) {
+        var fmtOpts = [['', 'CHD (PPSSPP / PCSX2 — recommended)'], ['zso', 'ZSO (--block=2048, PS2 OPL / PSP ARK-4)'], ['cso1', 'CSO v1 (--block=2048, PSP / Vita Adrenaline)'], ['cso2', 'CSO v2 (--block=2048, LZ4 + Deflate)']];
+        fields.append(selectField('Output format', fmtOpts, o.outFmt || '', pickOutFmt,
+          o.outFmt ? 'Uses 2,048-byte blocks (--block=2048) with automatic 4-byte alignment above 1.9 GB so PS2 OPL, real PSP CFW, and PS Vita Adrenaline stream smoothly.' : 'Keep CHD for emulators, or choose ZSO/CSO for real PSP, PS Vita Adrenaline, and PS2 OPL hardware.', busy));
+      }
+      if (!siblingFmt) {
+        var cur = presets.find(function (p) { return p[0] === o.preset; }) || presets[0];
+        var pfc = profile(job.ident && job.ident.sys), chint = cur[3];
+        // the presets that use Zstandard (Zstd, MiSTer): what can't read them; MiSTer's: where it has no core
+        var zwarn = /(^|,)(cdzs|zstd)(,|$)/.test(cur[2] || '') && pfc.noZstd;
+        if (zwarn) chint += ' ' + pfc.noZstd + ' can\u2019t read Zstd CHDs of ' + sysName(job.ident.sys) + ' games.';
+        // the compatibility mode: Zstd is what older emulators can't open, whatever the console
+        if (settings.compat && /(^|,)(cdzs|zstd)(,|$)/.test(cur[2] || '')) { chint += ' ' + ZSTD_OLD; zwarn = true; }
+        var is32x = job.ident && job.ident.sys === 'segacd' && ((job.ident.detected && job.ident.detected.cd32x) || /\b32X\b/i.test(job.ident.name || ''));
+        if (cur[0] === 'mister' && (pfc.noMister || is32x)) { chint += ' MiSTer has no core that plays ' + (is32x ? 'Sega CD 32X' : sysName(job.ident.sys)) + ' games from CHDs.'; zwarn = true; }
+        if (pfc.hint && cur[0] !== 'none') chint += ' ' + pfc.hint;
+        var cfield = selectField('Compression', presets.map(function (p) { return [p[0], p[1]]; }), o.preset, function (v) { o.preset = v; job.presetEdited = true; refresh(); }, chint, busy);
+        if (zwarn) cfield.lastChild.style.color = 'var(--warn)';
+        fields.append(cfield);
+        var hunks = HUNKS[disc] || [['', 'Automatic']];
+        if (hunks.length > 1) fields.append(selectField('Hunk size', hunks, o.hunk || hunks[0][0], function (v) { o.hunk = v; job.hunkEdited = true; soft(); }, disc === 'dvd' ? 'Use 2,048 for PSP and MAME arcade DVDs.' : null, busy));
+        if (disc === 'raw') fields.append(textField('Unit size (bytes)', o.unit, function (v) { o.unit = v.replace(/[^0-9]/g, ''); soft(); }, { inputmode: 'numeric', disabled: busy }));
+        if (job.fromCcd && job.subFile) {
+          fields.append(el('label', { class: 'check wide' },
+            el('input', { type: 'checkbox', checked: !!job.includeSub, disabled: busy, onchange: function (e) { job.includeSub = e.target.checked; refresh(); } }),
+            'Include subchannel data (CD+G / RW_RAW) — Tier X; off by default because Beetle PCE/Saturn/PC-FX and Flycast \u2264 2.7 reject subchannel CHDs'));
+        }
+      }
+      var outSuffix = o.outFmt === 'xiso' ? '.xiso.iso' : o.outFmt === 'zso' ? '.zso' : (o.outFmt === 'cso1' || o.outFmt === 'cso2') ? '.cso' : o.outFmt === 'cdi-extract' ? '.cue + .bin' : '.chd';
+      fields.append(textField('Output name', o.out, function (v) { o.out = v; job.outEdited = true; soft(); }, { hint: function () { return 'Saved as ' + outBase(job) + outSuffix; }, disabled: busy, wide: true }));
       var det = el('details', { class: 'opts' }, el('summary', null, 'Options'), fields);
       if (job.ui.optsOpen) det.open = true;
       det.addEventListener('toggle', function () { job.ui.optsOpen = det.open; });
@@ -3082,7 +3635,14 @@ function renderResult(job) {
     if (job.kind === 'create' && job.outputs[0]) {
       var inBytes = jobImageBytes(job);
       var pct = inBytes ? Math.round(100 * job.outputs[0].size / inBytes) : 0;
-      box.append(el('div', { class: 'note ok' }, el('b', null, 'Done. '), fmtBytes(job.outputs[0].size) + ' — ' + pct + '% of the original ' + fmtBytes(inBytes) + (job.elapsed ? ', in ' + fmtDur(job.elapsed / 1000) : '') + '.'));
+      if (job.xisoMeta) {
+        var xp = job.xisoMeta.origBytes ? Math.round(100 * job.xisoMeta.outBytes / job.xisoMeta.origBytes) : 0;
+        box.append(el('div', { class: 'note ok' }, el('b', null, 'Done. '), fmtBytes(job.xisoMeta.outBytes) + ' scrubbed XISO — ' + xp + '% of the original ' + fmtBytes(job.xisoMeta.origBytes) + ' (' + plural(job.xisoMeta.fileCount, 'file') + ' repacked for xemu' + (job.elapsed ? ', in ' + fmtDur(job.elapsed / 1000) : '') + ').'));
+      } else if (job.opts.outFmt === 'cdi-extract') {
+        box.append(el('div', { class: 'note ok' }, el('b', null, 'Extracted ' + plural(job.outputs.length, 'file') + ' from .cdi. '), 'Keep the .cue and track .bin files together in one folder.'));
+      } else {
+        box.append(el('div', { class: 'note ok' }, el('b', null, 'Done. '), fmtBytes(job.outputs[0].size) + ' — ' + pct + '% of the original ' + fmtBytes(inBytes) + (job.elapsed ? ', in ' + fmtDur(job.elapsed / 1000) : '') + '.'));
+      }
     } else if (job.kind === 'chd' && job.action === 'rename') {
       box.append(el('div', { class: 'note ok' }, el('b', null, 'Renamed copy ready. '), 'Delete the old file after saving this one.'));
     } else if (job.kind === 'chd' && job.action === 'repair') {
@@ -3372,7 +3932,10 @@ function renderFoot(job) {
   if (job.invalid) st = ['err', 'Can\u2019t convert'];
   f.append(el('span', { class: 'state' }, el('span', { class: 'dot ' + st[0] }), st[1]));
   if (job.state === 'ready') {
-    var label = job.kind === 'create' ? (job.resumeFrom ? 'Resume CHD' : 'Create CHD') : job.action === 'extract' ? 'Extract' : job.action === 'verify' ? 'Verify' : job.action === 'rename' ? 'Save renamed copy' : job.action === 'repair' ? 'Repair CHD' : 'Show info';
+    var ofmt = job.opts && job.opts.outFmt;
+    var label = job.kind === 'create'
+      ? (ofmt === 'xiso' ? 'Create scrubbed XISO' : ofmt === 'zso' ? 'Create ZSO' : (ofmt === 'cso1' || ofmt === 'cso2') ? 'Create CSO' : ofmt === 'cdi-extract' ? 'Extract .cue + .bin' : job.resumeFrom ? 'Resume CHD' : 'Create CHD')
+      : job.action === 'extract' ? 'Extract' : job.action === 'verify' ? 'Verify' : job.action === 'rename' ? 'Save renamed copy' : job.action === 'repair' ? 'Repair CHD' : 'Show info';
     f.append(el('button', { class: 'btn primary', onclick: function () { enqueueChecked(job); } }, icon('i-play'), label));
   } else if (job.state === 'queued' || job.state === 'running') {
     f.append(el('button', { class: 'btn danger sm fit', onclick: function () { cancelJob(job); } }, 'Cancel'));
@@ -3631,7 +4194,7 @@ function removeJob(job, silent, keepFiles) {
     // a zip whose files are all gone can be added again; what was unpacked from it is deleted
     var zips = new Set();
     job.files.concat(job.descFile ? [{ file: job.descFile }] : [], job.subFile ? [{ file: job.subFile }] : [], job.sbi ? [{ file: job.sbi.file }] : []).forEach(function (f) { if (f.file.fromZip) zips.add(f.file.fromZip); });
-    if (job.src === 'zip') zips.add(job.files[0].file);
+    if (job.src === 'zip' || job.src === '7z') zips.add(job.files[0].file);
     zips.forEach(function (z) {
       var inUse = jobs.some(function (o) {
         return o.files.some(function (f) { return f.file.fromZip === z || f.file === z; }) ||
@@ -3853,14 +4416,19 @@ async function runJobNow(job) {
     }
   }
   if (job.aborted) { job.runBase = ''; Recovery.running(null); job.state = 'canceled'; if (jobs.indexOf(job) >= 0) refreshJob(job, true); return; }
-  var resumeInfo = (spec.outMode === 'opfs' && job.kind === 'create' && job.opts.preset !== 'none' && job.resumeFrom) ? job.resumeFrom : null;
+  var customWorker = spec.cisoWrite ? 'ciso-write' : spec.xisoRepack ? 'xiso-repack' : spec.cdiExtract ? 'cdi-extract' : '';
+  var extraMsg = spec.cisoWrite ? Object.assign({ blob: job.files[0].file }, spec.cisoWrite)
+    : spec.xisoRepack ? Object.assign({ blob: job.files[0].file }, spec.xisoRepack)
+    : spec.cdiExtract ? Object.assign({ blob: job.files[0].file }, spec.cdiExtract)
+    : null;
+  var resumeInfo = (!customWorker && spec.outMode === 'opfs' && job.kind === 'create' && job.opts.preset !== 'none' && job.resumeFrom) ? job.resumeFrom : null;
   var storeId = resumeInfo ? resumeInfo.jobId : job.id;
   var storeSess = resumeInfo ? resumeInfo.session : Store.session;
   job.storeId = storeId;
   job.storeSession = storeSess;
   var runDirPath = resumeInfo ? Store.dirPath(storeId, storeSess) : Store.claim(job.id);
   var ckptOpt = null, inputsMeta = null;
-  if (spec.outMode === 'opfs' && job.kind === 'create' && job.opts.preset !== 'none') {
+  if (!customWorker && spec.outMode === 'opfs' && job.kind === 'create' && job.opts.preset !== 'none') {
     inputsMeta = [];
     for (var mi = 0; mi < spec.inputs.length; mi++) {
       if (!spec.inputs[mi].blob) continue;
@@ -3883,8 +4451,10 @@ async function runJobNow(job) {
   }
   document.addEventListener('visibilitychange', onRunVis);
   job.storageRefused = false;
+  job.xisoMeta = null;
   var verifyRedump = [];
   job.run = Engine.run({
+    workerType: customWorker || 'run', extraMsg: extraMsg,
     jobId: storeId, dirPath: runDirPath, args: spec.args, inputs: spec.inputs, writable: spec.writable,
     slots: spec.slots, helpers: spec.helpers, outMode: spec.outMode, outDir: runDir, agreed: main ? [main] : [],
     ckpt: ckptOpt, resume: !!resumeInfo,
@@ -3896,6 +4466,21 @@ async function runJobNow(job) {
       appendLog(job, t);
       var fm = /final ratio = ([\d.]+)%/.exec(t);
       if (fm) setProgress(job, 100, 'Finishing…', [fm[1] + '% of the original']);
+    },
+    onBinProgress: function (m) {
+      if (!customWorker) return;
+      var pct = Math.max(0, Math.min(100, m.done || 0));
+      var phase = spec.xisoRepack ? 'Repacking XISO' : spec.cdiExtract ? 'Extracting .cdi' : 'Compressing';
+      lastPct = pct;
+      var curHidden = hiddenMs + (hiddenAt ? performance.now() - hiddenAt : 0);
+      var el2 = Math.max(0.1, (performance.now() - phaseStart - curHidden) / 1000);
+      var eta = pct > 2 ? el2 * (100 - pct) / pct : NaN;
+      var bits = [];
+      if (m.ratio > 0 && !spec.cdiExtract) bits.push(m.ratio.toFixed(1) + '% of the original');
+      if (isFinite(eta)) bits.push(fmtDur(eta) + ' left');
+      setProgress(job, pct, phase + ' ' + pct.toFixed(1) + '%', bits);
+      if (job === current) document.title = Math.floor(pct) + '% · ' + job.title + ' · Discpress';
+      updateDock();
     },
     onCkpt: function (m) {
       job.ckptPct = m.pct;
@@ -3979,8 +4564,9 @@ async function runJobNow(job) {
           if (storeSess !== Store.session) o.session = storeSess;
         }
       });
+      job.xisoMeta = res.xisoMeta || null;
       if (job.kind === 'chd' && job.action === 'info') job.lastInfo = parseInfo(job.log);
-      if ((job.kind === 'create' || job.action === 'repair') && job.sbi) await addSbi(job, spec, runDir, runBase);
+      if (!customWorker && (job.kind === 'create' || job.action === 'repair') && job.sbi) await addSbi(job, spec, runDir, runBase);
       if (job.aborted || jobs.indexOf(job) < 0) { Recovery.running(null); return; }
       if (job.identState === 'done') renameOutputs(job); // the checksum finished while converting
       if (spec.outMode === 'stream' && runRootDir) await autoWriteM3u(job, runRootDir);
@@ -4152,19 +4738,52 @@ function detachSbi(job) {
   job.sbi = null;
 }
 function scanSub(job) {
-  if (!job.subFile || job.subScan || (job.sbi && !job.sbi.fromSub) || !job.ident || job.ident.sys !== 'ps1') return;
+  if ((!job.subFile && !job.mdfSub) || job.subScan || (job.sbi && !job.sbi.fromSub) || !job.ident || job.ident.sys !== 'ps1') return;
   job.subScanning = true;
-  job.subScan = sbiFromSub(job.subFile).then(function (r) {
+  var srcLabel = job.mdfSub ? '.mdf subchannel' : '.sub file';
+  var scanP = job.mdfSub ? sbiFromMdf(job.mdfSub) : sbiFromSub(job.subFile);
+  job.subScan = scanP.then(function (r) {
     job.subScanning = false;
     if (jobs.indexOf(job) < 0) return;
-    if (r.bad > SUB_MAX_BAD) job.subNote = 'The .sub file has ' + r.bad.toLocaleString('en-US') + ' sectors whose subchannel data is damaged, far more than LibCrypt protection uses, so no .sbi file is made from it.';
+    if (r.bad > SUB_MAX_BAD) job.subNote = 'The ' + srcLabel + ' has ' + r.bad.toLocaleString('en-US') + ' sectors whose subchannel data is damaged, far more than LibCrypt protection uses, so no .sbi file is made from it.';
     else if (r.sbi && !job.sbi) job.sbi = { file: new File([r.sbi], stem(job.descName || job.title) + '.sbi'), name: stem(job.descName || job.title) + '.sbi', fromSub: true, count: r.bad };
     if (job.ui && job.state !== 'running') refreshJob(job, true);
   }, function (e) {
     job.subScanning = false;
-    appendLog(job, 'The .sub file could not be read: ' + e.message);
+    appendLog(job, 'The ' + srcLabel + ' could not be read: ' + e.message);
     if (job.ui && job.state !== 'running') refreshJob(job, true);
   });
+}
+async function sbiFromMdf(m) {
+  var entries = [], bad = 0, bcd = function (v) { return ((v / 10) | 0) * 16 + v % 10; };
+  var qbuf = new Uint8Array(12), chunkSecs = 2048;
+  for (var s0 = 0; s0 < m.count; s0 += chunkSecs) {
+    var cnt = Math.min(chunkSecs, m.count - s0);
+    var b = new Uint8Array(await m.file.slice(m.offset + s0 * m.stride, m.offset + (s0 + cnt) * m.stride).arrayBuffer());
+    for (var i = 0; i < cnt; i++) {
+      var o = i * m.stride + m.dataSize;
+      if (o + 96 > b.length) break;
+      var any = 0;
+      for (var byteIdx = 0; byteIdx < 12; byteIdx++) {
+        var val = 0, baseO = o + byteIdx * 8;
+        for (var bit = 0; bit < 8; bit++) val = (val << 1) | ((b[baseO + bit] >> 6) & 1);
+        qbuf[byteIdx] = val;
+        any |= val;
+      }
+      if (!any || subCrc(qbuf, 0) === ((qbuf[10] << 8) | qbuf[11])) continue;
+      bad++;
+      if (bad > SUB_MAX_BAD) return { bad: bad };
+      var lba = s0 + i + 150, e = new Uint8Array(14);
+      e[0] = bcd(Math.floor(lba / 4500)); e[1] = bcd(Math.floor(lba / 75) % 60); e[2] = bcd(lba % 75); e[3] = 1;
+      e.set(qbuf.subarray(0, 10), 4);
+      entries.push(e);
+    }
+  }
+  if (!entries.length) return { bad: 0 };
+  var out = new Uint8Array(4 + 14 * entries.length);
+  out.set([83, 66, 73, 0]);
+  entries.forEach(function (e, i) { out.set(e, 4 + 14 * i); });
+  return { bad: bad, sbi: out };
 }
 function subCrc(b, o) {
   var c = 0;

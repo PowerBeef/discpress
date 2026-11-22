@@ -51,4 +51,8 @@ addToLibrary({
     var comps = [HEAPU32[p], HEAPU32[p + 1], HEAPU32[p + 2], HEAPU32[p + 3]];
     return Module['ckptTryResume'](comp >>> 0, hunk_bytes >>> 0, hunk_count >>> 0, unit_bytes >>> 0, comps, logical_bytes, meta_end, out_state_ptr >>> 0) ? 1 : 0;
   },
+  // streaming .7z unpacker callback: delivers <=2 MiB slices straight to OPFS/memory
+  wasm_7z_write: function (file_idx, ptr, len) {
+    return Module['on7zWrite'] ? (Module['on7zWrite'](file_idx >>> 0, ptr >>> 0, len >>> 0) | 0) : -1;
+  },
 });

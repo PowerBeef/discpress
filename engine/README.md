@@ -1,6 +1,6 @@
 # The Discpress chdman engine
 
-`engine/mame` holds **chdman from MAME 0.289** (tag `mame0289`, commit `f34f025`) and exactly the parts of MAME it links: 77 source files (75 compiled translation units plus 2 `#include`d libFLAC `.c` files) and the headers they include, listed in [`FILES`](FILES). It is a fork. Discpress builds it with [`wasm/Makefile`](../wasm/Makefile), for the browser (`build.sh`) and natively (`scripts/build-native.sh`), and nothing else from MAME is needed.
+`engine/mame` holds **chdman from MAME 0.289** (tag `mame0289`, commit `f34f025`) and the parts of MAME it links (including LZMA SDK 23.01's 7z archive decoder and filter C files for browser `.7z` unpacking), all listed in [`FILES`](FILES). It is a fork. Discpress builds it with [`wasm/Makefile`](../wasm/Makefile), for the browser (`build.sh`) and natively (`scripts/build-native.sh`), and nothing else from MAME is needed.
 
 The paths mirror MAME's, so every file can be compared with its original. **[`mame-0.289.diff`](mame-0.289.diff)** lists every change the fork makes; Help → About shows it too. Current changes:
 
@@ -70,7 +70,7 @@ The paths mirror MAME's, so every file can be compared with its original. **[`ma
 | `src/lib/util` (18 of MAME's utility files) | MAME | BSD-3-Clause; `md5.h` public domain (Colin Plumb) |
 | `src/osd` (core, sync, string conversion, POSIX files) | MAME | BSD-3-Clause |
 | `3rdparty/zlib` | zlib 1.3.2, as bundled by MAME | zlib ([`LICENSE`](mame/3rdparty/zlib/LICENSE)) |
-| `3rdparty/lzma/C` (`LzmaEnc`, `LzmaDec`, `LzFind`, `CpuArch`) | LZMA SDK 23.01, as bundled by MAME | public domain ([`lzma-sdk.txt`](mame/3rdparty/lzma/DOC/lzma-sdk.txt)) |
+| `3rdparty/lzma/C` (`LzmaEnc`, `LzmaDec`, `LzFind`, `CpuArch`, plus 7z/LZMA2/Bra/Delta/BCJ2/PPMd7 decoder files) | LZMA SDK 23.01, as bundled by MAME | public domain ([`lzma-sdk.txt`](mame/3rdparty/lzma/DOC/lzma-sdk.txt)) |
 | `3rdparty/flac` (libFLAC, 14 files) | FLAC 1.4.3, as bundled by MAME | BSD-3-Clause, Xiph.Org ([`COPYING.Xiph`](mame/3rdparty/flac/COPYING.Xiph)) |
 | `3rdparty/zstd/lib` | Zstandard 1.5.5, as bundled by MAME | BSD-3-Clause, chosen from its BSD/GPLv2 dual license ([`LICENSE`](mame/3rdparty/zstd/LICENSE)) |
 | `../libdeflate` (outside `mame/`) | libdeflate 1.24's compressor, for `--libdeflate` | MIT ([`COPYING`](libdeflate/COPYING)) |

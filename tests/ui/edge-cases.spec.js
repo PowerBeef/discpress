@@ -67,12 +67,10 @@ test('a truncated image gets a warning', async ({ app }) => {
 });
 
 // chdman 0.289 never finishes on a descriptor it reads as having no tracks (and writes outside its
-// track table for a track number outside 1-99), and refuses CD+G tracks; the app refuses those and says why instead
+// track table for a track number outside 1-99); the app refuses those and says why instead
 for (const [name, text, why] of [
   ['no tracks', 'FILE "lone.bin" BINARY\r\n', 'This CUE file lists no tracks.'],
   ['track zero', 'FILE "lone.bin" BINARY\r\n  TRACK 00 MODE2/2352\r\n    INDEX 01 00:00:00\r\n', 'Track numbers go from 01 to 99'],
-  // CD+G (karaoke graphics): chdman 0.289 refuses it ("Unsupported format"; engine.spec.js)
-  ['karaoke', 'FILE "lone.bin" BINARY\r\n  TRACK 01 MODE2/2352\r\n    INDEX 01 00:00:00\r\n  TRACK 02 CDG\r\n    INDEX 01 00:02:00\r\n', 'Track 2 is a CD+G track (karaoke graphics), which chdman 0.289 can\u2019t convert.'],
 ]) {
   test(`a descriptor chdman can't convert is refused: ${name}`, async ({ app }) => {
     const file = name + (text.startsWith('CD_ROM') ? '.toc' : '.cue');
@@ -694,11 +692,11 @@ test('a cue sheet added later does not take a lone file of the same name from an
 test('unsupported disc images and archives get a card that explains them', async ({ app }) => {
   const dir = path.join(FIXTURES, 'gen', 'unsupported');
   fs.mkdirSync(dir, { recursive: true });
-  for (const n of ['homebrew.cdi', 'shmup.mds', 'shmup.mdf', 'game.isz', 'set.7z', 'set.rar']) fs.writeFileSync(path.join(dir, n), Buffer.alloc(4096, 1));
+  for (const n of ['homebrew.cdi', 'shmup.mds', 'shmup.mdf', 'game.isz', 'set.7z', 'set.rar', 'v2.mdx']) fs.writeFileSync(path.join(dir, n), Buffer.alloc(4096, 1));
   await app.open();
-  await app.add(['homebrew.cdi', 'shmup.mds', 'shmup.mdf', 'game.isz', 'set.7z', 'set.rar'].map(n => 'gen/unsupported/' + n));
-  await expect(app.jobs()).toHaveCount(5); // the .mdf goes with its .mds
-  for (const [title, why] of [['homebrew', 'Flycast and Redream load .cdi files as they are'], ['shmup', 'Alcohol 120% images'], ['game', '.isz'], ['set', '7-Zip archives']]) {
+  await app.add(['homebrew.cdi', 'shmup.mds', 'shmup.mdf', 'game.isz', 'set.7z', 'set.rar', 'v2.mdx'].map(n => 'gen/unsupported/' + n));
+  await expect(app.jobs()).toHaveCount(6); // the .mdf goes with its .mds
+  for (const [title, why] of [['homebrew', 'DiscJuggler'], ['shmup', 'Alcohol 120%'], ['game', '.isz'], ['set', '7z'], ['v2', '.mdx']]) {
     const card = app.job(title).first();
     await expect(card.locator('.note.err')).toContainText(why);
     await expect(card.locator('.job-foot')).toContainText('Can’t convert');

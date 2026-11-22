@@ -25,13 +25,21 @@ Applies to `app/` (`index.html`, `ui.js`, `ident.js`, `quirks.js`, `worker.js`, 
 `app/ui.js` is one IIFE owning the job model, CLI builder, OPFS bookkeeping (`Store`), settings, recovery, and worker orchestration (`Engine`):
 
 - **Input grouping & container formats:**
-  - Files group into jobs by descriptor (`.cue`, `.gdi`, `.toc`, `.nrg`, etc.).
-  - CloneCD `.ccd` is translated into a cue sheet for its `.img` by `ccdToCue`.
-  - `.cso` / `.zso` becomes an input flagged `ciso`, passed to chdman as `<name>.iso`.
+  - Files group into jobs by descriptor (`.cue`, `.gdi`, `.toc`, `.nrg`, GOG `.ins`, Alcohol 120% `.mds`/`.mdf`, etc.).
+  - CloneCD `.ccd` (v2 `[Entry N]` and v3 `[TRACK n]`) is translated into a cue sheet for its `.img` by `ccdToCue`, with an opt-in Tier-X `"Include subchannel data (CD+G / RW_RAW)"` toggle when `.sub` is present (transposing planar 8×12 `.sub` → interleaved `RW_RAW`).
+  - Alcohol 120% v1.x (`.mds` + `.mdf`) reads DVDs directly and CDs via `StrideSliceStore` + synthetic `.cue` (auto-extracting PS1 LibCrypt `.sbi` from `+96B` interleaved Q subchannels); v2 `.mdx` is refused; ImgBurn DVD-9 `.mds` sidecars next to `.iso` are skipped cleanly.
+  - DiscJuggler `.cdi` (v2/v3/v3.5) parses trailer/sessions/tracks via `parseCdi`: 1-session `.cdi` converts to CHD; multi-session `.cdi` identifies the disc (`IP.BIN`), recommends keeping `.cdi`, defaults to 1-click `.cue + .bin` extraction (`cdi-extract`), and offers guarded Tier-X Flycast 2.8+ CHD mode on compatible 2-session Audio+Data MIL-CDs.
+  - Audio track cues (`.flac`, extended/RF64/24-bit/float `.wav`, `.aiff`/`.aifc`, `.ogg`, `.mp3`, plus GOG `.ins`) decode on demand via WASM `AudioStore` (`wasm/audio.cpp`) into Red Book 44.1 kHz 16-bit LE stereo PCM (matching Redump/DAT checksums for lossless tracks, warning with `lossy-audio`/`resampled-audio` otherwise).
+  - `.cso` / `.zso` becomes an input flagged `ciso`, passed to chdman as `<name>.iso`. PSP/PS2 DVD cards and DVD CHD `Extract` can also write `--block=2048` CSO v1, CSO v2, or ZSO (`ciso-write`) across helper workers.
+  - Original Xbox `.iso` (XGD1 `0x18300000` or un-scrubbed XISO `0`) defaults to creating a scrubbed `.xiso.iso` for `xemu` via pure-JS `xiso-repack` (preserving exact XDVDFS AVL trees and `FILETIME`).
   - ECM `<name>.ecm` stands for `<name>` (referenced by a descriptor or a lone `.bin` via `trackFile`), flagged `ecm`.
   - PS1 `EBOOT.PBP` creates one job per disc; `sniffPbp` reads each disc's TOC into a cue sheet and flags the image `pbp`.
-  - `.zip` entries join the picked file list (`zipEntries`): stored entries are read as slices; deflated entries unpack via `Unzip` into OPFS `chdman-unzip/` (else memory up to `UNZIP_MEM_MAX`) and are verified against their CRC-32.
-  - Unsupported formats (`UNSUPPORTED`: `.cdi`, `.mds`/`.mdf`, `.isz`, `.7z`, `.rar`) produce an explanatory card instead of being ignored.
+  - `.zip` and `.7z` archives join the picked file list (`zipEntries`, `un7zEntries`): worker-side streaming into OPFS `chdman-unzip/` (else memory up to `UNZIP_MEM_MAX`) verifies CRC-32s and pre-seeds `crcCache`.
+  - Unsupported formats (`UNSUPPORTED`: `.mdx`, `.isz`, `.hdi`, `.nhd`, `.vhd`, `.rar`) produce an explanatory card instead of being ignored.
+- **Target Environments, CHD Auditor & Reversible Repairs:**
+  - `#targetSelect` in `#chips` (mirrored by `#setTarget` in `#settings`) selects one of 6 `TARGETS` (`universal`, `fast-universal`, `esde-modern`, `handheld-linux`, `mister`, `legacy`), coordinating default preset, PS2 CD/DVD mode, reversible layout repairs, `--keepcue`, and `.m3u` folder layouts (`flat`, `esde`, `discs`, `minui`).
+  - `buildRepairedCueJob` (`app/quirks.js`) implements reversible Tier-X cue/disc layout repairs (`gaps`, `sessions`, `mode2`, `dcgaps`, `pcsession`) using `ZeroStore`/`ConcatStore`, `--sessions` (`CHSE`), and `--trailer` (`DPRC0001` reversed on `extractcd --redump`).
+  - `auditChd` (`app/quirks.js`) runs 12 health checks on loaded `.chd` files, rendered in `#chdAudit` with 1-click `copy` (`--stripmeta`, `-hs 2048`, codec re-encode) and 2-step rebuild repairs.
 - **Command building, profiles & quirks:**
   - `buildJob` builds chdman argument lists; `PROFILES` (applied via `applyIdent`) provides console-specific CHD type and hunk size (e.g., PSP `2048`), Zstd warnings (`noZstd`, for all presets using Zstd), MiSTer warnings (`noMister`), notes for systems whose emulators don't load CHDs (`keep`: does not force CHD type), and DOSBox Pure hints.
   - **Compatibility mode for older emulators** (`settings.compat`, migrating stored `ps2dvd: 'cd'` from ≤ 1.8; `COMPAT_NAME`) turns PS2 DVD games into CD CHDs (for AetherSX2, NetherSX2, and PCSX2 builds before April 2023) and makes Zstd presets warn for every console (`ZSTD_OLD`). Compression **never** changes automatically.

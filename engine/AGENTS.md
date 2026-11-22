@@ -4,9 +4,9 @@ Applies to `engine/` (`mame/`, `libdeflate/`, `libm/`, `FILES`, `mame-0.289.diff
 
 ## Fork Layout & Licensing
 
-- **`engine/mame/`** holds MAME 0.289 (`mame0289`, commit `f34f02505e32c1993c6a782b6814232cbfc74e36`) `chdman` and **only** the 77 source files (75 compiled translation units + 2 `#include`d libFLAC `.c` files), 123 headers, and 4 license files it links (204 files total, listed in `engine/FILES`), at MAME's original paths.
+- **`engine/mame/`** holds MAME 0.289 (`mame0289`, commit `f34f02505e32c1993c6a782b6814232cbfc74e36`) `chdman` and the MAME source/header/3rdparty files it links (including LZMA SDK 23.01 7z decoder C files for browser `.7z` streaming, all listed in `engine/FILES` sorted in `LC_ALL=C`), at MAME's original paths.
   - Edit forked MAME files in place, keep their paths, and run `./scripts/engine-diff.sh` to update `engine/mame-0.289.diff` (displayed in Help → About; verified in CI via `--check`). On macOS, install GNU `diffutils` (`brew install diffutils`) so `engine-diff.sh` uses `gdiff` and matches CI's Ubuntu hunk alignment byte for byte.
-  - **All new code goes outside `engine/mame/`** (e.g., `wasm/`, `engine/libdeflate/`, `engine/libm/`).
+  - **All new code goes outside `engine/mame/`** (e.g., `wasm/`, `engine/libdeflate/`, `engine/libm/`). Browser-only C/C++ helpers live in `wasm/` (`audio.cpp`, `7z_stream.c`, `lz4_block.c`, `stb_vorbis.c`, `minimp3.h`, `minimp3_ex.h`).
   - Unmodified MAME 0.289 is fetched on demand into `third_party/mame` via `./scripts/fetch-mame.sh` for diffing and building the upstream oracle (`scripts/build-upstream.sh`).
 - **Permissive licensing only (`scripts/check-licenses.sh`):**
   - Every file under `engine/mame/src/` must declare `license:BSD-3-Clause` in its first 3 lines (exception: `engine/mame/src/lib/util/md5.h` is `license:Public Domain`).

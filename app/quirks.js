@@ -290,6 +290,31 @@ var QUIRKS = [
     when: function (c) { return !!(c.disc && c.disc.tracks.length > 1 && c.disc.audio); },
     text: 'DOSBox-X omits CHD track padding, so music tracks on multi-track PC CDs can start a few frames early in DOSBox-X. 86Box and MiSTer ao486 read them accurately.',
     src: 'DOSBox-X src/dos/cdrom_image.cpp (omits 4-frame track padding)'
+  },
+  {
+    // Lossy audio tracks (Ogg Vorbis, MP3) decoded to Red Book PCM for CD CHD
+    id: 'lossy-audio', warn: true,
+    when: function (c) { return c.job.files.some(function (f) { return !!(f.audInfo && f.audInfo.isLossy); }); },
+    text: 'This disc uses lossy audio tracks (OGG/MP3): they are decoded to standard CD audio inside the CHD so emulators can play them, but the audio won\u2019t match lossless Redump checksums.',
+    src: 'Phase 6 audio track decoder (Ogg Vorbis / MP3)'
+  },
+  {
+    // Non-44.1 kHz / mono / non-16-bit audio tracks resampled to Red Book 44.1 kHz 16-bit stereo
+    id: 'resampled-audio',
+    when: function (c) { return c.job.files.some(function (f) { return !!(f.audInfo && (f.audInfo.origRate !== 44100 || f.audInfo.origCh !== 2 || f.audInfo.origBits !== 16)); }); },
+    text: function (c) {
+      var f = c.job.files.find(function (x) { return x.audInfo && (x.audInfo.origRate !== 44100 || x.audInfo.origCh !== 2 || x.audInfo.origBits !== 16); });
+      var ai = f.audInfo;
+      return 'Audio tracks (' + (ai.origRate / 1000).toFixed(1).replace(/\.0$/, '') + ' kHz, ' + (ai.origCh === 1 ? 'mono' : ai.origCh + ' ch') + ', ' + ai.origBits + '-bit) are converted to standard Red Book 44.1 kHz 16-bit stereo PCM for CD CHD.';
+    },
+    src: 'Phase 6 audio track decoder (Red Book normalization)'
+  },
+  {
+    // Guarded Tier-X CD+G / RW_RAW subchannel data: rejected by Beetle PCE/Saturn/PC-FX & Flycast <= 2.7
+    id: 'cdg-subcode', warn: true,
+    when: function (c) { return !!((c.disc && c.disc.cdg) || c.job.includeSub); },
+    text: 'This CHD includes raw subchannel data (CD+G / RW_RAW). Beetle PCE, Beetle Saturn, Beetle PC-FX and Flycast 2.7 or earlier reject CHDs with subchannel tracks; keep this off for regular games and use it only for CD+G karaoke/graphics discs.',
+    src: 'docs/chd/ecosystem-other.md & Flycast <= 2.7 subtype rejection'
   }
 ];
 // what the rules look at: the job's system and identification, its cue sheet or TOC, the settings
@@ -398,12 +423,22 @@ function buildRepairedCueJob(job) {
   job.files.forEach(function (f) { if (f.ref) map[refKey(f.ref)] = f.name; });
   var normCue = rewriteRefs('cue', job.descText, map);
   var fileByName = Object.create(null);
-  var rawInputs = [];
+  var rawInputs = [], strideSources = new Map();
   job.files.forEach(function (f, idx) {
     var rname = '__raw_' + idx;
-    var sz = f.ecm && f.imageSize ? f.imageSize : f.file.size;
+    var sz = (f.ecm || f.audio || f.stride) && f.imageSize ? f.imageSize : f.file.size;
     fileByName[f.name.toLowerCase()] = { ref: rname, size: sz, f: f };
-    rawInputs.push({ name: rname, blob: f.file, ecm: f.ecm, hidden: true });
+    if (f.stride) {
+      var sref = strideSources.get(f.file);
+      if (!sref) {
+        sref = '__strsrc_' + strideSources.size;
+        strideSources.set(f.file, sref);
+        rawInputs.push({ name: sref, blob: f.file, hidden: true });
+      }
+      rawInputs.push({ name: rname, stride: { ref: sref, offset: f.stride.offset, count: f.stride.count, dataSize: f.stride.dataSize, stride: f.stride.stride }, hidden: true });
+    } else {
+      rawInputs.push({ name: rname, blob: f.file, ecm: f.ecm, audio: f.audio, hidden: true });
+    }
   });
 
   var catalog = '', curFile = null, session = 1, fileGroups = [], tracks = [], curTrack = null;
@@ -683,7 +718,7 @@ function discMinutes(job, disc) {
       var frames = 0;
       for (var i = 0; i < disc.tracks.length; i++) {
         var f = job.files[i];
-        var sz = f.ecm && f.imageSize ? f.imageSize : f.pbp ? f.pbp.sectors * 2352 : f.file.size;
+        var sz = (f.ecm || f.audio || f.stride) && f.imageSize ? f.imageSize : f.pbp ? f.pbp.sectors * 2352 : f.file.size;
         var mode = disc.tracks[i].mode;
         var ss = /\/2048$|^MODE1$/.test(mode) ? 2048 : /\/2324$/.test(mode) ? 2324 : /\/2336$/.test(mode) ? 2336 : 2352;
         frames += sz / ss;

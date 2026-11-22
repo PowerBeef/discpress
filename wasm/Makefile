@@ -23,11 +23,15 @@ FLACDEF := -ffp-contract=off -DHAVE_CONFIG_H -DENABLE_64_BIT_WORDS=1 -DOGG_FOUND
 ZSTDDEF := -DXXH_NAMESPACE=ZSTD_ -DDEBUGLEVEL=0 -DZSTD_DISABLE_ASM -DZSTD_MULTITHREAD=0
 LZMADEF := -DZ7_PPMD_SUPPORT -DZ7_ST
 
-# wasm_helper.cpp and ecm.cpp are browser-only (helper workers, identification probes, ECM input)
+# wasm_helper.cpp, ecm.cpp, audio.cpp, and browser codec/archive helpers are browser-only
 ifeq ($(T),wasm)
 CPP_SRC := $(UTIL_SRC) $(OSD_SRC) $(TOOL_SRC)
+EXTRA_C := $(WASM_EXTRA_C)
+EXTRA_LZMA := $(LZMA_7Z_SRC)
 else
-CPP_SRC := $(UTIL_SRC) $(OSD_SRC) $(filter-out wasm_helper.cpp ecm.cpp,$(TOOL_SRC))
+CPP_SRC := $(UTIL_SRC) $(OSD_SRC) $(filter-out wasm_helper.cpp ecm.cpp audio.cpp,$(TOOL_SRC))
+EXTRA_C :=
+EXTRA_LZMA :=
 endif
 obj = $(O)/$(subst /,_,$(subst ../,,$(subst $(M)/,,$(basename $(1))))).o
 
@@ -45,13 +49,14 @@ $(foreach s,$(CPP_SRC),$(eval $(call cxxrule,$(s))))
 $(foreach s,$(ZLIB_SRC),$(eval $(call crule,$(s),-I$(M)/3rdparty/zlib)))
 $(foreach s,$(ZSTD_SRC),$(eval $(call crule,$(s),$(ZSTDDEF))))
 $(foreach s,$(FLAC_SRC),$(eval $(call crule,$(s),$(FLACDEF))))
-$(foreach s,$(LZMA_SRC),$(eval $(call crule,$(s),$(LZMADEF))))
+$(foreach s,$(LZMA_SRC) $(EXTRA_LZMA),$(eval $(call crule,$(s),$(LZMADEF))))
+$(foreach s,$(EXTRA_C),$(eval $(call crule,$(s),$(LZMADEF) -I$(M)/3rdparty/lzma/C -I$(M)/3rdparty/zlib -I$(M)/../libdeflate -DSTB_VORBIS_NO_PUSHDATA_API)))
 $(foreach s,$(UTF8_SRC),$(eval $(call crule,$(s),)))
 $(foreach s,$(DEFLATE_SRC),$(eval $(call crule,$(s),)))
 # -ffp-contract=off: no fused multiply-adds but the explicit fma() calls, on any CPU
 $(foreach s,$(LIBM_SRC),$(eval $(call crule,$(s),-ffp-contract=off)))
 
-ALL_SRC := $(CPP_SRC) $(ZLIB_SRC) $(ZSTD_SRC) $(FLAC_SRC) $(LZMA_SRC) $(UTF8_SRC) $(LIBM_SRC) $(DEFLATE_SRC)
+ALL_SRC := $(CPP_SRC) $(ZLIB_SRC) $(ZSTD_SRC) $(FLAC_SRC) $(LZMA_SRC) $(EXTRA_LZMA) $(EXTRA_C) $(UTF8_SRC) $(LIBM_SRC) $(DEFLATE_SRC)
 OBJS := $(foreach s,$(ALL_SRC),$(call obj,$(s)))
 -include $(OBJS:.o=.d)
 # and a change to the flags or the source list recompiles everything

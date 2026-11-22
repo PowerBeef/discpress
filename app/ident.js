@@ -359,16 +359,25 @@ function chdReader(file, ciso, parent) {
     return { kind: m.kind, tracks: m.tracks, logical: m.logical, inspect: m.inspect || null, read: function (track, lba) { return r.request({ track: track, lba: lba }); }, close: r.close };
   });
 }
-// opens ECM images, and PS1 PBP files' discs, in a worker (which scans each ECM file whole): for each,
-// a stand-in for the image it holds that reads like a file (size, slice(a, b).arrayBuffer(), and pack:
-// {file, how}, what checksums it), or null if it can't be read; and close().
-// files: the job's file entries ({file, ecm} or {file, pbp})
+// opens ECM, PBP, audio (FLAC/WAV/AIFF/OGG/MP3), and strided (MDS/CDI) images in a worker:
+// returns virtual file stand-ins ({size, pack, audInfo, slice(a,b)}) and close().
 function ecmImages(files, onScan) {
-  return readerWorker({ type: 'reader', ecm: files.map(function (f) { return f.pbp ? { blob: f.file, pbp: f.pbp } : f.file; }) }, 180000, onScan).then(function (r) {
+  var reqs = files.map(function (f) {
+    if (f.pbp) return { blob: f.file, pbp: f.pbp };
+    if (f.audio) return { blob: f.file, audio: true };
+    if (f.stride) return { blob: f.file, stride: f.stride };
+    return f.file;
+  });
+  return readerWorker({ type: 'reader', ecm: reqs }, 180000, onScan).then(function (r) {
+    var audInfos = r.info.audInfos || [];
     var views = files.map(function (f, i) {
       var size = r.info.sizes[i];
+      var how = f.pbp ? 'pbp@' + f.pbp.at + ':' + f.pbp.sectors
+        : f.audio ? 'audio'
+        : f.stride ? 'stride:' + JSON.stringify(f.stride)
+        : 'ecm';
       return size == null ? null : {
-        size: size, pack: { file: f.file, how: f.pbp ? 'pbp@' + f.pbp.at + ':' + f.pbp.sectors : 'ecm' },
+        size: size, audInfo: audInfos[i] || null, pack: { file: f.file, how: how },
         slice: function (a, b) {
           return {
             arrayBuffer: function () {
@@ -465,7 +474,12 @@ function crcWorker(blob, start, end, onProgress, how) {
       };
       w.onerror = function (e) { w.terminate(); reject(new Error(e.message || 'worker error')); };
       var pbp = /^pbp@(\d+):(\d+)$/.exec(how || ''); // a PS1 PBP's disc: its header's offset and its sectors
-      Engine.post(w, { type: 'crc', blob: blob, start: start || 0, end: end, ciso: how === 'ciso', ecm: how === 'ecm', pbp: pbp ? { at: +pbp[1], sectors: +pbp[2] } : null, debugSlow: DEBUG.crcSlow }); // with the compiled module, for zlib's crc32
+      var stride = how && how.indexOf('stride:') === 0 ? JSON.parse(how.slice(7)) : null;
+      Engine.post(w, {
+        type: 'crc', blob: blob, start: start || 0, end: end,
+        ciso: how === 'ciso', ecm: how === 'ecm', audio: how === 'audio', stride: stride,
+        pbp: pbp ? { at: +pbp[1], sectors: +pbp[2] } : null, debugSlow: DEBUG.crcSlow
+      }); // with the compiled module, for zlib's crc32
     });
   });
 }
@@ -898,8 +912,8 @@ function cueModel(text) {
     var r;
     if (/^\s*FILE\s/i.test(ln)) fileNo++;
     else if ((r = /^\s*REM\s+SESSION\s+0*(\d+)/i.exec(ln))) { session = +r[1]; m.sessions = Math.max(m.sessions, session); }
-    else if ((r = /^\s*TRACK\s+(\d+)\s+(\S+)/i.exec(ln))) {
-      cur = { no: +r[1], mode: r[2].toUpperCase(), session: session, index: {}, indexFile: {}, pregap: 0, postgap: 0, pregapCmd: false };
+    else if ((r = /^\s*TRACK\s+(\d+)\s+(\S+)(?:\s+(\S+))?/i.exec(ln))) {
+      cur = { no: +r[1], mode: r[2].toUpperCase(), sub: (r[3] || '').toUpperCase(), session: session, index: {}, indexFile: {}, pregap: 0, postgap: 0, pregapCmd: false };
       m.tracks.push(cur);
     } else if (cur && (r = /^\s*INDEX\s+(\d+)\s+(\S+)/i.exec(ln))) {
       var idx = +r[1];
@@ -915,7 +929,7 @@ function cueModel(text) {
     if ((0 in t.index) && (1 in t.index) && t.indexFile[0] === t.indexFile[1] && t.index[0] === t.index[1]) delete t.index[0];
   });
   m.audio = m.tracks.some(function (t) { return t.mode === 'AUDIO'; });
-  m.cdg = m.tracks.some(function (t) { return t.mode === 'CDG'; });
+  m.cdg = m.tracks.some(function (t) { return t.mode === 'CDG' || t.sub === 'RW_RAW'; });
   m.gaps = m.tracks.some(function (t) { return (0 in t.index) || t.pregap > 0 || t.postgap > 0; });
   return m;
 }
@@ -1000,7 +1014,7 @@ function nrgModel(nrg) {
 // nrg: the tracks of a Nero image (nrgTracks)
 function probePlan(job, images, nrg) {
   var readers = [], hashes = [], audio = [];
-  var fileOf = function (f) { return f && (f.ecm || f.pbp ? images && images.get(f) : f.file); };
+  var fileOf = function (f) { return f && (f.ecm || f.pbp || f.audio || f.stride ? images && images.get(f) : f.file); };
   var normNfc = function (s) { return s.normalize ? s.normalize('NFC') : s; };
   var byName = function (n) {
     var full = normNfc(String(n || '').replace(/\\/g, '/').replace(/^\.\//, '')).toLowerCase();
@@ -1193,7 +1207,7 @@ function probePlan(job, images, nrg) {
     if (!f1) return { readers: readers, hashes: hashes, audio: audio };
     hashes.push({ file: f1, track: 0 });
     if (job.autoCue) readers.push(fileReader(f1, 0, /2048/.test(job.autoCue) ? 2048 : 2352));
-    else if (x === 'iso' || x === 'cdr' || x === 'toast' || x === 'bin' || x === 'img') readers.push(fileReader(f1, 0, job.disc === 'cd' && job.syncMode ? 2352 : 2048));
+    else if (x === 'iso' || x === 'cdr' || x === 'toast' || x === 'bin' || x === 'img' || x === 'mdf') readers.push(fileReader(f1, 0, job.disc === 'cd' && job.syncMode ? 2352 : 2048));
   } else {
     job.files.forEach(function (f) { if (fileOf(f)) hashes.push({ file: fileOf(f), track: 0 }); });
   }
@@ -1276,15 +1290,26 @@ async function identifyJob(job, onStatus, onProvisional) {
         dataSizes.push(chd.logical);
       }
     } else {
-      // ECM images and PS1 PBP files: a worker rebuilds the images they hold
-      var ecms = job.files.filter(function (f) { return f.ecm || f.pbp; }), images = null;
+      // ECM, PS1 PBP, encoded audio tracks, and MDS/CDI strided tracks: a worker decodes/slices them
+      var ecms = job.files.filter(function (f) { return f.ecm || f.pbp || f.audio || f.stride; }), images = null;
       if (ecms.length) {
-        var reading = job.src === 'pbp' ? 'Reading the PBP file\u2026' : 'Reading the ECM image' + (ecms.length > 1 ? 's' : '') + '\u2026';
+        var hasEcm = ecms.some(function (f) { return f.ecm; });
+        var hasAud = ecms.some(function (f) { return f.audio; });
+        var reading = job.src === 'pbp' ? 'Reading the PBP file\u2026'
+          : hasEcm ? ('Reading the ECM image' + (ecms.length > 1 ? 's' : '') + '\u2026')
+          : hasAud ? 'Inspecting audio tracks\u2026'
+          : 'Reading disc tracks\u2026';
         onStatus && onStatus(reading, 0);
         var ei = await ecmImages(ecms, function (f) { if (onStatus) onStatus(reading, f); });
         ecm = ei;
         images = new Map();
-        ecms.forEach(function (f, i) { if (ei.views[i]) { images.set(f, ei.views[i]); f.imageSize = ei.views[i].size; } });
+        ecms.forEach(function (f, i) {
+          if (ei.views[i]) {
+            images.set(f, ei.views[i]);
+            f.imageSize = ei.views[i].size;
+            if (ei.views[i].audInfo) f.audInfo = ei.views[i].audInfo;
+          }
+        });
       }
       var nrg = job.src === 'nrg' ? await nrgTracks(job.files[0].file) : null;
       if (nrg) job.nrgTracks = nrg;

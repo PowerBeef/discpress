@@ -211,6 +211,9 @@ engine_sha = src_hash[:12] if src_hash else 'dev'
 patch = rd(os.path.join(ROOT, 'engine', 'mame-0.289.diff'))
 for path, name, label in [(os.path.join(W, 'wasm_helper.cpp'), 'wasm_helper.cpp', 'new file'),
                           (os.path.join(W, 'ecm.cpp'), 'ecm.cpp', 'new file'),
+                          (os.path.join(W, 'audio.cpp'), 'audio.cpp', 'new file, windowed audio decoder'),
+                          (os.path.join(W, '7z_stream.c'), '7z_stream.c', 'new file, streaming .7z unpacker'),
+                          (os.path.join(W, 'lz4_block.c'), 'lz4_block.c', 'new file, LZ4/libdeflate CSO/ZSO encoder'),
                           (os.path.join(W, 'par_lib.js'), 'par_lib.js', 'new file, Emscripten JS library'),
                           (os.path.join(W, 'version.cpp'), 'version.cpp', 'new file'),
                           (os.path.join(W, 'shim', 'SDL2', 'SDL.h'), 'shim/SDL2/SDL.h', 'new file, minimal SDL header shim'),

@@ -175,18 +175,31 @@ ZeroStore.prototype.read = function (dst, pos, len) {
 // Virtual concatenation of { store, start, len } slices (including ZeroStore, BlobStore,
 // OpfsStore, EcmStore, PbpStore) with zero copying or temporary files.
 function ConcatStore(parts) {
+  this.rawParts = parts || [];
   this.parts = [];
   this.readonly = true;
+  this.sizeV = 0;
+  this.last = 0;
+  this.rebuild();
+}
+ConcatStore.prototype.rebuild = function () {
+  this.parts = [];
   var off = 0;
-  for (var i = 0; i < parts.length; i++) {
-    var p = parts[i];
-    if (!p || !p.store || !(p.len > 0)) continue;
-    this.parts.push({ store: p.store, start: p.start || 0, len: p.len, off: off });
-    off += p.len;
+  for (var i = 0; i < this.rawParts.length; i++) {
+    var p = this.rawParts[i];
+    if (!p || !p.store) continue;
+    var st = p.start || 0;
+    var ln = p.autoLen ? Math.max(0, p.store.sizeV - st) : (p.len || 0);
+    if (!(ln > 0)) continue;
+    this.parts.push({ store: p.store, start: st, len: ln, off: off });
+    off += ln;
   }
   this.sizeV = off;
   this.last = 0;
-}
+};
+ConcatStore.prototype.setModule = function () {
+  this.rebuild();
+};
 ConcatStore.prototype.read = function (dst, pos, len) {
   if (pos >= this.sizeV) return 0;
   len = Math.min(len, this.sizeV - pos);
@@ -209,6 +222,168 @@ ConcatStore.prototype.read = function (dst, pos, len) {
     if (rel + got >= p.len) idx++;
   }
   this.last = Math.min(idx, Math.max(0, parts.length - 1));
+  return done;
+};
+
+// Virtual sector-strided slice of a disc image (Alcohol 120% .mdf, DiscJuggler .cdi, or
+// CloneCD .img + planar .sub transposed to bit-interleaved 96-byte RW_RAW subchannels).
+function StrideSliceStore(base, offset, count, dataSize, stride, subStore, subOffset) {
+  this.base = base;
+  this.offset = offset || 0;
+  this.count = count || 0;
+  this.dataSize = dataSize || 2352;
+  this.stride = stride || this.dataSize;
+  this.subStore = subStore || null;
+  this.subOffset = subOffset || 0;
+  this.outSec = this.subStore ? (this.dataSize + 96) : this.dataSize;
+  this.sizeV = this.count * this.outSec;
+  this.readonly = true;
+  this.chunkSecs = 256;
+  this.cache = null;
+}
+StrideSliceStore.prototype.transposePlanarSub = function (src, sOff, dst, dOff) {
+  for (var s = 0; s < 96; s++) {
+    var bi = s >> 3, sh = 7 - (s & 7), v = 0;
+    if ((src[sOff + bi] >>> sh) & 1) v |= 0x80;
+    if ((src[sOff + 12 + bi] >>> sh) & 1) v |= 0x40;
+    if ((src[sOff + 24 + bi] >>> sh) & 1) v |= 0x20;
+    if ((src[sOff + 36 + bi] >>> sh) & 1) v |= 0x10;
+    if ((src[sOff + 48 + bi] >>> sh) & 1) v |= 0x08;
+    if ((src[sOff + 60 + bi] >>> sh) & 1) v |= 0x04;
+    if ((src[sOff + 72 + bi] >>> sh) & 1) v |= 0x02;
+    if ((src[sOff + 84 + bi] >>> sh) & 1) v |= 0x01;
+    dst[dOff + s] = v;
+  }
+};
+StrideSliceStore.prototype.chunk = function (ci) {
+  if (this.cache && this.cache.ci === ci) return this.cache.data;
+  var first = ci * this.chunkSecs;
+  var n = Math.min(this.chunkSecs, this.count - first);
+  var out = new Uint8Array(n * this.outSec);
+  var raw = new Uint8Array(n * this.stride);
+  var got = this.base.read(raw, this.offset + first * this.stride, raw.length);
+  var subRaw = null;
+  if (this.subStore) {
+    subRaw = new Uint8Array(n * 96);
+    this.subStore.read(subRaw, this.subOffset + first * 96, subRaw.length);
+  }
+  for (var i = 0; i < n; i++) {
+    var rOff = i * this.stride, oOff = i * this.outSec;
+    if (rOff + this.dataSize <= got) out.set(raw.subarray(rOff, rOff + this.dataSize), oOff);
+    else if (rOff < got) out.set(raw.subarray(rOff, got), oOff);
+    if (subRaw) this.transposePlanarSub(subRaw, i * 96, out, oOff + this.dataSize);
+  }
+  this.cache = { ci: ci, data: out };
+  return out;
+};
+StrideSliceStore.prototype.read = function (dst, pos, len) {
+  if (pos >= this.sizeV) return 0;
+  len = Math.min(len, this.sizeV - pos);
+  if (!this.subStore && this.stride === this.dataSize) {
+    return this.base.read(dst, this.offset + pos, len);
+  }
+  var done = 0, span = this.chunkSecs * this.outSec;
+  while (done < len) {
+    var p = pos + done, ci = Math.floor(p / span), data = this.chunk(ci), off = p - ci * span;
+    var n = Math.min(len - done, data.length - off);
+    if (n <= 0) break;
+    dst.set(data.subarray(off, off + n), done);
+    done += n;
+  }
+  return done;
+};
+StrideSliceStore.prototype.free = function () { this.cache = null; };
+
+// Windowed on-demand Red Book 44.1 kHz 16-bit LE stereo PCM decoder backed by wasm/audio.cpp
+// (FLAC, extended WAV/RF64, AIFF/AIFC, Ogg Vorbis, MP3). Exact 2,352-byte sector boundary padding.
+var AUD_WIN = 112 * 2352; // 263,424 bytes = 65,856 stereo frames (~1.5 s)
+var audSeq = 0;
+function ensureAudMount(M) {
+  if (M._audRoot) return M._audRoot;
+  var chdfs = makeFS(M.FS);
+  try { M.FS.mkdir('/aud'); } catch (e) { /* already exists */ }
+  M.FS.mount(chdfs, { files: [] }, '/aud');
+  M._audRoot = M.FS.lookupPath('/aud').node;
+  M._audCHDFS = chdfs;
+  return M._audRoot;
+}
+function AudioStore(base, label) {
+  this.base = base;
+  this.label = label || 'audio track';
+  this.sizeV = 0;
+  this.readonly = true;
+  this.M = null;
+  this.handle = 0;
+  this.buf = 0;
+  this.audKey = '';
+  this.audInfo = null;
+  this.windows = [];
+}
+AudioStore.prototype.setModule = function (M) {
+  this.M = M;
+  var root = ensureAudMount(M);
+  this.audKey = 'a' + (++audSeq) + '.aud';
+  M._audCHDFS.createNode(root, this.audKey, RO_FILE_MODE, this.base);
+  var path = '/aud/' + this.audKey;
+  var pPath = M.stringToNewUTF8(path);
+  var pInfo = wasmAlloc(M, 32);
+  var h = M._wasm_aud_open(pPath, pInfo);
+  M._free(pPath);
+  if (h <= 0) {
+    M._free(pInfo);
+    delete root.contents[this.audKey];
+    this.audKey = '';
+    throw new Error('"' + this.label + '" could not be decoded as a supported audio track.');
+  }
+  var q = pInfo >>> 2, hu = M.HEAPU32;
+  var framesPad = hu[q + 1] + hu[q + 2] * 4294967296;
+  this.audInfo = {
+    fmt: hu[q],
+    framesPad: framesPad,
+    origRate: hu[q + 3],
+    origCh: hu[q + 4],
+    origBits: hu[q + 5],
+    isLossy: !!hu[q + 6]
+  };
+  M._free(pInfo);
+  this.handle = h;
+  this.sizeV = framesPad * 4;
+  this.buf = wasmAlloc(M, AUD_WIN);
+  this.windows = [];
+};
+AudioStore.prototype.free = function () {
+  if (this.M) {
+    if (this.handle) { this.M._wasm_aud_close(this.handle); this.handle = 0; }
+    if (this.buf) { this.M._free(this.buf); this.buf = 0; }
+    if (this.audKey && this.M._audRoot) { delete this.M._audRoot.contents[this.audKey]; this.audKey = ''; }
+  }
+  this.windows = [];
+};
+AudioStore.prototype.window = function (w) {
+  for (var i = 0; i < this.windows.length; i++) if (this.windows[i].w === w) return this.windows[i].data;
+  var M = this.M, bytePos = w * AUD_WIN;
+  var want = Math.min(AUD_WIN, this.sizeV - bytePos);
+  if (want <= 0 || !M || !this.handle) return new Uint8Array(0);
+  var framePos = Math.floor(bytePos / 4);
+  var got = M._wasm_aud_read(this.handle, framePos >>> 0, Math.floor(framePos / 4294967296) >>> 0, this.buf, want);
+  if (got < 0) throw { errno: ERR.EIO };
+  var data = M.HEAPU8.slice(this.buf, this.buf + got);
+  this.windows = [{ w: w, data: data }].concat(this.windows.slice(0, 1));
+  return data;
+};
+AudioStore.prototype.read = function (dst, pos, len) {
+  if (pos >= this.sizeV) return 0;
+  len = Math.min(len, this.sizeV - pos);
+  var M = this.M, heap = M && dst.buffer === M.HEAPU8.buffer, addr = dst.byteOffset, done = 0, parts = [];
+  while (done < len) {
+    var p = pos + done, w = Math.floor(p / AUD_WIN), data = this.window(w), off = p - w * AUD_WIN;
+    var n = Math.min(len - done, data.length - off);
+    if (n <= 0) break;
+    parts.push({ data: data, off: off, n: n, at: done });
+    done += n;
+  }
+  if (heap && dst.byteLength === 0) dst = M.HEAPU8.subarray(addr, addr + len);
+  parts.forEach(function (q) { dst.set(q.data.subarray(q.off, q.off + q.n), q.at); });
   return done;
 };
 
@@ -1586,6 +1761,43 @@ function attachHelper(msg) {
         var xfer = [m.items.buffer, meta.buffer, sha1.buffer, out.buffer];
         if (m.data && m.data.byteLength > 0) xfer.push(m.data);
         port.postMessage({ type: 'result', id: m.id, items: m.items, meta: meta, sha1: sha1, out: out, recyc: m.data }, xfer);
+        return;
+      }
+      if (m.type === 'ciso-batch') {
+        var ccount = m.count | 0, cfmt = m.fmt, cshift = m.shift || 1, clevel = m.level || 6;
+        var cmax = 2048 - cshift;
+        if (!hs.cisoIn) {
+          hs.cisoIn = wasmAlloc(M, 2048);
+          hs.cisoOutA = wasmAlloc(M, 2048);
+          hs.cisoOutB = wasmAlloc(M, 2048);
+        }
+        var csrc = new Uint8Array(m.blocks, 0, ccount * 2048);
+        var clens = new Uint16Array(ccount), cflags = new Uint8Array(ccount);
+        var cout = new Uint8Array(ccount * 2048), cpos = 0;
+        for (var bi = 0; bi < ccount; bi++) {
+          var boff = bi * 2048;
+          M.HEAPU8.set(csrc.subarray(boff, boff + 2048), hs.cisoIn);
+          var bestLen = 2048, bestFlag = (cfmt === 'cso2') ? 0 : 1, bestPtr = 0;
+          if (cfmt === 'zso') {
+            var zl = M._wasm_lz4_compress_block(hs.cisoIn, 2048, hs.cisoOutA, cmax);
+            if (zl > 0 && zl <= cmax) { bestLen = zl; bestFlag = 0; bestPtr = hs.cisoOutA; }
+          } else if (cfmt === 'cso1') {
+            var dl = M._wasm_deflate_raw(hs.cisoIn, 2048, hs.cisoOutA, cmax, clevel);
+            if (dl > 0 && dl <= cmax) { bestLen = dl; bestFlag = 0; bestPtr = hs.cisoOutA; }
+          } else {
+            var l2 = M._wasm_lz4_compress_block(hs.cisoIn, 2048, hs.cisoOutA, cmax);
+            var d2 = M._wasm_deflate_raw(hs.cisoIn, 2048, hs.cisoOutB, cmax, clevel);
+            if (d2 > 0 && d2 <= cmax && (l2 <= 0 || d2 <= l2)) { bestLen = d2; bestFlag = 0; bestPtr = hs.cisoOutB; }
+            else if (l2 > 0 && l2 <= cmax) { bestLen = l2; bestFlag = 1; bestPtr = hs.cisoOutA; }
+          }
+          clens[bi] = bestLen;
+          cflags[bi] = bestFlag;
+          if (bestPtr) cout.set(M.HEAPU8.subarray(bestPtr, bestPtr + bestLen), cpos);
+          else cout.set(csrc.subarray(boff, boff + 2048), cpos);
+          cpos += bestLen;
+        }
+        var ctrim = cout.slice(0, cpos);
+        port.postMessage({ type: 'ciso-result', id: m.id, seq: m.seq, lens: clens, flags: cflags, out: ctrim }, [clens.buffer, cflags.buffer, ctrim.buffer]);
       }
     } catch (err) {
       port.onmessage = null;
@@ -1905,6 +2117,16 @@ async function runJob(msg) {
     var inp = inputs[ii], bs;
     if (inp.zero != null) {
       bs = new ZeroStore(inp.zero);
+    } else if (inp.stride) {
+      var sref = storeByName[inp.stride.ref];
+      var subRef = inp.stride.subRef ? storeByName[inp.stride.subRef] : null;
+      if (!sref || (inp.stride.subRef && !subRef)) {
+        await dropStages();
+        await backing.finalize(false);
+        postMessage({ type: 'done', code: -1, error: 'Missing virtual sector source "' + (inp.stride.ref || inp.stride.subRef) + '".', outputs: [] });
+        return;
+      }
+      bs = new StrideSliceStore(sref, inp.stride.offset, inp.stride.count, inp.stride.dataSize, inp.stride.stride, subRef, inp.stride.subOffset);
     } else if (inp.concat) {
       var cparts = [];
       for (var ci = 0; ci < inp.concat.length; ci++) {
@@ -1920,8 +2142,9 @@ async function runJob(msg) {
             return;
           }
           var st0 = cp.start || 0;
-          var ln0 = cp.len != null ? cp.len : Math.max(0, ref.sizeV - st0);
-          cparts.push({ store: ref, start: st0, len: ln0 });
+          var autoLen = cp.len == null;
+          var ln0 = autoLen ? Math.max(0, ref.sizeV - st0) : cp.len;
+          cparts.push({ store: ref, start: st0, len: ln0, autoLen: autoLen });
         }
       }
       bs = new ConcatStore(cparts);
@@ -1937,14 +2160,18 @@ async function runJob(msg) {
           return;
         }
       }
-      // a CSO/ZSO compressed ISO, an ECM image or a PS1 PBP's disc: chdman reads what they hold
-      if (inp.ciso || inp.ecm || inp.pbp) {
+      // a CSO/ZSO compressed ISO, an ECM image, a PS1 PBP's disc, or a decoded audio track
+      if (inp.ciso || inp.ecm || inp.pbp || inp.audio) {
         var label = inp.blob.name || inp.name;
-        try { bs = inp.ciso ? new CisoStore(bs, 0, label) : inp.pbp ? new PbpStore(bs, inp.pbp, label) : new EcmStore(bs, label); }
-        catch (e) {
+        try {
+          bs = inp.ciso ? new CisoStore(bs, 0, label)
+            : inp.pbp ? new PbpStore(bs, inp.pbp, label)
+            : inp.audio ? new AudioStore(bs, label)
+            : new EcmStore(bs, label);
+        } catch (e) {
           await dropStages();
           await backing.finalize(false);
-          postMessage({ type: 'done', code: -1, error: '"' + label + '" could not be read as ' + (inp.ciso ? 'a compressed ISO' : inp.pbp ? 'a PS1 PBP file' : 'an ECM image') + ': ' + (e && e.message || e), outputs: [] });
+          postMessage({ type: 'done', code: -1, error: '"' + label + '" could not be read as ' + (inp.ciso ? 'a compressed ISO' : inp.pbp ? 'a PS1 PBP file' : inp.audio ? 'an audio track' : 'an ECM image') + ': ' + (e && e.message || e), outputs: [] });
           return;
         }
       }
@@ -2096,18 +2323,25 @@ function runCisoReader(M, msg) {
   };
 }
 
-// the CD images in a job's ECM files (msg.ecm): reports their sizes (null: not an ECM image, or
-// damaged), then answers {type:'read', id, file, pos, len} with the image's bytes
+// the CD images in a job's ECM/PBP/Audio/Stride files (msg.ecm): reports their sizes (null: not
+// readable, or damaged) and decoded audio metadata, then answers {type:'read', id, file, pos, len}
 function runEcmReader(M, msg) {
   var images = msg.ecm.map(function (it) {
     try {
-      var blob = it.blob || it; // {blob, pbp}: a PS1 PBP's disc
-      var s = it.pbp ? new PbpStore(new BlobStore(blob), it.pbp, blob.name) : new EcmStore(new BlobStore(blob), blob.name);
-      s.setModule(M);
+      var blob = it.blob || it;
+      var s = it.pbp ? new PbpStore(new BlobStore(blob), it.pbp, blob.name)
+        : it.audio ? new AudioStore(new BlobStore(blob), blob.name)
+        : it.stride ? new StrideSliceStore(new BlobStore(blob), it.stride.offset, it.stride.count, it.stride.dataSize, it.stride.stride)
+        : new EcmStore(new BlobStore(blob), blob.name);
+      if (s.setModule) s.setModule(M);
       return s;
     } catch (e) { return null; }
   });
-  postMessage({ type: 'reader-ready', kind: 3, tracks: [], logical: 0, sizes: images.map(function (s) { return s ? s.sizeV : null; }) });
+  postMessage({
+    type: 'reader-ready', kind: 3, tracks: [], logical: 0,
+    sizes: images.map(function (s) { return s ? s.sizeV : null; }),
+    audInfos: images.map(function (s) { return s && s.audInfo ? s.audInfo : null; })
+  });
   self.onmessage = function (e) {
     var m = e.data, data = null;
     if (m.type !== 'read') return;
@@ -2159,12 +2393,15 @@ async function runCrc(msg) {
       if (typeof M._crc32 === 'function' && (buf = M._malloc(step))) { /* the module's crc32 */ } else M = null;
     } catch (e) { M = null; }
   }
-  // msg.ciso: the checksum of the ISO inside a CSO/ZSO image, which needs the module's inflate;
-  // msg.ecm: of the CD image inside an ECM file (and that image's EDC is checked)
-  if (msg.ciso || msg.ecm || msg.pbp) {
-    if (!M) throw new Error('cannot decompress');
-    iso = msg.ciso ? new CisoStore(new BlobStore(blob), 0, blob.name) : msg.pbp ? new PbpStore(new BlobStore(blob), msg.pbp, blob.name) : new EcmStore(new BlobStore(blob), blob.name);
-    iso.setModule(M);
+  // msg.ciso/ecm/pbp/audio/stride: checksum of the decoded/sliced image
+  if (msg.ciso || msg.ecm || msg.pbp || msg.audio || msg.stride) {
+    if (!M && !msg.stride) throw new Error('cannot decompress');
+    iso = msg.ciso ? new CisoStore(new BlobStore(blob), 0, blob.name)
+      : msg.pbp ? new PbpStore(new BlobStore(blob), msg.pbp, blob.name)
+      : msg.audio ? new AudioStore(new BlobStore(blob), blob.name)
+      : msg.stride ? new StrideSliceStore(new BlobStore(blob), msg.stride.offset, msg.stride.count, msg.stride.dataSize, msg.stride.stride)
+      : new EcmStore(new BlobStore(blob), blob.name);
+    if (iso.setModule) iso.setModule(M);
     if (msg.end == null) end = iso.sizeV;
   }
   var crc = M ? 0 : -1;
@@ -2172,8 +2409,14 @@ async function runCrc(msg) {
     for (var pos = start; pos < end; pos += step) {
       var n = Math.min(end, pos + step) - pos;
       if (iso) {
-        if (iso.read(M.HEAPU8.subarray(buf, buf + n), pos, n) !== n) throw new Error('truncated image');
-        crc = M._crc32(crc, buf, n) >>> 0;
+        if (M) {
+          if (iso.read(M.HEAPU8.subarray(buf, buf + n), pos, n) !== n) throw new Error('truncated image');
+          crc = M._crc32(crc, buf, n) >>> 0;
+        } else {
+          var tmp = new Uint8Array(n);
+          if (iso.read(tmp, pos, n) !== n) throw new Error('truncated image');
+          crc = crcUpdate(crc, tmp);
+        }
       } else {
         var chunk = new Uint8Array(r.readAsArrayBuffer(blob.slice(pos, pos + n)));
         if (chunk.length !== n) throw new Error('truncated image');
@@ -2274,6 +2517,600 @@ async function runUnzip(msg) {
   postMessage({ type: 'unzip-done', reqId: msg.reqId, usedOpfs: !!sess && !parts.length, id: id, crc: hexCrc, blob: parts.length ? new Blob(parts) : null });
 }
 
+// Streaming .7z archive unpacker backed by LZMA SDK 23.01 (wasm/7z_stream.c).
+// Streams solid folders in <=2 MiB slices straight into OPFS chdman-unzip/<session>/<id>/<base>
+// (or MemStore when OPFS is unavailable), verifies CRCs, and returns pre-verified CRC-32 values.
+async function runUn7z(msg) {
+  await loadModule(msg);
+  var M = await instantiate({});
+  var FS = M.FS, CHDFS = makeFS(FS);
+  var bs = new BlobStore(msg.blob);
+  if (!storeReadable(bs)) {
+    var ms = new MemStore(), step = 4 << 20;
+    for (var sp = 0; sp < msg.blob.size; sp += step) {
+      ms.write(new Uint8Array(await msg.blob.slice(sp, Math.min(msg.blob.size, sp + step)).arrayBuffer()), sp);
+    }
+    ms.readonly = true;
+    bs = ms;
+  }
+  FS.mkdir('/in');
+  FS.mount(CHDFS, { files: [{ name: 'archive.7z', store: bs }] }, '/in');
+  var pPath = M.stringToNewUTF8('/in/archive.7z');
+  var numFiles = M._wasm_7z_open(pPath);
+  M._free(pPath);
+  if (numFiles < 0) {
+    var oerr = numFiles === -2 ? 'is password-protected or uses an unsupported 7z compression method'
+      : numFiles === -4 ? 'needs more memory than the browser allows'
+      : 'is damaged or not a valid 7z archive';
+    postMessage({ type: 'un7z-done', reqId: msg.reqId, error: (msg.name || 'Archive') + ' ' + oerr + '.' });
+    return;
+  }
+
+  var maxDic = msg.maxDicBytes || (128 << 20);
+  var nameBuf = wasmAlloc(M, 2048), metaPtr = wasmAlloc(M, 32), dec = new TextDecoder('utf-8');
+  var files = [], folderMap = Object.create(null), totalBytes = 0, idSeq = msg.idBase || 0;
+  try {
+    for (var i = 0; i < numFiles; i++) {
+      var nlen = M._wasm_7z_info(i, nameBuf, 2048, metaPtr);
+      if (nlen < 0) continue;
+      var q = metaPtr >>> 2, hu = M.HEAPU32;
+      var fsz = hu[q] + hu[q + 1] * 4294967296;
+      var fcrc = hu[q + 2] >>> 0, fidx = hu[q + 3] >>> 0;
+      var isDir = !!hu[q + 4], hasCrc = !!hu[q + 5], dic = hu[q + 6] >>> 0, enc = !!hu[q + 7];
+      var nm = dec.decode(M.HEAPU8.subarray(nameBuf, nameBuf + nlen)).replace(/\\/g, '/').replace(/^\/+/, '');
+      if (isDir || !nm || nm.slice(-1) === '/' || nm.indexOf('__MACOSX/') === 0) continue;
+      var base_ = nm.split('/').pop();
+      if (!base_ || base_.indexOf('._') === 0) continue;
+      if (enc) {
+        M._wasm_7z_close();
+        postMessage({ type: 'un7z-done', reqId: msg.reqId, error: (msg.name || 'Archive') + ' is password-protected; unpack it first.' });
+        return;
+      }
+      if (dic > maxDic) {
+        M._wasm_7z_close();
+        postMessage({ type: 'un7z-done', reqId: msg.reqId, error: (msg.name || 'Archive') + ' uses a ' + Math.round(dic / (1 << 20)) + ' MB LZMA dictionary, which exceeds this browser\u2019s safe limit (' + Math.round(maxDic / (1 << 20)) + ' MB). Extract it externally first.' });
+        return;
+      }
+      var rec = { idx: i, name: nm, baseName: base_, size: fsz, crc: fcrc, hasCrc: hasCrc, folderIdx: fidx, id: 'z7-' + (++idSeq) };
+      files.push(rec);
+      totalBytes += fsz;
+      if (fidx !== 0xFFFFFFFF && fsz > 0) {
+        if (!folderMap[fidx]) folderMap[fidx] = [];
+        folderMap[fidx].push(rec);
+      }
+    }
+  } finally {
+    M._free(nameBuf); M._free(metaPtr);
+  }
+  postMessage({ type: 'un7z-list', reqId: msg.reqId, count: files.length, totalBytes: totalBytes });
+
+  var sess = null, useOpfs = !!msg.useOpfs;
+  if (useOpfs && navigator.storage && navigator.storage.getDirectory) {
+    try {
+      var root = await (await navigator.storage.getDirectory()).getDirectoryHandle('chdman-unzip', { create: true });
+      sess = await root.getDirectoryHandle(msg.session, { create: true });
+      // test sync access handle availability once
+      var tfh = await sess.getFileHandle('.probe7z', { create: true });
+      var th = await openSyncHandle(tfh);
+      var tp = th.truncate(0);
+      if (tp && typeof tp.then === 'function') { try { await tp; await th.close(); } catch (x) {} throw new Error('async'); }
+      th.close();
+      try { await sess.removeEntry('.probe7z'); } catch (x) {}
+    } catch (e) { sess = null; }
+  }
+  if (!sess && totalBytes > (msg.memMax || (512 << 20))) {
+    M._wasm_7z_close();
+    postMessage({ type: 'un7z-done', reqId: msg.reqId, error: (msg.name || 'Archive') + ' is too large to unpack without private storage. Extract it externally first, or use Discpress online.' });
+    return;
+  }
+
+  var doneTotal = 0, lastProg = 0, outEntries = [], createdIds = [];
+  var folderKeys = Object.keys(folderMap).map(Number).sort(function (a, b) { return a - b; });
+  try {
+    // Emit any zero-byte files directly
+    for (var zi = 0; zi < files.length; zi++) {
+      if (files[zi].size === 0 || files[zi].folderIdx === 0xFFFFFFFF) {
+        outEntries.push({ name: files[zi].name, baseName: files[zi].baseName, size: 0, usedOpfs: false, id: files[zi].id, crc: '00000000', blob: new Blob([]) });
+      }
+    }
+    for (var fk = 0; fk < folderKeys.length; fk++) {
+      var fidx2 = folderKeys[fk], list = folderMap[fidx2];
+      var sinks = Object.create(null);
+      var writeErr = null;
+      for (var li = 0; li < list.length; li++) {
+        var f = list[li];
+        var sink = { rec: f, crc: -1, written: 0, parts: [], handle: null, wbuf: null, wlen: 0, wpos: 0 };
+        if (sess) {
+          var dir = await sess.getDirectoryHandle(f.id, { create: true });
+          createdIds.push(f.id);
+          var fh = await dir.getFileHandle(f.baseName, { create: true });
+          sink.handle = await openSyncHandle(fh);
+          sink.handle.truncate(0);
+          sink.wbuf = new Uint8Array(WBUF);
+        }
+        sinks[f.idx] = sink;
+      }
+      var flushSink = function (sk) {
+        if (!sk.wlen || !sk.handle) return;
+        var wn = sk.handle.write(sk.wbuf.subarray(0, sk.wlen), { at: sk.wpos });
+        if (wn !== sk.wlen) throw new DOMException('storage full', 'QuotaExceededError');
+        sk.wpos += sk.wlen;
+        sk.wlen = 0;
+      };
+      M.on7zWrite = function (fileIdx, ptr, len) {
+        var sk = sinks[fileIdx];
+        if (!sk) return 0; // unselected file inside solid folder
+        try {
+          var view = M.HEAPU8.subarray(ptr, ptr + len);
+          sk.crc = crcUpdate(sk.crc, view);
+          sk.written += len;
+          doneTotal += len;
+          if (sk.handle) {
+            if (len >= WBUF) {
+              flushSink(sk);
+              var wn = sk.handle.write(view, { at: sk.wpos });
+              if (wn !== len) throw new DOMException('storage full', 'QuotaExceededError');
+              sk.wpos += len;
+            } else {
+              if (sk.wlen + len > WBUF) flushSink(sk);
+              sk.wbuf.set(view, sk.wlen);
+              sk.wlen += len;
+            }
+          } else {
+            sk.parts.push(view.slice());
+          }
+          var now = Date.now();
+          if (now - lastProg > 80) { lastProg = now; postMessage({ type: 'un7z-progress', reqId: msg.reqId, done: doneTotal, total: totalBytes }); }
+          return 0;
+        } catch (e) {
+          writeErr = e;
+          return -1;
+        }
+      };
+      var rc = M._wasm_7z_extract_folder(fidx2, maxDic);
+      M.on7zWrite = null;
+      for (var ci = 0; ci < list.length; ci++) {
+        var sk2 = sinks[list[ci].idx];
+        try { if (sk2.handle) { if (rc === 0 && !writeErr) { flushSink(sk2); sk2.handle.flush(); } sk2.handle.close(); sk2.handle = null; } } catch (e) { if (!writeErr) writeErr = e; }
+      }
+      if (writeErr) throw writeErr;
+      if (rc !== 0) {
+        var rerr = rc === -2 ? 'is password-protected' : rc === -4 ? 'uses an unsupported 7z codec or exceeds memory limits' : 'is damaged or incomplete';
+        throw new Error((msg.name || 'Archive') + ' ' + rerr);
+      }
+      for (var vi = 0; vi < list.length; vi++) {
+        var sk3 = sinks[list[vi].idx], rec3 = sk3.rec;
+        var gotCrc = (sk3.crc ^ -1) >>> 0;
+        if (sk3.written !== rec3.size || (rec3.hasCrc && gotCrc !== rec3.crc)) {
+          throw new Error(rec3.baseName + ' is damaged in the 7z archive: checksum mismatch');
+        }
+        var hex = ('00000000' + gotCrc.toString(16).toUpperCase()).slice(-8);
+        outEntries.push({
+          name: rec3.name, baseName: rec3.baseName, size: rec3.size,
+          usedOpfs: !!sess, id: rec3.id, crc: hex, blob: sess ? null : new Blob(sk3.parts)
+        });
+      }
+    }
+    M._wasm_7z_close();
+    postMessage({ type: 'un7z-done', reqId: msg.reqId, entries: outEntries });
+  } catch (e) {
+    M._wasm_7z_close();
+    if (sess) {
+      for (var di = 0; di < createdIds.length; di++) {
+        try { await sess.removeEntry(createdIds[di], { recursive: true }); } catch (x) {}
+      }
+    }
+    var msgTxt = e && e.name === 'QuotaExceededError' ? 'the browser\u2019s storage is full' : (e && e.message || String(e));
+    postMessage({ type: 'un7z-done', reqId: msg.reqId, error: msgTxt });
+  }
+}
+
+// Parallel CSO v1 / CSO v2 / ZSO (--block=2048) writer for PSP, PS Vita Adrenaline, and PS2 OPL.
+// Reads from raw ISO, existing CSO/ZSO, or directly from a DVD CHD; compresses 2,048-byte blocks
+// across warm helper workers (or locally) and writes CISO/ZISO header + final aligned index table.
+async function runCisoWrite(msg) {
+  sinkPending = 0; sinkWaiter = null; lastWriter = null;
+  SINK_MAX = msg.debugSinkMax || (64 << 20);
+  var started = performance.now();
+  await loadModule(msg);
+  var backing = await makeBacking(msg);
+  postMessage({ type: 'storage', mode: backing.mode, reason: memReason });
+
+  var M = await instantiate({});
+  var FS = M.FS, CHDFS = makeFS(FS);
+  var bs = new BlobStore(msg.blob);
+  var srcStore = null, chdOpen = false, totalBytes = 0, secBuf = 0;
+  var fmt = msg.fmt || 'cso1'; // 'cso1' | 'cso2' | 'zso'
+  var level = msg.level || 6;
+  var helpers = (msg.ports || []).map(function (port) { return { port: port, inflight: 0, dead: false }; });
+
+  try {
+    if (msg.sourceKind === 'chd') {
+      FS.mkdir('/in');
+      var inF = [{ name: 'in.chd', store: bs }];
+      if (msg.parent) inF.push({ name: 'parent.chd', store: new BlobStore(msg.parent) });
+      FS.mount(CHDFS, { files: inF }, '/in');
+      var p1 = M.stringToNewUTF8('/in/in.chd'), p2 = msg.parent ? M.stringToNewUTF8('/in/parent.chd') : 0;
+      var kind = M._wasm_probe_open(p1, p2);
+      M._free(p1); if (p2) M._free(p2);
+      if (kind !== 2) throw new Error('Only DVD/raw CHDs can be converted to CSO or ZSO.');
+      totalBytes = M._wasm_probe_logical();
+      chdOpen = true;
+      secBuf = wasmAlloc(M, 2048);
+    } else if (msg.sourceKind === 'ciso') {
+      srcStore = new CisoStore(bs, 0, msg.blob.name || 'image');
+      srcStore.setModule(M);
+      totalBytes = srcStore.sizeV;
+    } else {
+      srcStore = bs;
+      totalBytes = bs.sizeV;
+    }
+    if (!(totalBytes > 0)) throw new Error('Input image is empty.');
+    var bsSize = 2048;
+    var nblocks = Math.ceil(totalBytes / bsSize);
+    var align = totalBytes > 1900 * 1024 * 1024 ? 2 : 0;
+    var shift = 1 << align;
+    var indexBytes = (nblocks + 1) * 4;
+    var dataStart = Math.ceil((24 + indexBytes) / shift) * shift;
+
+    var outStore = backing.create(msg.outName || (fmt === 'zso' ? 'output.zso' : 'output.cso'));
+    if (outStore instanceof StreamStore) {
+      outStore.pin = Math.min(32, Math.max(outStore.pin, Math.ceil(dataStart / BLOCK) + 1));
+    }
+
+    // Write placeholder header + index table so sequential block writes start at dataStart
+    var head = new Uint8Array(24), hdv = new DataView(head.buffer);
+    var magic = fmt === 'zso' ? 'ZISO' : 'CISO';
+    for (var mi = 0; mi < 4; mi++) head[mi] = magic.charCodeAt(mi);
+    hdv.setUint32(4, 24, true);
+    hdv.setUint32(8, totalBytes >>> 0, true);
+    hdv.setUint32(12, Math.floor(totalBytes / 4294967296) >>> 0, true);
+    hdv.setUint32(16, bsSize, true);
+    head[20] = fmt === 'cso2' ? 2 : 1;
+    head[21] = align;
+    outStore.write(head, 0);
+    var index = new Uint32Array(nblocks + 1);
+    var padHdr = dataStart - (24 + indexBytes);
+    if (padHdr > 0) outStore.write(new Uint8Array(padHdr), 24 + indexBytes);
+
+    var writePos = dataStart, doneBlocks = 0, lastProg = 0;
+    var BATCH = 512; // 1 MiB per parallel batch
+    var padZeros = new Uint8Array(shift);
+    function commitBatch(startBlock, lens, flags, outBytes) {
+      var o = 0;
+      for (var k = 0; k < lens.length; k++) {
+        var b = startBlock + k, blen = lens[k], flg = flags[k];
+        var entry = ((writePos / shift) >>> 0) & 0x7FFFFFFF;
+        if (flg) entry = (entry | 0x80000000) >>> 0;
+        index[b] = entry;
+        outStore.write(outBytes.subarray(o, o + blen), writePos);
+        o += blen;
+        writePos += blen;
+        var rem = writePos % shift;
+        if (rem) {
+          var p = shift - rem;
+          outStore.write(padZeros.subarray(0, p), writePos);
+          writePos += p;
+        }
+      }
+      doneBlocks += lens.length;
+      var now = Date.now();
+      if (now - lastProg > 120 || doneBlocks >= nblocks) {
+        lastProg = now;
+        postMessage({
+          type: 'prog-bin',
+          done: 100 * doneBlocks / nblocks,
+          ratio: doneBlocks ? 100 * writePos / (doneBlocks * bsSize) : 100,
+          bytesIn: Math.min(totalBytes, doneBlocks * bsSize),
+          bytesOut: writePos,
+          hunksDone: doneBlocks,
+          hunksTotal: nblocks,
+          phase: 1
+        });
+      }
+    }
+
+    function readBlocks(startBlock, count) {
+      var buf = new Uint8Array(count * bsSize);
+      if (chdOpen) {
+        for (var i = 0; i < count; i++) {
+          if (M._wasm_probe_read(0, (startBlock + i) >>> 0, secBuf) !== 0) throw new Error('Failed to read sector ' + (startBlock + i) + ' from CHD.');
+          buf.set(M.HEAPU8.subarray(secBuf, secBuf + bsSize), i * bsSize);
+        }
+      } else {
+        var pos = startBlock * bsSize;
+        var want = Math.min(count * bsSize, totalBytes - pos);
+        if (want > 0 && srcStore.read(buf.subarray(0, want), pos, want) !== want) throw new Error('Failed to read input image.');
+      }
+      return buf;
+    }
+
+    if (helpers.length > 0) {
+      var nextSend = 0, nextCommit = 0, totalBatches = Math.ceil(nblocks / BATCH);
+      var readyMap = Object.create(null), batchStarts = Object.create(null);
+      await new Promise(function (resolve, reject) {
+        var failed = false;
+        function pump() {
+          if (failed) return;
+          while (readyMap[nextCommit]) {
+            var res = readyMap[nextCommit];
+            delete readyMap[nextCommit];
+            try { commitBatch(batchStarts[nextCommit], res.lens, res.flags, res.out); }
+            catch (e) { failed = true; reject(e); return; }
+            delete batchStarts[nextCommit];
+            nextCommit++;
+          }
+          if (nextCommit >= totalBatches) { resolve(); return; }
+          if (sinkFull()) { sinkDrained().then(pump); return; }
+          for (var hi = 0; hi < helpers.length && nextSend < totalBatches; hi++) {
+            var h = helpers[hi];
+            if (h.dead || h.inflight >= 2) continue;
+            var seq = nextSend++;
+            var sb = seq * BATCH, cnt = Math.min(BATCH, nblocks - sb);
+            var blkBuf;
+            try { blkBuf = readBlocks(sb, cnt); }
+            catch (e) { failed = true; reject(e); return; }
+            batchStarts[seq] = sb;
+            h.inflight++;
+            h.port.postMessage({ type: 'ciso-batch', id: seq, seq: seq, fmt: fmt, level: level, shift: shift, count: cnt, blocks: blkBuf.buffer }, [blkBuf.buffer]);
+          }
+        }
+        helpers.forEach(function (h) {
+          h.port.onmessage = function (e) {
+            var m = e.data;
+            if (failed) return;
+            if (m.type === 'error') { failed = true; reject(new Error(m.message || 'helper error')); return; }
+            if (m.type !== 'ciso-result') return;
+            h.inflight--;
+            readyMap[m.seq] = m;
+            pump();
+          };
+        });
+        pump();
+      });
+    } else {
+      var inP = wasmAlloc(M, bsSize), outA = wasmAlloc(M, bsSize), outB = wasmAlloc(M, bsSize), cmax = bsSize - shift;
+      try {
+        for (var sb2 = 0; sb2 < nblocks; sb2 += BATCH) {
+          if (sinkFull()) await sinkDrained();
+          var cnt2 = Math.min(BATCH, nblocks - sb2);
+          var raw = readBlocks(sb2, cnt2);
+          var lens = new Uint16Array(cnt2), flags = new Uint8Array(cnt2), out = new Uint8Array(cnt2 * bsSize), o = 0;
+          for (var i2 = 0; i2 < cnt2; i2++) {
+            var off2 = i2 * bsSize;
+            M.HEAPU8.set(raw.subarray(off2, off2 + bsSize), inP);
+            var bestLen = bsSize, bestFlag = (fmt === 'cso2') ? 0 : 1, bestPtr = 0;
+            if (fmt === 'zso') {
+              var zl = M._wasm_lz4_compress_block(inP, bsSize, outA, cmax);
+              if (zl > 0 && zl <= cmax) { bestLen = zl; bestFlag = 0; bestPtr = outA; }
+            } else if (fmt === 'cso1') {
+              var dl = M._wasm_deflate_raw(inP, bsSize, outA, cmax, level);
+              if (dl > 0 && dl <= cmax) { bestLen = dl; bestFlag = 0; bestPtr = outA; }
+            } else {
+              var l2 = M._wasm_lz4_compress_block(inP, bsSize, outA, cmax);
+              var d2 = M._wasm_deflate_raw(inP, bsSize, outB, cmax, level);
+              if (d2 > 0 && d2 <= cmax && (l2 <= 0 || d2 <= l2)) { bestLen = d2; bestFlag = 0; bestPtr = outB; }
+              else if (l2 > 0 && l2 <= cmax) { bestLen = l2; bestFlag = 1; bestPtr = outA; }
+            }
+            lens[i2] = bestLen;
+            flags[i2] = bestFlag;
+            if (bestPtr) out.set(M.HEAPU8.subarray(bestPtr, bestPtr + bestLen), o);
+            else out.set(raw.subarray(off2, off2 + bsSize), o);
+            o += bestLen;
+          }
+          commitBatch(sb2, lens, flags, out.subarray(0, o));
+        }
+      } finally {
+        M._free(inP); M._free(outA); M._free(outB);
+      }
+    }
+
+    index[nblocks] = (writePos / shift) >>> 0;
+    outStore.write(new Uint8Array(index.buffer, index.byteOffset, index.byteLength), 24);
+    var ferr = backing.flush();
+    if (ferr) throw new Error(ferr);
+    var outputs = await backing.finalize(true);
+    helpers.forEach(function (h) { h.port.onmessage = null; try { h.port.close(); } catch (e) {} });
+    if (srcStore && srcStore.free) srcStore.free();
+    if (secBuf) M._free(secBuf);
+    postMessage({ type: 'done', code: 0, outputs: outputs, ms: performance.now() - started });
+  } catch (e) {
+    helpers.forEach(function (h) { h.port.onmessage = null; try { h.port.close(); } catch (x) {} });
+    if (srcStore && srcStore.free) srcStore.free();
+    if (secBuf) M._free(secBuf);
+    await backing.finalize(false);
+    postMessage({ type: 'done', code: -1, error: errText(e), outputs: [], ms: performance.now() - started });
+  }
+}
+
+// Clean-room Original Xbox XDVDFS scrubber/repacker (.iso -> scrubbed .xiso.iso for xemu).
+// Handles both full Redump XGD1 ISOs (partition at 0x18300000) and un-scrubbed XISOs (partition at 0),
+// preserving exact XDVDFS AVL directory tables, FILETIME, and attributes while stripping random padding.
+async function runXisoRepack(msg) {
+  sinkPending = 0; sinkWaiter = null; lastWriter = null;
+  SINK_MAX = msg.debugSinkMax || (64 << 20);
+  var started = performance.now();
+  var backing = await makeBacking(msg);
+  postMessage({ type: 'storage', mode: backing.mode, reason: memReason });
+
+  var bs = new BlobStore(msg.blob);
+  try {
+    var SIG = 'MICROSOFT*XBOX*MEDIA';
+    function checkSig(buf, off) {
+      for (var i = 0; i < 20; i++) if (buf[off + i] !== SIG.charCodeAt(i)) return false;
+      return true;
+    }
+    var partBase = -1, vd = new Uint8Array(2048);
+    var bases = [0x18300000, 0];
+    for (var bi = 0; bi < bases.length; bi++) {
+      var off = bases[bi] + 32 * 2048;
+      if (off + 2048 <= bs.sizeV && bs.read(vd, off, 2048) === 2048 && checkSig(vd, 0) && checkSig(vd, 0x7EC)) {
+        partBase = bases[bi];
+        break;
+      }
+    }
+    if (partBase < 0) throw new Error('Not a recognized Original Xbox XDVDFS disc image.');
+
+    var vdv = new DataView(vd.buffer);
+    var rootSec = vdv.getUint32(0x14, true), rootSize = vdv.getUint32(0x18, true);
+    if (!rootSec || !rootSize || rootSize > (64 << 20)) throw new Error('Invalid Xbox XDVDFS root directory.');
+
+    var dirs = [], files = [], totalFileBytes = 0;
+    function walkDir(sec, size) {
+      var aligned = Math.ceil(size / 2048) * 2048;
+      var buf = new Uint8Array(aligned);
+      buf.fill(0xFF);
+      var byteOff = partBase + sec * 2048;
+      if (byteOff + size > bs.sizeV || bs.read(buf.subarray(0, size), byteOff, size) !== size) {
+        throw new Error('Truncated Xbox XDVDFS directory at sector ' + sec + '.');
+      }
+      var dirRec = { origSec: sec, size: size, aligned: aligned, buf: buf, newSec: 0, entries: [] };
+      dirs.push(dirRec);
+      var dv = new DataView(buf.buffer), visited = Object.create(null), stack = [0];
+      while (stack.length) {
+        var noff = stack.pop();
+        if (noff + 14 > size || (noff & 3) || visited[noff]) continue;
+        visited[noff] = true;
+        var left = dv.getUint16(noff, true), right = dv.getUint16(noff + 2, true);
+        if (left === 0xFFFF && right === 0xFFFF) continue;
+        var esec = dv.getUint32(noff + 4, true), esize = dv.getUint32(noff + 8, true);
+        var attrs = buf[noff + 12];
+        var isDir = (attrs & 0x10) !== 0;
+        if (left && left !== 0xFFFF) stack.push(left * 4);
+        if (right && right !== 0xFFFF) stack.push(right * 4);
+        if (isDir) {
+          var child = (esize > 0 && esec > 0) ? walkDir(esec, esize) : null;
+          dirRec.entries.push({ nodeOff: noff, isDir: true, child: child });
+        } else {
+          var frec = (esize > 0 && esec > 0) ? { dir: dirRec, nodeOff: noff, origSec: esec, size: esize, newSec: 0 } : null;
+          if (frec) { files.push(frec); totalFileBytes += esize; }
+          dirRec.entries.push({ nodeOff: noff, isDir: false, file: frec });
+        }
+      }
+      return dirRec;
+    }
+    var rootDir = walkDir(rootSec, rootSize);
+    files.sort(function (a, b) { return a.origSec - b.origSec; });
+
+    // Assign compact sectors: 0..31 zero, 32 VD, 33.. dirs, then non-empty files
+    var nextSec = 33;
+    for (var di = 0; di < dirs.length; di++) {
+      dirs[di].newSec = nextSec;
+      nextSec += dirs[di].aligned / 2048;
+    }
+    for (var fi = 0; fi < files.length; fi++) {
+      files[fi].newSec = nextSec;
+      nextSec += Math.ceil(files[fi].size / 2048);
+    }
+
+    // Patch directory node sector pointers in-place (preserves exact AVL tree + attributes)
+    for (var di2 = 0; di2 < dirs.length; di2++) {
+      var dr = dirs[di2], ddv = new DataView(dr.buf.buffer);
+      for (var ei = 0; ei < dr.entries.length; ei++) {
+        var en = dr.entries[ei];
+        var ns = en.isDir ? (en.child ? en.child.newSec : 0) : (en.file ? en.file.newSec : 0);
+        ddv.setUint32(en.nodeOff + 4, ns >>> 0, true);
+      }
+    }
+    vdv.setUint32(0x14, rootDir.newSec >>> 0, true);
+
+    var outStore = backing.create(msg.outName || 'output.xiso.iso');
+    var totalOutBytes = nextSec * 2048;
+    // Sectors 0..31 (64 KiB zero) + Sector 32 (VD)
+    outStore.write(new Uint8Array(32 * 2048), 0);
+    outStore.write(vd, 32 * 2048);
+    var writePos = 33 * 2048;
+    for (var di3 = 0; di3 < dirs.length; di3++) {
+      outStore.write(dirs[di3].buf, writePos);
+      writePos += dirs[di3].aligned;
+    }
+
+    var CHUNK = 4 << 20, buf4 = new Uint8Array(CHUNK), doneBytes = 0, lastProg = 0;
+    var secPad = new Uint8Array(2048);
+    for (var fi2 = 0; fi2 < files.length; fi2++) {
+      var fl = files[fi2], srcPos = partBase + fl.origSec * 2048, rem = fl.size;
+      while (rem > 0) {
+        if (sinkFull()) await sinkDrained();
+        var n = Math.min(CHUNK, rem);
+        if (bs.read(buf4.subarray(0, n), srcPos, n) !== n) throw new Error('Truncated Xbox file data at sector ' + fl.origSec + '.');
+        outStore.write(buf4.subarray(0, n), writePos);
+        srcPos += n; writePos += n; rem -= n; doneBytes += n;
+        var now = Date.now();
+        if (now - lastProg > 120) {
+          lastProg = now;
+          postMessage({
+            type: 'prog-bin',
+            done: totalFileBytes ? 100 * doneBytes / totalFileBytes : 100,
+            ratio: bs.sizeV ? 100 * totalOutBytes / bs.sizeV : 100,
+            bytesIn: doneBytes, bytesOut: writePos,
+            hunksDone: fi2 + 1, hunksTotal: files.length, phase: 1
+          });
+        }
+      }
+      var tail = fl.size % 2048;
+      if (tail) {
+        var pad = 2048 - tail;
+        outStore.write(secPad.subarray(0, pad), writePos);
+        writePos += pad;
+      }
+    }
+    var ferr = backing.flush();
+    if (ferr) throw new Error(ferr);
+    var outputs = await backing.finalize(true);
+    postMessage({
+      type: 'done', code: 0, outputs: outputs, ms: performance.now() - started,
+      xisoMeta: { origBytes: bs.sizeV, outBytes: writePos, fileCount: files.length, dirCount: dirs.length }
+    });
+  } catch (e) {
+    await backing.finalize(false);
+    postMessage({ type: 'done', code: -1, error: errText(e), outputs: [], ms: performance.now() - started });
+  }
+}
+
+// Multi-session DiscJuggler .cdi -> .cue + track .bin unpacker
+async function runCdiExtract(msg) {
+  sinkPending = 0; sinkWaiter = null; lastWriter = null;
+  SINK_MAX = msg.debugSinkMax || (64 << 20);
+  var started = performance.now();
+  var backing = await makeBacking(msg);
+  postMessage({ type: 'storage', mode: backing.mode, reason: memReason });
+
+  var bs = new BlobStore(msg.blob);
+  try {
+    var cueBytes = new TextEncoder().encode(msg.cueText);
+    var cueStore = backing.create(msg.cueName);
+    cueStore.write(cueBytes, 0);
+    var tracks = msg.tracks || [], totalBytes = 0, doneBytes = 0, lastProg = 0;
+    for (var ti = 0; ti < tracks.length; ti++) totalBytes += tracks[ti].count * tracks[ti].dataSize;
+    var buf = new Uint8Array(2 << 20);
+    for (var i = 0; i < tracks.length; i++) {
+      var tr = tracks[i];
+      var slice = new StrideSliceStore(bs, tr.offset, tr.count, tr.dataSize, tr.stride);
+      var outStore = backing.create(tr.name);
+      for (var pos = 0; pos < slice.sizeV; pos += buf.length) {
+        if (sinkFull()) await sinkDrained();
+        var n = Math.min(buf.length, slice.sizeV - pos);
+        if (slice.read(buf.subarray(0, n), pos, n) !== n) throw new Error('Truncated CDI track ' + (i + 1) + '.');
+        outStore.write(buf.subarray(0, n), pos);
+        doneBytes += n;
+        var now = Date.now();
+        if (now - lastProg > 120) {
+          lastProg = now;
+          postMessage({ type: 'prog-bin', done: totalBytes ? 100 * doneBytes / totalBytes : 100, ratio: 100, bytesIn: doneBytes, bytesOut: doneBytes, hunksDone: i + 1, hunksTotal: tracks.length, phase: 2 });
+        }
+      }
+      slice.free();
+    }
+    var ferr = backing.flush();
+    if (ferr) throw new Error(ferr);
+    var outputs = await backing.finalize(true);
+    postMessage({ type: 'done', code: 0, outputs: outputs, ms: performance.now() - started });
+  } catch (e) {
+    await backing.finalize(false);
+    postMessage({ type: 'done', code: -1, error: errText(e), outputs: [], ms: performance.now() - started });
+  }
+}
+
 self.addEventListener('error', function (e) {
   if (e && e.error && e.error.name === 'ExitStatus') { e.preventDefault(); }
 });
@@ -2313,7 +3150,14 @@ self.onmessage = function (e) {
     return;
   }
   if (msg.type === 'unzip') { runUnzip(msg).catch(function (err) { postMessage({ type: 'unzip-done', reqId: msg.reqId, error: errText(err) }); }); return; }
+  if (msg.type === 'un7z') { runUn7z(msg).catch(function (err) { postMessage({ type: 'un7z-done', reqId: msg.reqId, error: errText(err) }); }); return; }
   if (msg.type === 'crc') { runCrc(msg).catch(function (err) { postMessage({ type: 'fatal', message: errText(err) }); }); return; }
-  var p = msg.type === 'helper' ? runHelper(msg) : msg.type === 'run' ? runJob(msg) : msg.type === 'reader' ? runReader(msg) : null;
+  var p = msg.type === 'helper' ? runHelper(msg)
+    : msg.type === 'run' ? runJob(msg)
+    : msg.type === 'ciso-write' ? runCisoWrite(msg)
+    : msg.type === 'xiso-repack' ? runXisoRepack(msg)
+    : msg.type === 'cdi-extract' ? runCdiExtract(msg)
+    : msg.type === 'reader' ? runReader(msg)
+    : null;
   if (p) p.catch(function (err) { postMessage({ type: 'fatal', message: err && typeof err.errno === 'number' ? errText(err) : String(err && err.stack || err && err.message || err) }); });
 };
