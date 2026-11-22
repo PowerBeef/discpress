@@ -290,3 +290,24 @@ This uses the same harness compiled with Emscripten 6.0.10 at `-O3 -fwasm-except
 - **FLAC is faster in the SIMD wasm build than in the native reference.** LLVM auto-vectorises libFLAC's LPC loops for SIMD128, whereas the native reference uses gcc `-O2` with FLAC's intrinsics disabled. **Without SIMD, wasm FLAC is about 1.9× slower than with it.** Devices without wasm SIMD (Safari before 16.4) therefore pay most on audio.
 - **Huffman encoding is the weakest wasm path (0.53×).** It is a small share of a DVD trial, but the obvious target if `huff` ever matters.
 - **Decompression** (extract, verify, identification) runs at 0.5–0.95× native. zstd decoding suffers most.
+
+## 8. Browser end-to-end speed & peak RSS (`v1.8.2` → `v1.9.0` → `v2.0.1`)
+
+Measured on 2026-11-22 in headless Chromium via Playwright (`tests/bench/bench.js` methodology: fresh persistent profile per run, `treeRss()` browser process-tree peak RSS sampled every 250 ms, SIMD build) on a 12-core Apple Silicon macOS host against synthetic `bench-cd` (`--cd-mb 64`, 70.9 MiB total input) and `bench-dvd` (`--dvd-mb 128`, 127.2 MiB ISO). All three builds were run interleaved per workload (A/B/C back-to-back) to eliminate thermal clock drift. All 16 `v2.0.1` create/extract configurations (`default` and `plan`, 1T and 4T) were independently verified byte-identical to native `chdman` via `node tests/bench/bench.js --fixtures bench-cd,bench-dvd --cd-mb 64 --dvd-mb 128 --ops create,extract --threads 1,4 --presets default,plan --simd on --no-native-timing`.
+
+| Workload (SIMD, interleaved) | `v1.8.2` | `v1.9.0` | `v2.0.1` | Speed (`2.0.1` vs `1.9.0`) | Peak RSS (`2.0.1` vs `1.8.2` / `1.9.0`) |
+|---|---:|---:|---:|---:|---:|
+| `bench-cd` default 1T | 5.43 s (13.1 MB/s, 562 MB) | 5.47 s (13.0 MB/s, 503 MB) | **5.48 s** (13.0 MB/s, 516 MB) | +0.2% (parity) | −46 MB / +13 MB |
+| `bench-cd` default 4T | 2.10 s (33.8 MB/s, 696 MB) | 2.08 s (34.1 MB/s, 657 MB) | **2.08 s** (34.1 MB/s, **566 MB**) | 0.0% (parity) | **−130 MB (−19%) / −91 MB (−14%)** |
+| `bench-cd` plan 1T | 3.40 s (20.9 MB/s, 578 MB) | 3.31 s (21.4 MB/s, 531 MB) | **3.20 s** (22.2 MB/s, 518 MB) | **−3.3% faster** | −60 MB / −13 MB |
+| `bench-cd` plan 4T | 1.22 s (58.2 MB/s, 658 MB) | 1.20 s (59.0 MB/s, 631 MB) | **1.18 s** (60.0 MB/s, **559 MB**) | **−1.7% faster** | **−99 MB (−15%) / −72 MB (−11%)** |
+| `bench-dvd` default 1T | 11.59 s (11.0 MB/s, 539 MB) | 11.10 s (11.5 MB/s, 506 MB) | **11.36 s** (11.2 MB/s, 521 MB) | +2.3% (−2.0% vs `1.8.2`) | −18 MB / +15 MB |
+| `bench-dvd` default 4T | 4.43 s (28.7 MB/s, 659 MB) | 4.37 s (29.1 MB/s, 679 MB) | **4.30 s** (29.6 MB/s, **563 MB**) | **−1.6% faster** | **−96 MB (−15%) / −116 MB (−17%)** |
+| `bench-dvd` plan 1T | 7.55 s (16.8 MB/s, 519 MB) | 7.35 s (17.3 MB/s, 495 MB) | **7.13 s** (17.8 MB/s, 508 MB) | **−3.0% faster** | −11 MB / +13 MB |
+| `bench-dvd` plan 4T | 2.91 s (43.7 MB/s, 683 MB) | 2.93 s (43.4 MB/s, 677 MB) | **2.65 s** (48.0 MB/s, **565 MB**) | **−9.6% faster** | **−118 MB (−17%) / −112 MB (−17%)** |
+
+**Findings:**
+
+- **Memory regression check (`v1.8.2` → `v1.9.0` → `v2.0.1`):** Single-thread peak RSS dropped 33–59 MB from `v1.8.2` to `v1.9.0` (confirming `v1.9.0`'s single-`chd_compressor_group` reduction), and `v2.0.1` holds that 1T footprint (within ~13–15 MB despite added Phase 6 decoders and OPFS checkpointing) while cutting **4-thread peak RSS by an additional 72–116 MB (−11% to −17% vs `v1.9.0`, −96 to −130 MB vs `v1.8.2`)** via early working-memory release, 32-byte packed hash entries, and persistent helper buffer reuse.
+- **Throughput:** Across all four 4-thread workloads, `v2.0.1` matches or beats both `v1.8.2` and `v1.9.0` (up to **9.6% faster** on `bench-dvd` `plan` 4T after refining `chdcodec.cpp`'s PCM probe to eliminate 43.3% non-audio DVD false positives, replacing ARM64-heavy `wasm_i8x16_bitmask` short-match loops with 64-bit `i64` XOR+`ctzll`, and aligning `worker.js` `halfHunks` batching with `chd.cpp`'s 256-hunk work-buffer rounding).
+- **Single-file size:** `dist/discpress.html` grew from 3,095,096 bytes (`v1.9.0`) to 3,337,926 bytes (`v2.0.1`, +243 KB / ~3.18 MiB), reflecting the vendored Public Domain LZMA SDK `.7z` decoder, `stb_vorbis`/`minimp3` audio decoders, `.mds`/`.cdi`/CD+G parsers, and CSO/ZSO/XISO writers shipped in 2.0.
