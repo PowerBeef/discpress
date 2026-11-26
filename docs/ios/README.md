@@ -1,6 +1,6 @@
 # Discpress on iPhone and iPad: what limits it, and the plan
 
-Researched 2026-09-28 (iOS 26/27, Safari 27.0). Four reports sit next to this file; every claim below links to one of them, and they cite WebKit source (file:line), Apple and WebKit documents, and measurements:
+Originally researched 2026-09-28 (iOS 26/27, Safari 27.0); **living status updated for Discpress v2.0.1**. Four historical research reports sit next to this file; every research claim below links to one of them, and they cite WebKit source (file:line), Apple and WebKit documents, and 2026-09-28 measurements. This file is the single source of truth for current iOS status and measurements:
 
 - [export.md](export.md): every way a web page can hand a large file to the Files app, from WebKit's source.
 - [limits.md](limits.md): memory, WebAssembly, storage, picked files and background limits.
@@ -50,7 +50,7 @@ A page can't tell in advance whether downloads work; the best hint is an iOS use
   - Safari deletes a site's storage after 7 days without a visit.
   - In viewer apps, every `file://` page shares one origin.
 - **Picked files.** iOS copies each picked file into the host app's temporary folder, and it can be deleted while the page still reads it. That is a plausible cause of the "worker can't read the file" failures already seen in viewer apps.
-- **After a reload.** Discpress deletes the previous session's files in private storage (`Store.cleanupStale`), and nothing on the page lists them any more. So a CHD that was finished but not yet saved when iOS reloaded the page is lost. (Fixed since: `Recovery`, Phase 2, step 4.)
+- **After a reload.** Originally Discpress deleted the previous session's files in private storage (`Store.cleanupStale`), losing finished unsaved CHDs and interrupted progress. (Fixed since: `Recovery` in 1.3.1 kept unsaved results, and v2.0.0 added crash-resumable OPFS checkpoints; see Phase 2, step 4.)
 
 **Routes other than Safari** ([apps-and-native.md](apps-and-native.md)):
 
@@ -61,12 +61,18 @@ A page can't tell in advance whether downloads work; the best hint is an iOS use
 - **a-Shell (WASI build)** is feasible but slow: every read and write crosses a text bridge, it runs single-threaded, and the app must stay in the foreground.
 - **Rejected:** iSH and UTM (too slow), Shortcuts (can't do it), and "save in parts" (joining the parts needs a terminal).
 
+## Current v2.0.1 measurements
+
+- **Single-file payload (`dist/discpress.html`):** **3,337,926 bytes** (3.34 MB / 3.18 MiB); **2,140,275 bytes** (2.14 MB) after `gzip -9` (~46,700 uncached loads per 100 GB/month on GitHub Pages).
+- **WebAssembly function sizes (WebKit bug 304810 watch):** `build/chdman.wasm` has **1,753 functions**, max **32,884 bytes** (0 over 40 KB); `build/chdman-nosimd.wasm` has **1,754 functions**, max **32,229 bytes** (still below the 40 KB+ trigger in the bug 304810 repro).
+
 ## Plan
 
-### Phase 0: in PR #11 (done)
+### Phase 0: in PR #11 & refined in v2.0.0 (done)
 
 - An identified PSP game is a DVD CHD, and the other type moves into Options.
-- On iPhone and iPad, results over 512 MB skip the share sheet and download instead: that works in Safari, but not in Sitecase.
+- On iPhone and iPad, results over `SHARE_MAX` skip the share sheet and download instead: **512 MiB** in Safari/WKWebView and **256 MiB** in Home Screen web apps (`SHARE_MAX = (iosHomeApp ? 256 : 512) * 1048576` in `app/ui.js`), since Home Screen web apps have tighter Jetsam budgets.
+- In Home Screen web apps, `<a download>` targets a hidden `<iframe name="dl-sink">` (`app/index.html`) so failed standalone downloads don't hijack the page, inputs larger than `SHARE_MAX * 1.4` show an upfront Safari tip, and iOS does not mark `<a download>` saved immediately so unsaved results stay recoverable.
 
 ### Phase 1: an https copy for Safari (the main fix): done
 
@@ -90,22 +96,27 @@ The plan as it was:
 3. **Make it an offline home-screen web app.** Add a manifest, icons and a small service worker that caches the one file and switches to a new version only when no job is running (superseded: the worker that shipped is network first and takes over at once, see Status above and `web/README.md`). The single-file download stays the main release for desktop and Android.
 4. **In the page:**
    - in a viewer app, show a notice up front: large results can't be saved in this app; open the hosted copy in Safari instead;
-   - in Safari, results over 512 MB download (already the case);
+   - in Safari, results over `SHARE_MAX` download (512 MiB in Safari/viewers; lowered to 256 MiB in Home Screen web apps in v2.0.0);
    - the Help page and README get new iPhone instructions: "open it in Safari, or add it to your Home Screen".
 5. **Test on a device** (checklist below), including downloads from a home-screen web app.
 
 ### Phase 2: making big jobs survive on iOS (engine and page): done, except as noted
 
-**Status.**
+**Status (updated for v2.0.1).**
 1. **Threads:** the speed test decides, as on other devices, trying at most 4 threads on iPhones (`iosThreadCap` in `app/ui.js`) and 8 on iPads.
    - **1.3.1** capped iPhones at 2 threads and iPads at 4, following the research, before measuring on a device.
    - **1.3.2** reverted this. Threads were not what closed Sitecase: the share sheet was. An iPhone 17 Pro converted the 1.6 GB PSP game in 1 min 42 s without the cap. A thread costs about 16 MB of memory, and the speed test runs on the device, so it already picks fewer threads where more don't help.
    - A stored speed test that stopped at the old cap is run again.
 2. **Heaps:** not needed. Measured in the page (bench CD and 1 GB DVD, every preset): a helper's heap never grows past its initial 16 MB, and the job worker's peaks at 23–40 MB. Growth copies are small and rare.
 3. **Wake lock:** already there. It is taken when a job starts and again whenever the page becomes visible. The Help page now says what iOS does when the phone is locked.
-4. **Recovery:** done (`Recovery` in `app/ui.js`, `tests/ui/recovery.spec.js`). A record in `localStorage` lists the running job and the finished results not saved yet. At the next start, `Store.cleanupStale` keeps those results' folder, and the page lists them under "From your last visit" (Save or Delete), with the job that didn't finish. For that job the page only says "Add its files again to start over": there is no restart action, since the picked files are gone after a reload ([limits.md](limits.md) §1.3).
+4. **Recovery & OPFS checkpoints:** done (`Recovery` in `app/ui.js`, `setupCheckpoint` in `app/worker.js`, `tests/ui/recovery.spec.js`). A record in `localStorage` tracks finished results not saved yet and active checkpoints. During OPFS conversions, v2.0.0 writes dual-buffered checkpoints (`ckpt.log`, `ckpt.0`, `ckpt.1`) every ~32 MiB of output (~16 MiB when unplugged below 25% battery) and urgently on `pagehide`/`visibilitychange`. After a reload or Jetsam kill, `Store.cleanupStale` preserves both unsaved results ("From your last visit") and valid checkpoints ("Resume interrupted conversion" with `% saved`). Because picked file handles don't survive a reload ([limits.md](limits.md) §1.3), re-adding the original source files fingerprint-matches the checkpoint and offers **Resume CHD** to finish byte-for-byte. (Jobs killed before the first checkpoint, or in memory-only mode, are named with "Add its files again to start over.")
 5. **Staging inputs in viewer apps:** not done. The 1.6 GB job read its input for its whole run in Sitecase, and a copy would double the time and disk space of every job. The existing fallback remains: the page streams an input the worker can't read.
 6. **Messages:** done. Lockdown Mode gets its own message, and a share-sheet read failure ("error while reading" in the `AbortError`'s message) is no longer taken for the user closing the sheet: for a single result since 1.3.1 (`saveOutput` in `app/ui.js`, which then downloads the file instead), for "Save all" since 1.8.2 (`downloadMany`).
+7. **v2.0.0–v2.0.1 mobile & runtime resilience:**
+   - **Warm worker pool reaping:** workers are reused across sequential jobs for zero reload overhead, idle-reaped after 20 s on mobile (60 s on desktop), evicted immediately when memory exceeds caps, and reaped on `pagehide` (`Engine.reapPools` in `app/ui.js`).
+   - **Thermal & battery awareness:** `PressureObserver` scales down active helpers under `serious`/`critical` CPU pressure where supported, and low battery (`<25%` unplugged via `navigator.getBattery()`) halves the checkpoint stride to 16 MiB.
+   - **Standalone PWA storage persistence:** installed Home Screen / standalone web apps automatically call `navigator.storage.persist()` on startup when OPFS is available (`Store.init` in `app/ui.js`).
+   - **Worker-side OPFS archive unpacking:** `.zip` and `.7z` unpacking runs in a worker using OPFS `createSyncAccessHandle()`, unblocking iOS 16.4–25.x without needing `createWritable()` (only persistent custom DAT storage in `DatStore.save` uses `createWritable()`).
 
 The plan as it was:
 
@@ -114,7 +125,7 @@ The plan as it was:
 3. **Keeping the phone awake.** Take a Screen Wake Lock when a job starts and again whenever the page becomes visible, and say that locking the phone or switching apps pauses the job and may stop it.
 4. **Recovery after a reload.**
    - A job leaves a "running" marker in storage.
-   - After a reload, the page says the job was stopped and offers to start it again. (It says so, but offers no restart: see Status above.)
+   - After a reload, the page says the job was stopped and offers to start it again. (Shipped in 1.3.1 as a notice; upgraded in v2.0.0 to OPFS checkpoint resume once source files are re-added: see Status above.)
    - Finished CHDs that weren't saved yet stay in private storage and are listed, instead of being deleted (`Store.cleanupStale`).
    - Saved results are deleted, as Safari's 7-day rule would delete them anyway.
 5. **Inputs in viewer apps.** Copy picked inputs into private storage at the start when running in a web view, so iOS deleting its temporary copy can't break a job; check `estimate()` for the input plus the output.

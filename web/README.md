@@ -2,9 +2,10 @@
 
 https://powerbeef.github.io/discpress/ is Discpress for people who don't want to download the HTML file,
 and the way to convert big games on iPhone and iPad: iOS Safari can't run a local HTML file, and apps that
-can usually can't save results over 512 MB (see `docs/ios/README.md`). In Safari, results of any size
-download into Files → Downloads. In any browser, the page can be installed (Add to Home Screen, or Chrome
-and Edge's install button) and used offline.
+can usually can't save results over 512 MB (Home Screen web apps cap share-sheet saves at 256 MiB and route
+larger `<a download>` saves through a hidden `<iframe name="dl-sink">`; see `docs/ios/README.md`). In Safari,
+results of any size download into Files → Downloads. In any browser, the page can be installed (Add to Home
+Screen, or Chrome and Edge's install button) and used offline.
 
 The Release workflow (`.github/workflows/release.yml`) publishes it together with the download: a new release stays a draft until the site is deployed, and `scripts/check-release.sh` then checks that both are the same file (also daily, `release-check.yml`). Re-running an older release's workflow deploys nothing, so there only the download is checked. For each release it publishes:
 

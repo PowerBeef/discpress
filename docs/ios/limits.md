@@ -15,33 +15,10 @@ is linked with `-sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB -sINITIAL_MEMORY=16
 pthreads (`wasm/link.sh`). On iOS it runs in Safari (only when served over https, since iOS Safari cannot open
 local HTML) or as a `file://` page inside a WKWebView file-viewer app such as Sitecase.
 
-## Status since 1.3
+## Status
 
-Added 2026-11-11. This report was written just before the iOS work shipped (commit `78fdb72`, 2026-09-28, in
-1.3.1), so its recommendations read as plans. This is what became of them and of those in [export.md](export.md)
-and [hosting.md](hosting.md); the plan itself, step by step, is in [README.md](README.md). The research below is
-unchanged except where a line says otherwise, and §8 carries the same statuses item by item.
-
-- **Done:**
-  - `Recovery`: results not saved yet are kept after a reload (`Store.cleanupStale` leaves them alone, and the
-    page lists them under "From your last visit"), and a job cut off by the reload is named.
-  - The wake lock, taken when a job starts and again whenever the page becomes visible.
-  - The Lockdown Mode message.
-  - In an app's web view, the `#iosTip` notice points big games to the online version in Safari.
-  - A share-sheet read failure is told from the user closing the sheet: for a single result since 1.3.1
-    (`saveOutput` in `app/ui.js`), for "Save all" since 1.8.2 (`downloadMany`).
-- **Changed:**
-  - Threads: the speed test tries at most 4 on iPhones (`iosThreadCap`) and 8 on other touch devices. 1.3.1 used
-    2 on iPhones and 4 on iPads, and 1.3.2 reverted that (`.github/release-notes/v1.3.1.md`, `v1.3.2.md`).
-  - The service worker that shipped is network first (`web/sw.js`, `web/README.md`), not the cache-first design
-    of hosting.md §3.3.
-- **Rejected:**
-  - Staging inputs into OPFS (README.md, Phase 2, step 5 says why).
-  - A fixed heap that doesn't grow, or a larger `INITIAL_MEMORY`: judged not needed (README.md, Phase 2, step 2),
-    and `wasm/link.sh` still has `INITIAL_MEMORY=16MB` with growth.
-  - "At most 2 helpers on iPhone", and capping helpers by measured memory.
-- **Open, not adopted:** lowering `SHARE_MAX` to about 256 MB on 4 GB devices (§7 and §8 here, and export.md).
-  The code uses one fixed 512 MB (`SHARE_MAX` in `app/ui.js`). Revisit after device testing.
+> [!NOTE]
+> **Historical research snapshot (2026-09-28).** This report records the original WebKit memory, WebAssembly, storage, and backgrounding research written just before the online HTTPS edition and iOS resilience work shipped. For current v2.0.1 iOS status (including OPFS checkpoint resume, 256 MiB Home Screen `SHARE_MAX`, warm worker pool reaping, `PressureObserver` throttling, and current WASM function-size measurements), see [docs/ios/README.md](README.md). The research body below is preserved as recorded on 2026-09-28.
 
 ---
 
@@ -75,7 +52,7 @@ ArrayBuffers plus wasm memories on any device running iOS ≤ 17**. Never plan t
 CD job (19,584-byte hunks) or a DVD job (hunks of a few KB), even with several hundred hunks in flight, a few hundred
 MB is plenty. So the aim is
 a small fixed heap per worker (for example 32–64 MB) with no growth, and only as many helpers as there are fast
-memories. (Both were rejected: see Status since 1.3 above.)
+memories. (Both were later rejected; see [README.md](README.md).)
 
 ---
 
@@ -163,8 +140,8 @@ When the host app is killed or suspended, its WebContent process goes with it. H
   (`WK/Source/JavaScriptCore/wasm/WasmMemory.cpp#L389-L411`), so growth briefly needs old + new. High.
 - **The JSC VM and heap per worker:** a few MB each (**UNVERIFIED**; no WebKit-specific measurement found).
   The OMG tier-up compile uses temporary memory per compiling thread. Discpress's largest function was 26 KB
-  when this was written (`build/chdman.wasm`: 1,587 functions, none over 40 KB, measured here). As of 1.8.1 it is
-  30,039 bytes (1,613 functions, none over 40 KB). That is under the sizes that hit bug 304810, but the risk is
+  when this report was written (`build/chdman.wasm`: 1,587 functions, none over 40 KB, measured here; see
+  [README.md](README.md) for current v2.0.1 measurements). That is under the sizes that hit bug 304810, but the risk is
   not zero. Medium.
 - **JS-side buffers:** each `FileReaderSync` slice, `postMessage` copy (unless transferred) and staged chunk is a
   separate ArrayBuffer. They all count toward the footprint and, on iOS ≤ 17, toward the 2 GB cage. Blob data
@@ -447,7 +424,7 @@ Example: 128 GB iPhone, WKWebView app: about 19 GB per origin and about 25.6 GB 
   (`BlobRegistryImpl.cpp#L156-L177`). For outputs, hand out the `File` from an OPFS `getFile()` rather than
   `new Blob([...chunks])`. Medium.
 - **Share sheet:** reads whole files into memory (§1.3). Keep `SHARE_MAX` at ≤ 512 MB or lower it on 4 GB devices
-  (not adopted: one fixed 512 MB; see Status since 1.3). High.
+  (see [README.md](README.md) for current v2.0.1 `SHARE_MAX` limits). High.
 - **Downloads in WKWebView apps:** with no `decidePolicyForNavigationAction` delegate, a `download` link becomes
   `listener->download()`. The file goes somewhere only if the app implements `webView:navigationAction:didBecomeDownload:`
   (WKDownload, iOS 14.5+) (`WK/Source/WebKit/UIProcess/Cocoa/NavigationState.mm#L600-L645`, `#L1400-L1413`).
@@ -460,8 +437,8 @@ Example: 128 GB iPhone, WKWebView app: about 19 GB per origin and about 25.6 GB 
 - **Service workers:** not available to `file://`. In WKWebView apps they need App-Bound Domains. Irrelevant to
   Discpress offline. High.
 - **OMG compiler memory spikes** (WebKit bug 304810, iOS 26.x): large functions can make tier-up allocate GBs.
-  Discpress's biggest function is 30,039 bytes as of 1.8.1 (26 KB when this was written; both measured), below
-  the 40 KB+ functions in the reproduction. Recheck after engine changes, and keep Asyncify out. Medium.
+  Discpress's biggest function was 26 KB when this report was written (measured; see [README.md](README.md) for current
+  v2.0.1 measurements), below the 40 KB+ functions in the reproduction. Recheck after engine changes, and keep Asyncify out. Medium.
 - **iOS Safari cannot open local HTML** from Files: Quick Look renders it without JavaScript
   (https://discussions.apple.com/thread/256102223). Hence the WKWebView-app route, or an https-hosted copy. Medium.
 
@@ -469,49 +446,27 @@ Example: 128 GB iPhone, WKWebView app: about 19 GB per origin and about 25.6 GB 
 
 ## 8. Concrete implications for Discpress (checklist)
 
-Each item ends with what became of it (see Status since 1.3 at the top).
+Historical 2026-09-28 recommendations; for what shipped and current v2.0.1 status (including OPFS checkpoint resume and 256 MiB Home Screen `SHARE_MAX`), see [docs/ios/README.md](README.md).
 
 1. **Memory plan (iOS):** job worker plus **at most 2 helpers** on iPhone. That uses the 3 fast memories and matches
    2 performance cores; `hardwareConcurrency` is 4 anyway. On iPads (report 8), allow more, but beyond 3 memories
    they run bounds-checked. Cap `Tuning`'s touch-device maximum of 8 accordingly on iOS WebKit.
-   - **Status: rejected as written, changed.** 1.3.1 capped iPhones at 2 threads and iPads at 4; 1.3.2 reverted
-     that (README.md, Phase 2, step 1 says why). The speed test now tries at most 4 threads on iPhones
-     (`iosThreadCap`, `Tuning.cap` in `app/ui.js`) and 8 on other touch devices.
 2. **No heap growth:** give each helper a fixed heap (compute the need from hunk size × slots) and the job worker a
    fixed heap. Set `INITIAL_MEMORY` per role, or grow once at startup before other allocations. Growth of a
    bounds-checked memory copies the whole heap.
-   - **Status: rejected,** as not needed: measured in the page, a helper's heap never grows past its initial
-     16 MB and the job worker's peaks at 23–40 MB (README.md, Phase 2, step 2). `wasm/link.sh` still has
-     `INITIAL_MEMORY=16MB` with growth.
 3. **Budget:** keep the sum of all heaps plus JS buffers below about 700 MB on 4 GB iPhones and about 1.2 GB on bigger
    ones. On iOS ≤ 17, keep all ArrayBuffers plus wasm memories below about 1.5 GB total (Gigacage).
-   - **Status: nothing enforces it.** The heaps measured for item 2 are far below it. Capping helpers by measured
-     memory was rejected.
 4. **Crash detection and restart** (a `running` marker), plus optional resume via OPFS checkpoints (5.3).
-   - **Status: done,** without the restart or the checkpoints. `Recovery` in `app/ui.js` keeps the marker in
-     `localStorage`; after a reload the page names the job that didn't finish and says "Add its files again to
-     start over", and lists the finished results not saved yet (`Store.cleanupStale` keeps them).
 5. **Wake Lock at Start**, re-acquired on visibility. Warn that locking the phone or switching apps pauses the job,
    and may kill it.
-   - **Status: done.** The Help page says what iOS does when the phone is locked.
 6. **OPFS first:** target 16.4+ for the synchronous handle API. Handle a `getDirectory()` rejection (Private
    Browsing, opaque origin) by falling back to memory with a size warning. Check `estimate()` against the expected
    output size plus the staged input. Delete outputs once they are saved (ITP 7-day cap in Safari; quota).
-   - **Status: in place,** except the staged input (item 9): the memory fallback with its `#memTip` note, a
-     warning before a job when `estimate()` leaves too little room for the expected output, and at the next visit
-     `Store.cleanupStale` clears an earlier visit's storage, except where results were not saved yet (`Recovery`).
 7. **Lockdown Mode:** detect `typeof WebAssembly === 'undefined'` and say so explicitly.
-   - **Status: done** (`Engine._load` in `app/ui.js`).
 8. **Share ≤ 512 MB** (or about 256 MB on 4 GB devices). Beyond that, download (Safari) or "keep in app storage",
    and explain that downloads may not work in some viewer apps.
-   - **Status: done** for 512 MB, the download and the explanation (`SHARE_MAX`, `viaShare` and the `#iosTip`
-     notice). **Open, not adopted:** about 256 MB on 4 GB devices; the code uses one fixed 512 MB. Revisit after
-     device testing.
 9. **Input robustness in viewer apps:** consider staging picked inputs into OPFS immediately (a clone-free copy costs
    disk space but survives temp cleanup and web view reloads).
-   - **Status: rejected.** The 1.6 GB job read its input for its whole run in Sitecase, and a copy would double
-     the time and disk space of every job (README.md, Phase 2, step 5). The page still streams an input the
-     worker can't read (`feedStage` in `app/ui.js`).
 
 ---
 
@@ -535,5 +490,5 @@ Each item ends with what became of it (see Status since 1.3 at the top).
   https://github.com/Nehanth/pooled/issues/207 ; https://powersync.com/blog/sqlite-persistence-on-the-web ;
   https://www.techlicious.com/blog/iphone-low-power-mode-slows-your-phone/ ; https://discussions.apple.com/thread/256102223
 - Discpress repo: `wasm/link.sh`, `Engine` in `app/ui.js`, `loadModule` and `instantiate` in `app/worker.js`,
-  commit `b25d04d`; function sizes measured from `build/chdman.wasm` in this session, and again for 1.8.1
-  (2026-11-11, from the wasm in `dist/discpress.html`).
+  commit `b25d04d`; function sizes measured from `build/chdman.wasm` on 2026-09-28 (see [README.md](README.md) for
+  current v2.0.1 measurements).

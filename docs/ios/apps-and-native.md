@@ -1,5 +1,8 @@
 # L4: Getting Discpress (or its engine) to write multi-GB CHDs into Files on iPhone/iPad, without plain Safari
 
+> [!NOTE]
+> **Historical research snapshot (2026-09-28).** This report records the original research into iOS viewer apps, a-Shell/WASI, and native wrappers before the online HTTPS edition and v2.0 iOS resilience work shipped. For current v2.0.1 iOS status, behaviour, and measurements, see [docs/ios/README.md](README.md).
+
 Research date: 2026-09-28. Repository read-only (no changes). "Unverified" means I could not confirm it from a primary source or a device test.
 
 Starting point (from the task): in **Sitecase** (App Store, WKWebView), `dist/discpress.html` converts a 1.6 GB PSP ISO, but the result can't leave the app. `navigator.share` loads the whole ~1 GB file into memory and iOS kills the app. `<a download>` fails with "Frame load interrupted", which is WebKit's error when the host app doesn't handle a download: the app implements no `WKDownload`.

@@ -1177,8 +1177,8 @@ test('every GD-ROM extract reads back as the same disc, and a TOC is refused', (
 
 // Cue sheets with INDEX points out of order, or a track with no frames from its INDEX 01 on: 0.289 made tracks of a
 // negative length (exit 0, or a read error) or of none (exit 0), whose TOC does not read back (START at the end)
-// CD+G tracks (TRACK nn CDG): 0.289 refuses the cue sheet, and so does the engine (the page refuses
-// it before running, edge-cases.spec.js; CD+G CHDs are post-0.289)
+// CD+G tracks (TRACK nn CDG): raw chdman 0.289 and the engine refuse the cue keyword directly;
+// the page rewrites TRACK nn CDG to AUDIO RW_RAW in fixDescriptor() (app/ui.js, overhaul6.spec.js)
 test('a CD+G track is an error, and no CHD is written', () => {
   const dir = tmp('cdg');
   fs.mkdirSync(dir, { recursive: true });

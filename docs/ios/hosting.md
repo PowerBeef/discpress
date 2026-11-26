@@ -1,29 +1,13 @@
 # L3: Serving Discpress from an https origin for iPhone and iPad
 
-Research date: 2026-09-28. Scope: research only, no repository changes. Repo facts come from this repository (CLAUDE.md, README.md, `app/`, `.github/workflows/release.yml`). On that date `dist/discpress.html` was 2,935,720 bytes, or 1,964,307 bytes after `gzip -9` (measured locally), which is roughly what a gzip-serving host sends over the wire. As of 1.8.1 (measured 2026-11-11) it is 3,210,138 bytes, about 3.2 MB, or 2,044,846 bytes after `gzip -9`; the sizes and load counts below are the 2026-09-28 ones unless they say otherwise.
+Research date: 2026-09-28. Scope: research only, no repository changes. Repo facts come from the repository as of that date (then `CLAUDE.md` — now `AGENTS.md` — `README.md`, `app/`, `.github/workflows/release.yml`). On that date `dist/discpress.html` was 2,935,720 bytes, or 1,964,307 bytes after `gzip -9` (measured locally), which is roughly what a gzip-serving host sends over the wire; sizes and load counts below are those 2026-09-28 figures unless noted otherwise.
 
 Confidence labels: **High** means official vendor documentation, compatibility data or a direct measurement. **Medium** means a credible secondary source or community report. **Unverified** means a claim I could not confirm; each one says so.
 
-## Status since 1.3
+## Status
 
-Added 2026-11-11. This report was written just before the iOS work shipped (commit `78fdb72`, 2026-09-28, in 1.3.1), so its recommendations read as plans. This is what became of them and of those in [limits.md](limits.md) and [export.md](export.md); the plan itself, step by step, is in [README.md](README.md), and the online version is described in `web/README.md`. The research below is unchanged except where a line says otherwise.
-
-- **Done:**
-  - The release file on GitHub Pages, deployed by the Release workflow (recommendation 1), with a manifest, icons and a service worker (4), the CSP with `connect-src 'none'` (3), and the single file kept as the download (5). There is no custom domain (2).
-  - `Recovery`: results not saved yet are kept after a reload (`Store.cleanupStale` leaves them alone, and the page lists them under "From your last visit"). §6, risk 3 asked to check this.
-  - The wake lock, and the Lockdown Mode message.
-  - In an app's web view, the `#iosTip` notice points big games to the online version in Safari.
-  - A share-sheet read failure is told from the user closing the sheet: for a single result since 1.3.1 (`saveOutput` in `app/ui.js`), for "Save all" since 1.8.2 (`downloadMany`).
-- **Changed:**
-  - The service worker that shipped is network first (`web/sw.js`, `web/README.md`), not the cache-first design of §3.3: it takes over at once, and a new release reaches the next visit.
-  - The deploy is the `pages` job, before `publish`, not after it, and only for the newest version; no tag rule on the `github-pages` environment was needed (§2.1).
-  - Threads: the speed test tries at most 4 on iPhones (`iosThreadCap`) and 8 on other touch devices. 1.3.1 used 2 on iPhones and 4 on iPads, and 1.3.2 reverted that (`.github/release-notes/v1.3.1.md`, `v1.3.2.md`).
-  - The CSP that shipped is in `app/index.html`; the draft in §3.4 lacks parts of it.
-- **Rejected:**
-  - Capping helpers by measured memory (§6, risk 2), and "at most 2 helpers on iPhone" (limits.md §8).
-  - Staging inputs into OPFS (README.md, Phase 2, step 5 says why).
-  - A fixed heap that doesn't grow, or a larger `INITIAL_MEMORY`: judged not needed, and `wasm/link.sh` still has `INITIAL_MEMORY=16MB` with growth.
-- **Open, not adopted:** lowering `SHARE_MAX` to about 256 MB on 4 GB devices (limits.md §8, export.md). The code uses one fixed 512 MB (`SHARE_MAX` in `app/ui.js`). Revisit after device testing.
+> [!NOTE]
+> **Historical research snapshot (2026-09-28).** This report records the original HTTPS hosting and PWA research written just before the online edition shipped on GitHub Pages. For current v2.0.1 iOS status, shipped hosting architecture, OPFS checkpoint resume, `SHARE_MAX` rules, and current file-size / bandwidth measurements, see [docs/ios/README.md](README.md) and [`web/README.md`](../../web/README.md). The research body below is preserved as recorded on 2026-09-28.
 
 ---
 
@@ -41,7 +25,7 @@ Added 2026-11-11. This report was written just before the iOS work shipped (comm
 | | **GitHub Pages** | **Cloudflare Workers static assets / Pages** | **Netlify** | **Vercel** |
 |---|---|---|---|---|
 | Cost at this scale | Free for public repos | Free: static-asset requests are "free and unlimited" (Workers) | Free plan: 300 credits/month, hard cap. Bandwidth costs 20 credits/GB (about 15 GB), a deploy costs 15 | Hobby plan: free, but "non-commercial, personal use only" |
-| Bandwidth | 100 GB/month *soft* limit, about 51,000 cold loads of 1.96 MB (about 49,000 of 2.04 MB as of 1.8.1) | Unlimited static | About 15 GB/month on the credit-based Free plan (accounts created before 2025-09-04 keep 100 GB) | 100 GB Fast Data Transfer. After that, "wait until 30 days have passed" |
+| Bandwidth | 100 GB/month *soft* limit, about 51,000 cold loads of 1.96 MB (see [README.md](README.md) for current v2.0.1 figures) | Unlimited static | About 15 GB/month on the credit-based Free plan (accounts created before 2025-09-04 keep 100 GB) | 100 GB Fast Data Transfer. After that, "wait until 30 days have passed" |
 | Per-file / site limits | Site ≤ 1 GB, 10-minute deploy timeout | 25 MiB per asset (Pages), 20,000 files | Not a constraint here | Not a constraint here |
 | Custom response headers | **No.** Fixed headers, `cache-control: max-age=600` (measured) | **Yes**: `_headers` file, up to 100 rules | **Yes**: `_headers` / `netlify.toml` | **Yes**: `vercel.json` |
 | COOP/COEP (SharedArrayBuffer) | Only through the `coi-serviceworker` workaround (reloads the page once) | Yes (RetroShrink does this, measured) | Yes (squoosh.app and ffmpegwasm.netlify.app send them, measured) | Yes (chdman.com sends them, measured) |
@@ -75,7 +59,7 @@ Sources: GitHub Pages limits https://docs.github.com/en/pages/getting-started-wi
 
 ### 2.1 Deploying the committed `dist/discpress.html`
 
-GitHub's custom-workflow route uses `actions/configure-pages@v5`, `actions/upload-pages-artifact@v4` and `actions/deploy-pages@v4`. It needs `pages: write` and `id-token: write`, plus `environment: github-pages` (https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages). With a custom Actions workflow, the 10-builds-per-hour soft limit does not apply (limits page above). The alternatives are publishing from a branch or folder (`/docs` or `gh-pages`). Those would need the 2.9 MB file (3.2 MB as of 1.8.1) committed a second time. The `docs/` folder already holds research and brand assets, and Jekyll would process it, so Actions is the cleaner route.
+GitHub's custom-workflow route uses `actions/configure-pages@v5`, `actions/upload-pages-artifact@v4` and `actions/deploy-pages@v4`. It needs `pages: write` and `id-token: write`, plus `environment: github-pages` (https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages). With a custom Actions workflow, the 10-builds-per-hour soft limit does not apply (limits page above). The alternatives are publishing from a branch or folder (`/docs` or `gh-pages`). Those would need the 2.9 MB file (see [README.md](README.md) for current size) committed a second time. The `docs/` folder already holds research and brand assets, and Jekyll would process it, so Actions is the cleaner route.
 
 Two gotchas that apply to this repo (High):
 - **A separate workflow triggered by the release won't fire.** "Events triggered by the `GITHUB_TOKEN` will not create a new workflow run", except `workflow_dispatch` and `repository_dispatch` (https://docs.github.com/en/actions/concepts/security/github_token). `release.yml` creates releases with `GH_TOKEN: ${{ github.token }}`, so a `on: release` Pages workflow would never run for those releases. Add the deploy as a second job in `release.yml` (`needs: publish`). (As shipped, the `pages` job runs before `publish`, not after it: prepare → release → pages → publish → verify. The release stays a draft until the site is deployed, and `pages` deploys only when the tag is the newest version: `scripts/newest-release.sh`.)
@@ -112,13 +96,12 @@ Sketch (not committed; for illustration). Superseded by the `pages` job in `rele
 
 ### 2.3 Headers GitHub Pages sends
 Measured on github.io and Pages custom domains on 2026-09-28: `server: GitHub.com`, `cache-control: max-age=600`, `expires`, `etag`, `last-modified`, `access-control-allow-origin: *`, `content-encoding: gzip`. The service sends no COOP, COEP, CSP or HSTS headers, and they can't be configured. GitHub says it "would support" custom headers but gives no ETA (https://github.com/orgs/community/discussions/13309).
-- **Do we need COOP/COEP? No.** They are required only for `SharedArrayBuffer` and wasm threads (https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Cross-Origin-Embedder-Policy; Safari iOS supports COEP since 15.2 per MDN compat data). Discpress uses message-passing helper workers (CLAUDE.md). A hosted build could use shared memory in future (`docs/chd/encoders.md`: "only for an HTTPS-hosted build"). That would need Cloudflare, Netlify or Vercel, or `coi-serviceworker` on Pages (https://github.com/gzuidhof/coi-serviceworker, https://blog.tomayac.com/2025/03/08/setting-coop-coep-headers-on-static-hosting-like-github-pages/).
+- **Do we need COOP/COEP? No.** They are required only for `SharedArrayBuffer` and wasm threads (https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Cross-Origin-Embedder-Policy; Safari iOS supports COEP since 15.2 per MDN compat data). Discpress uses message-passing helper workers (`AGENTS.md`). A hosted build could use shared memory in future (`docs/chd/encoders.md`: "only for an HTTPS-hosted build"). That would need Cloudflare, Netlify or Vercel, or `coi-serviceworker` on Pages (https://github.com/gzuidhof/coi-serviceworker, https://blog.tomayac.com/2025/03/08/setting-coop-coep-headers-on-static-hosting-like-github-pages/).
 - **Caching:** `max-age=600` means a new release is visible within about 10 minutes without a service worker. With one, the worker decides (§3.3).
-- **Size:** 2.9 MB is far below the 1 GB site limit. At about 1.96 MB per gzip transfer, the 100 GB/month soft limit allows about 51,000 uncached loads a month, and the service worker makes repeat visits free.
-  - As of 1.8.1: 3.2 MB, about 2.04 MB per gzip transfer, so about 49,000 uncached loads a month. Repeat visits are not free with the network-first worker that shipped: an online visit asks the site for the page again (§3.3).
+- **Size:** 2.9 MB is far below the 1 GB site limit. At about 1.96 MB per gzip transfer, the 100 GB/month soft limit allows about 51,000 uncached loads a month, and the service worker makes repeat visits free. *(Note: see [README.md](README.md) for current v2.0.1 size and load counts; repeat visits ask the site for the page again under the network-first worker that shipped, §3.3.)*
 
 ### 2.4 Terms
-GitHub Pages "is not intended for or allowed to be used as a free web-hosting service to run your online business, e-commerce site, or … SaaS". Donation links are allowed (terms URL above). A free, open-source tool whose Pages site is built from its own repository is the standard Pages use case. The app ships no game data (CLAUDE.md: fixtures are synthetic), and MAME and chdman source already live on GitHub. Confidence that it is allowed: High for the Pages terms. Whether the Acceptable Use Policies have anything to say about emulation tooling is **unverified**, but I found no sign of a problem, and comparable tools are hosted on GitHub.
+GitHub Pages "is not intended for or allowed to be used as a free web-hosting service to run your online business, e-commerce site, or … SaaS". Donation links are allowed (terms URL above). A free, open-source tool whose Pages site is built from its own repository is the standard Pages use case. The app ships no game data (`AGENTS.md`: fixtures are synthetic), and MAME and chdman source already live on GitHub. Confidence that it is allowed: High for the Pages terms. Whether the Acceptable Use Policies have anything to say about emulation tooling is **unverified**, but I found no sign of a problem, and comparable tools are hosted on GitHub.
 
 ### 2.5 Alternatives
 - **Cloudflare:** for new projects Cloudflare now steers people to Workers with static assets. Pages still works, but investment goes to Workers (https://developers.cloudflare.com/workers/static-assets/migration-guides/migrate-from-pages/, Medium). Both support `_headers` (100 rules, 2,000 characters per line). Workers adds `Cache-Control: public, max-age=0, must-revalidate` and an ETag by default. Static requests are free and unlimited. RetroShrink runs on `retroshrink.pages.dev` with COOP, COEP and CORP set (measured).
@@ -152,7 +135,7 @@ GitHub Pages "is not intended for or allowed to be used as a free web-hosting se
   - It precaches `./` (index.html), the manifest and the icon, and serves cache-first.
   - On `install` it does not call `skipWaiting()`; the page shows "Update ready: restart when idle". The page sends `SKIP_WAITING` only when no job is running and no OPFS results are unsaved. A mid-conversion reload would lose the job.
   - It needs no runtime network access, because the app loads nothing else.
-  - The cached shell is about 2.9 MB (3.2 MB as of 1.8.1). A Safari tab loses it after 7 days of Safari use without a visit; the Home Screen app keeps it.
+  - The cached shell was about 2.9 MB when researched (see [README.md](README.md) for current size). A Safari tab loses it after 7 days of Safari use without a visit; the Home Screen app keeps it.
 - iOS WKWebView apps (Sitecase and similar) don't get service workers unless the app opts into App-Bound Domains (https://webkit.org/blog/10882/app-bound-domains/). So the PWA layer only works in Safari or a Home Screen web app, which is the point of hosting.
 
 ### 3.4 Keeping "nothing is uploaded" credible
@@ -168,7 +151,7 @@ GitHub Pages "is not intended for or allowed to be used as a free web-hosting se
 - **No analytics, cookies or third-party requests.** State this and show how to check it:
   - Airplane mode after the first load.
   - Safari Web Inspector (Mac + cable) or desktop devtools Network tab: nothing after load.
-  - `curl -s https://<site>/ | sha256sum` equals the release asset's SHA-256, and the build is reproducible (CLAUDE.md).
+  - `curl -s https://<site>/ | sha256sum` equals the release asset's SHA-256, and the build is reproducible (`AGENTS.md`).
   - Show the version and hash in Help → About.
 - **Be honest about the new trust dependency.** A hosted page can change whenever the host or account is compromised, and SRI doesn't exist for top-level documents. Mitigations: deploy only from tagged releases, publish hashes in release notes, and keep the downloadable file as the fully offline option.
 
@@ -224,11 +207,11 @@ Suggested wording: "Discpress runs entirely on your device. The page is the same
    - Mitigations: Screen Wake Lock (already in `ui.js`; Home Screen apps need iOS 18.4+); a clear "keep Discpress on screen" banner; `visibilitychange` handling; progress that survives a pause.
 2. **Memory kills (jetsam).** iOS reloads the tab with "This webpage was reloaded because it was using significant memory" and no JavaScript error. Reported budgets range from about 1.5 GB (iPhone 12 Pro after days of uptime) to about 3 GB (iPhone 15 Pro) and vary with RAM, load and uptime (https://github.com/Nehanth/pooled/issues/207, Medium).
    - All dedicated workers run in the page's WebContent process, so the job worker plus its helper wasm instances share that budget (`Tuning.cap` in `app/ui.js` allows up to 8 threads on touch devices, and 4 on iPhones: `iosThreadCap`). That is my inference from WebKit's process model; **unverified** for workers specifically.
-   - A related WebKit bug (304810) makes the optimizing wasm compiler spike to about 4 GB on Asyncify builds, and jetsam killed them on iOS 26.6.2 (https://github.com/frankhinek/webkit-wasm-compiler-memory-repro). Discpress uses C++20 coroutines, not Asyncify (CLAUDE.md), so it is probably unaffected, but measure peak memory on a 4 GB-RAM iPhone.
-   - Mitigations: cap helpers on iPhone by measured memory, not only speed; keep the 512 MB share-sheet cap (share loads the whole file); stream from OPFS for downloads. (The first was rejected, see Status since 1.3; the other two are in place.)
+   - A related WebKit bug (304810) makes the optimizing wasm compiler spike to about 4 GB on Asyncify builds, and jetsam killed them on iOS 26.6.2 (https://github.com/frankhinek/webkit-wasm-compiler-memory-repro). Discpress uses C++20 coroutines, not Asyncify (`AGENTS.md`), so it is probably unaffected, but measure peak memory on a 4 GB-RAM iPhone.
+   - Mitigations: cap helpers on iPhone by measured memory, not only speed; keep a conservative share-sheet cap (share loads the whole file); stream from OPFS for downloads. (See [README.md](README.md) for current v2.0.1 status and `SHARE_MAX` limits.)
 3. **Loss of state after a reload.** OPFS outputs survive a reload, but the job model doesn't.
    - Option: persist a job journal in `localStorage`/OPFS so a reload can offer "resume / save finished results". When this was written, stale sessions were cleaned up based on Web Locks (`Store.cleanupStale`); on a reload after jetsam the lock is gone, so finished-but-unsaved results would be deleted: **check this**.
-   - Checked, and fixed in 1.3.1: they were deleted. `Recovery` in `app/ui.js` now keeps a record in `localStorage` of the running job and of finished results not saved yet; `Store.cleanupStale` leaves those results, and the page lists them under "From your last visit". A job cut off by the reload is named, without a resume: its files have to be added again.
+   - *(Shipped since: `Recovery` in 1.3.1 preserved unsaved results, and v2.0.0 added OPFS checkpoints/resume; see [README.md](README.md).)*
 4. **Picked input files can disappear.** iOS Safari deletes its temporary copies of picked files (existing handling in `app/ui.js`: `feedStage` streams an input the worker can't read, and `readFailHint` words the error). The same applies when hosted.
 5. **Storage eviction and space.** In a Safari tab, data goes after 7 days of Safari use without a visit, plus LRU eviction under disk pressure. Home Screen use and `persist()` help. Check `navigator.storage.estimate()` (iOS 17+) before a DVD job (in place: a job warns when the free space is under its expected output). Private Browsing gives ephemeral storage, possibly with a smaller quota (**unverified**).
 6. **Downloads.**

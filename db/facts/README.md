@@ -12,7 +12,7 @@ A new kind of fact also needs its name in `FACTS` in `scripts/assemble.py`, and 
 
 | File | Fact | What the page does with it |
 |---|---|---|
-| `libcrypt.tsv` | `libcrypt`: a PAL PlayStation disc protected by LibCrypt | warns when no `.sbi`, `.lsd` or CloneCD `.sub` came with it (rule `libcrypt-missing` in `app/quirks.js`) |
+| `libcrypt.tsv` | `libcrypt`: a PAL PlayStation disc protected by LibCrypt | warns when no `.sbi`, `.lsd`, CloneCD/redumper `.sub`/`.subcode`, or Alcohol `.mdf` interleaved Q subchannel came with it (rule `libcrypt-missing` in `app/quirks.js`), and flags existing PAL PS1 CHDs missing a paired `.sbi` in the CHD Health Auditor (`chd-libcrypt-missing` in `auditChd()`) |
 | `saturn-cart.tsv` | `sat_rom_cart`, `sat_mpeg_card`, `sat_ram_4m`, `sat_ram_1m`: mandatory Sega Saturn expansion cartridges | shows emulator cartridge notes (`saturn-rom-cart`, `saturn-mpeg-card`, `saturn-ram-4m`, `saturn-ram-1m` in `app/quirks.js`) |
 
 ## Sourcing and licensing
