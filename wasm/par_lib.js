@@ -1,5 +1,5 @@
 addToLibrary({
-  // flags: 1 = the deflate codec encodes with libdeflate (--libdeflate)
+  // flags: bit 0 = libdeflate (--libdeflate), bit 1 = ultra (--ultra), bits 8..15 = zstd level (--zstd-level)
   wasm_par_enabled: function (hunkbytes, unitbytes, comp, flags) {
     if (!Module['parSetup']) return 0;
     var p = comp >>> 2;

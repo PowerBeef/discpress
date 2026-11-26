@@ -3,6 +3,11 @@
  * For conditions of distribution and use, see copyright notice in zlib.h
  */
 
+/* Modified by Discpress (2026): add WebAssembly SIMD128 hash-table slide
+ * (slide_hash) and 64-bit little-endian match extension (longest_match) for
+ * __wasm__. See engine/mame-0.289.diff for the exact diff against zlib 1.3.2.
+ */
+
 /*
  *  ALGORITHM
  *
