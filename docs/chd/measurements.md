@@ -4,7 +4,7 @@ Measured on 2026-09-27 for the chdman fork dossier. Everything here can be repro
 
 **What was measured.** The subject is chdman built from the source Discpress shipped at the time: MAME `76c7d19`, i.e. 0.289 plus 1,167 commits. Codecs were driven through MAME's own classes (`chdcodec.cpp`), linked from `build/obj-native`. Discpress 1.2.1 moved to the 0.289 release, whose only codec difference is LZMA level 8 instead of 6 (§5): LZMA figures shift by about 0.1% in size and LZMA is about 1.35× slower there; everything else is unchanged.
 
-**What the lab builds against today.** The scripts moved to the 0.289 pin with 1.2.1, and to the engine (`engine/mame`, the fork of chdman 0.289) when it was forked. Their two patches apply to the engine's `chdcodec.cpp` and `flac.cpp`; the first had stopped applying when milestones 2.4 and 2.6 changed that file, and was rebased on 2026-11-11. So a run today measures the engine: LZMA level 8, and creation times that include early abort and the faster hashing and ECC. The tables of §1, §3 and §4 are the research's runs and were not repeated; the "as built" tables in §2 are the engine's.
+**What the lab builds against today.** The scripts moved to the 0.289 pin with 1.2.1, and to the engine (`engine/mame`, the fork of chdman 0.289) when it was forked. Their two patches (`lab/chdcodec-variants.diff` and `lab/flac-variants.diff`) were rebased onto the v2.0.1 engine (supporting the persistent LZMA encoder, `chd().zstd_level()`, `cdfl` libdeflate, and `--ultra`); `--ultra` and `--zstd-level` are also now built-in engine flags. A run today measures the current engine: LZMA level 8 by default, plus early abort, `cd_prep_cache`, persistent LZMA, and the faster hashing/ECC/SIMD paths. The tables of §1, §3 and §4 are the 2026-09-27 research runs and were not repeated; the "as built" tables in §2 and §8 are the engine's.
 
 **Build and host.** The native build uses `-O2`, `FLAC__NO_ASM` and `Z7_ST`, as `scripts/build-native.sh` builds it. The host is a 4 vCPU Intel Xeon at 2.1 GHz shared with other jobs. **Timings are per-thread CPU time** (`CLOCK_THREAD_CPUTIME_ID`, or `rusage` for whole processes), so contention mostly cancels out. Wall-clock comparisons are marked as such.
 
@@ -183,7 +183,7 @@ What each variant changes:
 | FLAC max LPC order 32 | 64,207,438 | −0.14% | 70.8 s | 35,019,415 | ±0 | 44.0 s |
 | FLAC exhaustive model + precision search | 64,108,876 | −0.29% | **695 s** | 35,014,389 | −0.01% | 663 s |
 | FLAC precision search (`-p`) | 64,164,215 | −0.21% | 113 s | — | — | — |
-| **"Smaller still"** (not built; `smallest` in `run_variants.py`): LZMA level 9 fb 273 mc 1000 + libdeflate-12 + FLAC `-p` | **63,991,305** | **−0.47%** | 140 s | **34,724,995** | **−0.84%** | 90 s |
+| **"Smaller still"** (`smallest` in `run_variants.py`; later shipped in 2.0.0 as `--ultra --libdeflate`, see note below): LZMA level 9 fb 273 mc 1000 + libdeflate-12 + FLAC `-p` | **63,991,305** | **−0.47%** | 140 s | **34,724,995** | **−0.84%** | 90 s |
 
 **Findings:**
 
@@ -191,9 +191,9 @@ What each variant changes:
   - The best single change is libdeflate on DVD/raw data: −0.76% for about 30% more CPU. The same encoder is also *faster* than zlib at comparable levels.
   - LZMA tuning gains 0.1–0.2%.
   - FLAC `-p` gains 0.2% on CD for 2× CPU, while exhaustive search costs 12× for 0.3%.
-  - All together ("Smaller still", the plan's 2.7) they give −0.47% (CD) and −0.84% (DVD) for about 2.5× the CPU, and every reader decodes it. It is not built, and it is not the app's "Smallest (default)" preset, which is chdman's own default settings.
+  - All together ("Smaller still", the plan's 2.7) the lab configuration gave −0.47% (CD) and −0.84% (DVD) for about 2.5× the CPU, and every reader decodes it. *(Shipped in Discpress 2.0.0 as the opt-in Tier-C **Smaller still** preset via `--ultra --libdeflate`, distinct from Tier-R "Smallest (default)". The shipped `--ultra` FLAC configuration uses `-e -p` with `"tukey(0.5);partial_tukey(2);punchout_tukey(3)"` apodization within max LPC order 12 rather than `-p` alone.)*
 - **The 0.289 → HEAD LZMA level change (8 → 6)** cost about 0.1% in size and made LZMA about 1.35× faster (lane B). Level 9 recovers the size.
-- None of these changes is worth breaking byte identity by default. They fit an explicit, opt-in preset ("Smaller still").
+- None of these changes is worth breaking byte identity by default; they live behind the explicit, opt-in **Smaller still** preset (`--ultra --libdeflate`).
 
 **Deflate at its limit.** zopfli (15 iterations) is too slow for the full corpus, so it ran on smaller discs built from the same material (`small.cue`: the first 6,000 data frames plus the Chopin *Albumleaf* and NIN *999,999* tracks, 46.6 MB; `small.iso`: the first 12,000 sectors of `payload.iso`, 24.6 MB). Four threads; CPU is the process total. MAME and libchdr decoded every output to the same data SHA-1.
 

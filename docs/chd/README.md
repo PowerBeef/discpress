@@ -16,7 +16,7 @@ This is research done on 2026-09-27 to prepare a hard fork of MAME's `chdman` fo
 
 | Document | What it covers |
 |---|---|
-| [fork-plan.md](fork-plan.md) | **The synthesis:** the compatibility contract, output tiers, and a milestone roadmap with measured gains and each milestone's status as of Discpress 1.9.0 (milestones 0, 5 and 6 done, 1 to 4 mostly, 7 planned) |
+| [fork-plan.md](fork-plan.md) | **The synthesis:** the compatibility contract, output tiers, and a milestone roadmap with measured gains and each milestone's status as of Discpress 2.0.1 (milestones 0, 5, 6 and 7 done; 1 to 4 nearly complete) |
 | [measurements.md](measurements.md) | Per-codec economics, codec-selection policies, encoder variants, hunk sizes, the 0.289 drift, native vs wasm |
 | [format.md](format.md) (lane A) | Byte-level spec of CHD V1–V5 (headers, maps, metadata, hashes), every codec, and what decoders let an encoder change (tested with MAME, five libchdr versions and chd-rs) |
 | [chdman-internals.md](chdman-internals.md) (lane B) | Every command and option, the compression pipeline and threading, performance, defects, the Discpress wasm patch, licensing of every file |
@@ -58,7 +58,7 @@ Three separate causes:
 - **CD audio isn't deterministic across builds.** libFLAC's window functions use `cosf`/`log`, and Emscripten's libm differs from glibc by one unit in the last place. The app's wasm output therefore differs from its own native build by a few bytes on real music (reproduced here on a Chopin recording). Official ARM64 builds (NEON) differ from x86 for the same kind of reason. The tests missed this because their audio is synthetic sine waves and the oracle was built from the same tree. **Fixed in milestone 2.3:** libFLAC now uses copies of glibc's `cosf` and `log` in every build (`engine/libm`), and the page's CD audio matches chdman on Linux byte for byte. The `music-cd` fixture, 10 s of synthetic piano, would catch a regression.
 - **What does hold is the CHD SHA-1**, i.e. content identity (data plus metadata), for everything except GD-ROM. That is what MAME and DAT tools check.
 
-The research recommended rewording the claim in the README, the help page, CLAUDE.md and the release notes until the fork restored identity (fork-plan.md, milestones 0 and 2.3).
+The research recommended rewording the claim in the README, the help page, CLAUDE.md (now `AGENTS.md`) and the release notes until the fork restored identity (fork-plan.md, milestones 0 and 2.3).
 
 **Status: resolved in milestone 2.3 (Discpress 1.3.0).** 1.2.1 built the 0.289 tag, which restored byte identity for data (verified on every fixture against an independent 0.289 build), and its wording said "the same bytes for data" while the FLAC caveat remained. Since `engine/libm`, CD audio matches too, so the README, the help page and `AGENTS.md` say "byte for byte" again, for default settings and against chdman 0.289 as built on Linux with MAME's bundled libraries. chdman builds for other platforms can still differ from it on CD audio (fork-plan.md, 2.3).
 
@@ -67,7 +67,7 @@ The research recommended rewording the claim in the README, the help page, CLAUD
 - **The `CHSE` session tag.** It is written for multi-session sources, and changes the SHA-1 compared with 0.289. Virtual Jaguar requires it for Jaguar CD. Kronos, Yabause and jgenesis refuse any disc that has it.
 - **CD+G cue input.** Every Beetle core and Flycast ≤ 2.7 refuse discs with subcode.
 
-**Status:** gone in 1.2.1; 0.289 has neither.
+**Status:** gone in 1.2.1; 0.289 has neither. Since 2.0.0, both are available opt-in without affecting defaults: `createcd --sessions` writes `CHSE` only for Jaguar CD, and CD+G cues are rewritten to `AUDIO RW_RAW` with per-emulator warnings (see [fork-plan.md](fork-plan.md), milestones 4 and 7).
 
 ### 4. Inputs that hang or crash chdman
 
@@ -89,9 +89,9 @@ Hostile CHDs are a risk too: a malformed FLAC hunk hangs MAME's decoder, and a s
 - Hardening against hostile CHDs was left to the fork.
 
 **Status in the fork:**
-- The FLAC hang is fixed: a decoder whose damaged data ends the stream early stops with an error instead of looping (`flac.cpp`, in `engine/mame-0.289.diff`).
-- The self-referencing hunk and crafted CHDs: 1.8.2 added a loop and cycle check for self-references (`read_hunk`, `chd.cpp`) and a block-length check; 1.9.0 added Brent cycle detection for cyclic metadata lists (`chd.cpp`), 64-bit map-size and header/map bounds validation, and codec decompression underflow guards (`chdcodec.cpp`, `flac.cpp`). Up to 1.8.1 the engine followed self-references without a limit, as 0.289 does.
-- The engine also fixes 0.289's crashes on bad input (`engine/README.md`), and `.github/workflows/sanitizers.yml` runs its tests under ASan, LSan and UBSan.
+- The FLAC hang is fixed: a decoder whose damaged data ends the stream with 0 samples decoded stops with an error instead of looping (`flac.cpp`); since 2.0.0, legacy unpadded final `cdfl` hunks (`#16644`) that decode valid samples before EOS zero-fill the remainder and rely on `read_hunk`'s hunk CRC-16 to reject corrupt streams.
+- The self-referencing hunk and crafted CHDs: 1.8.2 added a loop and cycle check for self-references (`read_hunk`, `chd.cpp`) and a block-length check; 1.9.0 added Brent cycle detection for cyclic metadata lists (`chd.cpp`), 64-bit map-size and header/map bounds validation, and codec decompression underflow guards (`chdcodec.cpp`, `flac.cpp`); 2.0.0 added bounded `cdrom.cpp` `sscanf` / `CHCD` alignment checks, `huffman.cpp`/`avhuff.cpp`/`bitstream.h` bounds checks, and `size_t` map math.
+- The engine also fixes 0.289's crashes on bad input ([`engine/README.md`](../../engine/README.md)), and `.github/workflows/sanitizers.yml` runs its tests under ASan, LSan and UBSan.
 
 ---
 
@@ -139,7 +139,7 @@ There are serial bottlenecks too:
 - MAME's SHA-1 ran at about 80 MB/s in wasm in lane G's harness (Node, wall clock; about 150 MB/s native in lane B's), for the whole-image hash on one thread. Milestone 2.1's own before-and-after measurement, a separate one, gave 120 MB/s in wasm for MAME's and 650 MB/s for the engine's;
 - `-np N` gives N−1 workers, capped at 16 (fixed in the fork since 1.9.0 by the C++20 thread pool: `-np N` uses N workers without a 16-thread cap);
 - `-np 1` busy-waits (fixed since 1.9.0: runs inline with zero worker threads);
-- verify and extract are single-threaded (in the page they use several cores since milestone 2.8).
+- verify and extract are single-threaded (in the page, `verify`, extract, `copy`, and `-op` parent walks use several cores via `wasm_read_ahead` since milestones 2.8 and 2.0.0).
 
 ### Compatible ways to shrink files are small, except hunk size (A, G, measurements)
 
@@ -149,6 +149,8 @@ There are serial bottlenecks too:
 | libdeflate-12 | −0.1% | −0.8% |
 | FLAC `-p` | −0.2% (2× CPU) | — |
 | **Larger hunks** | −2.3% (16 frames) | **−9% (16 KiB), −16% (64 KiB)** |
+
+*(Shipped in 2.0.0 as the opt-in Tier-C **Smaller still** preset via `--ultra --libdeflate`, combining LZMA level 9 `fb=273`/`mc=1000`, libdeflate-12, and FLAC `-e -p` + custom apodization within max LPC order 12.)*
 
 Larger hunks are the only big lever, and every reader decodes them. But MAME's own DVD reader accepts only 2048-byte hunks, rchd caps hunks at 512 KiB, and random reads cost more. So hunk size is a per-system policy choice, not a free win.
 
@@ -182,7 +184,7 @@ Larger hunks are the only big lever, and every reader decodes them. But MAME's o
 
 ### Platform (G)
 
-- The SIMD build doubles FLAC speed and does nothing for the LZ codecs.
+- The SIMD build originally doubled FLAC speed while doing little for LZ codecs; since 2.0.0 the engine also uses WASM SIMD128 and 64-bit paths in ECC, SHA-1, libdeflate/zlib matchfinders, and LZMA `LzFind` hash rebasing ([`engine/README.md`](../../engine/README.md)).
 - JSPI is Baseline since 2026-09-14, so Asyncify can go. (It went: the engine's commands are C++20 coroutines, milestone 1.)
 - Shared-memory threads are impossible from `file://`.
 - WebGPU is not a fit.
@@ -192,19 +194,19 @@ Larger hunks are the only big lever, and every reader decodes them. But MAME's o
 
 ## Recommendation in one paragraph
 
-The research's five recommendations, each with where it stands as of Discpress 1.9.0:
+The research's five recommendations, each with where it stands as of Discpress 2.0.1:
 
 1. **Ship a correctness hotfix.** Shipped in 1.2.1:
    - GD-ROM back to the 0.289 layout;
    - LZMA level 8;
    - honest identity wording;
    - input guard rails.
-2. **Hard-fork chdman's minimal BSD-3 closure** (78 objects; 77 MAME source files in `engine/FILES` — 75 compiled translation units plus 2 `#include`d libFLAC `.c` files) into `engine/`, exposed as a library that the browser drives directly, with no `callMain` or Asyncify, and with an explicit compatibility contract and output tiers: reference, compatible and extended. Done, except the library: the page drives chdman's commands step by step (`chdman_begin`/`chdman_resume`), without `callMain` or Asyncify, but still as command lines whose progress it reads as text.
+2. **Hard-fork chdman's minimal BSD-3 closure** into `engine/` (`engine/FILES` now lists 228 files including 91 `.c`/`.cpp`: 75 core MAME/codec translation units, 14 LZMA SDK `.7z` decoder C files, and 2 `#include`d libFLAC `.c` files), exposed as a library that the browser drives directly, with no `callMain` or Asyncify, and with an explicit compatibility contract and output tiers: reference, compatible and extended. Done, except the push-input library API: the page drives chdman's commands step by step (`chdman_begin`/`chdman_resume`) without `callMain` or Asyncify, and the engine/worker expose a 48-byte binary progress snapshot (`_wasm_progress_ptr` / `prog-bin`), though `app/ui.js` currently uses `prog-bin` for custom workers (CSO/XISO/CDI) and still parses chdman's progress text.
 3. **Take the free speed.** The lab estimated a 1.5–2.8× faster "compatible" mode from fast hashing, early abort, a per-track codec plan and parallel decoding. As built and measured:
-   - fast hashing and early abort keep chdman's bytes, and make conversions in the page about 25% faster than 1.2.1's;
-   - the codec plan (opt-in, the "Nearly as small, faster" preset) takes 1.38–2.00× less CPU natively and is 1.31–1.73× faster in the page;
-   - parallel decoding makes extracting 1.4–2.5× faster in the page with 4 threads.
-4. **Add fidelity features:** Redump-exact extraction and verification, the parser fixes, and new input formats. Done: extraction in Redump's layout, the parser fixes, and CloneCD, CSO/ZSO, ECM, PBP and `.zip` input. Verification in part: Verify compares a CHD with Redump for the file the built-in database lists, and with the user's DAT files for every track.
-5. **Test every output** against several independent readers, not just the build it came from. In part: the tests compare with unmodified chdman 0.289, built from the MAME release. Models of the other readers are still to come (fork-plan.md §5, milestone 7).
+   - fast hashing, early abort, `cd_prep_cache`, persistent LZMA encoder, SIMD128/64-bit paths, and memory reductions keep chdman's Tier-R bytes while cutting 4-thread browser peak RSS by 15–19% vs 1.8.2 ([measurements.md](measurements.md) §8);
+   - the codec plan (opt-in, "Nearly as small, faster", with adaptive `cdzl` fallback and DVD/raw PCM probe) takes 1.38–2.00× less CPU natively and is 1.31–1.73× faster in the page, and `--ultra --libdeflate` ("Smaller still") shipped in 2.0.0;
+   - parallel decoding (`wasm_read_ahead`) speeds up extracting (1.4–2.5× with 4 threads), `verify`, `copy`, and `-op` parent walks.
+4. **Add fidelity features:** Redump-exact extraction and verification, the parser fixes, Tier-X layout repairs, and new input formats. Done: extraction in Redump's layout, single-pass `verify --redump`, the parser fixes, CloneCD (with opt-in `.sub` `RW_RAW`), CSO/ZSO, ECM, PBP, `.zip`, `.7z`, `.mds`/`.mdf`, `.cdi`, FLAC/WAV/RF64/AIFF/OGG/MP3 audio cues, CD+G cue rewrite, and Milestone 7 Tier-X repairs (`--sessions`, `--trailer` lossless reversal). Built-in Redump verification checks the file in `db/db.json.gz` (with `DPDB v2` multi-track schema for `--redump-xml`), and user DAT files check every track.
+5. **Test every output** against several independent readers, not just the build it came from. In part: the tests compare with unmodified chdman 0.289 built from the MAME release, and the browser includes a 12-check CHD Health Auditor (`auditChd`); automated external C/Rust reader oracles (libchdr/rchd/chd-rs) and CLI `verify --layout` remain open ([fork-plan.md](fork-plan.md) §5).
 
 Details, ordering and effort are in [fork-plan.md](fork-plan.md).

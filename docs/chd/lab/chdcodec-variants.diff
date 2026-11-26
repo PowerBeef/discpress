@@ -1,9 +1,10 @@
 --- src/lib/util/chdcodec.cpp
 +++ src/lib/util/chdcodec.cpp
-@@ -22,6 +22,38 @@
+@@ -21,6 +21,38 @@
+ #include <zlib.h>
  #include <zstd.h>
  #include <libdeflate.h>
- 
++
 +#include <cstdio>
 +#include <cstdlib>
 +#include <string>
@@ -35,11 +36,10 @@
 +	return -1;
 +}
 +}
-+
+ 
  #include <cstddef>
  #include <cstring>
- #include <new>
-@@ -976,6 +1008,17 @@
+@@ -1102,6 +1134,17 @@
  
  uint32_t chd_zlib_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
@@ -57,20 +57,21 @@
  	// Discpress: libdeflate returns 0 when the result doesn't fit, which here means it must be
  	// smaller than the hunk and the limit, as with zlib below
  	if (m_libdeflate)
-@@ -1114,7 +1157,8 @@
+@@ -1240,7 +1283,9 @@
  uint32_t chd_zstd_compressor::compress(const uint8_t *src, uint32_t srclen, uint8_t *dest)
  {
- 	// reset the compressor
--	auto result = ZSTD_initCStream(m_stream, ZSTD_maxCLevel());
-+	static const int zlevel = getenv("CHDV_ZSTD") ? atoi(getenv("CHDV_ZSTD")) : ZSTD_maxCLevel();
+ 	// reset the compressor (Discpress: chd().zstd_level() defaults to 22 = ZSTD_maxCLevel())
+-	auto result = ZSTD_initCStream(m_stream, chd().zstd_level());
++	static const char *zenv = getenv("CHDV_ZSTD");
++	int const zlevel = zenv ? atoi(zenv) : chd().zstd_level();
 +	auto result = ZSTD_initCStream(m_stream, zlevel);
  	if (ZSTD_isError(result))
  		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  
-@@ -1308,6 +1352,30 @@
+@@ -1439,6 +1484,30 @@
  {
- 	// initialize the properties
- 	configure_properties(m_props, hunkbytes);
+ 	// initialize the properties and create the persistent encoder once (activates LzFind epoch hash reuse)
+ 	configure_properties(m_props, hunkbytes, chd.ultra());
 +	// CHDV_LZMA = level=9,fb=273,mc=..,algo=1,bt=1,hb=4 (lc/lp/pb and the dictionary stay as the decoder expects)
 +	if (const char *e = getenv("CHDV_LZMA"))
 +	{
@@ -95,23 +96,24 @@
 +			hunkbytes, p.level, p.dictSize, p.lc, p.lp, p.pb, p.algo, p.fb, p.btMode, p.numHashBytes, p.mc, m_props.level, m_props.fb, m_props.algo, m_props.mc); }
 +		m_props = p;
 +	}
- }
- 
- 
-@@ -1723,6 +1791,16 @@
- 	if (!encoded || complen >= m_limit)
+ 	m_encoder = LzmaEnc_Create(&m_allocator);
+ 	if (m_encoder == nullptr)
+ 		throw std::bad_alloc();
+@@ -1870,6 +1939,17 @@
  		throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
  
+ 	// deflate the subcode data
 +	{
-+		long v = variant_deflate(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA], frames * cdrom_file::MAX_SUBCODE_DATA, &dest[complen], hunkbytes() - complen);
++		uint32_t const limit = std::min(m_limit, srclen);
++		long v = variant_deflate(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA], frames * cdrom_file::MAX_SUBCODE_DATA, &dest[complen], (limit > complen) ? (limit - complen) : 0);
 +		if (v >= 0)
 +		{
 +			complen += uint32_t(v);
-+			if (uint32_t(v) == 0x7fffffff || complen >= srclen)
++			if (uint32_t(v) == 0x7fffffff || complen >= limit)
 +				throw std::error_condition(chd_file::error::COMPRESSION_ERROR);
 +			return complen;
 +		}
 +	}
- 	// deflate the subcode data
- 	m_deflater.next_in = const_cast<Bytef *>(&m_buffer[frames * cdrom_file::MAX_SECTOR_DATA]);
- 	m_deflater.avail_in = frames * cdrom_file::MAX_SUBCODE_DATA;
+ 	if (m_libdeflate)
+ 	{
+ 		uint32_t const limit = std::min(m_limit, srclen);
