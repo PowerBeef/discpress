@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Checks that only permissively licensed MAME code is in engine/ (THIRD_PARTY_NOTICES.md): MAME as a
-# whole is GPL-2.0-or-later, but each of its files says its own license in its first lines, and every
-# file under engine/mame/src must say BSD-3-Clause, except the public-domain md5.h. No file anywhere in
-# engine/ may carry MAME's GPL header or the GPL's or LGPL's text. The libraries MAME bundles
-# (engine/mame/3rdparty: zlib, the LZMA SDK, FLAC, Zstandard) keep their own permissive license files,
-# and the other libraries there their MIT ones (engine/libdeflate/COPYING, engine/libm/LICENSE). CI runs
-# it on every push to main and every pull request.
+# Checks that only permissively licensed code is in engine/ and wasm/ (THIRD_PARTY_NOTICES.md):
+# MAME as a whole is GPL-2.0-or-later, but each of its files says its own license in its first
+# lines, and every file under engine/mame/src must say BSD-3-Clause, except the public-domain
+# md5.h. No file anywhere in engine/ or wasm/ (including vendored browser decoders such as
+# stb_vorbis.c and minimp3*.h) may carry GPL, LGPL, AGPL, or CC-BY-NC headers or license text.
+# The libraries MAME bundles (engine/mame/3rdparty: zlib, the LZMA SDK, FLAC, Zstandard) keep
+# their own permissive license files, and the other libraries in engine/ keep their MIT ones
+# (engine/libdeflate/COPYING, engine/libm/LICENSE). CI runs this on every push to main and PR.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -31,12 +32,12 @@ while IFS= read -r f; do
   fi
 done < <(git ls-files --cached --others --exclude-standard engine/mame/src)
 
-if git grep --untracked -nIi -e 'license:A\?L\?GPL' -e 'license:CC-BY-NC' -- engine >&2; then
-  echo "GPL/LGPL/AGPL/CC-BY-NC-licensed MAME files are in engine/ (above)" >&2
+if git grep --untracked -nIi -e 'license:A\?L\?GPL' -e 'license:CC-BY-NC' -- engine wasm >&2; then
+  echo "GPL/LGPL/AGPL/CC-BY-NC-licensed MAME files are in engine/ or wasm/ (above)" >&2
   bad=1
 fi
-if git grep --untracked -nIi -e 'GNU General Public' -e 'GNU Lesser General' -e 'GNU Affero General' -e 'SPDX-License-Identifier: *A\?L\?GPL' -e 'SPDX-License-Identifier: *CC-BY-NC' -- engine >&2; then
-  echo "GPL-, LGPL-, AGPL-, or CC-BY-NC-licensed code is in engine/ (above)" >&2
+if git grep --untracked -nIi -e 'GNU General Public' -e 'GNU Lesser General' -e 'GNU Affero General' -e 'SPDX-License-Identifier: *A\?L\?GPL' -e 'SPDX-License-Identifier: *CC-BY-NC' -- engine wasm >&2; then
+  echo "GPL-, LGPL-, AGPL-, or CC-BY-NC-licensed code is in engine/ or wasm/ (above)" >&2
   bad=1
 fi
 for f in engine/libdeflate/COPYING engine/libm/LICENSE; do
@@ -60,4 +61,4 @@ engine/mame/3rdparty/zstd/LICENSE|Redistribution and use in source and binary fo
 LICENSES
 
 [ "$bad" = 0 ] || exit 1
-echo "engine/: $(git ls-files engine/mame/src | wc -l) MAME files, all BSD-3-Clause (md5.h public domain); zlib, LZMA SDK, FLAC and Zstandard with their license files; libdeflate and libm MIT"
+echo "engine/ & wasm/: $(git ls-files engine/mame/src | wc -l) MAME files, all BSD-3-Clause (md5.h public domain); zlib, LZMA SDK, FLAC and Zstandard with their license files; libdeflate and libm MIT; wasm/ clean of GPL/LGPL/AGPL/CC-BY-NC"
