@@ -35,6 +35,12 @@ else
   missing+=("fixtures")
 fi
 
+if diff --version 2>/dev/null | grep -qi 'GNU diffutils' || command -v gdiff >/dev/null 2>&1; then
+  ready+=("gnu-diff")
+else
+  missing+=("gnu-diffutils")
+fi
+
 if command -v em++ >/dev/null 2>&1 || [ -f "$HOME/emsdk/emsdk_env.sh" ]; then
   ready+=("emsdk")
 else
